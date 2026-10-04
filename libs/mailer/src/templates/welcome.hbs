@@ -1,0 +1,7 @@
+{{> header title=(concat "Welcome to " appName) preheader="Your account is ready."}}
+<h1 style="margin:0 0 16px;font-size:22px;color:#1f2933;">Welcome, {{displayName}}!</h1>
+<p style="margin:0 0 12px;">Thanks for signing up for {{appName}}. Your account is ready to use.</p>
+<p style="margin:0 0 12px;">You will get notifications about activity on your account both in the app and by email.</p>
+{{#if appUrl}}{{> button url=appUrl label="Open the app"}}{{/if}}
+<p style="margin:16px 0 0;color:#52606d;">If you did not create this account, you can safely ignore this email.</p>
+{{> footer}}

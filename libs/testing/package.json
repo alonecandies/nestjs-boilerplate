@@ -1,0 +1,31 @@
+{
+  "name": "@app/testing",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Test helpers: Fastify e2e app factory and Proxy-based Vitest auto mocks.",
+  "exports": {
+    ".": {
+      "@app/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project testing",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@nestjs/common": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@nestjs/platform-fastify": "catalog:",
+    "@nestjs/testing": "catalog:",
+    "fastify": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:",
+    "vitest": "catalog:"
+  }
+}

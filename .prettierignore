@@ -1,0 +1,18 @@
+# Prettier formats ONLY Markdown and YAML. Everything else is Biome's job.
+# (.gitignore is honoured automatically by Prettier 3.)
+# 1) ignore every file that has an extension...
+*.*
+# 2) ...but keep descending into directories (incl. dot-dirs like .github/)...
+!*/
+# 3) ...and re-include Markdown + YAML.
+!*.md
+!*.yml
+!*.yaml
+
+# generated / vendored
+**/CHANGELOG.md
+bun.lock
+.nx/
+**/dist/
+**/coverage/
+**/generated/

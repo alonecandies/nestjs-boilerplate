@@ -1,0 +1,22 @@
+# Normalise line endings to LF in the repo and working tree (Biome/Prettier use LF).
+* text=auto eol=lf
+
+# Lockfiles / generated
+bun.lock linguist-generated=true
+**/CHANGELOG.md linguist-generated=true
+**/generated/** linguist-generated=true
+**/migrations/meta/** linguist-generated=true
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.pdf binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.gz binary
+*.zip binary

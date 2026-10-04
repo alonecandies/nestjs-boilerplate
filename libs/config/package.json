@@ -1,0 +1,30 @@
+{
+  "name": "@app/config",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Typed, zod-validated, namespaced environment configuration (the only package that reads process.env).",
+  "exports": {
+    ".": {
+      "@app/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project config",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "lodash-es": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "catalog:"
+  }
+}

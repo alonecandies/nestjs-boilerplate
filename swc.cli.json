@@ -1,0 +1,9 @@
+{
+  "filenames": ["src"],
+  "outDir": "dist",
+  "stripLeadingPaths": true,
+  "deleteDirOnStart": true,
+  "copyFiles": true,
+  "ignore": ["**/*.spec.ts", "**/*.test.ts", "**/*.e2e-spec.ts", "**/*.int-spec.ts", "**/*.d.ts"],
+  "quiet": true
+}

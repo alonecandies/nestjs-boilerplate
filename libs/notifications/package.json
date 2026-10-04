@@ -1,0 +1,60 @@
+{
+  "name": "@app/notifications",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Notifications bounded context: Cassandra inbox (pageState paging, mark-read), welcome/receipt/digest flows from Kafka events, CQRS + saga, REST/GraphQL/WebSocket/gRPC edges bound through NotificationsPort",
+  "exports": {
+    ".": {
+      "@app/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project notifications",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@app/auth": "workspace:*",
+    "@app/cassandra": "workspace:*",
+    "@app/common": "workspace:*",
+    "@app/config": "workspace:*",
+    "@app/contracts": "workspace:*",
+    "@app/graphql": "workspace:*",
+    "@app/mailer": "workspace:*",
+    "@app/redis": "workspace:*",
+    "@app/transport": "workspace:*",
+    "@grpc/grpc-js": "catalog:",
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@nestjs/cqrs": "catalog:",
+    "@nestjs/graphql": "catalog:",
+    "@nestjs/microservices": "catalog:",
+    "@nestjs/platform-socket.io": "catalog:",
+    "@nestjs/schedule": "catalog:",
+    "@nestjs/swagger": "catalog:",
+    "@nestjs/websockets": "catalog:",
+    "cassandra-driver": "catalog:",
+    "class-validator": "catalog:",
+    "graphql": "catalog:",
+    "graphql-subscriptions": "catalog:",
+    "lodash-es": "catalog:",
+    "nestjs-cls": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:",
+    "socket.io": "catalog:",
+    "uuid": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@app/testing": "workspace:*",
+    "@nestjs/testing": "catalog:",
+    "@types/lodash-es": "catalog:",
+    "fastify": "catalog:"
+  }
+}

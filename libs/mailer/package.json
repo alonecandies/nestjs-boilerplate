@@ -1,0 +1,41 @@
+{
+  "name": "@app/mailer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Transactional mail: Handlebars templates, BullMQ mail queue with idempotent enqueue, pooled SMTP worker",
+  "exports": {
+    ".": {
+      "@app/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project mailer",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@app/common": "workspace:*",
+    "@app/config": "workspace:*",
+    "@app/redis": "workspace:*",
+    "@nestjs-modules/mailer": "catalog:",
+    "@nestjs/bullmq": "catalog:",
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "@nestjs/core": "catalog:",
+    "bullmq": "catalog:",
+    "handlebars": "catalog:",
+    "lodash": "catalog:",
+    "lodash-es": "catalog:",
+    "nodemailer": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "catalog:"
+  }
+}

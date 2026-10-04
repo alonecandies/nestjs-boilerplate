@@ -1,0 +1,38 @@
+{
+  "name": "@app/storage",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Driver-agnostic object storage (S3-compatible or GCS): streaming uploads, presigned URLs, in-memory test double",
+  "exports": {
+    ".": {
+      "@app/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project storage",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@app/common": "workspace:*",
+    "@app/config": "workspace:*",
+    "@aws-sdk/client-s3": "catalog:",
+    "@aws-sdk/lib-storage": "catalog:",
+    "@aws-sdk/s3-request-presigner": "catalog:",
+    "@google-cloud/storage": "catalog:",
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "@nestjs/core": "catalog:",
+    "lodash-es": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "catalog:"
+  }
+}

@@ -1,0 +1,52 @@
+# Grafana file provisioning (read at startup). Grafana expands $VAR / ${VAR} from its environment in
+# these files: a literal `$` must be written `$$`.
+# UIDs are fixed so dashboards and cross-links (logs -> traces) can reference them.
+apiVersion: 1
+
+prune: true
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: 15s
+
+  # Jaeger 2.20 (NOT 2.21+: 2.21 removed the /api/services + /api/traces endpoints this datasource calls).
+  - name: Jaeger
+    uid: jaeger
+    type: jaeger
+    access: proxy
+    url: http://jaeger:16686
+    editable: false
+    jsonData:
+      nodeGraph:
+        enabled: true
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: -5m
+        spanEndTimeShift: 5m
+        filterByTraceID: true
+        filterBySpanID: false
+
+  # Only reachable with the `logs` profile (Loki + Alloy); harmless otherwise.
+  - name: Loki
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    editable: false
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        - name: TraceID
+          matcherType: label # trace_id is shipped as structured metadata by Alloy
+          matcherRegex: trace_id
+          datasourceUid: jaeger
+          url: $${__value.raw}
+          urlDisplayLabel: Open trace

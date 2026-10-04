@@ -1,0 +1,126 @@
+# CI: quality gate (lint + typecheck + tests + build), one production image per app (built, not
+# pushed) and a boot check of the docker compose infra stack.
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  BUN_VERSION: 1.4.2
+  CI: true
+  HUSKY: 0
+  NX_DAEMON: false
+  NX_NO_CLOUD: true
+  FORCE_COLOR: 1
+
+jobs:
+  verify:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # lerna/nx `--since` and commitlint need history
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc # 24 (runtime of every tool and test)
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Cache Nx / ESLint results
+        uses: actions/cache@v6
+        with:
+          path: |
+            .nx/cache
+            node_modules/.cache
+          key: tools-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}
+          restore-keys: tools-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
+
+      - name: Check (biome ci, eslint, prettier, tsc)
+        run: bun run check
+
+      - name: Unit + e2e tests
+        run: bun run test
+
+      - name: Build (swc, all packages)
+        run: bun run build
+
+      - name: Config drift (.env.example, Kafka topics)
+        run: |
+          node scripts/check-env-example.mjs
+          node scripts/docker/check-kafka-topics.mjs
+
+  image:
+    name: Image ${{ matrix.app }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        app: [gateway, monolith, identity-service, notifications-service, billing-service]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build ${{ matrix.app }} (runtime target, not pushed)
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: runtime
+          push: false
+          load: true
+          tags: boilerplate/${{ matrix.app }}:ci
+          build-args: |
+            APP=${{ matrix.app }}
+            VCS_REF=${{ github.sha }}
+          # One cache scope per app: the shared install layers are identical, the build layers not.
+          cache-from: type=gha,scope=image-${{ matrix.app }}
+          cache-to: type=gha,mode=max,scope=image-${{ matrix.app }}
+
+      - name: Inspect image
+        run: |
+          docker image inspect boilerplate/${{ matrix.app }}:ci \
+            --format 'size={{.Size}} user={{.Config.User}} workdir={{.Config.WorkingDir}} cmd={{json .Config.Cmd}}'
+          docker image ls boilerplate/${{ matrix.app }}:ci
+
+  compose:
+    name: Compose config + infra boot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - name: docker compose config (every profile combination)
+        run: scripts/docker/validate-compose.sh
+
+      - name: Boot infra, assert topics / keyspace / buckets / extensions, tear down
+        run: scripts/docker/check-infra.sh

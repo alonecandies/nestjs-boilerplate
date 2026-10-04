@@ -1,0 +1,53 @@
+# Keep the build context small and deterministic. Host node_modules/dist must never leak in
+# (darwin native binaries, stale output): everything the image needs is re-created inside.
+# Files listed here also stop busting the `COPY . .` layer cache when they change.
+**/node_modules
+**/dist
+**/coverage
+**/*.tsbuildinfo
+**/.turbo
+.nx
+.cache
+tmp
+
+# VCS / editor / CI / git hooks
+.git
+.gitattributes
+.github
+.husky
+.vscode
+.idea
+**/.DS_Store
+
+# Secrets & local env: inject at runtime instead (compose `environment`, k8s Secrets).
+**/.env
+**/.env.*
+!**/.env.example
+
+# Docs, tests and lint/format/commit tooling: not needed to build or run an app.
+**/*.md
+docs
+apps/*/test
+**/*.spec.ts
+**/*.int-spec.ts
+**/*.e2e-spec.ts
+biome.json
+eslint.config.ts
+.prettierrc.json
+.prettierignore
+.editorconfig
+commitlint.config.ts
+lint-staged.config.ts
+vitest.config.ts
+
+# Docker/compose assets (compose mounts docker/**; the image does not need them).
+docker
+Dockerfile*
+.dockerignore
+docker-compose*.yml
+compose*.yml
+
+# Logs / profiles
+**/*.log
+**/*.heapsnapshot
+**/*.cpuprofile

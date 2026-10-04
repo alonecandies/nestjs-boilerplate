@@ -1,0 +1,57 @@
+{
+  "name": "@app/observability",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Observability: pino JSON logs with request/trace ids, nestjs-cls request context, Prometheus metrics, terminus health probes, OpenTelemetry tracing (ESM preload subpath ./otel) and optional @nestjs/observe.",
+  "exports": {
+    ".": {
+      "@app/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./otel": {
+      "@app/source": "./src/otel.ts",
+      "types": "./src/otel.ts",
+      "default": "./dist/otel.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project observability",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@app/common": "workspace:*",
+    "@app/config": "workspace:*",
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@nestjs/observe": "catalog:",
+    "@nestjs/terminus": "catalog:",
+    "@opentelemetry/api": "catalog:",
+    "@opentelemetry/auto-instrumentations-node": "catalog:",
+    "@opentelemetry/resources": "catalog:",
+    "@opentelemetry/sdk-node": "catalog:",
+    "@opentelemetry/semantic-conventions": "catalog:",
+    "@willsoto/nestjs-prometheus": "catalog:",
+    "import-in-the-middle": "catalog:",
+    "lodash-es": "catalog:",
+    "nestjs-cls": "catalog:",
+    "nestjs-otel": "catalog:",
+    "nestjs-pino": "catalog:",
+    "pino": "catalog:",
+    "pino-http": "catalog:",
+    "prom-client": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:",
+    "uuid": "catalog:"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "catalog:",
+    "fastify": "catalog:",
+    "pino-pretty": "catalog:"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "name": "@app/redis",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "ioredis 6 infrastructure: global Redis clients, key builder, distributed locks (@WithLock), two-tier cache (L1 LRU + Redis), Redis-backed throttling, BullMQ connection, socket.io Redis adapter, health indicator.",
+  "exports": {
+    ".": {
+      "@app/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "@app/source": "./src/testing/index.ts",
+      "types": "./src/testing/index.ts",
+      "default": "./dist/testing/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project redis",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@app/common": "workspace:*",
+    "@app/config": "workspace:*",
+    "@app/observability": "workspace:*",
+    "@keyv/redis": "catalog:",
+    "@nestjs/bullmq": "catalog:",
+    "@nestjs/cache-manager": "catalog:",
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@nestjs/platform-socket.io": "catalog:",
+    "@nestjs/terminus": "catalog:",
+    "@nestjs/throttler": "catalog:",
+    "@nestjs/websockets": "catalog:",
+    "@sesamecare-oss/redlock": "catalog:",
+    "@socket.io/redis-adapter": "catalog:",
+    "bullmq": "catalog:",
+    "cache-manager": "catalog:",
+    "cacheable": "catalog:",
+    "ioredis": "catalog:",
+    "keyv": "catalog:",
+    "lodash-es": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:",
+    "socket.io": "catalog:"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "catalog:",
+    "fastify": "catalog:"
+  }
+}

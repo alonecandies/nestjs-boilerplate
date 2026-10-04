@@ -1,0 +1,115 @@
+syntax = "proto3";
+
+// Identity bounded context: authentication (sessions/JWT) and user management.
+package identity.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+// Credential flows. Every successful flow returns a fresh access + refresh token pair.
+service AuthService {
+  // Creates a user and opens a session.
+  rpc Register(RegisterRequest) returns (AuthTokens);
+  // Verifies credentials and opens a session.
+  rpc Login(LoginRequest) returns (AuthTokens);
+  // Rotates a refresh token. Reusing a revoked refresh token revokes every session of the user.
+  rpc RefreshTokens(RefreshTokensRequest) returns (AuthTokens);
+  // Revokes the session and denylists the access token for its remaining lifetime.
+  rpc Logout(LogoutRequest) returns (google.protobuf.Empty);
+}
+
+// User queries and administration.
+service UsersService {
+  rpc GetUser(GetUserRequest) returns (User);
+  // Batch lookup (DataLoader backend). Unknown ids are omitted; order follows the request.
+  rpc GetUsersByIds(GetUsersByIdsRequest) returns (UserList);
+  // Keyset-paginated listing (uuidv7 ids, newest first).
+  rpc ListUsers(ListUsersRequest) returns (UserPage);
+  rpc UpdateUserRoles(UpdateUserRolesRequest) returns (User);
+}
+
+message User {
+  string id = 1;
+  string email = 2;
+  string display_name = 3;
+  // Role names: "admin" | "moderator" | "user".
+  repeated string roles = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message AuthTokens {
+  string access_token = 1;
+  string refresh_token = 2;
+  // Access token lifetime in seconds.
+  int32 expires_in = 3;
+  // Always "Bearer".
+  string token_type = 4;
+  User user = 5;
+}
+
+// Client fingerprint stored on the session (audit / theft investigation).
+message ClientInfo {
+  optional string user_agent = 1;
+  optional string ip = 2;
+}
+
+message RegisterRequest {
+  string email = 1;
+  string password = 2;
+  string display_name = 3;
+  ClientInfo client = 4;
+}
+
+message LoginRequest {
+  string email = 1;
+  string password = 2;
+  ClientInfo client = 3;
+}
+
+message RefreshTokensRequest {
+  string refresh_token = 1;
+  ClientInfo client = 2;
+}
+
+message LogoutRequest {
+  string user_id = 1;
+  string access_token_jti = 2;
+  // Access token `exp` claim (epoch seconds); bounds the denylist entry TTL.
+  int64 access_token_exp = 3;
+  // When present, only the session bound to this refresh token is revoked.
+  optional string refresh_token = 4;
+}
+
+message GetUserRequest {
+  string id = 1;
+}
+
+message GetUsersByIdsRequest {
+  repeated string ids = 1;
+}
+
+message UserList {
+  repeated User users = 1;
+}
+
+message ListUsersRequest {
+  int32 limit = 1;
+  // Opaque cursor from a previous UserPage.next_cursor.
+  optional string cursor = 2;
+  // Case-insensitive substring match on email / display name.
+  optional string search = 3;
+}
+
+message UserPage {
+  repeated User items = 1;
+  // Absent on the last page.
+  optional string next_cursor = 2;
+}
+
+message UpdateUserRolesRequest {
+  string id = 1;
+  repeated string roles = 2;
+  // The admin performing the change (an actor cannot remove their own admin role).
+  string actor_id = 3;
+}

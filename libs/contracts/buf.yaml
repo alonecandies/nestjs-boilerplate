@@ -1,0 +1,17 @@
+# buf v2 workspace for the gRPC contracts. Protos live under src/ so swc `copyFiles` ships them to
+# dist/proto (PROTO_DIR resolves to <pkg>/src/proto in dev and <pkg>/dist/proto in prod).
+version: v2
+modules:
+  - path: src/proto
+lint:
+  use:
+    - STANDARD
+  except:
+    # Domain-shaped responses are shared on purpose (Register/Login/RefreshTokens all return
+    # AuthTokens; GetUser/UpdateUserRoles return User; commands return google.protobuf.Empty).
+    # Wrapping each in a unique <Rpc>Response message would only add allocation + mapping noise.
+    - RPC_REQUEST_RESPONSE_UNIQUE
+    - RPC_RESPONSE_STANDARD_NAME
+breaking:
+  use:
+    - FILE

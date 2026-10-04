@@ -1,0 +1,49 @@
+{
+  "name": "@app/graphql",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Code-first Apollo Server 5 on Fastify: complexity limit, per-operation DataLoaders, graphql-ws subscriptions with JWT auth, Redis PubSub, unified error format",
+  "exports": {
+    ".": {
+      "@app/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project graphql",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@apollo/server": "catalog:",
+    "@app/auth": "workspace:*",
+    "@app/common": "workspace:*",
+    "@app/config": "workspace:*",
+    "@app/redis": "workspace:*",
+    "@as-integrations/fastify": "catalog:",
+    "@nestjs/apollo": "catalog:",
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@nestjs/graphql": "catalog:",
+    "dataloader": "catalog:",
+    "graphql": "catalog:",
+    "graphql-query-complexity": "catalog:",
+    "graphql-redis-subscriptions": "catalog:",
+    "graphql-scalars": "catalog:",
+    "graphql-subscriptions": "catalog:",
+    "graphql-ws": "catalog:",
+    "ioredis": "catalog:",
+    "lodash-es": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "catalog:",
+    "fastify": "catalog:"
+  }
+}

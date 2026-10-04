@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    // Language & runtime — Node 24 implements ES2025; SWC's max target is es2024.
+    "target": "ES2024",
+    "lib": ["ES2025"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "moduleDetection": "force",
+    "resolveJsonModule": true,
+    // TS 6 defaults `types` to [] (no automatic @types/* inclusion).
+    "types": ["node"],
+    // Workspace libs resolve to their TS sources (exports["@app/source"]) for typecheck, ESLint,
+    // tests and the dev loop — no lib build needed. Node (prod) resolves exports.default → dist.
+    "customConditions": ["@app/source"],
+
+    // NestJS legacy decorators + DI metadata.
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "useDefineForClassFields": false,
+
+    // verbatimModuleSyntax: types imported as values → TS1484 (would otherwise become an ESM link
+    // error after SWC). It does NOT force injected classes to `import type` (that would break DI).
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    // Type-checking
+    "strict": true,
+    "strictPropertyInitialization": false,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": false,
+    "useUnknownInCatchVariables": true,
+
+    "sourceMap": true,
+    "newLine": "lf"
+  }
+}

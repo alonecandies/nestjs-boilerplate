@@ -1,0 +1,74 @@
+syntax = "proto3";
+
+// Billing bounded context: Stripe Checkout payments.
+package billing.v1;
+
+import "google/protobuf/timestamp.proto";
+
+service BillingService {
+  // Creates a Stripe Checkout Session and a `pending` payment row.
+  rpc CreateCheckoutSession(CreateCheckoutSessionRequest) returns (CheckoutSession);
+  // Verifies the Stripe signature and applies the event exactly once (duplicates are acknowledged).
+  rpc HandleStripeWebhook(HandleStripeWebhookRequest) returns (HandleStripeWebhookResponse);
+  rpc ListPayments(ListPaymentsRequest) returns (PaymentList);
+}
+
+message CreateCheckoutSessionRequest {
+  string user_id = 1;
+  string customer_email = 2;
+  string price_id = 3;
+  int32 quantity = 4;
+  // Defaults to the configured STRIPE_SUCCESS_URL / STRIPE_CANCEL_URL.
+  optional string success_url = 5;
+  optional string cancel_url = 6;
+  // Forwarded as the Stripe idempotency key (defaults to `checkout-<paymentId>`).
+  optional string idempotency_key = 7;
+}
+
+message CheckoutSession {
+  string id = 1;
+  // Hosted Checkout page to redirect the customer to.
+  string url = 2;
+  string payment_id = 3;
+}
+
+message HandleStripeWebhookRequest {
+  // Raw request body, byte-for-byte (the signature is computed over it).
+  bytes payload = 1;
+  // Value of the `stripe-signature` header.
+  string signature = 2;
+}
+
+message HandleStripeWebhookResponse {
+  bool received = 1;
+  string event_id = 2;
+  string event_type = 3;
+  // True when the event id was already processed (Stripe retries deliveries).
+  bool duplicate = 4;
+}
+
+message Payment {
+  string id = 1;
+  string user_id = 2;
+  // "pending" | "succeeded" | "failed" | "expired".
+  string status = 3;
+  // Minor currency units (e.g. cents). A decimal string in TypeScript (int64, forceLong=string).
+  int64 amount_total = 4;
+  // ISO 4217, lowercase (Stripe convention).
+  string currency = 5;
+  string price_id = 6;
+  int32 quantity = 7;
+  optional string stripe_checkout_session_id = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message ListPaymentsRequest {
+  // Absent = all users (requires billing:read-all at the edge).
+  optional string user_id = 1;
+  int32 limit = 2;
+}
+
+message PaymentList {
+  repeated Payment items = 1;
+}

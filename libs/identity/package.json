@@ -1,0 +1,63 @@
+{
+  "name": "@app/identity",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Identity bounded context: users, registration, login (argon2 + JWT access/refresh), refresh-token rotation with reuse detection, RBAC role management \u2014 REST, GraphQL and gRPC presentation over CQRS.",
+  "exports": {
+    ".": {
+      "@app/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project identity",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@app/auth": "workspace:*",
+    "@app/common": "workspace:*",
+    "@app/config": "workspace:*",
+    "@app/contracts": "workspace:*",
+    "@app/database": "workspace:*",
+    "@app/graphql": "workspace:*",
+    "@app/redis": "workspace:*",
+    "@app/transport": "workspace:*",
+    "@grpc/grpc-js": "catalog:",
+    "@nestjs-cls/transactional": "catalog:",
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@nestjs/cqrs": "catalog:",
+    "@nestjs/graphql": "catalog:",
+    "@nestjs/microservices": "catalog:",
+    "@nestjs/passport": "catalog:",
+    "@nestjs/schedule": "catalog:",
+    "@nestjs/swagger": "catalog:",
+    "@nestjs/websockets": "catalog:",
+    "class-transformer": "catalog:",
+    "class-validator": "catalog:",
+    "dataloader": "catalog:",
+    "drizzle-orm": "catalog:",
+    "graphql": "catalog:",
+    "lodash-es": "catalog:",
+    "nestjs-cls": "catalog:",
+    "passport-local": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:",
+    "uuid": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@app/testing": "workspace:*",
+    "@nestjs/testing": "catalog:",
+    "@testcontainers/postgresql": "catalog:",
+    "@types/lodash-es": "catalog:",
+    "@types/passport-local": "catalog:",
+    "fastify": "catalog:"
+  }
+}

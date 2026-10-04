@@ -1,0 +1,14 @@
+# Kafka topics provisioned by the one-shot `kafka-init` service (docker/kafka/create-topics.sh).
+# Source of truth: @app/contracts KAFKA_TOPIC_VALUES + DEAD_LETTER_TOPIC_VALUES
+# (`node scripts/docker/check-kafka-topics.mjs` fails when this file drifts from the contracts).
+# Broker auto-creation is OFF (as in production): a topic missing here makes consumers fail at boot.
+#
+# Format: name:partitions:replication-factor[:config=value,config=value]   (idempotent, --if-not-exists)
+# Partitions cap the parallelism of ONE consumer group (instances x KAFKA_CONSUMER_CONCURRENCY);
+# events are keyed by user id, so per-user order is kept whatever the partition count.
+identity.user-registered.v1:6:1:retention.ms=604800000
+identity.user-registered.v1.dlq:1:1:retention.ms=1209600000
+billing.payment-succeeded.v1:6:1:retention.ms=604800000
+billing.payment-succeeded.v1.dlq:1:1:retention.ms=1209600000
+notifications.notification-created.v1:6:1:retention.ms=604800000
+notifications.notification-created.v1.dlq:1:1:retention.ms=1209600000

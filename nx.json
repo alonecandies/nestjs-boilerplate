@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/nx/schemas/nx-schema.json",
+  "defaultBase": "master",
+  "neverConnectToCloud": true,
+  "analytics": false,
+  "tui": { "enabled": false },
+  "namedInputs": {
+    "sharedGlobals": [
+      "{workspaceRoot}/tsconfig.base.json",
+      "{workspaceRoot}/.swcrc",
+      "{workspaceRoot}/swc.cli.json",
+      "{workspaceRoot}/bun.lock",
+      { "runtime": "node --version" }
+    ],
+    "default": ["{projectRoot}/**/*", "sharedGlobals"],
+    "production": [
+      "default",
+      "!{projectRoot}/**/*.spec.ts",
+      "!{projectRoot}/**/*.int-spec.ts",
+      "!{projectRoot}/**/*.test.ts",
+      "!{projectRoot}/test/**/*",
+      "!{projectRoot}/tsconfig.json",
+      "!{projectRoot}/**/*.md"
+    ]
+  },
+  "targetDefaults": {
+    "build": {
+      "dependsOn": ["^build"],
+      "inputs": ["production", "^production"],
+      "outputs": ["{projectRoot}/dist"],
+      "cache": true
+    },
+    "typecheck": { "inputs": ["default", "^production"], "cache": true },
+    "test": { "inputs": ["default", "^production"], "cache": true },
+    "clean": { "cache": false }
+  }
+}

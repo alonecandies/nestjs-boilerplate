@@ -1,0 +1,142 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "root": true,
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true,
+    "defaultBranch": "master"
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "**",
+      "!!**/dist",
+      "!!**/coverage",
+      "!!**/generated",
+      "!!**/migrations/meta",
+      "!!**/.nx",
+      "!!**/docker/grafana/dashboards",
+      "!**/*.md",
+      "!**/*.yml",
+      "!**/*.yaml"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100,
+    "lineEnding": "lf",
+    "useEditorconfig": true
+  },
+  "javascript": {
+    "parser": {
+      "unsafeParameterDecoratorsEnabled": true
+    },
+    "formatter": {
+      "quoteStyle": "single",
+      "jsxQuoteStyle": "double",
+      "quoteProperties": "asNeeded",
+      "trailingCommas": "all",
+      "semicolons": "always",
+      "arrowParentheses": "always",
+      "bracketSpacing": true
+    }
+  },
+  "json": {
+    "parser": {
+      "allowComments": true,
+      "allowTrailingCommas": false
+    },
+    "formatter": {
+      "trailingCommas": "none"
+    }
+  },
+  "graphql": {
+    "formatter": { "enabled": true, "quoteStyle": "double" },
+    "linter": { "enabled": true }
+  },
+  "css": {
+    "formatter": { "enabled": true }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        "useImportType": "off",
+        "useExportType": "error",
+        "noParameterProperties": "off",
+        "useNodejsImportProtocol": "error",
+        "noNonNullAssertion": "warn",
+        "useConsistentArrayType": { "level": "error", "options": { "syntax": "shorthand" } },
+        "useTemplate": "error",
+        "noUselessElse": "error"
+      },
+      "complexity": {
+        "noStaticOnlyClass": "off",
+        "noUselessConstructor": "error",
+        "useLiteralKeys": "off"
+      },
+      "correctness": {
+        "noUnusedImports": "error",
+        "noUnusedVariables": { "level": "error", "options": { "ignoreRestSiblings": true } },
+        "noUnusedFunctionParameters": "warn",
+        "noUndeclaredDependencies": "error"
+      },
+      "suspicious": {
+        "noExplicitAny": "error",
+        "noConsole": { "level": "error", "options": { "allow": ["warn", "error", "info"] } },
+        "noEmptyBlockStatements": "warn"
+      },
+      "nursery": {
+        "noFloatingPromises": "off",
+        "noMisusedPromises": "off"
+      }
+    }
+  },
+  "assist": {
+    "enabled": true,
+    "actions": {
+      "source": {
+        "organizeImports": "on",
+        "useSortedKeys": "off"
+      }
+    }
+  },
+  "overrides": [
+    {
+      "includes": [
+        "**/*.spec.ts",
+        "**/*.int-spec.ts",
+        "**/*.e2e-spec.ts",
+        "**/test/**",
+        "**/testing/**"
+      ],
+      "linter": {
+        "rules": {
+          "suspicious": { "noExplicitAny": "off", "noConsole": "off" },
+          "style": { "noNonNullAssertion": "off" },
+          "correctness": { "noUndeclaredDependencies": "off" }
+        }
+      }
+    },
+    {
+      "includes": [
+        "*.ts",
+        "*.mjs",
+        "**/*.config.ts",
+        "**/*.config.mjs",
+        "**/scripts/**",
+        "typings/**"
+      ],
+      "linter": {
+        "rules": {
+          "correctness": { "noUndeclaredDependencies": "off" },
+          "suspicious": { "noConsole": "off" }
+        }
+      }
+    }
+  ]
+}

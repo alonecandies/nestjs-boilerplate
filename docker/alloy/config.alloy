@@ -1,0 +1,65 @@
+// Grafana Alloy (`logs` profile): tails stdout/stderr of THIS compose project's containers through the
+// Docker socket and ships them to Loki. Apps log pino JSON (one object per line).
+discovery.docker "compose" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "10s"
+
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=" + sys.env("COMPOSE_PROJECT_NAME")]
+  }
+}
+
+discovery.relabel "compose" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+}
+
+loki.source.docker "compose" {
+  host          = "unix:///var/run/docker.sock"
+  targets       = discovery.docker.compose.targets
+  relabel_rules = discovery.relabel.compose.rules
+  forward_to    = [loki.process.pino.receiver]
+}
+
+// Lift pino's `level` (a string label: info/warn/error…, low cardinality) to a Loki label, and keep
+// trace_id / span_id (OTel mixin) as structured metadata so Grafana can jump from a log line to Jaeger.
+// Non-JSON lines (infra containers) pass through unchanged.
+loki.process "pino" {
+  stage.json {
+    expressions = {
+      level    = "level",
+      trace_id = "trace_id",
+      span_id  = "span_id",
+    }
+  }
+
+  stage.labels {
+    values = { level = "" }
+  }
+
+  stage.structured_metadata {
+    values = {
+      trace_id = "",
+      span_id  = "",
+    }
+  }
+
+  forward_to = [loki.write.local.receiver]
+}
+
+loki.write "local" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

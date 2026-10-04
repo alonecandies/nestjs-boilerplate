@@ -1,0 +1,36 @@
+{
+  "name": "@app/common",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Cross-cutting primitives: DomainException family, RFC 9457 problem details, transport-aware global enhancers (filter, timeout, validation pipes), middleware, pagination DTOs, utilities.",
+  "exports": {
+    ".": {
+      "@app/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project common",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@nestjs/common": "catalog:",
+    "@nestjs/core": "catalog:",
+    "class-transformer": "catalog:",
+    "class-validator": "catalog:",
+    "lodash-es": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:",
+    "uuid": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "catalog:",
+    "fastify": "catalog:"
+  }
+}

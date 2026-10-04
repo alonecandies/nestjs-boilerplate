@@ -1,0 +1,14 @@
+{
+  "recommendations": [
+    "biomejs.biome",
+    "dbaeumer.vscode-eslint",
+    "esbenp.prettier-vscode",
+    "editorconfig.editorconfig",
+    "redhat.vscode-yaml",
+    "graphql.vscode-graphql",
+    "graphql.vscode-graphql-syntax",
+    "vitest.explorer",
+    "ms-azuretools.vscode-containers",
+    "bufbuild.vscode-buf"
+  ]
+}

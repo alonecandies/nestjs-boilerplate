@@ -1,0 +1,49 @@
+{
+  "name": "@app/transport",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "gRPC and Kafka infrastructure: server/client options (health, reflection, deadlines, retries), DomainException <-> gRPC <-> HTTP mapping, circuit breakers, validated Kafka envelopes, dead-lettering and hybrid-app wiring.",
+  "exports": {
+    ".": {
+      "@app/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project transport",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@app/common": "workspace:*",
+    "@app/config": "workspace:*",
+    "@app/contracts": "workspace:*",
+    "@app/observability": "workspace:*",
+    "@grpc/grpc-js": "catalog:",
+    "@grpc/proto-loader": "catalog:",
+    "@grpc/reflection": "catalog:",
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@nestjs/microservices": "catalog:",
+    "@nestjs/terminus": "catalog:",
+    "@nestjs/websockets": "catalog:",
+    "grpc-health-check": "catalog:",
+    "kafkajs": "catalog:",
+    "lodash-es": "catalog:",
+    "nestjs-cls": "catalog:",
+    "opossum": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:",
+    "uuid": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "catalog:",
+    "@types/opossum": "catalog:"
+  }
+}

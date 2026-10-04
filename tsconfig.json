@@ -1,0 +1,22 @@
+{
+  // One-shot typecheck of the whole monorepo from sources (no builds needed) + ESLint project for root files.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "types": ["node", "vitest/globals"],
+    "incremental": true,
+    "tsBuildInfoFile": "./node_modules/.cache/tsc/root.tsbuildinfo"
+  },
+  "include": [
+    "apps/*/src",
+    "apps/*/test",
+    "apps/*/*.ts",
+    "libs/*/src",
+    "libs/*/test",
+    "libs/*/*.ts",
+    "*.ts",
+    "typings/**/*.d.ts"
+  ],
+  "exclude": ["**/node_modules", "**/dist", "**/coverage"]
+}

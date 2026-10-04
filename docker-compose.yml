@@ -1,0 +1,864 @@
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+# NestJS boilerplate: local stack (Compose Specification; Docker Compose v2.24+ / v5). docs/DOCKER.md
+#
+#   docker compose up -d --wait                                   # infra only (no profile)
+#   docker compose --profile monolith up -d --build --wait        # + monolith            :3000
+#   docker compose --profile microservices up -d --build --wait   # + gateway + 3 services :3000
+#   docker compose --profile observability up -d                  # + Prometheus, Grafana, Jaeger, exporters
+#   docker compose --profile logs up -d                           # + Loki + Alloy (container logs -> Grafana)
+#   docker compose --profile tools up -d                          # + Kafka UI
+#   docker compose --profile loadtest run --rm k6                 # k6 against http://api:3000
+#   docker compose --profile microservices watch                  # rebuild + recreate apps on change
+#   docker compose --profile '*' down -v                          # stop everything, wipe volumes
+#
+# Never enable `monolith` and `microservices` together: both are the `api` (alias + host port 3000).
+# Host ports bind 127.0.0.1 only and are overridable (*_HOST_PORT). Containers talk over the
+# `backend` network by service name (postgres:5432, kafka:9092 …); apps run on the host
+# (`bun run dev`) use the published ports with zero .env (Kafka: localhost:9094).
+# Compose-only knobs are prefixed DOCKER_ / *_HOST_PORT so the root .env (read by compose for
+# interpolation AND by the host apps) cannot leak host-dev values into the containers.
+# ─────────────────────────────────────────────────────────────────────────────────────────────
+name: boilerplate
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "3"
+
+# ---- app environment (names = @app/config env vars) -------------------------------------------
+x-env-base: &env-base
+  NODE_ENV: ${DOCKER_NODE_ENV:-production}
+  LOG_LEVEL: ${DOCKER_LOG_LEVEL:-info}
+  LOG_PRETTY: "false"
+  HOST: 0.0.0.0
+  PORT: "3000" # every container serves HTTP (API or health + metrics) on 3000
+  CLUSTER_WORKERS: "1" # scale with replicas (`--scale`), not node:cluster, in containers
+  SHUTDOWN_TIMEOUT_MS: "15000" # < stop_grace_period
+  METRICS_ENABLED: "true"
+  REDIS_URL: redis://redis:6379
+  KAFKA_BROKERS: kafka:9092
+  # Tracing: off unless DOCKER_OTEL_SDK_DISABLED=false (start the `observability` profile too).
+  OTEL_SDK_DISABLED: ${DOCKER_OTEL_SDK_DISABLED:-true}
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
+  OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf
+  OTEL_TRACES_SAMPLER: parentbased_traceidratio
+  OTEL_TRACES_SAMPLER_ARG: ${DOCKER_OTEL_SAMPLER_RATIO:-1.0}
+
+# NODE_ENV=production rejects the dev-default JWT secrets: use distinct local ones (not secret!).
+x-env-auth: &env-auth
+  JWT_ACCESS_SECRET: ${DOCKER_JWT_ACCESS_SECRET:-compose-local-access-secret-not-for-production-0001}
+  JWT_REFRESH_SECRET: ${DOCKER_JWT_REFRESH_SECRET:-compose-local-refresh-secret-not-for-production-0002}
+
+x-env-postgres: &env-postgres
+  DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}
+  # Advisory-locked, so concurrent replicas/services are safe. Production: run it as a job
+  # (`docker compose run --rm -w /app/libs/database identity-service dist/migrate.js`).
+  DATABASE_RUN_MIGRATIONS: "true"
+
+x-env-cassandra: &env-cassandra
+  CASSANDRA_CONTACT_POINTS: cassandra
+  CASSANDRA_PORT: "9042"
+  CASSANDRA_LOCAL_DC: ${CASSANDRA_DC:-datacenter1}
+  CASSANDRA_KEYSPACE: ${CASSANDRA_KEYSPACE:-app}
+
+x-env-mail: &env-mail
+  SMTP_HOST: mailpit
+  SMTP_PORT: "1025"
+
+x-env-storage: &env-storage
+  STORAGE_DRIVER: ${DOCKER_STORAGE_DRIVER:-s3}
+  S3_ENDPOINT: http://rustfs:9000
+  # Presigned URLs embed this host: it must be reachable from the browser/curl on the host.
+  S3_PUBLIC_ENDPOINT: http://localhost:${S3_HOST_PORT:-9000}
+  S3_REGION: us-east-1
+  S3_FORCE_PATH_STYLE: "true"
+  S3_ACCESS_KEY_ID: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+  S3_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+  S3_BUCKET: uploads
+  GCS_API_ENDPOINT: http://gcs:4443
+  GCS_PROJECT_ID: local-project
+  GCS_BUCKET: uploads
+
+# Pass-through on purpose: a real Stripe TEST key in the root .env reaches the containers.
+x-env-stripe: &env-stripe
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_placeholder}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_placeholder}
+
+x-env-edge: &env-edge
+  DOCS_ENABLED: ${DOCKER_DOCS_ENABLED:-true} # /docs (Scalar) + /openapi.json even in production mode
+
+# ---- app container defaults ---------------------------------------------------------------------
+x-app: &app
+  init: true # tini as PID 1: signal forwarding + zombie reaping
+  restart: unless-stopped
+  logging: *logging
+  networks: [backend]
+  env_file:
+    - path: .env.docker # optional, gitignored: extra app env for the containers only
+      required: false
+  stop_grace_period: 20s
+  ulimits:
+    nofile: { soft: 65535, hard: 65535 }
+  sysctls:
+    net.core.somaxconn: 4096
+    net.ipv4.ip_local_port_range: "1024 65535"
+
+# `develop.watch` rules shared by every app. `rebuild` works for both build targets (BuildKit keeps
+# the dependency layers cached; the dev target has no compile step at all).
+x-watch-libs: &watch-libs { action: rebuild, path: ./libs, ignore: [node_modules/, dist/] }
+x-watch-manifest: &watch-manifest { action: rebuild, path: ./package.json }
+x-watch-lockfile: &watch-lockfile { action: rebuild, path: ./bun.lock }
+
+services:
+  # ═══════════════════════════════ INFRA (no profile: always on) ═══════════════════════════════
+  postgres:
+    image: postgres:18.6-alpine3.24
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    shm_size: 128mb # the default 64 MB /dev/shm breaks parallel queries
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+    # Dev tuning for a 512 MB container (4 GB Docker Desktop budget, see docs/DOCKER.md).
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - effective_cache_size=384MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - maintenance_work_mem=64MB
+      - -c
+      - max_wal_size=1GB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
+      - -c
+      - jit=off # JIT compile time hurts OLTP p99
+      - -c
+      - shared_preload_libraries=pg_stat_statements
+      - -c
+      - pg_stat_statements.track=all
+      - -c
+      - track_io_timing=on
+      - -c
+      - log_min_duration_statement=500ms
+      - -c
+      - log_lock_waits=on
+    ports: ["127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"]
+    volumes:
+      # PG18 keeps PGDATA in /var/lib/postgresql/18/docker: mount the PARENT (the old
+      # /var/lib/postgresql/data path silently lands in an anonymous volume).
+      - pg-data:/var/lib/postgresql
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      # TCP (-h 127.0.0.1): the init-time server listens on the unix socket only, so a socket
+      # probe would report ready while docker-entrypoint-initdb.d is still running.
+      test:
+        - CMD-SHELL
+        - pg_isready -h 127.0.0.1 -p 5432 -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+      start_interval: 1s
+    deploy:
+      resources:
+        limits: { cpus: "1.5", memory: 512M }
+
+  redis:
+    image: redis:8.10.2-alpine3.23
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    # No password: host apps use the config default redis://localhost:6379 (port bound to 127.0.0.1).
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - everysec
+      - --save
+      - "3600 1 300 100 60 10000"
+      - --maxmemory
+      - 192mb
+      # BullMQ REQUIRES noeviction (queues + locks + cache share this instance). A cache-only
+      # instance would use allkeys-lfu instead.
+      - --maxmemory-policy
+      - noeviction
+      - --io-threads
+      - "2"
+      - --tcp-keepalive
+      - "60"
+      - --lazyfree-lazy-eviction
+      - "yes"
+      - --lazyfree-lazy-expire
+      - "yes"
+      - --lazyfree-lazy-user-del
+      - "yes"
+    ports: ["127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      # redis-cli exits 0 even on error replies: assert the PONG.
+      test: ["CMD-SHELL", "redis-cli ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+      start_interval: 1s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 256M }
+
+  cassandra:
+    image: cassandra:5.0.9
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    environment:
+      CASSANDRA_CLUSTER_NAME: boilerplate
+      # The DC name is what the apps' CASSANDRA_LOCAL_DC must equal (config default: datacenter1).
+      CASSANDRA_DC: ${CASSANDRA_DC:-datacenter1}
+      CASSANDRA_RACK: rack1
+      CASSANDRA_ENDPOINT_SNITCH: GossipingPropertyFileSnitch
+      CASSANDRA_NUM_TOKENS: "16"
+      # Small on purpose (4 GB Docker Desktop). Cassandra 5 on JDK 17 = G1: set MAX_HEAP_SIZE only
+      # (HEAP_NEWSIZE is CMS-only and ignored). Direct memory defaults to the heap size; cap it.
+      MAX_HEAP_SIZE: ${CASSANDRA_HEAP:-512M}
+      JVM_EXTRA_OPTS: -Dcassandra.skip_wait_for_gossip_to_settle=0 -XX:MaxDirectMemorySize=256M
+    ports: ["127.0.0.1:${CASSANDRA_HOST_PORT:-9042}:9042"]
+    volumes: [cassandra-data:/var/lib/cassandra]
+    ulimits:
+      nofile: { soft: 100000, hard: 100000 }
+      nproc: 32768
+      memlock: { soft: -1, hard: -1 }
+    healthcheck:
+      test: ["CMD-SHELL", "cqlsh -e 'describe keyspaces' > /dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 120s
+      start_interval: 5s
+    stop_grace_period: 60s
+    deploy:
+      resources:
+        # Measured ~1.05 GiB RSS idle with a 512M heap (pre-touched heap + direct + metaspace).
+        limits: { cpus: "2.0", memory: 1536M }
+
+  cassandra-init:
+    image: cassandra:5.0.9 # reused for cqlsh
+    restart: "no"
+    logging: *logging
+    networks: [backend]
+    depends_on:
+      cassandra: { condition: service_healthy }
+    environment:
+      CASSANDRA_HOST: cassandra
+      CASSANDRA_KEYSPACE: ${CASSANDRA_KEYSPACE:-app}
+      CASSANDRA_DC: ${CASSANDRA_DC:-datacenter1}
+      CASSANDRA_REPLICATION_FACTOR: "1"
+    entrypoint: ["/bin/sh", "/opt/cassandra-init/init.sh"]
+    volumes:
+      - ./docker/cassandra:/opt/cassandra-init:ro
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 256M }
+
+  kafka:
+    image: apache/kafka:4.3.1 # JVM image: the native image has no CLI tools (healthcheck, init)
+    hostname: kafka
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    environment:
+      CLUSTER_ID: ${KAFKA_CLUSTER_ID:-5L6g3nShT-eMCtK--X86sw}
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      # PLAINTEXT = containers (kafka:9092) · EXTERNAL = apps on the host (localhost:9094).
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:9094
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,EXTERNAL://localhost:${KAFKA_HOST_PORT:-9094}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      # Single node => EVERY internal topic needs RF=1 (default 3 => "group coordinator not available").
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_SHARE_COORDINATOR_STATE_TOPIC_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_NUM_PARTITIONS: 3
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # As in production: topics come from docker/kafka/topics.txt (kafka-init), never from typos.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 72
+      KAFKA_HEAP_OPTS: -Xms384m -Xmx384m
+    ports: ["127.0.0.1:${KAFKA_HOST_PORT:-9094}:9094"]
+    volumes: [kafka-data:/var/lib/kafka/data]
+    ulimits:
+      nofile: { soft: 100000, hard: 100000 }
+    healthcheck:
+      # CLI tools inherit KAFKA_HEAP_OPTS: shrink the probe JVM (never set JMX_PORT globally either).
+      test:
+        - CMD-SHELL
+        - KAFKA_HEAP_OPTS='-Xmx96m' /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1
+      interval: 10s
+      timeout: 15s
+      retries: 20
+      start_period: 30s
+      start_interval: 3s
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: "1.5", memory: 768M }
+
+  kafka-init:
+    image: apache/kafka:4.3.1
+    restart: "no"
+    logging: *logging
+    networks: [backend]
+    depends_on:
+      kafka: { condition: service_healthy }
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      TOPICS_FILE: /opt/kafka-init/topics.txt
+    entrypoint: ["/bin/bash", "/opt/kafka-init/create-topics.sh"]
+    volumes:
+      - ./docker/kafka:/opt/kafka-init:ro
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 256M }
+
+  mailpit:
+    image: axllent/mailpit:v1.31.3 # ships its own HEALTHCHECK (`/mailpit readyz`)
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    environment:
+      MP_DATABASE: /data/mailpit.db
+      MP_MAX_MESSAGES: 5000
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+      # Do NOT set MP_ENABLE_PROMETHEUS=0: it is parsed as a listen address -> crash loop.
+    ports:
+      - "127.0.0.1:${MAILPIT_SMTP_HOST_PORT:-1025}:1025"
+      - "127.0.0.1:${MAILPIT_UI_HOST_PORT:-8025}:8025"
+    volumes: [mailpit-data:/data]
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128M }
+
+  rustfs:
+    image: rustfs/rustfs:1.0.0 # S3-compatible (MinIO images are gone; LocalStack needs a token)
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    environment:
+      RUSTFS_VOLUMES: /data
+      RUSTFS_ADDRESS: 0.0.0.0:9000
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: 0.0.0.0:9001
+      RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      RUSTFS_OBS_LOGGER_LEVEL: warn
+    ports:
+      - "127.0.0.1:${S3_HOST_PORT:-9000}:9000"
+      - "127.0.0.1:${S3_CONSOLE_HOST_PORT:-9001}:9001"
+    volumes: [rustfs-data:/data] # named volume: inherits the image's uid 10001 ownership
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:9000/health > /dev/null"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+      start_interval: 1s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 256M }
+
+  gcs:
+    image: fsouza/fake-gcs-server:1.56.1
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    # ENTRYPOINT is ["/bin/fake-gcs-server","-data","/data"]; these flags are appended.
+    command:
+      - -scheme
+      - http
+      - -port
+      - "4443"
+      - -public-host
+      - localhost:${GCS_HOST_PORT:-4443}
+      - -backend
+      - filesystem
+      - -filesystem-root
+      - /storage
+      - -log-level
+      - warn
+    ports: ["127.0.0.1:${GCS_HOST_PORT:-4443}:4443"]
+    volumes: [gcs-data:/storage]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:4443/_internal/healthcheck"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 30s
+      start_interval: 1s
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128M }
+
+  storage-init:
+    image: rustfs/rustfs:1.0.0 # reused for its curl (supports --aws-sigv4)
+    restart: "no"
+    logging: *logging
+    networks: [backend]
+    depends_on:
+      rustfs: { condition: service_healthy }
+      gcs: { condition: service_healthy }
+    environment:
+      S3_ENDPOINT: http://rustfs:9000
+      S3_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
+      S3_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
+      S3_BUCKETS: uploads
+      GCS_ENDPOINT: http://gcs:4443
+      GCS_PROJECT_ID: local-project
+      GCS_BUCKETS: uploads
+    entrypoint: ["/bin/sh", "/opt/storage-init/init-buckets.sh"]
+    volumes:
+      - ./docker/storage:/opt/storage-init:ro
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 64M }
+
+  # Sentinel: `docker compose up --wait` only treats a one-shot container that EXITED as success
+  # when an enabled service depends on it with service_completed_successfully. Without an app
+  # profile nothing would, and `--wait` would fail on "kafka-init exited (0)". This idle process
+  # also means "infra bootstrapped": it starts only after all three init jobs succeeded.
+  infra-ready:
+    image: redis:8.10.2-alpine3.23 # any already-pulled image with busybox `sleep`
+    restart: unless-stopped
+    init: true # tini forwards SIGTERM: stops instantly
+    logging: *logging
+    network_mode: none
+    entrypoint: ["sleep", "2147483647"]
+    depends_on:
+      kafka-init: { condition: service_completed_successfully }
+      cassandra-init: { condition: service_completed_successfully }
+      storage-init: { condition: service_completed_successfully }
+    deploy:
+      resources:
+        limits: { cpus: "0.05", memory: 16M }
+
+  # ═══════════════════════════════ APPS: MONOLITH (profile monolith) ═══════════════════════════
+  monolith:
+    <<: *app
+    profiles: [monolith]
+    image: boilerplate/monolith:${TAG:-local}
+    build:
+      context: .
+      target: ${APP_TARGET:-runtime}
+      args: { APP: monolith }
+    environment:
+      <<:
+        - *env-base
+        - *env-auth
+        - *env-postgres
+        - *env-cassandra
+        - *env-mail
+        - *env-storage
+        - *env-stripe
+        - *env-edge
+      SERVICE_NAME: monolith
+      KAFKA_GROUP_ID: monolith
+      NODE_OPTIONS: --max-old-space-size=512
+    ports: ["127.0.0.1:${API_HOST_PORT:-3000}:3000"]
+    networks:
+      backend:
+        aliases: [api] # k6 and docs target http://api:3000 whichever topology runs
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      mailpit: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+      cassandra-init: { condition: service_completed_successfully }
+      storage-init: { condition: service_completed_successfully }
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 768M }
+    develop:
+      watch:
+        - action: rebuild
+          path: ./apps/monolith
+          ignore: [node_modules/, dist/, test/]
+        - *watch-libs
+        - *watch-manifest
+        - *watch-lockfile
+
+  # ═══════════════════════════════ APPS: MICROSERVICES (profile microservices) ═════════════════
+  gateway:
+    <<: *app
+    profiles: [microservices]
+    image: boilerplate/gateway:${TAG:-local}
+    build:
+      context: .
+      target: ${APP_TARGET:-runtime}
+      args: { APP: gateway }
+    environment:
+      <<: [*env-base, *env-auth, *env-storage, *env-edge]
+      SERVICE_NAME: gateway
+      KAFKA_GROUP_ID: gateway-push
+      NODE_OPTIONS: --max-old-space-size=384
+      # One address per service; grpc-js resolves every A record of a scaled service (round_robin).
+      IDENTITY_GRPC_URL: identity-service:50051
+      NOTIFICATIONS_GRPC_URL: notifications-service:50051
+      BILLING_GRPC_URL: billing-service:50051
+    ports: ["127.0.0.1:${API_HOST_PORT:-3000}:3000"]
+    networks:
+      backend:
+        aliases: [api]
+    depends_on:
+      redis: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+      storage-init: { condition: service_completed_successfully }
+      # service_started, not _healthy: dev-target images have no HEALTHCHECK; gRPC clients
+      # reconnect on their own.
+      identity-service: { condition: service_started }
+      notifications-service: { condition: service_started }
+      billing-service: { condition: service_started }
+    deploy:
+      resources:
+        limits: { cpus: "1.5", memory: 512M }
+    develop:
+      watch:
+        - action: rebuild
+          path: ./apps/gateway
+          ignore: [node_modules/, dist/, test/]
+        - *watch-libs
+        - *watch-manifest
+        - *watch-lockfile
+
+  identity-service:
+    <<: *app
+    profiles: [microservices]
+    image: boilerplate/identity-service:${TAG:-local}
+    build:
+      context: .
+      target: ${APP_TARGET:-runtime}
+      args: { APP: identity-service }
+    environment:
+      <<: [*env-base, *env-auth, *env-postgres]
+      SERVICE_NAME: identity-service
+      KAFKA_GROUP_ID: identity-service
+      NODE_OPTIONS: --max-old-space-size=320
+      GRPC_URL: 0.0.0.0:50051
+    # Published so an app on the host (e.g. `bun run dev:gateway`) reaches it at its default URL.
+    ports: ["127.0.0.1:${IDENTITY_GRPC_HOST_PORT:-50051}:50051"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+    deploy:
+      resources:
+        limits: { cpus: "1.5", memory: 448M }
+    develop:
+      watch:
+        - action: rebuild
+          path: ./apps/identity-service
+          ignore: [node_modules/, dist/, test/]
+        - *watch-libs
+        - *watch-manifest
+        - *watch-lockfile
+
+  notifications-service:
+    <<: *app
+    profiles: [microservices]
+    image: boilerplate/notifications-service:${TAG:-local}
+    build:
+      context: .
+      target: ${APP_TARGET:-runtime}
+      args: { APP: notifications-service }
+    environment:
+      <<: [*env-base, *env-cassandra, *env-mail]
+      SERVICE_NAME: notifications-service
+      KAFKA_GROUP_ID: notifications-service
+      NODE_OPTIONS: --max-old-space-size=320
+      GRPC_URL: 0.0.0.0:50051
+    ports: ["127.0.0.1:${NOTIFICATIONS_GRPC_HOST_PORT:-50052}:50051"]
+    depends_on:
+      redis: { condition: service_healthy }
+      mailpit: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+      cassandra-init: { condition: service_completed_successfully }
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 448M }
+    develop:
+      watch:
+        - action: rebuild
+          path: ./apps/notifications-service
+          ignore: [node_modules/, dist/, test/]
+        - *watch-libs
+        - *watch-manifest
+        - *watch-lockfile
+
+  billing-service:
+    <<: *app
+    profiles: [microservices]
+    image: boilerplate/billing-service:${TAG:-local}
+    build:
+      context: .
+      target: ${APP_TARGET:-runtime}
+      args: { APP: billing-service }
+    environment:
+      <<: [*env-base, *env-postgres, *env-stripe]
+      SERVICE_NAME: billing-service
+      KAFKA_GROUP_ID: billing-service
+      NODE_OPTIONS: --max-old-space-size=320
+      GRPC_URL: 0.0.0.0:50051
+    ports: ["127.0.0.1:${BILLING_GRPC_HOST_PORT:-50053}:50051"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      kafka-init: { condition: service_completed_successfully }
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 448M }
+    develop:
+      watch:
+        - action: rebuild
+          path: ./apps/billing-service
+          ignore: [node_modules/, dist/, test/]
+        - *watch-libs
+        - *watch-manifest
+        - *watch-lockfile
+
+  # ═══════════════════════════════ TOOLS (profile tools) ═══════════════════════════════════════
+  kafka-ui:
+    image: kafbat/kafka-ui:v1.5.0
+    profiles: [tools]
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    depends_on:
+      kafka: { condition: service_healthy }
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+      DYNAMIC_CONFIG_ENABLED: "true"
+      JAVA_OPTS: -Xmx256m -XX:+UseSerialGC
+    ports: ["127.0.0.1:${KAFKA_UI_HOST_PORT:-8080}:8080"]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 448M }
+
+  # ═══════════════════════════════ OBSERVABILITY (profiles observability / logs) ════════════════
+  jaeger:
+    # 2.20.0, NOT 2.21+: 2.21 removed the /api/services + /api/traces endpoints that Grafana's
+    # Jaeger datasource calls (health 404, search broken). Default all-in-one config: in-memory
+    # store, OTLP gRPC 4317 / HTTP 4318, UI 16686, own metrics :8888, health :13133.
+    image: jaegertracing/jaeger:2.20.0
+    profiles: [observability]
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    ports:
+      - "127.0.0.1:${JAEGER_UI_HOST_PORT:-16686}:16686"
+      - "127.0.0.1:${OTLP_GRPC_HOST_PORT:-4317}:4317" # host apps: OTEL_EXPORTER_OTLP_ENDPOINT
+      - "127.0.0.1:${OTLP_HTTP_HOST_PORT:-4318}:4318" # = http://localhost:4318
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:13133/status"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+      start_interval: 2s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    profiles: [observability]
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-lifecycle # POST /-/reload after editing prometheus.yml
+      - --web.enable-remote-write-receiver # k6 experimental-prometheus-rw output
+    extra_hosts:
+      - "host.docker.internal:host-gateway" # scrape apps running on the host (job host-apps)
+    ports: ["127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"]
+    volumes:
+      - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9090/-/healthy"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+      start_interval: 2s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 384M }
+
+  grafana:
+    image: grafana/grafana:13.2.2
+    profiles: [observability, logs]
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_ANALYTICS_REPORTING_ENABLED: "false"
+      GF_ANALYTICS_CHECK_FOR_UPDATES: "false"
+      GF_NEWS_NEWS_FEED_ENABLED: "false"
+      # Grafana 13 "updates" its bundled core datasource plugins from grafana.com at startup and
+      # stops the bundled Prometheus plugin first: the datasource is gone until the download ends
+      # (forever offline). Use the bundled plugins as shipped.
+      GF_PLUGINS_PREINSTALL_DISABLED: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/nestjs-overview.json
+    # 3300, not 3000-3003: those are the API and the services' host-dev ports.
+    ports: ["127.0.0.1:${GRAFANA_HOST_PORT:-3300}:3000"]
+    volumes:
+      - ./docker/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/grafana/dashboards:/etc/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+      start_interval: 2s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 256M }
+
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:v0.20.1
+    profiles: [observability]
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      DATA_SOURCE_NAME: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}?sslmode=disable
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
+
+  redis-exporter:
+    image: oliver006/redis_exporter:v1.92.1-alpine
+    profiles: [observability]
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    depends_on:
+      redis: { condition: service_healthy }
+    environment:
+      REDIS_ADDR: redis://redis:6379
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
+
+  loki:
+    image: grafana/loki:3.7.8 # distroless (no shell) => no healthcheck; single binary, tsdb v13
+    profiles: [logs]
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    ports: ["127.0.0.1:${LOKI_HOST_PORT:-3100}:3100"]
+    volumes: [loki-data:/loki]
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 384M }
+
+  alloy:
+    image: grafana/alloy:v1.20.0
+    profiles: [logs]
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    depends_on:
+      loki: { condition: service_started }
+    environment:
+      COMPOSE_PROJECT_NAME: ${COMPOSE_PROJECT_NAME} # only this project's containers are shipped
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    ports: ["127.0.0.1:${ALLOY_HOST_PORT:-12345}:12345"]
+    volumes:
+      - ./docker/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - alloy-data:/var/lib/alloy/data
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 192M }
+
+  # ═══════════════════════════════ LOAD TEST (profile loadtest) ════════════════════════════════
+  k6:
+    image: grafana/k6:2.3.0
+    profiles: [loadtest]
+    restart: "no"
+    logging: *logging
+    networks: [backend]
+    environment:
+      BASE_URL: ${K6_BASE_URL:-http://api:3000}
+      RATE: ${K6_RATE:-5} # new-user journeys per second (5 requests each, 2 Argon2id)
+      READ_RATE: ${K6_READ_RATE:-0} # extra authenticated read iterations per second
+      DURATION: ${K6_DURATION:-1m}
+      P95_MS: ${K6_P95_MS:-250}
+      MAX_ERROR_RATE: ${K6_MAX_ERROR_RATE:-0.01}
+      # Results -> Prometheus (Grafana "k6" row). Set K6_OUT= (empty) without the observability profile.
+      K6_OUT: ${K6_OUT-experimental-prometheus-rw}
+      K6_PROMETHEUS_RW_SERVER_URL: http://prometheus:9090/api/v1/write
+      K6_PROMETHEUS_RW_TREND_STATS: p(50),p(95),p(99),max
+      K6_WEB_DASHBOARD: "true"
+      K6_WEB_DASHBOARD_HOST: 0.0.0.0
+      K6_WEB_DASHBOARD_PERIOD: 2s
+      K6_WEB_DASHBOARD_EXPORT: /reports/k6-report.html
+    command: ["run", "/scripts/script.js"]
+    ports: ["127.0.0.1:${K6_DASHBOARD_HOST_PORT:-5665}:5665"]
+    volumes:
+      - ./docker/k6:/scripts:ro
+      - ./docker/k6/reports:/reports # gitignored; HTML report of the last run
+    deploy:
+      resources:
+        limits: { cpus: "2.0", memory: 512M }
+
+networks:
+  backend: {} # project-scoped (<project>_backend): parallel projects never share a network
+
+volumes:
+  pg-data:
+  redis-data:
+  cassandra-data:
+  kafka-data:
+  mailpit-data:
+  rustfs-data:
+  gcs-data:
+  prometheus-data:
+  grafana-data:
+  loki-data:
+  alloy-data:

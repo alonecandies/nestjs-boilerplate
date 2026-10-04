@@ -1,0 +1,21 @@
+# Bun is the package manager / script runner ONLY. The runtime is Node.js 24 LTS.
+
+[install]
+# Pin exact versions on `bun add` (the root "catalog" holds every version once).
+exact = true
+# Hoisted (npm-like) layout: exactly ONE copy of every package version in the root node_modules.
+# Why not Bun's default "isolated" linker for workspaces: NestJS packages declare each other as
+# cyclic optional peers (@nestjs/core <-> @nestjs/microservices <-> @nestjs/websockets, plus
+# @nestjs/terminus, @nestjs/platform-socket.io ...). The isolated linker creates one store copy per
+# distinct peer set, so two workspace packages ended up with different @nestjs/core instances
+# ("realm" split: broken instanceof checks, duplicated DI tokens, ClientsModule loaded twice).
+# Dependency hygiene is still enforced: every package must declare what it imports — Biome's
+# `correctness/noUndeclaredDependencies` rule (error) checks each file against its own package.json.
+# Per-service Docker pruning still works: `bun install --production --filter ./apps/<app>`.
+linker = "hoisted"
+# Supply-chain hardening (optional): refuse versions younger than N seconds.
+# minimumReleaseAge = 259200
+
+[run]
+# Never alias `node` -> `bun` inside package.json scripts; always run on Node.js.
+bun = false

@@ -1,0 +1,46 @@
+{
+  "name": "@app/auth",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "JWT authentication (passport-jwt, HS256, local verification), refresh tokens, Redis access-token denylist, Argon2id password hashing and RBAC guards/decorators for HTTP, GraphQL and WebSocket.",
+  "exports": {
+    ".": {
+      "@app/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project auth",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@app/common": "workspace:*",
+    "@app/config": "workspace:*",
+    "@app/redis": "workspace:*",
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@nestjs/jwt": "catalog:",
+    "@nestjs/passport": "catalog:",
+    "@node-rs/argon2": "catalog:",
+    "ioredis": "catalog:",
+    "lodash-es": "catalog:",
+    "passport": "catalog:",
+    "passport-jwt": "catalog:",
+    "passport-local": "catalog:",
+    "reflect-metadata": "catalog:",
+    "rxjs": "catalog:",
+    "uuid": "catalog:"
+  },
+  "devDependencies": {
+    "@types/lodash-es": "catalog:",
+    "@types/passport-jwt": "catalog:",
+    "@types/passport-local": "catalog:",
+    "fastify": "catalog:"
+  }
+}

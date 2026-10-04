@@ -1,0 +1,71 @@
+# Prometheus v3: scrapes every NestJS app's GET /metrics (prom-client via @willsoto/nestjs-prometheus;
+# `http_request_duration_seconds{method,route,status_code}` + Node default metrics) and the exporters.
+#
+# Apps are found with DNS service discovery against Docker's embedded DNS: one A record per running
+# replica, so `docker compose up --scale identity-service=3` is picked up automatically and services
+# whose profile is not running simply yield no targets (instead of permanently-down static targets).
+# Every app container serves HTTP (health + metrics) on port 3000 inside the network.
+# Prometheus sets the `service` label from the DNS name; the apps must not add their own.
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    env: local
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: nestjs-apps
+    metrics_path: /metrics
+    dns_sd_configs:
+      - names:
+          - monolith
+          - gateway
+          - identity-service
+          - notifications-service
+          - billing-service
+        type: A
+        port: 3000
+        refresh_interval: 15s
+    relabel_configs:
+      - source_labels: [__meta_dns_name]
+        target_label: service
+      - source_labels: [__address__]
+        target_label: instance
+
+  # Apps started on the host (`bun run dev:*`), reached through host.docker.internal
+  # (Docker Desktop built-in; `extra_hosts: host-gateway` in compose for Linux). Default host ports:
+  # 3000 monolith|gateway, 3001 identity, 3002 notifications, 3003 billing. Targets that are not
+  # running are simply `down`. NOTE: when the API runs IN compose, host port 3000 is that container
+  # (published), so service="host:3000" then duplicates it — filter it out in Grafana.
+  - job_name: host-apps
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - host.docker.internal:3000
+          - host.docker.internal:3001
+          - host.docker.internal:3002
+          - host.docker.internal:3003
+    relabel_configs:
+      - source_labels: [__address__]
+        regex: "[^:]+:(\\d+)"
+        replacement: host:$1
+        target_label: service
+
+  - job_name: jaeger
+    static_configs:
+      - targets: ["jaeger:8888"]
+        labels: { service: jaeger }
+
+  - job_name: postgres
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+        labels: { service: postgres }
+
+  - job_name: redis
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+        labels: { service: redis }

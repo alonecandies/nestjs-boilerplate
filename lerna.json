@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/lerna/schemas/lerna-schema.json",
+  "version": "independent",
+  "npmClient": "bun",
+  "command": {
+    "version": {
+      "conventionalCommits": true,
+      "changelogPreset": "conventionalcommits",
+      "message": "chore(release): publish",
+      "allowBranch": ["master", "main", "release/*"],
+      "private": true,
+      "push": false,
+      "createRelease": false,
+      "runScriptsOnLockfileUpdate": false
+    },
+    "run": {
+      "stream": true
+    }
+  }
+}
