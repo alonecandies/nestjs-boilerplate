@@ -24,8 +24,6 @@
     "@nestjs/common": "catalog:",
     "@nestjs/config": "catalog:",
     "@nestjs/core": "catalog:",
-    "reflect-metadata": "catalog:",
-    "rxjs": "catalog:",
     "stripe": "catalog:"
   }
 }

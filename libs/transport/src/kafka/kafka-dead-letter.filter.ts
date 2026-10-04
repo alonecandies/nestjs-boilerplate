@@ -6,9 +6,8 @@ import {
   Logger,
   type RpcExceptionFilter,
 } from '@nestjs/common';
-import { type KafkaContext, KafkaRetriableException } from '@nestjs/microservices';
+import { KafkaContext, KafkaRetriableException } from '@nestjs/microservices';
 import { defer, map, type Observable, throwError } from 'rxjs';
-import { isInstanceAcrossRealms, isKafkaContext } from '../context/realm.js';
 import { errorTypeOf, sendToDeadLetter } from './dead-letter.js';
 
 /**
@@ -28,8 +27,9 @@ import { errorTypeOf, sendToDeadLetter } from './dead-letter.js';
  *   kafkajs redelivers the message later. Nothing is lost; at worst it is processed twice, which
  *   handlers tolerate by deduplicating on the envelope id.
  * - Non-Kafka contexts are rethrown untouched.
- * - The context and `KafkaRetriableException` are recognised across `@nestjs/microservices` copies
- *   (`context/realm.ts`): the context Nest hands us comes from `@nestjs/core`'s copy, not ours.
+ * - Transient failures reach it only after `KafkaRetryInterceptor` (applied by
+ *   `@KafkaConsumerController()`) has retried them; replay the dead-letter topic with
+ *   `replayDeadLetters` (`scripts/kafka-dlq-replay.mjs`) once the cause is fixed.
  */
 @Catch()
 export class KafkaDeadLetterFilter implements RpcExceptionFilter<unknown> {
@@ -37,10 +37,7 @@ export class KafkaDeadLetterFilter implements RpcExceptionFilter<unknown> {
 
   catch(exception: unknown, host: ArgumentsHost): Observable<null> {
     const context = host.getType() === 'rpc' ? host.switchToRpc().getContext<unknown>() : undefined;
-    if (
-      !isKafkaContext(context) ||
-      isInstanceAcrossRealms(exception, KafkaRetriableException, 'KafkaRetriableException')
-    ) {
+    if (!(context instanceof KafkaContext) || exception instanceof KafkaRetriableException) {
       return throwError(() => exception);
     }
     return defer(() => this.deadLetter(context, exception)).pipe(map(() => null));

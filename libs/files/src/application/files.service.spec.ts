@@ -2,7 +2,7 @@ import { Readable } from 'node:stream';
 import { makeAuthUser, Role } from '@app/auth';
 import { DomainValidationException, generateId } from '@app/common';
 import { type StorageConfig, storageConfig } from '@app/config';
-import { InMemoryStorageService, type StorageService } from '@app/storage';
+import { InMemoryStorageService, type StorageService, type StoredObject } from '@app/storage';
 import { createMock } from '@app/testing';
 import { Logger } from '@nestjs/common';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -11,6 +11,7 @@ import {
   FileNotFoundException,
   FileTooLargeException,
   UnsupportedFileTypeException,
+  UploadCapacityExceededException,
 } from '../domain/files.errors.js';
 import { FilesService, UPLOADED_BY_METADATA_KEY } from './files.service.js';
 
@@ -102,6 +103,97 @@ describe('FilesService', () => {
         service.upload(alice, { filename: 'a.txt', contentType: 'text/plain', body: failing }),
       ).rejects.toThrow('limit reached');
       expect(storage.listKeys()).toEqual([]);
+    });
+  });
+
+  describe('upload concurrency cap (STORAGE_MAX_CONCURRENT_UPLOADS)', () => {
+    const MAX = 2;
+    const capped: StorageConfig = storageConfig.parse({
+      STORAGE_MAX_UPLOAD_BYTES: '1000',
+      STORAGE_MAX_CONCURRENT_UPLOADS: String(MAX),
+    });
+
+    /** A storage port whose uploads stay pending until the test settles them one by one. */
+    function slowStorage() {
+      const pending: { resolve: () => void; reject: (error: Error) => void }[] = [];
+      const port = createMock<StorageService>({
+        upload: (input: { key: string; contentType: string }) =>
+          new Promise<StoredObject>((resolve, reject) => {
+            pending.push({
+              resolve: () => resolve({ key: input.key, contentType: input.contentType }),
+              reject,
+            });
+          }),
+      });
+      return { port, pending };
+    }
+
+    const params = () => ({
+      filename: 'a.txt',
+      contentType: 'text/plain',
+      body: Readable.from(['x']),
+    });
+
+    it('rejects upload N+1 with a 503 before touching storage while N are in flight', async () => {
+      const { port, pending } = slowStorage();
+      const files = new FilesService(port, capped);
+
+      const inFlight = Array.from({ length: MAX }, () => files.upload(alice, params()));
+      const extra = files.upload(bob, params());
+
+      await expect(extra).rejects.toBeInstanceOf(UploadCapacityExceededException);
+      await expect(extra).rejects.toMatchObject({
+        code: 'UPLOAD_CAPACITY_EXCEEDED',
+        httpStatus: 503,
+        retryAfterSec: 5,
+        details: { maxConcurrentUploads: MAX, retryAfterSec: 5 },
+      });
+      expect(port.upload).toHaveBeenCalledTimes(MAX);
+
+      for (const p of pending) p.resolve();
+      await expect(Promise.all(inFlight)).resolves.toHaveLength(MAX);
+    });
+
+    it('frees the slot when an upload completes and when it fails', async () => {
+      const { port, pending } = slowStorage();
+      const files = new FilesService(port, capped);
+
+      const ok = files.upload(alice, params());
+      const failing = files.upload(alice, params());
+      await expect(files.upload(alice, params())).rejects.toBeInstanceOf(
+        UploadCapacityExceededException,
+      );
+
+      pending[0]?.resolve();
+      await ok;
+      const afterSuccess = files.upload(alice, params()); // takes the freed slot
+      expect(port.upload).toHaveBeenCalledTimes(3);
+
+      pending[1]?.reject(new Error('bucket down'));
+      await expect(failing).rejects.toThrow('bucket down');
+      const afterFailure = files.upload(alice, params()); // takes the slot of the failed one
+      expect(port.upload).toHaveBeenCalledTimes(4);
+      await expect(files.upload(alice, params())).rejects.toBeInstanceOf(
+        UploadCapacityExceededException,
+      );
+
+      for (const p of pending.slice(2)) p.resolve();
+      await Promise.all([afterSuccess, afterFailure]);
+    });
+
+    it('checks the content type first: a 415 never takes (or leaks) a slot', async () => {
+      const { port, pending } = slowStorage();
+      const files = new FilesService(port, capped);
+      const svg = { ...params(), contentType: 'image/svg+xml' };
+
+      for (let i = 0; i <= MAX; i += 1) {
+        await expect(files.upload(alice, svg)).rejects.toBeInstanceOf(UnsupportedFileTypeException);
+      }
+      const accepted = Array.from({ length: MAX }, () => files.upload(alice, params()));
+      expect(port.upload).toHaveBeenCalledTimes(MAX);
+
+      for (const p of pending) p.resolve();
+      await Promise.all(accepted);
     });
   });
 

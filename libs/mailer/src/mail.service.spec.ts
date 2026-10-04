@@ -1,5 +1,6 @@
+import { EventEmitter } from 'node:events';
 import { mailConfig } from '@app/config';
-import { Module } from '@nestjs/common';
+import { Logger, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { MailerModule, MailerService } from '@nestjs-modules/mailer';
 import type { Queue } from 'bullmq';
@@ -17,7 +18,7 @@ function createQueue(): Queue<MailJobData, void, MailTemplate> & {
   const add = vi.fn(async (_name: string, _data: MailJobData, opts?: { jobId?: string }) => ({
     id: opts?.jobId ?? 'auto-1',
   }));
-  return { add } as unknown as Queue<MailJobData, void, MailTemplate> & {
+  return { add, on: vi.fn() } as unknown as Queue<MailJobData, void, MailTemplate> & {
     add: ReturnType<typeof vi.fn>;
   };
 }
@@ -140,5 +141,25 @@ describe('MailService.sendNow', () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+describe('MailService queue errors', () => {
+  it('listens to the queue "error" event from construction and logs through the Nest logger, throttled', () => {
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const { add } = createQueue();
+    const queue = Object.assign(new EventEmitter(), { add }) as unknown as EventEmitter &
+      Queue<MailJobData, void, MailTemplate>;
+
+    // No lifecycle hook is called: the listener must exist as soon as the provider is created,
+    // because a queue whose Redis is down at boot errors before any onModuleInit runs.
+    new MailService(queue, createMailer(), cfg);
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      queue.emit('error', new Error('connect ECONNREFUSED 127.0.0.1:6379'));
+    }
+
+    expect(queue.listenerCount('error')).toBe(1);
+    expect(error).toHaveBeenCalledOnce();
+    expect(String(error.mock.calls[0]?.[0])).toContain('Mail queue error: connect ECONNREFUSED');
   });
 });

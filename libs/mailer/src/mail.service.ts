@@ -4,7 +4,7 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { MailerService } from '@nestjs-modules/mailer';
 import { Queue } from 'bullmq';
 import type { MailJobData, MailMessage } from './mail.types.js';
-import { defaultMailContext, toMailJobId } from './mail.util.js';
+import { createThrottledErrorLog, defaultMailContext, toMailJobId } from './mail.util.js';
 import { MAIL_JOB_OPTIONS, MAIL_QUEUE, type MailTemplate } from './mailer.constants.js';
 
 /** Result of `enqueue`: the BullMQ job id (the idempotency key when one was given). */
@@ -21,11 +21,21 @@ export interface EnqueuedMail {
 export class MailService {
   private readonly logger = new Logger(MailService.name);
 
+  /**
+   * The queue's Redis connection reports outages and reconnect attempts as `error` events. With no
+   * listener BullMQ falls back to `console.error` (raw stacks outside pino, one per attempt), so
+   * they are logged here instead, throttled. The listener is attached in the constructor, not in
+   * `onModuleInit`: the queue starts connecting as soon as its provider is created, and a Redis
+   * that is down at boot reports ECONNREFUSED while other providers (Cassandra, Postgres) are
+   * still being created, long before any `onModuleInit` hook runs.
+   */
   constructor(
     @InjectQueue(MAIL_QUEUE) private readonly queue: Queue<MailJobData, void, MailTemplate>,
     private readonly mailer: MailerService,
     @Inject(mailConfig.KEY) private readonly cfg: MailConfig,
-  ) {}
+  ) {
+    this.queue.on('error', createThrottledErrorLog(this.logger, 'Mail queue error'));
+  }
 
   /**
    * Adds the mail to the `mail` queue. The job is named after the template, which makes queue

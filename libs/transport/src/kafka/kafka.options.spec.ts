@@ -24,6 +24,7 @@ describe('createKafkaClientConfig', () => {
       connectionTimeout: 3000,
       requestTimeout: 30_000,
       logLevel: logLevel.WARN,
+      logCreator: expect.any(Function),
       retry: { initialRetryTime: 300, maxRetryTime: 30_000 },
     });
     expect(client.retry).not.toHaveProperty('retries');

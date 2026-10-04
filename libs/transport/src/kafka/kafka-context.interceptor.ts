@@ -7,9 +7,9 @@ import {
   type NestInterceptor,
   Optional,
 } from '@nestjs/common';
+import { KafkaContext } from '@nestjs/microservices';
 import { CLS_ID, ClsService } from 'nestjs-cls';
 import { Observable } from 'rxjs';
-import { isKafkaContext } from '../context/realm.js';
 import { RPC_CLS_KEYS } from '../context/transport-context.js';
 
 const headerString = (headers: unknown, name: string): string | undefined => {
@@ -39,8 +39,7 @@ export class KafkaContextInterceptor implements NestInterceptor {
     if (cls === undefined || getContextType(context) !== 'rpc') return next.handle();
     const rpc = context.switchToRpc();
     const kafka = rpc.getContext<unknown>();
-    // Structural: the context comes from @nestjs/core's copy of @nestjs/microservices (realm.ts).
-    if (!isKafkaContext(kafka)) return next.handle();
+    if (!(kafka instanceof KafkaContext)) return next.handle();
 
     const data = rpc.getData<unknown>();
     const eventId = field(data, 'id');

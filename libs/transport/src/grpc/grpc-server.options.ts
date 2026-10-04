@@ -11,12 +11,16 @@ import {
 } from '@nestjs/microservices';
 import { GRPC_KEEPALIVE } from './grpc.constants.js';
 import { GrpcHealthService, type HealthServer } from './grpc-health.js';
+import { createGrpcServerCredentials } from './grpc-tls.js';
 
 /** Extra knobs for `createGrpcServerOptions` / `createGrpcServerStrategy`. */
 export interface GrpcServerOptionsExtras {
   /** Health service to attach. Default: a new one, created SERVING (options) or NOT_SERVING (strategy). */
   health?: GrpcHealthService;
-  /** Expose gRPC server reflection (grpcurl, Postman, Kreya). Default `true`. */
+  /**
+   * Expose gRPC server reflection (grpcurl, Postman, Kreya). Default `grpcConfig.reflection`
+   * (`GRPC_REFLECTION`, else on unless `NODE_ENV=production`).
+   */
   reflection?: boolean;
   /** Raw `grpc.*` channel options, merged over the defaults below. */
   channelOptions?: ChannelOptions;
@@ -49,7 +53,9 @@ function isHealthServer(value: unknown): value is HealthServer {
  * `GrpcOptions` for a server hosting `packages`: bind address and message limits from
  * `grpcConfig`, proto-loader options that match the ts-proto codegen, keepalive,
  * `gracefulShutdown` (drain with `tryShutdown`), and `grpc.health.v1` plus reflection attached
- * through `onLoadPackageDefinition`.
+ * through `onLoadPackageDefinition`. With `grpcConfig.tls` the server speaks TLS (mutual TLS when
+ * `requireClientCert`); without it, plaintext with no caller authentication at all, so the port
+ * must only be reachable by trusted callers (NetworkPolicy, mesh).
  *
  * Use it directly for a standalone `NestFactory.createMicroservice`. Hybrid apps use
  * `connectGrpcServer`, which also reports health around listen and close.
@@ -61,11 +67,13 @@ export function createGrpcServerOptions(
 ): GrpcOptions {
   const resolved = resolveGrpcPackages(packages);
   const health = extras.health ?? new GrpcHealthService(resolved.services, 'SERVING');
-  const reflection = extras.reflection ?? true;
+  const reflection = extras.reflection ?? cfg.reflection;
+  const credentials = createGrpcServerCredentials(cfg.tls);
   return {
     transport: Transport.GRPC,
     options: {
       url: cfg.url,
+      ...(credentials === undefined ? {} : { credentials }),
       package: resolved.packages,
       protoPath: resolved.protoPath,
       loader: { ...GRPC_LOADER_OPTIONS, includeDirs: [...GRPC_LOADER_OPTIONS.includeDirs] },

@@ -50,7 +50,11 @@ export function createSubscriptionAuthenticator(
 }
 
 export interface GraphqlWsAuthOptions {
-  /** Refuse connections without a token (default `false`: resolvers' guards decide per operation). */
+  /**
+   * Refuse connections without a token (default `true`). Every subscription needs a user, and an
+   * anonymous socket is never timed out or rate-limited. Pass `false` only when some subscriptions
+   * are public: anonymous sockets are then accepted and each operation's guards decide.
+   */
   requireAuth?: boolean;
 }
 
@@ -62,6 +66,7 @@ export interface GraphqlWsAuthHandlers {
 
 /**
  * Authenticates graphql-ws connections once, at `connection_init`:
+ * - Without a token the connection is refused (4403), unless `requireAuth: false`.
  * - With a valid token, the `AuthUser` goes on `ctx.extra.user`. The context function copies it
  *   into `req.user` for every operation, and guards read it there.
  * - An invalid, expired or revoked token returns `false`. graphql-ws then closes with 4403
@@ -91,7 +96,7 @@ export function createGraphqlWsAuthHandlers(
   return {
     async onConnect(ctx) {
       const token = extractConnectionToken(ctx.connectionParams);
-      if (token === undefined) return !options.requireAuth;
+      if (token === undefined) return !(options.requireAuth ?? true);
       try {
         const user = await authenticate(token);
         ctx.extra.user = user;

@@ -61,12 +61,15 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
       expect(response.json()).toMatchObject({ status: 'ok' });
     });
 
-    it('GET /health/ready checks postgres, cassandra, redis and kafka (no broker → 503)', async () => {
+    it('GET /health/ready → 200 on postgres, cassandra and redis: an unreachable Kafka never un-readies the API', async () => {
+      // KAFKA_BROKERS points at a closed port: event publishing is best-effort, so the REST/GraphQL
+      // API must stay in rotation during a broker outage.
       const response = await inject({ method: 'GET', url: '/health/ready' });
-      const body = response.json<{ info: object; error: object }>();
+      const body = response.json<{ status: string; info: object; error: object }>();
+      expect(response.statusCode).toBe(200);
+      expect(body.status).toBe('ok');
       expect(Object.keys({ ...body.info, ...body.error }).sort()).toEqual([
         'cassandra',
-        'kafka',
         'postgres',
         'redis',
       ]);
@@ -75,8 +78,7 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
         cassandra: { status: 'up' },
         redis: { status: 'up' },
       });
-      expect(body.error).toMatchObject({ kafka: { status: 'down' } });
-      expect(response.statusCode).toBe(503);
+      expect(body.error).toEqual({});
     });
 
     it('GET /metrics → Prometheus text with the HTTP latency histogram', async () => {
@@ -359,7 +361,7 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
         headers: bearer(tokens.accessToken),
       });
       expect(response.statusCode, response.body).toBe(200);
-      expect(response.json()).toEqual({ items: [] });
+      expect(response.json()).toEqual({ items: [], nextCursor: null });
       const select = e2e.postgres.queries.find(({ sql }) => sql.includes('from "payments"'));
       expect(select?.params).toContain(tokens.user.id);
     });

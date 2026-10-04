@@ -6,6 +6,7 @@ import { Job, UnrecoverableError } from 'bullmq';
 import { isPermanentMailError } from './mail.errors.js';
 import { MailService } from './mail.service.js';
 import type { MailJobData } from './mail.types.js';
+import { createThrottledErrorLog } from './mail.util.js';
 import { DEFAULT_MAIL_CONCURRENCY, MAIL_QUEUE, type MailTemplate } from './mailer.constants.js';
 
 type MailJob = Job<MailJobData, void, MailTemplate>;
@@ -18,6 +19,7 @@ type MailJob = Job<MailJobData, void, MailTemplate>;
 @Processor(MAIL_QUEUE, { concurrency: DEFAULT_MAIL_CONCURRENCY })
 export class MailProcessor extends WorkerHost implements OnApplicationBootstrap {
   private readonly logger = new Logger(MailProcessor.name);
+  private readonly logWorkerError = createThrottledErrorLog(this.logger, 'Mail worker error');
 
   constructor(
     private readonly mail: MailService,
@@ -43,6 +45,15 @@ export class MailProcessor extends WorkerHost implements OnApplicationBootstrap 
       // No retry can fix a template bug or a permanent SMTP rejection, so the job fails now.
       throw new UnrecoverableError(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  /**
+   * Connection errors of the worker (its blocking client's included: BullMQ re-emits them here).
+   * Without a listener BullMQ prints each one with `console.error`, bypassing pino.
+   */
+  @OnWorkerEvent('error')
+  onError(error: Error): void {
+    this.logWorkerError(error);
   }
 
   @OnWorkerEvent('failed')

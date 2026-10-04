@@ -79,7 +79,7 @@ describe('DrizzleUsersRepository', () => {
     expect(executed[0]?.sql).toBe('select "id" from "users" where "users"."email" = $1 limit $2');
   });
 
-  it('findByIds: ONE `IN (...)` query; no query for an empty batch', async () => {
+  it('findByIds: ONE query with ONE array parameter (same SQL for any batch size); none for an empty batch', async () => {
     const [a, b] = [generateId(), generateId()];
     const { repository, executed } = setup(() => [row(a), row(b)]);
 
@@ -89,7 +89,11 @@ describe('DrizzleUsersRepository', () => {
     const found = await repository.findByIds([a, b]);
     expect(found.map((user) => user.id)).toEqual([a, b]);
     expect(executed).toHaveLength(1);
-    expect(executed[0]?.sql).toContain('where "users"."id" in ($1, $2)');
+    expect(executed[0]?.sql).toMatch(/where "users"\."id" = any\(\$1::uuid\[\]\)$/);
+    expect(executed[0]?.params).toEqual([[a, b]]);
+
+    await repository.findByIds([a, b, generateId()]);
+    expect(executed[1]?.sql).toBe(executed[0]?.sql);
   });
 
   it('list: keyset page on id DESC with limit+1 look-ahead and an escaped ILIKE search', async () => {
@@ -176,11 +180,25 @@ describe('DrizzleUsersRepository', () => {
     );
   });
 
-  it('findAggregate restores the aggregate', async () => {
+  it('findAggregate locks the row (FOR UPDATE) and restores the aggregate', async () => {
     const id = generateId();
-    const { repository } = setup(() => [fullRow(id)]);
+    const { repository, executed } = setup(() => [fullRow(id)]);
     const user = await repository.findAggregate(id);
     expect(user).toBeInstanceOf(UserAggregate);
     expect(user?.roles).toEqual(['admin', 'user']);
+    expect(executed[0]?.sql).toMatch(/where "users"\."id" = \$1 limit \$2 for update$/);
+  });
+
+  it('countAdmins takes the role-change advisory lock first, then counts admins', async () => {
+    const { repository, executed } = setup((query) =>
+      query.startsWith('select count') ? [{ admins: '2' }] : [],
+    );
+    await expect(repository.countAdmins()).resolves.toBe(2);
+    expect(executed[0]).toEqual({
+      sql: 'select pg_advisory_xact_lock(hashtext($1))',
+      params: ['identity:user-roles'],
+    });
+    expect(executed[1]?.sql).toBe('select count(*) from "users" where "users"."roles" @> $1');
+    expect(executed[1]?.params).toEqual(['{"admin"}']);
   });
 });

@@ -27,6 +27,22 @@ const optionalString = (max: number) =>
     .nullish()
     .transform((value) => (value === null || value === '' ? undefined : value));
 
+/** Trimmed; blank → undefined (no filter); otherwise SEARCH_MIN_LENGTH..SEARCH_MAX_LENGTH chars. */
+const searchTerm = z
+  .string()
+  .nullish()
+  .transform((value) => {
+    const trimmed = value?.trim();
+    return trimmed === undefined || trimmed === '' ? undefined : trimmed;
+  })
+  .pipe(
+    z
+      .string()
+      .min(IDENTITY_LIMITS.SEARCH_MIN_LENGTH)
+      .max(IDENTITY_LIMITS.SEARCH_MAX_LENGTH)
+      .optional(),
+  );
+
 const clientInfo = z
   .object({
     // Attacker-controlled headers: bounded here, truncated again before storage.
@@ -82,7 +98,7 @@ export const listUsersRequestSchema = z.object({
   /** 0 = unset (proto3 default) → default page size. */
   limit: z.number().int().min(0).max(MAX_PAGE_LIMIT),
   cursor: optionalString(MAX_CURSOR_LENGTH),
-  search: optionalString(IDENTITY_LIMITS.SEARCH_MAX_LENGTH),
+  search: searchTerm,
 }) satisfies z.ZodType<ListUsersRequest>;
 
 export const updateUserRolesRequestSchema = z.object({

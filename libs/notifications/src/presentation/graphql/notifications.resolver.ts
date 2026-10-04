@@ -4,7 +4,7 @@ import { type GqlContext, type GraphqlPubSub, InjectPubSub } from '@app/graphql'
 import { Args, Mutation, Query, Resolver, Subscription } from '@nestjs/graphql';
 import { notificationFromCreatedPayload } from '../../application/mappers/notification.mapper.js';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
-import { NOTIFICATION_CREATED_TRIGGER } from '../../notifications.constants.js';
+import { notificationCreatedTrigger } from '../../notifications.constants.js';
 import { toNotificationView } from '../notification-view.js';
 import { ListNotificationsArgs } from './list-notifications.args.js';
 import { MarkNotificationReadInput } from './mark-notification-read.input.js';
@@ -19,8 +19,9 @@ export function toNotificationConnection(page: NotificationPage): NotificationCo
 }
 
 /**
- * Subscribers only receive their own notifications. The trigger is global (one Redis channel)
- * and the filter runs per subscriber on each replica — cheap, since it is one string compare.
+ * Subscribers only receive their own notifications. The trigger is already per user
+ * (`notificationCreatedTrigger`), so this filter is defence in depth: a payload published on the
+ * wrong trigger still never reaches another user.
  */
 export function isOwnNotification(
   payload: NotificationCreatedPayload,
@@ -84,9 +85,11 @@ export class NotificationsResolver {
     resolve: toCreatedNotificationModel,
   })
   @RequirePermissions(Permission.NotificationsRead)
-  notificationCreated(): AsyncIterableIterator<NotificationCreatedPayload> {
+  notificationCreated(
+    @CurrentUser('id') userId: string,
+  ): AsyncIterableIterator<NotificationCreatedPayload> {
     return this.pubSub.asyncIterableIterator<NotificationCreatedPayload>(
-      NOTIFICATION_CREATED_TRIGGER,
+      notificationCreatedTrigger(userId),
     );
   }
 }

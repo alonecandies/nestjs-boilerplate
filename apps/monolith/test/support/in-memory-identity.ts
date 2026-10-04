@@ -63,6 +63,10 @@ export class InMemoryUsersRepository extends UsersRepository {
     return user ? UserAggregate.restore(user) : null;
   }
 
+  async countAdmins(): Promise<number> {
+    return [...this.store.users.values()].filter((user) => user.roles.includes('admin')).length;
+  }
+
   async existsByEmail(email: string): Promise<boolean> {
     return (await this.findCredentialsByEmail(email)) !== null;
   }

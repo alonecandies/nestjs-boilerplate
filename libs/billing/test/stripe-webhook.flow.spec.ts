@@ -7,6 +7,7 @@ import { AuthModule } from '@app/auth';
 import { provideCommonEnhancers } from '@app/common';
 import { AppConfigModule } from '@app/config';
 import { KAFKA_TOPICS } from '@app/contracts';
+import { makeCounterProvider } from '@app/observability';
 import { StripeService } from '@app/payments';
 import { createFastifyTestApp } from '@app/testing';
 import { FakeKafkaProducer, KafkaProducer } from '@app/transport';
@@ -18,6 +19,7 @@ import { BillingPort } from '../src/application/ports/billing.port.js';
 import { PaymentSucceededRelay } from '../src/application/relays/payment-succeeded.relay.js';
 import { PaymentsRepository } from '../src/application/repositories/payments.repository.js';
 import { StripeEventsRepository } from '../src/application/repositories/stripe-events.repository.js';
+import { PAID_WITHOUT_CURRENCY_METRIC } from '../src/billing.constants.js';
 import { PaymentStatus } from '../src/domain/payment-status.enum.js';
 import { BillingLocalAdapter } from '../src/infrastructure/adapters/local/billing-local.adapter.js';
 import { BillingController } from '../src/presentation/http/billing.controller.js';
@@ -74,6 +76,7 @@ describe('Stripe webhook flow (raw body → signature → exactly-once → Kafka
         { provide: BillingPort, useClass: BillingLocalAdapter },
         HandleStripeWebhookHandler,
         PaymentSucceededRelay,
+        makeCounterProvider({ name: PAID_WITHOUT_CURRENCY_METRIC, help: 'test' }),
         { provide: StripeService, useValue: createTestStripeService() },
         { provide: PaymentsRepository, useValue: new InMemoryPaymentsRepository(store) },
         { provide: StripeEventsRepository, useValue: new InMemoryStripeEventsRepository(store) },

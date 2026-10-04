@@ -80,7 +80,8 @@ export class UsersController {
   @RequirePermissions(Permission.UsersManageRoles)
   @ApiOperation({
     summary: "Replace a user's roles",
-    description: 'Effective on the next token refresh. Admins cannot remove their own admin role.',
+    description:
+      'Effective on the next token refresh. Admins cannot remove their own admin role, and the last admin cannot be demoted.',
   })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({ type: UserResponse })
@@ -89,7 +90,7 @@ export class UsersController {
   @ApiNotFoundResponse({ type: ProblemResponse })
   @ApiUnprocessableEntityResponse({
     type: ProblemResponse,
-    description: '`CANNOT_REVOKE_OWN_ADMIN`',
+    description: '`CANNOT_REVOKE_OWN_ADMIN`, `CANNOT_REMOVE_LAST_ADMIN`',
   })
   async updateRoles(
     @Param('id', userIdPipe) id: string,

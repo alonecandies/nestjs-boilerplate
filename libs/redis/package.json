@@ -44,13 +44,9 @@
     "cacheable": "catalog:",
     "ioredis": "catalog:",
     "keyv": "catalog:",
-    "lodash-es": "catalog:",
-    "reflect-metadata": "catalog:",
-    "rxjs": "catalog:",
-    "socket.io": "catalog:"
+    "lodash-es": "catalog:"
   },
   "devDependencies": {
-    "@types/lodash-es": "catalog:",
-    "fastify": "catalog:"
+    "@types/lodash-es": "catalog:"
   }
 }

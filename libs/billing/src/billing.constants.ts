@@ -29,5 +29,23 @@ export const BILLING_LIMITS = {
  */
 export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]+$/;
 
+/**
+ * `stripe_events` retention. The table only dedupes redeliveries, and Stripe retries a webhook
+ * for up to 3 days; 30 days leaves ample margin (manual "resend" from the dashboard included).
+ */
+export const STRIPE_EVENTS_RETENTION_DAYS = 30;
+/** Hourly purge of old `stripe_events`, on one replica only (`@WithLock`). */
+export const PURGE_STRIPE_EVENTS_LOCK = 'billing:purge-stripe-events';
+export const PURGE_STRIPE_EVENTS_LOCK_TTL_MS = 60_000;
+/** Rows deleted per statement: keeps each DELETE short (row locks, WAL bursts, replication lag). */
+export const PURGE_STRIPE_EVENTS_BATCH_SIZE = 5_000;
+
+/**
+ * Prometheus counter: Checkout Sessions Stripe reported paid without any usable currency (none in
+ * the event, none stored). The payment is left `pending` and NOT announced (no receipt): alert on
+ * any increase and reconcile it against the Stripe dashboard.
+ */
+export const PAID_WITHOUT_CURRENCY_METRIC = 'billing_checkout_paid_without_currency_total';
+
 /** gRPC circuit-breaker / operation names (logs, metrics). */
 export const BILLING_GRPC_UPSTREAM = 'billing';

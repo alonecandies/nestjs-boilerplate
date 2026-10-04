@@ -3,13 +3,20 @@
  * transaction snapshots, so rollback behaviour is observable), a TransactionHost wired to it,
  * a real StripeService with a test webhook secret and signed webhook builders.
  */
-import { generateId } from '@app/common';
+import { type CursorPage, generateId } from '@app/common';
 import { stripeConfig } from '@app/config';
-import { type DrizzleDB, type DrizzleTransactionalAdapter, TransactionHost } from '@app/database';
+import {
+  type DrizzleDB,
+  type DrizzleTransactionalAdapter,
+  decodeIdCursor,
+  keysetFetchLimit,
+  keysetPage,
+  TransactionHost,
+} from '@app/database';
 import { createStripeClient, StripeService } from '@app/payments';
 import { getTableColumns } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
-import { cloneDeep } from 'lodash-es';
+import { cloneDeep, isEmpty } from 'lodash-es';
 import Stripe from 'stripe';
 import type {
   CreatePaymentResult,
@@ -108,22 +115,41 @@ export class InMemoryPaymentsRepository implements PaymentsRepository {
     payment.markPersisted();
   }
 
-  async list(criteria: ListPaymentsCriteria): Promise<Payment[]> {
-    return [...this.store.state.payments.values()]
+  async list(criteria: ListPaymentsCriteria): Promise<CursorPage<Payment>> {
+    const after = isEmpty(criteria.cursor) ? undefined : decodeIdCursor(String(criteria.cursor)).id;
+    const rows = [...this.store.state.payments.values()]
       .filter((p) => criteria.userId === undefined || p.userId === criteria.userId)
+      .filter((p) => after === undefined || p.id < after)
       .sort((a, b) => b.id.localeCompare(a.id))
-      .slice(0, criteria.limit)
+      .slice(0, keysetFetchLimit(criteria.limit))
       .map((p) => Payment.restore(p));
+    return keysetPage(rows, criteria.limit);
   }
 }
 
 export class InMemoryStripeEventsRepository implements StripeEventsRepository {
   constructor(readonly store: InMemoryBillingStore) {}
 
+  /** `processed_at` per event id (kept apart so `state.events` stays `{ id, type }`). */
+  readonly processedAt = new Map<string, Date>();
+
   async markProcessed(event: StripeEventReceipt): Promise<boolean> {
     if (this.store.state.events.has(event.id)) return false;
     this.store.state.events.set(event.id, { ...event });
+    this.processedAt.set(event.id, new Date());
     return true;
+  }
+
+  async deleteProcessedBefore(cutoff: Date, limit: number): Promise<number> {
+    const expired = [...this.processedAt]
+      .filter(([, at]) => at < cutoff)
+      .slice(0, limit)
+      .map(([id]) => id);
+    for (const id of expired) {
+      this.store.state.events.delete(id);
+      this.processedAt.delete(id);
+    }
+    return expired.length;
   }
 }
 

@@ -2,7 +2,9 @@
 
 The **files** bounded context: per-user object storage on S3-compatible stores or GCS.
 
-- streamed multipart uploads: the bytes go from the socket to the bucket and are never buffered in the API
+- streamed multipart uploads: the bytes go from the socket to the bucket without a whole-file buffer, but the
+  storage driver holds bounded chunks (S3: up to ~15 MiB per upload), so they are capped per process
+  (`STORAGE_MAX_CONCURRENT_UPLOADS`, 503 + `Retry-After` beyond it). Prefer presigned uploads for large files.
 - presigned upload URLs (direct browser → bucket `PUT`) and presigned download URLs
 - deletes
 - ownership by key prefix; `files:manage` (admins) bypasses it
@@ -55,12 +57,12 @@ provides `FilesService` and `FilesResolver`, registers `FilesController` and exp
 
 ## REST (`/v1/files`, bearer JWT; errors are RFC 9457 `application/problem+json`)
 
-| Method & path                      | Permission                      | Input                                                                                                                               | Success                                                         | Errors                                                                                                        |
-| ---------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `POST /v1/files`                   | `files:write`                   | `multipart/form-data` with one `file` part and no other parts (`FileStreamInterceptor`)                                             | `201 { key, filename, contentType, size?, etag? }`              | 400 (no file part, other field, extra parts), 401, 403, **413 `FILE_TOO_LARGE`**, 415 `UNSUPPORTED_FILE_TYPE` |
-| `POST /v1/files/presigned-uploads` | `files:write`                   | zod body (`@Body({ schema })`, strict): `filename` (1–255), `contentType` (allow-list, case-insensitive), `contentLength` (int ≥ 1) | `201 { key, filename, url, method: 'PUT', headers, expiresAt }` | 400 (zod), 401, 403, 413 `FILE_TOO_LARGE` (`contentLength` > `STORAGE_MAX_UPLOAD_BYTES`)                      |
-| `GET /v1/files/download-url?key=`  | `files:read` or `files:manage`  | zod query: `key` (valid storage key)                                                                                                | `200 { key, filename, url, expiresAt, size, contentType? }`     | 400, 401, 403 `FILE_ACCESS_DENIED`, 404 `FILE_NOT_FOUND`                                                      |
-| `DELETE /v1/files?key=`            | `files:write` or `files:manage` | zod query: `key`                                                                                                                    | `204` (idempotent)                                              | 400, 401, 403 `FILE_ACCESS_DENIED`                                                                            |
+| Method & path                      | Permission                      | Input                                                                                                                               | Success                                                         | Errors                                                                                                                                                        |
+| ---------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/files`                   | `files:write`                   | `multipart/form-data` with one `file` part and no other parts (`FileStreamInterceptor`)                                             | `201 { key, filename, contentType, size?, etag? }`              | 400 (no file part, other field, extra parts), 401, 403, **413 `FILE_TOO_LARGE`**, 415 `UNSUPPORTED_FILE_TYPE`, 503 `UPLOAD_CAPACITY_EXCEEDED` + `Retry-After` |
+| `POST /v1/files/presigned-uploads` | `files:write`                   | zod body (`@Body({ schema })`, strict): `filename` (1–255), `contentType` (allow-list, case-insensitive), `contentLength` (int ≥ 1) | `201 { key, filename, url, method: 'PUT', headers, expiresAt }` | 400 (zod), 401, 403, 413 `FILE_TOO_LARGE` (`contentLength` > `STORAGE_MAX_UPLOAD_BYTES`)                                                                      |
+| `GET /v1/files/download-url?key=`  | `files:read` or `files:manage`  | zod query: `key` (valid storage key)                                                                                                | `200 { key, filename, url, expiresAt, size, contentType? }`     | 400, 401, 403 `FILE_ACCESS_DENIED`, 404 `FILE_NOT_FOUND`                                                                                                      |
+| `DELETE /v1/files?key=`            | `files:write` or `files:manage` | zod query: `key`                                                                                                                    | `204` (idempotent)                                              | 400, 401, 403 `FILE_ACCESS_DENIED`                                                                                                                            |
 
 - Swagger/OpenAPI: `@ApiTags('Files')`, `@ApiBearerAuth()`, `@ApiOperation` and a response
   decorator for each status. The upload body is documented by `@ApiMultipartFileBody()`
@@ -118,12 +120,13 @@ users/{userId}/{uuidv7}-{safeFilename}      e.g. users/01a0…/01a0…-quarterly
 
 ## Errors (`FilesErrorCode`)
 
-| Class                          | Status | Code                    | When                                                                                                                                         |
-| ------------------------------ | ------ | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FileAccessDeniedException`    | 403    | `FILE_ACCESS_DENIED`    | The key is outside the caller's prefix and the caller lacks `files:manage`. The key is not echoed.                                           |
-| `FileNotFoundException`        | 404    | `FILE_NOT_FOUND`        | Download URL requested for a missing (authorized) key.                                                                                       |
-| `FileTooLargeException`        | 413    | `FILE_TOO_LARGE`        | The multipart stream overflowed, or the announced `contentLength` is too big. `errors[0]` (path `file` or `contentLength`) states the limit. |
-| `UnsupportedFileTypeException` | 415    | `UNSUPPORTED_FILE_TYPE` | The type is not in the allow-list.                                                                                                           |
+| Class                             | Status | Code                       | When                                                                                                                                                                            |
+| --------------------------------- | ------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `FileAccessDeniedException`       | 403    | `FILE_ACCESS_DENIED`       | The key is outside the caller's prefix and the caller lacks `files:manage`. The key is not echoed.                                                                              |
+| `FileNotFoundException`           | 404    | `FILE_NOT_FOUND`           | Download URL requested for a missing (authorized) key.                                                                                                                          |
+| `FileTooLargeException`           | 413    | `FILE_TOO_LARGE`           | The multipart stream overflowed, or the announced `contentLength` is too big. `errors[0]` (path `file` or `contentLength`) states the limit.                                    |
+| `UnsupportedFileTypeException`    | 415    | `UNSUPPORTED_FILE_TYPE`    | The type is not in the allow-list.                                                                                                                                              |
+| `UploadCapacityExceededException` | 503    | `UPLOAD_CAPACITY_EXCEEDED` | `STORAGE_MAX_CONCURRENT_UPLOADS` streamed uploads are already in flight in this process. Raised before the body is read; REST adds `Retry-After: 5` (`UPLOAD_RETRY_AFTER_SEC`). |
 
 Malformed keys that reach the service (for example over GraphQL, or from other callers) raise
 @app/storage's 422 `INVALID_STORAGE_KEY`. Storage outages raise its 502 `STORAGE_ERROR`.
@@ -131,7 +134,12 @@ Malformed keys that reach the service (for example over GraphQL, or from other c
 ## Configuration (`storage` namespace)
 
 `STORAGE_MAX_UPLOAD_BYTES` (26214400) caps streamed uploads through the multipart `limits.fileSize`
-and presigned uploads through the announced `contentLength`. `STORAGE_SIGNED_URL_TTL_SEC` (900) is
+and presigned uploads through the announced `contentLength`. `STORAGE_MAX_CONCURRENT_UPLOADS` (4) caps
+streamed uploads in flight per process (per replica / cluster worker); presigned uploads are not
+counted. Memory budget: each streamed upload holds up to ~15 MiB of off-heap Buffers (S3 driver:
+`(S3_UPLOAD_QUEUE_SIZE + 1) × S3_UPLOAD_PART_SIZE`), outside `--max-old-space-size`, so keep
+`cap × 15 MiB` well below `container memory − max-old-space-size` (gateway: 4 × 15 = 60 MiB of
+512 − 384 = 128 MiB). `STORAGE_SIGNED_URL_TTL_SEC` (900) is
 the lifetime of presigned URLs. See `@app/storage` for the driver variables (`STORAGE_DRIVER`, `S3_*`,
 `GCS_*`).
 
@@ -155,6 +163,7 @@ the lifetime of presigned URLs. See `@app/storage` for the driver variables (`ST
     `Readable`, not a buffer
   - an upload of exactly the limit (201) and an upload over the limit (413 `FILE_TOO_LARGE`, nothing stored)
   - 415, and 400 for a missing file, a file in the wrong field or extra fields
+  - 503 `UPLOAD_CAPACITY_EXCEEDED` + `Retry-After` over `STORAGE_MAX_CONCURRENT_UPLOADS`, and the slot freed afterwards
   - 401 anonymous or forged, and 403 without `files:write`
   - presign 201, zod 400s (strict body) and 413
   - download: own file 200, another user's 403, the `u1`/`u10` boundary, admin bypass, 404, and

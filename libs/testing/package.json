@@ -23,7 +23,6 @@
     "@nestjs/core": "catalog:",
     "@nestjs/platform-fastify": "catalog:",
     "@nestjs/testing": "catalog:",
-    "fastify": "catalog:",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
     "vitest": "catalog:"

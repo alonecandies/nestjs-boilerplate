@@ -1,11 +1,13 @@
 import { isUuid } from '@app/common';
 import type { HandleStripeWebhookResponse } from '@app/contracts';
 import { Transactional } from '@app/database';
+import { InjectMetric } from '@app/observability';
 import { StripeService } from '@app/payments';
 import { Logger } from '@nestjs/common';
 import { CommandHandler, EventPublisher, type ICommandHandler } from '@nestjs/cqrs';
 import type Stripe from 'stripe';
-import type { Payment } from '../../../domain/payment.aggregate.js';
+import { PAID_WITHOUT_CURRENCY_METRIC } from '../../../billing.constants.js';
+import { normalizeCurrency, type Payment } from '../../../domain/payment.aggregate.js';
 import { PaymentsRepository } from '../../repositories/payments.repository.js';
 import { StripeEventsRepository } from '../../repositories/stripe-events.repository.js';
 import { HandleStripeWebhookCommand } from './handle-stripe-webhook.command.js';
@@ -53,6 +55,8 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
     private readonly stripeEvents: StripeEventsRepository,
     private readonly payments: PaymentsRepository,
     private readonly publisher: EventPublisher,
+    @InjectMetric(PAID_WITHOUT_CURRENCY_METRIC)
+    private readonly paidWithoutCurrency: { inc(): void },
   ) {}
 
   async execute(command: HandleStripeWebhookCommand): Promise<HandleStripeWebhookResponse> {
@@ -88,8 +92,19 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
           this.logger.debug(`Checkout Session ${session.id} completed, awaiting async payment`);
           return { duplicate: false, payment: null };
         }
-        const payment = await this.transition(event, session, (p, now) =>
-          p.complete(
+        const payment = await this.transition(event, session, (p, now) => {
+          if (
+            normalizeCurrency(session.currency) === null &&
+            normalizeCurrency(p.currency) === null
+          ) {
+            // `complete()` refuses it too; say why, loudly: money was taken but no receipt goes out.
+            this.paidWithoutCurrency.inc();
+            this.logger.warn(
+              `Stripe event ${event.id} (${event.type}): Checkout Session ${session.id} is paid but neither it nor payment ${p.id} has a currency; payment left ${p.status}, not announced`,
+            );
+            return false;
+          }
+          return p.complete(
             {
               sessionId: session.id,
               paymentIntentId: paymentIntentIdOf(session),
@@ -98,8 +113,8 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
               paidAt,
             },
             now,
-          ),
-        );
+          );
+        });
         return { duplicate: false, payment };
       }
       case 'checkout.session.async_payment_failed':

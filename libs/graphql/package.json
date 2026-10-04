@@ -38,9 +38,7 @@
     "graphql-subscriptions": "catalog:",
     "graphql-ws": "catalog:",
     "ioredis": "catalog:",
-    "lodash-es": "catalog:",
-    "reflect-metadata": "catalog:",
-    "rxjs": "catalog:"
+    "lodash-es": "catalog:"
   },
   "devDependencies": {
     "@types/lodash-es": "catalog:",

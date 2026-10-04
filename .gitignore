@@ -146,7 +146,8 @@ vite.config.ts.timestamp-*
 # Nx / Lerna
 .nx/cache
 .nx/workspace-data
-# Load-test reports
-docker/k6/reports/
+# Load-test reports (the directory itself is committed via .gitkeep, so a bind mount never creates it root-owned)
+docker/k6/reports/*
+!docker/k6/reports/.gitkeep
 # Local GraphQL schema dumps (GRAPHQL_SCHEMA_FILE)
 **/generated/schema.gql

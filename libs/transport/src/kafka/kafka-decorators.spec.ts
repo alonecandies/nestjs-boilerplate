@@ -11,6 +11,7 @@ import { KafkaConsumerController } from './kafka-consumer.decorator.js';
 import { KafkaContextInterceptor } from './kafka-context.interceptor.js';
 import { KafkaDeadLetterFilter } from './kafka-dead-letter.filter.js';
 import { KafkaEventPattern } from './kafka-event-pattern.decorator.js';
+import { KafkaRetryInterceptor } from './kafka-retry.interceptor.js';
 
 @KafkaConsumerController()
 class UserEventsConsumer {
@@ -45,12 +46,16 @@ describe('@KafkaEventPattern()', () => {
 });
 
 describe('@KafkaConsumerController()', () => {
-  it('applies the dead-letter filter and the context interceptor at controller scope', () => {
+  it('applies the dead-letter filter, the context and (inside it) the retry interceptor', () => {
     expect(Reflect.getMetadata(EXCEPTION_FILTERS_METADATA, UserEventsConsumer)).toEqual([
       KafkaDeadLetterFilter,
     ]);
-    expect(Reflect.getMetadata(INTERCEPTORS_METADATA, UserEventsConsumer)).toEqual([
-      KafkaContextInterceptor,
-    ]);
+    const interceptors = Reflect.getMetadata(
+      INTERCEPTORS_METADATA,
+      UserEventsConsumer,
+    ) as unknown[];
+    expect(interceptors).toHaveLength(2);
+    expect(interceptors[0]).toBe(KafkaContextInterceptor);
+    expect(interceptors[1]).toBeInstanceOf(KafkaRetryInterceptor);
   });
 });

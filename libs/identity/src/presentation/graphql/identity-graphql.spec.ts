@@ -171,6 +171,16 @@ describe('identity GraphQL API (Apollo on Fastify, global guards, fake ports)', 
     });
   });
 
+  it('users(search:) shorter than 3 characters is a 400 validation error', async () => {
+    const res = await gql(
+      `query($search: String) { users(search: $search) { items { id } } }`,
+      { search: ' ab ' },
+      bearer(admin),
+    );
+    expect(res.errors?.[0]?.extensions?.status).toBe(400);
+    expect(usersPort.listUsers).not.toHaveBeenCalled();
+  });
+
   it('updateUserRoles maps enum names to Role values and uses the caller as actor', async () => {
     const target = generateId();
     usersPort.updateUserRoles.mockResolvedValue(makeUser({ id: target, roles: ['moderator'] }));

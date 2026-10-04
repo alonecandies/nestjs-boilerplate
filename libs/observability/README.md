@@ -19,7 +19,7 @@ nestjs-cls' `idGenerator`, so `request.id`, the log field `requestId`, `cls.getI
 | `HealthContributor`                                                                               | `abstract class { abstract readonly key: string; abstract check(): Promise<HealthIndicatorResult> }` — implemented by infra libs (Postgres, Redis, Cassandra, Kafka)                                                                                               |
 | `HealthController`                                                                                | `GET /health/live` (no dependency checks, always 200 while the process runs), `GET /health/ready` (all contributors in parallel, each bounded by the timeout; 503 when one is down or while draining). `@Public()`, VERSION_NEUTRAL, `Cache-Control: no-store`     |
 | `HealthContributorRegistry`                                                                       | `contributors: readonly HealthContributor[]` — resolved at `onModuleInit` (reuses exported instances; instantiates unprovided classes); rejects duplicate keys                                                                                                     |
-| `MetricsController`                                                                               | `GET /metrics` — `@Public()`, VERSION_NEUTRAL; 404 when `METRICS_ENABLED=false`; cluster-wide aggregate under `runClustered()`                                                                                                                                     |
+| `MetricsController`                                                                               | `GET /metrics` — `@Public()`, VERSION_NEUTRAL; 404 when `METRICS_ENABLED=false` or (with `METRICS_BEARER_TOKEN`) without `Authorization: Bearer <token>`; cluster-wide aggregate under `runClustered()`                                                            |
 | `HttpMetricsHook`, `httpMetricLabels(method, route?, status)`                                     | Fastify `onResponse` hook → `http_request_duration_seconds{method,route,status_code}` (buckets 5 ms…5 s); `route` = route template or `UNMATCHED`; names the OTel server span when tracing                                                                         |
 | `HTTP_REQUEST_DURATION_SECONDS`, `HTTP_DURATION_BUCKETS`, …                                       | metric constants (`HTTP_METRIC_LABEL_NAMES`, `UNMATCHED_ROUTE`, `METRICS_PATH`)                                                                                                                                                                                    |
 | `makeCounterProvider`, `makeGaugeProvider`, …, `InjectMetric`                                     | re-exported from `@willsoto/nestjs-prometheus` for app-specific metrics                                                                                                                                                                                            |
@@ -30,6 +30,7 @@ nestjs-cls' `idGenerator`, so `request.id`, the log field `requestId`, `cls.getI
 | `requestIdOf(req)`, `incomingCorrelationId(req)`                                                  | reuse `req.id`; valid `x-correlation-id` or `undefined`                                                                                                                                                                                                            |
 | `resolveRpcRequestId(ctx)`, `resolveContextRequestId(ctx)`                                        | id from Kafka headers / gRPC metadata (`x-request-id`, else `x-correlation-id`), stable per message; any transport                                                                                                                                                 |
 | `buildLoggerParams(obs, app, { sync? })`, `LOG_REDACT_PATHS`                                      | nestjs-pino `Params` (level label, redaction, quiet probes, rpc hooks); `traceContextMixin()`                                                                                                                                                                      |
+| `createBootstrapLogger(config)`                                                                   | `LoggerService \| undefined` — single-line JSON `ConsoleLogger` (+ `service`, `LOG_LEVEL`) for the Nest create phase (used by `@app/bootstrap`); `undefined` when `LOG_PRETTY`                                                                                     |
 | `createStandaloneLogger(context, env?)`                                                           | `LoggerService` over pino (sync) for processes without Nest (cluster primary, scripts)                                                                                                                                                                             |
 | `TelemetryFlushService`, `flushLogs(timeoutMs?)`                                                  | `onApplicationShutdown` → `shutdownTracing()` + drain pino                                                                                                                                                                                                         |
 | `observeInstrument(env?)`                                                                         | `ObserveInstrumentation \| undefined` for `NestFactory.create(…, { instrument })`; `isObserveEnabled(env?)`, `buildObserveOptions(cfg)`, `observeTraceIdGenerator(req)`, `ObserveModule`, `ObserveInstrument`                                                      |
@@ -75,7 +76,7 @@ export class OrdersService {
 ## Env vars (via `@app/config` `observability`/`app` namespaces)
 
 `LOG_LEVEL` (info), `LOG_PRETTY` (dev only; needs the `pino-pretty` devDependency), `METRICS_ENABLED`
-(true), `SERVICE_NAME`, `NODE_ENV`, `OBSERVE_APP_KEY` + `OBSERVE_APP_SECRET` (+ `OBSERVE_SERVICE_ID`,
+(true), `METRICS_BEARER_TOKEN` (optional scrape token), `SERVICE_NAME`, `NODE_ENV`, `OBSERVE_APP_KEY` + `OBSERVE_APP_SECRET` (+ `OBSERVE_SERVICE_ID`,
 `OBSERVE_ENDPOINT` read by @nestjs/observe itself). `otel.ts` reads the standard OTel variables
 directly: `OTEL_SDK_DISABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`
 (tracing is on only when one is set, unless `OTEL_SDK_DISABLED` says otherwise), `OTEL_SERVICE_NAME`
@@ -103,6 +104,11 @@ directly: `OTEL_SDK_DISABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OT
   `interface X extends IncomingMessage { id?: … }` then fails to typecheck in every program that
   imports this package — declare such request types as intersections
   (`IncomingMessage & { id?: string | number }`) instead.
+- **`/metrics` is served on the API port**: never route it (or `/docs`) through the public ingress;
+  set `METRICS_BEARER_TOKEN` as defence in depth (wrong/missing token → 404).
+- gRPC/Kafka auto-logging (`microservice` params): a handler failing with a CALLER error
+  (`DomainException`/`HttpException` < 500, zod errors, client-class gRPC codes) is logged at `warn`
+  with `error: { type, message, code }` (no `err`, no stack); server-side failures stay `error` + `err`.
 - nestjs-pino keeps ONE root logger per process (first params win) — `createStandaloneLogger()` is
   for processes that never boot Nest.
 - `@nestjs/observe` runs with `sourceContext: false` (it would upload source around error frames) and

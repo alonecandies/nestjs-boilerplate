@@ -12,6 +12,7 @@ import {
   describePostgresUrl,
   isTransientConnectionError,
 } from './postgres-options.js';
+import { preferPreparedStatements } from './prepared-statements.js';
 
 /** Boot connectivity retries (DB container still starting, failover in progress). */
 const BOOT_PING_RETRIES = 4;
@@ -53,7 +54,8 @@ export async function createDrizzleDatabase<TSchema extends DrizzleSchema>(
     ),
   );
   const db = drizzle({
-    client,
+    // drizzle runs every query through `unsafe()`, which postgres.js never prepares by default.
+    client: preferPreparedStatements(client),
     schema: options.schema,
     // MUST equal drizzle.config.ts `casing` (drizzle-kit) or generated SQL and queries disagree.
     casing: 'snake_case',

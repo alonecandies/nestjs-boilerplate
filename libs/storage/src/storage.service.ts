@@ -14,7 +14,8 @@ import type {
  * the S3 or GCS driver selected by `STORAGE_DRIVER` (abstract class → usable as DI token).
  *
  * Prefer presigned URLs for browser uploads/downloads: bytes then never transit the API process.
- * `upload()` streams (never buffers the whole body) for server-side ingestion.
+ * `upload()` streams for server-side ingestion: memory per upload is bounded (driver chunking, see
+ * `S3_UPLOAD_PART_SIZE`) but not zero, so callers should cap how many run at once.
  */
 export abstract class StorageService {
   abstract readonly driver: StorageDriverName;

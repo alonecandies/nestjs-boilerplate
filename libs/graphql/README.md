@@ -20,7 +20,7 @@ vocabulary as the REST API.
 | `formatGraphqlError({ exposeInternal, typeBaseUrl? })`, `formatExecutionResult(result, format)`, `unwrapResolverError`, `isGraphQLError`, `type GraphqlErrorFormatter` | errors        | Resolver errors → `extensions { code, status, type, errors? }` via `toProblemDetails`. Internals are hidden in production, for HTTP and subscription events.             |
 | `ComplexityPlugin`, `measureComplexity`, `isIntrospectionOnly`, `COMPLEXITY_ESTIMATORS`, `QUERY_TOO_COMPLEX`                                                           | plugin        | Rejects operations above `GRAPHQL_MAX_COMPLEXITY` with HTTP 400 before execution. Introspection is exempt.                                                               |
 | `ErrorRequestIdPlugin`, `attachRequestId`                                                                                                                              | plugin        | `extensions.requestId` on every HTTP error (= `x-request-id`).                                                                                                           |
-| `extractConnectionToken`, `createSubscriptionAuthenticator(tokens, denylist)`, `createGraphqlWsAuthHandlers(auth, { requireAuth? })`, `WS_CLOSE_TOKEN_EXPIRED` (4401)  | ws auth       | graphql-ws `onConnect`/`onClose`.                                                                                                                                        |
+| `extractConnectionToken`, `createSubscriptionAuthenticator(tokens, denylist)`, `createGraphqlWsAuthHandlers(auth, { requireAuth? })`, `WS_CLOSE_TOKEN_EXPIRED` (4401)  | ws auth       | graphql-ws `onConnect`/`onClose`. `requireAuth` defaults to `true`.                                                                                                      |
 | `GraphQLUUID`, `GraphQLJSONObject`, `UUIDResolver`, `JSONObjectResolver`, `GRAPHQL_SCALAR_RESOLVERS`                                                                   | scalars       | `@Field(() => GraphQLUUID)`, `@Field(() => GraphQLJSONObject)`. `DateTime` is Nest's ISO scalar.                                                                         |
 
 ## Usage
@@ -71,9 +71,11 @@ SDL there; unset = in memory). `app`: `NODE_ENV` (production hides internals and
 - **Put `complexity` on `@ResolveField`.** A `@Field` complexity is lost when a resolver resolves
   that property. Give fan-out list fields a real cost.
 - **Subscriptions** authenticate once, at `connection_init`. An invalid, expired or revoked token
-  closes the socket with 4403. A socket with no token is accepted unless `requireSubscriptionAuth`
-  is set, and each subscription's guards then decide. Sockets are closed with 4401 when the
-  token's `exp` passes. The global `JwtAuthGuard` still runs per subscribe, reading the Bearer
+  closes the socket with 4403. A socket with no token is refused too (4403) by default, since
+  anonymous sockets get no expiry timer and the throttler skips ws. To serve public subscriptions,
+  opt out with `AppGraphqlModule.forRootAsync({ requireSubscriptionAuth: false })`: anonymous
+  sockets are then accepted and each subscription's guards decide. Sockets are closed with 4401
+  when the token's `exp` passes. The global `JwtAuthGuard` still runs per subscribe, reading the Bearer
   header synthesized from the connection params.
 - `fieldResolverEnhancers` is left empty on purpose. Otherwise global guards would run for every
   resolved field of every list item.

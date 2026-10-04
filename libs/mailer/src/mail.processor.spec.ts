@@ -77,4 +77,16 @@ describe('MailProcessor', () => {
     expect(logged.join('\n')).not.toContain('jane@example.com');
     expect(logged[0]).toContain('attempt 1/7');
   });
+
+  it('logs worker connection errors through the Nest logger, throttled (no console.error)', () => {
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const { processor } = setup();
+
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      processor.onError(new Error('connect ECONNREFUSED 127.0.0.1:6379'));
+    }
+
+    expect(error).toHaveBeenCalledOnce();
+    expect(String(error.mock.calls[0]?.[0])).toContain('connect ECONNREFUSED');
+  });
 });

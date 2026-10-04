@@ -13,6 +13,8 @@ export const observabilityEnvSchema = z
     LOG_LEVEL: zEnum(LOG_LEVELS, 'info'),
     LOG_PRETTY: zBool(),
     METRICS_ENABLED: zBool(true),
+    // Optional shared secret for GET /metrics (`Authorization: Bearer <token>`); unset = open.
+    METRICS_BEARER_TOKEN: zStr(undefined, { min: 16 }),
     OTEL_SDK_DISABLED: zBool(),
     OTEL_EXPORTER_OTLP_ENDPOINT: zUrl(),
     OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: zUrl(),
@@ -29,6 +31,8 @@ export const observabilityEnvSchema = z
       /** Pretty logs cost ~5x throughput — dev only by default. */
       logPretty: env.LOG_PRETTY ?? env.NODE_ENV === 'development',
       metricsEnabled: env.METRICS_ENABLED,
+      /** When set, `/metrics` answers 404 unless the scrape sends `Authorization: Bearer <token>`. */
+      metricsBearerToken: env.METRICS_BEARER_TOKEN,
       /** Explicit `OTEL_SDK_DISABLED` wins; otherwise tracing is on only when an OTLP endpoint is set. */
       tracingEnabled:
         env.OTEL_SDK_DISABLED === undefined ? otlpEndpoint !== undefined : !env.OTEL_SDK_DISABLED,

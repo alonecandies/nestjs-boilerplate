@@ -10,7 +10,17 @@ import {
   TransactionHost,
 } from '@app/database';
 import { Injectable } from '@nestjs/common';
-import { and, eq, getTableColumns, ilike, inArray, or, type SQL, sql } from 'drizzle-orm';
+import {
+  and,
+  arrayContains,
+  count,
+  eq,
+  getTableColumns,
+  ilike,
+  or,
+  type SQL,
+  sql,
+} from 'drizzle-orm';
 import type {
   ListUsersCriteria,
   UserRecord,
@@ -18,7 +28,8 @@ import type {
 } from '../../application/persistence/users.repository.js';
 import { EmailAlreadyTakenException } from '../../domain/identity.errors.js';
 import { UserAggregate, type UserSnapshot } from '../../domain/user.aggregate.js';
-import type { UserRole } from '../../domain/user-role.js';
+import { ADMIN_ROLE, type UserRole } from '../../domain/user-role.js';
+import { USER_ROLES_LOCK } from '../../identity.constants.js';
 import { type IdentitySchema, users } from './identity.schema.js';
 import { isUniqueViolation } from './postgres-errors.js';
 
@@ -37,10 +48,11 @@ function searchFilter(search: string | undefined): SQL | undefined {
 }
 
 /*
- * Hot single-row lookups as prepared statements: the SQL text is built once and postgres.js
- * (`prepare: true`) keeps the server-side plan per connection. They run on the pool, never
- * inside a transaction — every other method goes through `txHost.tx`, which joins the active
- * `@Transactional()` / `TransactionRunner` transaction when there is one.
+ * Hot single-row lookups, built once. Every query is a server-side prepared statement per
+ * connection when `DATABASE_PREPARE=true` (@app/database `preferPreparedStatements`; postgres.js
+ * keys them by SQL text, so query text must stay bounded — see `findByIds`). These run on the
+ * pool, never inside a transaction — every other method goes through `txHost.tx`, which joins the
+ * active `@Transactional()` / `TransactionRunner` transaction when there is one.
  */
 const buildStatements = (db: Db) => ({
   byId: db
@@ -82,10 +94,12 @@ export class DrizzleUsersRepository implements UsersRepository {
 
   async findByIds(ids: readonly string[]): Promise<UserRecord[]> {
     if (ids.length === 0) return [];
+    // ONE array parameter, not `IN ($1…$n)`: the SQL text (and so the per-connection prepared
+    // statement) is the same for every batch size.
     return this.txHost.tx
       .select(publicColumns)
       .from(users)
-      .where(inArray(users.id, [...ids]));
+      .where(sql`${users.id} = any(${sql.param([...ids])}::uuid[])`);
   }
 
   async findCredentialsByEmail(email: string): Promise<UserSnapshot | null> {
@@ -94,8 +108,24 @@ export class DrizzleUsersRepository implements UsersRepository {
   }
 
   async findAggregate(id: string): Promise<UserAggregate | null> {
-    const [row] = await this.txHost.tx.select().from(users).where(eq(users.id, id)).limit(1);
+    const [row] = await this.txHost.tx
+      .select()
+      .from(users)
+      .where(eq(users.id, id))
+      .limit(1)
+      .for('update');
     return row ? UserAggregate.restore(row) : null;
+  }
+
+  async countAdmins(): Promise<number> {
+    const tx = this.txHost.tx;
+    // Held until the transaction ends (a no-op guard outside one: it is released immediately).
+    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${USER_ROLES_LOCK}))`);
+    const [row] = await tx
+      .select({ admins: count() })
+      .from(users)
+      .where(arrayContains(users.roles, [ADMIN_ROLE]));
+    return row?.admins ?? 0;
   }
 
   async existsByEmail(email: string): Promise<boolean> {

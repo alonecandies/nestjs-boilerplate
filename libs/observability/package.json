@@ -27,7 +27,6 @@
     "@app/common": "workspace:*",
     "@app/config": "workspace:*",
     "@nestjs/common": "catalog:",
-    "@nestjs/config": "catalog:",
     "@nestjs/core": "catalog:",
     "@nestjs/observe": "catalog:",
     "@nestjs/terminus": "catalog:",
@@ -45,9 +44,7 @@
     "pino": "catalog:",
     "pino-http": "catalog:",
     "prom-client": "catalog:",
-    "reflect-metadata": "catalog:",
-    "rxjs": "catalog:",
-    "uuid": "catalog:"
+    "rxjs": "catalog:"
   },
   "devDependencies": {
     "@types/lodash-es": "catalog:",

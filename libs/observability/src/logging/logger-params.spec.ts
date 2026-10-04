@@ -3,6 +3,7 @@ import { INVALID_SPAN_CONTEXT, trace } from '@opentelemetry/api';
 import type { Options as PinoHttpOptions } from 'pino-http';
 import { describe, expect, it, vi } from 'vitest';
 import { buildLoggerParams, LOG_REDACT_PATHS, traceContextMixin } from './logger-params.js';
+import { rpcErrorObject, rpcLogLevel } from './rpc-error-logging.js';
 
 const env = { NODE_ENV: 'production', SERVICE_NAME: 'orders', LOG_LEVEL: 'warn' };
 
@@ -60,7 +61,12 @@ describe('buildLoggerParams', () => {
 
   it('gives gRPC/Kafka handlers their own log context', () => {
     const params = buildLoggerParams(observabilityConfig.parse(env), appConfig.parse(env));
-    expect(params.microservice).toMatchObject({ includePayload: false, quietRpcLogger: true });
+    expect(params.microservice).toMatchObject({
+      includePayload: false,
+      quietRpcLogger: true,
+      customLogLevel: rpcLogLevel,
+      customErrorObject: rpcErrorObject,
+    });
   });
 });
 

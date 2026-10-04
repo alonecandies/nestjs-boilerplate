@@ -21,6 +21,7 @@ import {
 import type { Metadata } from '@grpc/grpc-js';
 import { Inject, Injectable, type OnModuleInit, Optional } from '@nestjs/common';
 import type { ClientGrpc } from '@nestjs/microservices';
+import { isNil } from 'lodash-es';
 import { ClsService } from 'nestjs-cls';
 import type { Observable } from 'rxjs';
 import type { BillingPort } from '../../../application/ports/billing.port.js';
@@ -84,7 +85,11 @@ export class BillingGrpcAdapter implements BillingPort, OnModuleInit {
   async listPayments(input: ListPaymentsRequest): Promise<PaymentList> {
     const list = await this.call('ListPayments', {}, (md) => this.client.listPayments(input, md));
     // Repeated fields decode as [] with `defaults: true`; `?? []` also covers a hand-written server.
-    return { items: (list.items ?? []).map(normalizePayment) };
+    // An absent `next_cursor` decodes as null (or ""): the port contract omits it.
+    return {
+      items: (list.items ?? []).map(normalizePayment),
+      ...(isNil(list.nextCursor) || list.nextCursor === '' ? {} : { nextCursor: list.nextCursor }),
+    };
   }
 
   private call<T>(

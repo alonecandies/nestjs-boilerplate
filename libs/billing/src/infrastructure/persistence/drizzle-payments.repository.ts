@@ -1,11 +1,16 @@
+import type { CursorPage } from '@app/common';
 import {
   type DrizzleDB,
   type DrizzleTransactionalAdapter,
+  decodeIdCursor,
   InjectDrizzle,
+  keysetFetchLimit,
+  keysetOrder,
+  keysetPage,
   TransactionHost,
 } from '@app/database';
 import { Injectable } from '@nestjs/common';
-import { and, desc, eq, or, sql } from 'drizzle-orm';
+import { and, eq, lt, or, sql } from 'drizzle-orm';
 import { isNil } from 'lodash-es';
 import type {
   CreatePaymentResult,
@@ -30,20 +35,40 @@ const prepareStatements = (db: DrizzleDB) => ({
     .where(eq(payments.id, sql.placeholder('id')))
     .limit(1)
     .prepare('billing_payment_by_id'),
-  // Index-backed: payments_user_id_id_idx scanned backwards (uuidv7 ids = newest first).
+  // Keyset pages, newest first (uuidv7 ids = time order). Per user: payments_user_id_id_idx
+  // scanned backwards from `(user_id, $cursor)`; every user (admin): the primary key.
   byUser: db
     .select()
     .from(payments)
     .where(eq(payments.userId, sql.placeholder('userId')))
-    .orderBy(desc(payments.id))
+    .orderBy(keysetOrder(payments.id))
     .limit(sql.placeholder('limit'))
     .prepare('billing_payments_by_user'),
+  byUserAfter: db
+    .select()
+    .from(payments)
+    .where(
+      and(
+        eq(payments.userId, sql.placeholder('userId')),
+        lt(payments.id, sql.placeholder('cursorId')),
+      ),
+    )
+    .orderBy(keysetOrder(payments.id))
+    .limit(sql.placeholder('limit'))
+    .prepare('billing_payments_by_user_after'),
   all: db
     .select()
     .from(payments)
-    .orderBy(desc(payments.id))
+    .orderBy(keysetOrder(payments.id))
     .limit(sql.placeholder('limit'))
     .prepare('billing_payments_all'),
+  allAfter: db
+    .select()
+    .from(payments)
+    .where(lt(payments.id, sql.placeholder('cursorId')))
+    .orderBy(keysetOrder(payments.id))
+    .limit(sql.placeholder('limit'))
+    .prepare('billing_payments_all_after'),
 });
 
 @Injectable()
@@ -125,11 +150,19 @@ export class DrizzlePaymentsRepository implements PaymentsRepository {
     payment.markPersisted();
   }
 
-  async list(criteria: ListPaymentsCriteria): Promise<Payment[]> {
+  async list(criteria: ListPaymentsCriteria): Promise<CursorPage<Payment>> {
+    // Decoded (and validated: a forged cursor is a 422, never SQL) before choosing the statement.
+    const { userId, cursor } = criteria;
+    const cursorId = isNil(cursor) || cursor === '' ? undefined : decodeIdCursor(cursor).id;
+    const limit = keysetFetchLimit(criteria.limit); // + 1 look-ahead row → is there a next page?
     const rows =
-      criteria.userId === undefined
-        ? await this.statements.all.execute({ limit: criteria.limit })
-        : await this.statements.byUser.execute({ userId: criteria.userId, limit: criteria.limit });
-    return rows.map(fromPaymentRow);
+      userId === undefined
+        ? cursorId === undefined
+          ? await this.statements.all.execute({ limit })
+          : await this.statements.allAfter.execute({ cursorId, limit })
+        : cursorId === undefined
+          ? await this.statements.byUser.execute({ userId, limit })
+          : await this.statements.byUserAfter.execute({ userId, cursorId, limit });
+    return keysetPage(rows.map(fromPaymentRow), criteria.limit);
   }
 }

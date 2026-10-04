@@ -17,7 +17,8 @@ export abstract class UsersPort {
 
   /**
    * @throws EntityNotFoundException (404), InvalidRolesException (422),
-   *   CannotRevokeOwnAdminRoleException (422 CANNOT_REVOKE_OWN_ADMIN)
+   *   CannotRevokeOwnAdminRoleException (422 CANNOT_REVOKE_OWN_ADMIN),
+   *   CannotRemoveLastAdminException (422 CANNOT_REMOVE_LAST_ADMIN)
    */
   abstract updateUserRoles(input: UpdateUserRolesRequest): Promise<User>;
 }

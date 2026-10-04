@@ -34,8 +34,15 @@ describe('payment mapper (aggregate → billing.v1.Payment)', () => {
     expect(contract).not.toHaveProperty('stripeCheckoutSessionId');
   });
 
-  it('maps lists in order', () => {
+  it('maps pages in order, carrying nextCursor and omitting it on the last page', () => {
     const [a, b] = [makePayment(), makePayment()];
-    expect(toPaymentListContract([a, b]).items.map((p) => p.id)).toEqual([a.id, b.id]);
+
+    const page = toPaymentListContract({ items: [a, b], nextCursor: 'next-1' });
+    expect(page.items.map((p) => p.id)).toEqual([a.id, b.id]);
+    expect(page.nextCursor).toBe('next-1');
+
+    expect(toPaymentListContract({ items: [a], nextCursor: null })).not.toHaveProperty(
+      'nextCursor',
+    );
   });
 });

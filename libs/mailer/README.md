@@ -19,7 +19,7 @@ keys make redelivered events safe.
 | `formatMoney(amountMinor, currency, locale = 'en-US')`                                                                                                                                                 | function      | Minor units → localized string with the right decimals (`1999, 'usd'` → `$19.99`).                                                                                                                |
 | `toMailJobId(key)`, `mailFromName(from)`, `defaultMailContext(from, now?)`                                                                                                                             | functions     | BullMQ-safe job ids; the `MAIL_FROM` display name; `{ appName, year }`.                                                                                                                           |
 | `isPermanentMailError(error)`                                                                                                                                                                          | function      | Handlebars errors, SMTP 5xx, `EENVELOPE`/`ENOENT`/`EMESSAGE` → `true`.                                                                                                                            |
-| `createMailerOptions(cfg)`, `SMTP_TIMEOUTS`, `MAIL_SEND_TIMEOUT_MS`                                                                                                                                    | factory       | `MailerOptions` from the `mail` config namespace.                                                                                                                                                 |
+| `createMailerOptions(cfg)`, `registerMailPartials(dir?)`, `SMTP_TIMEOUTS`, `MAIL_SEND_TIMEOUT_MS`                                                                                                      | factory       | `MailerOptions` from the `mail` config namespace.                                                                                                                                                 |
 | `MAIL_QUEUE` (`'mail'`), `MAIL_TEMPLATES`, `MailTemplate`, `MAIL_TEMPLATES_DIR`, `MAIL_PARTIALS_DIR`, `MAIL_JOB_OPTIONS`, `DEFAULT_MAIL_CONCURRENCY`, `DEFAULT_MAIL_APP_NAME`, `MAIL_TEMPLATE_HELPERS` | constants     |                                                                                                                                                                                                   |
 
 Templates (`src/templates`, copied to `dist/templates` by SWC `copyFiles`):
@@ -73,8 +73,15 @@ await this.mail.enqueue(
   key in `forRootAsync`; `defaults` needs a cast for nodemailer 10's bundled types; it
   `require('lodash')` without declaring it (hence the `lodash` dependency); its ESM adapter path is
   `@nestjs-modules/mailer/adapters/handlebars.adapter`.
-- The adapter re-reads the partials directory on every send (a glob plus small sync reads). This is
-  negligible next to SMTP latency, and it happens only in the worker.
+- Partials are precompiled and registered once, when `createMailerOptions` runs at boot
+  (`registerMailPartials`, on the global Handlebars env that the adapter renders with). The
+  adapter's own `options.partials` is deliberately not used: it globs, re-reads and re-registers
+  every partial synchronously on every send.
+- BullMQ prints `error` events nobody listens to with `console.error` (raw stacks, outside pino,
+  one per reconnect attempt). `MailService` (queue) and `MailProcessor` (worker) listen and log
+  them through the Nest logger, throttled to one line per 5 s (`createThrottledErrorLog`).
+  `MailService` attaches its listener in the constructor: with Redis down at boot the queue
+  errors before any `onModuleInit` hook runs.
 - CSS inlining is disabled because the templates are already inline-styled. Email clients strip
   `<style>` blocks.
 - SMTP timeouts are lowered from nodemailer's defaults (2 min connect, 10 min idle socket), so a

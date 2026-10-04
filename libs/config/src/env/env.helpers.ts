@@ -1,3 +1,4 @@
+import { isIP } from 'node:net';
 import { compact, uniq } from 'lodash-es';
 import { z } from 'zod';
 
@@ -110,6 +111,62 @@ export function zUrl(defaultValue?: string, protocol?: RegExp): z.ZodType<string
     .trim()
     .pipe(protocol ? z.url({ protocol }) : z.url());
   return unsetAware(defaultValue === undefined ? url.optional() : url.default(defaultValue));
+}
+
+/**
+ * Which peers Fastify trusts to set `X-Forwarded-*` (its `trustProxy` option):
+ * - `false` — trust nobody: `req.ip` is the socket address (the default);
+ * - `string[]` — trust only peers in these IPs / CIDRs (or the proxy-addr presets `loopback`,
+ *   `linklocal`, `uniquelocal`): `req.ip` is the first address, walking `X-Forwarded-For` from
+ *   the right, that is NOT a trusted proxy — i.e. what your load balancer appended;
+ * - `true` — trust EVERY hop: `req.ip` becomes the client-supplied leftmost `X-Forwarded-For`
+ *   value. Spoofable; the `app` namespace rejects it in production.
+ *
+ * Hop counts are not offered: Fastify ≥ 5.12 fails closed on a numeric `trustProxy` (it trusts
+ * nothing, because a hop count can't validate the immediate peer).
+ */
+export type TrustProxySetting = boolean | string[];
+
+const TRUST_PROXY_PRESETS: ReadonlySet<string> = new Set(['loopback', 'linklocal', 'uniquelocal']);
+
+const isTrustedProxyEntry = (entry: string): boolean => {
+  if (TRUST_PROXY_PRESETS.has(entry)) return true;
+  const slash = entry.indexOf('/');
+  const address = slash === -1 ? entry : entry.slice(0, slash);
+  const family = isIP(address);
+  if (family === 0) return false;
+  if (slash === -1) return true;
+  const prefix = entry.slice(slash + 1);
+  return /^\d{1,3}$/.test(prefix) && Number(prefix) <= (family === 4 ? 32 : 128);
+};
+
+/**
+ * `TRUST_PROXY`: `'true' | 'false' | '1' | '0'` (case-insensitive, like `zBool`) or a CSV of
+ * IPs / CIDRs / presets (`'10.0.0.0/8, 192.168.1.7'`). Anything else (e.g. a hop count) is invalid.
+ */
+export function zTrustProxy(defaultValue: TrustProxySetting = false): z.ZodType<TrustProxySetting> {
+  const setting = z
+    .string()
+    .trim()
+    .transform((raw, ctx): TrustProxySetting => {
+      const lower = raw.toLowerCase();
+      if (lower === 'true' || lower === '1') return true;
+      if (lower === 'false' || lower === '0') return false;
+      const entries = splitCsv(raw);
+      const invalid = entries.filter((entry) => !isTrustedProxyEntry(entry));
+      if (entries.length === 0 || invalid.length > 0) {
+        ctx.addIssue({
+          code: 'custom',
+          message:
+            'Expected true/false or a CSV of proxy IPs/CIDRs/presets (hop counts are not supported)',
+        });
+        return z.NEVER;
+      }
+      return entries;
+    });
+  return unsetAware(
+    setting.default(() => (Array.isArray(defaultValue) ? [...defaultValue] : defaultValue)),
+  );
 }
 
 /** One of a fixed set of (case-sensitive) values. */

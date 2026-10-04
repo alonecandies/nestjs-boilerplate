@@ -111,16 +111,27 @@ describe('createGraphqlWsAuthHandlers', () => {
     expect(ctx.extra.user).toBeUndefined();
   });
 
-  it('allows anonymous sockets unless auth is required', async () => {
+  it('refuses anonymous sockets by default (no expiry timer, no rate limit would apply)', async () => {
     const authenticate = vi.fn(async () => user());
+    const handlers = createGraphqlWsAuthHandlers(authenticate);
 
-    await expect(createGraphqlWsAuthHandlers(authenticate).onConnect(wsContext())).resolves.toBe(
-      true,
-    );
+    await expect(handlers.onConnect(wsContext())).resolves.toBe(false);
+    await expect(handlers.onConnect(wsContext({}))).resolves.toBe(false);
     await expect(
       createGraphqlWsAuthHandlers(authenticate, { requireAuth: true }).onConnect(wsContext({})),
     ).resolves.toBe(false);
     expect(authenticate).not.toHaveBeenCalled();
+  });
+
+  it('accepts anonymous sockets when auth is explicitly optional (requireAuth: false)', async () => {
+    const authenticate = vi.fn(async () => user());
+    const ctx = wsContext();
+
+    await expect(
+      createGraphqlWsAuthHandlers(authenticate, { requireAuth: false }).onConnect(ctx),
+    ).resolves.toBe(true);
+    expect(authenticate).not.toHaveBeenCalled();
+    expect(ctx.extra.user).toBeUndefined();
   });
 
   it('closes the socket with 4401 when the access token expires', async () => {

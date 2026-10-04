@@ -7,7 +7,9 @@ import {
   FileAccessDeniedException,
   FileNotFoundException,
   FileTooLargeException,
+  UploadCapacityExceededException,
 } from '../domain/files.errors.js';
+import { UPLOAD_RETRY_AFTER_SEC } from '../files.constants.js';
 import { resolveFileAccess } from './file-access.policy.js';
 import { buildUserFileKey, filenameOfFileKey } from './file-key.js';
 import type {
@@ -32,6 +34,8 @@ export const UPLOADED_BY_METADATA_KEY = 'uploaded-by';
 @Injectable()
 export class FilesService {
   private readonly logger = new Logger(FilesService.name);
+  /** Streamed uploads currently in `upload()` (this process; the service is a singleton). */
+  private inFlightUploads = 0;
 
   constructor(
     private readonly storage: StorageService,
@@ -43,16 +47,24 @@ export class FilesService {
     return this.config.maxUploadBytes;
   }
 
-  /** Streams `params.body` to `users/{actor}/{uuidv7}-{safeFilename}` without buffering it. */
+  /**
+   * Streams `params.body` to `users/{actor}/{uuidv7}-{safeFilename}`. Never one whole-file buffer,
+   * but the storage driver holds bounded chunks (S3: up to ~15 MiB per upload), so at most
+   * `STORAGE_MAX_CONCURRENT_UPLOADS` run at once per process: one more fails fast with a 503
+   * `UploadCapacityExceededException` before its body is read (the slot is freed whatever the
+   * outcome). Presigned uploads are not counted — their bytes never reach the API.
+   */
   async upload(actor: FileActor, params: UploadFileParams): Promise<UploadedFile> {
     const contentType = assertAllowedContentType(params.contentType);
     const key = buildUserFileKey(actor.id, params.filename);
-    const stored = await this.storage.upload({
-      key,
-      body: params.body,
-      contentType,
-      metadata: { [UPLOADED_BY_METADATA_KEY]: actor.id },
-    });
+    const stored = await this.withUploadSlot(() =>
+      this.storage.upload({
+        key,
+        body: params.body,
+        contentType,
+        metadata: { [UPLOADED_BY_METADATA_KEY]: actor.id },
+      }),
+    );
     this.logger.debug(`Stored ${stored.key} (${stored.size ?? '?'} bytes)`);
     return {
       key: stored.key,
@@ -109,6 +121,20 @@ export class FilesService {
   async deleteFile(actor: FileActor, key: string): Promise<void> {
     this.authorize(actor, key, 'delete');
     await this.storage.delete(key);
+  }
+
+  /** Fail-fast semaphore (no queue: a waiting upload would hold its socket and body anyway). */
+  private async withUploadSlot<T>(work: () => Promise<T>): Promise<T> {
+    const max = this.config.maxConcurrentUploads;
+    if (this.inFlightUploads >= max) {
+      throw new UploadCapacityExceededException(max, UPLOAD_RETRY_AFTER_SEC);
+    }
+    this.inFlightUploads += 1;
+    try {
+      return await work();
+    } finally {
+      this.inFlightUploads -= 1;
+    }
   }
 
   private authorize(actor: FileActor, key: string, action: 'download' | 'delete'): void {

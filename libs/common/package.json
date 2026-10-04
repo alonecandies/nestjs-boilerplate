@@ -30,7 +30,6 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@types/lodash-es": "catalog:",
-    "fastify": "catalog:"
+    "@types/lodash-es": "catalog:"
   }
 }

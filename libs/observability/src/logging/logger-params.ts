@@ -10,6 +10,7 @@ import pino from 'pino';
 import type { Options as PinoHttpOptions } from 'pino-http';
 import { QUIET_LOG_PATH_PREFIXES } from '../observability.constants.js';
 import { requestIdOf, resolveRpcRequestId } from './request-id.js';
+import { rpcErrorObject, rpcLogLevel } from './rpc-error-logging.js';
 
 /**
  * Log paths masked with `[REDACTED]`. Headers are listed although our serializers drop them, so a
@@ -159,12 +160,16 @@ export function buildLoggerParams(
   return {
     pinoHttp,
     // Nest 12 microservice pre-request hooks: every @MessagePattern/@EventPattern handler gets its
-    // own logging context (hybrid apps must connect with `inheritAppConfig: true`).
+    // own logging context (hybrid apps must connect with `inheritAppConfig: true`). Like HTTP,
+    // caller errors (NOT_FOUND, conflicts, auth, validation) are `warn` without a stack; only
+    // server-side failures are `error`.
     microservice: {
       genReqId: resolveRpcRequestId,
       customAttributeKeys: { reqId: 'requestId' },
       quietRpcLogger: true,
       includePayload: false,
+      customLogLevel: rpcLogLevel,
+      customErrorObject: rpcErrorObject,
     },
   };
 }

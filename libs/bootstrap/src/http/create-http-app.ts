@@ -1,7 +1,12 @@
 import { constants as zlib } from 'node:zlib';
 import { HTTP_HEADERS } from '@app/common';
-import { type AppConfig, appConfig } from '@app/config';
-import { observeInstrument, resolveRequestId } from '@app/observability';
+import {
+  type AppConfig,
+  appConfig,
+  type ObservabilityConfig,
+  observabilityConfig,
+} from '@app/config';
+import { createBootstrapLogger, observeInstrument, resolveRequestId } from '@app/observability';
 import fastifyCompress, { type FastifyCompressOptions } from '@fastify/compress';
 import fastifyCookie from '@fastify/cookie';
 import fastifyHelmet, { type FastifyHelmetOptions } from '@fastify/helmet';
@@ -49,6 +54,11 @@ export interface CreateHttpAppOptions extends HttpAppSetupOptions {
   multipart?: boolean | MultipartLimits;
   /** Extra Nest application options (merged last). */
   appOptions?: NestApplicationOptions;
+  /**
+   * Pre-parsed `observability` config (tests); default `observabilityConfig.parse()`. Picks the
+   * create-phase logger: single-line JSON unless `LOG_PRETTY` (see `createBootstrapLogger`).
+   */
+  observability?: ObservabilityConfig;
 }
 
 /**
@@ -144,7 +154,8 @@ function appLogger(app: NestFastifyApplication): Logger {
 
 /**
  * Creates the Fastify-based Nest application every HTTP-facing app uses: `buildFastifyOptions`
- * (request ids shared by Fastify/pino/cls, timeouts, body limit), buffered bootstrap logs, optional
+ * (request ids shared by Fastify/pino/cls, timeouts, body limit), buffered bootstrap logs (printed
+ * as single-line JSON if the create phase fails — `createBootstrapLogger`), optional
  * `@nestjs/observe` instrumentation, then `configureHttpApp` (logger, helmet, compression, cookies,
  * CORS, URI versioning, graceful shutdown).
  *
@@ -158,8 +169,14 @@ export async function createHttpApp(
   const config = options.config ?? appConfig.parse();
   const adapter = new FastifyAdapter(buildFastifyOptions(config, options));
   const instrument = observeInstrument();
+  // Until `configureHttpApp` attaches pino, a boot failure (unreachable Redis/Postgres/Cassandra in
+  // a provider factory) and the buffered bootstrap logs go through THIS logger: JSON, not colours.
+  const bootstrapLogger = createBootstrapLogger(
+    options.observability ?? observabilityConfig.parse(),
+  );
 
   const app = await NestFactory.create<NestFastifyApplication>(module, adapter, {
+    ...(bootstrapLogger === undefined ? {} : { logger: bootstrapLogger }),
     bufferLogs: true,
     // Rethrow boot errors (DI, config) to the caller instead of `process.abort()`.
     abortOnError: false,

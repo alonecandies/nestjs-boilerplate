@@ -37,13 +37,11 @@
     "nestjs-cls": "catalog:",
     "postgres": "catalog:",
     "reflect-metadata": "catalog:",
-    "rxjs": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@testcontainers/postgresql": "catalog:",
     "@types/lodash-es": "catalog:",
-    "drizzle-kit": "catalog:",
-    "testcontainers": "catalog:"
+    "drizzle-kit": "catalog:"
   }
 }

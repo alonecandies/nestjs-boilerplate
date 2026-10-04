@@ -5,7 +5,7 @@ import {
   RequireAnyPermission,
   RequirePermissions,
 } from '@app/auth';
-import { Timeout } from '@app/common';
+import { HTTP_HEADERS, Timeout } from '@app/common';
 import {
   Body,
   Controller,
@@ -16,6 +16,7 @@ import {
   PayloadTooLargeException,
   Post,
   Query,
+  Res,
   SerializeOptions,
   StandardSchemaSerializerInterceptor,
   UploadedFile,
@@ -35,12 +36,16 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiPayloadTooLargeResponse,
+  ApiServiceUnavailableResponse,
   ApiTags,
   ApiUnauthorizedResponse,
   ApiUnsupportedMediaTypeResponse,
 } from '@nestjs/swagger';
 import { FilesService } from '../../application/files.service.js';
-import { FileTooLargeException } from '../../domain/files.errors.js';
+import {
+  FileTooLargeException,
+  UploadCapacityExceededException,
+} from '../../domain/files.errors.js';
 import { UPLOAD_FILE_FIELD } from '../../files.constants.js';
 import { ApiMultipartFileBody } from './api-multipart-file-body.decorator.js';
 import {
@@ -69,6 +74,11 @@ import {
 
 const PROBLEM = 'RFC 9457 problem+json';
 
+/** The bit of the Fastify reply the upload route touches (`@Res({ passthrough: true })`). */
+interface HeaderWritableReply {
+  header(name: string, value: string): unknown;
+}
+
 /**
  * `/v1/files` — per-user object storage. Keys are `users/{userId}/{uuidv7}-{safeFilename}`; a user
  * may only touch keys under their own prefix unless they hold `files:manage`.
@@ -95,7 +105,9 @@ export class FilesController {
   @ApiOperation({
     summary: 'Upload a file',
     description:
-      'Streams one multipart file straight to object storage (never buffered in the API). ' +
+      'Streams one multipart file to object storage through the API (never as one whole-file ' +
+      'buffer, but each upload holds up to ~15 MiB while in flight). Concurrent streamed uploads ' +
+      'are capped per instance (STORAGE_MAX_CONCURRENT_UPLOADS): beyond it, 503 + Retry-After. ' +
       'Prefer presigned uploads for large files.',
   })
   @ApiMultipartFileBody('A single `file` part, at most STORAGE_MAX_UPLOAD_BYTES (default 25 MiB)')
@@ -108,9 +120,13 @@ export class FilesController {
     description: `FILE_TOO_LARGE; errors[0] states the limit (${PROBLEM})`,
   })
   @ApiUnsupportedMediaTypeResponse({ description: `UNSUPPORTED_FILE_TYPE (${PROBLEM})` })
+  @ApiServiceUnavailableResponse({
+    description: `UPLOAD_CAPACITY_EXCEEDED: too many uploads in flight; honour Retry-After (${PROBLEM})`,
+  })
   async upload(
     @CurrentUser() user: AuthUser,
     @UploadedFile(REQUIRED_UPLOAD_FILE_PIPE) file: MultipartFileStream,
+    @Res({ passthrough: true }) reply: HeaderWritableReply,
   ): Promise<UploadedFileResponse> {
     try {
       const uploaded = await this.files.upload(user, {
@@ -126,6 +142,10 @@ export class FilesController {
         throw new FileTooLargeException(this.files.maxUploadBytes, UPLOAD_FILE_FIELD, {
           cause: error,
         });
+      }
+      // The problem+json filter only sets the content type; headers set here survive its reply.
+      if (error instanceof UploadCapacityExceededException) {
+        reply.header(HTTP_HEADERS.RETRY_AFTER, String(error.retryAfterSec));
       }
       throw error;
     }

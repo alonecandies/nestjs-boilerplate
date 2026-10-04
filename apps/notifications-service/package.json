@@ -5,8 +5,9 @@
   "type": "module",
   "description": "notifications-service: gRPC notifications.v1 NotificationsService (Cassandra inbox) + Kafka consumers (welcome, payment receipt) + BullMQ mail worker + daily digest cron; HTTP only for /health and /metrics.",
   "scripts": {
-    "dev": "node --watch --watch-preserve-output --env-file-if-exists=../../.env --env-file-if-exists=.env --enable-source-maps --conditions=@app/source --import @swc-node/register/esm-register src/main.ts",
+    "dev": "node --watch --watch-preserve-output --env-file-if-exists=../../.env --env-file-if-exists=.env --enable-source-maps --conditions=@app/source --import @swc-node/register/esm-register --import ./src/instrument.ts src/main.ts",
     "start:dev": "bun run dev",
+    "g": "sh -c 'nest g \"$@\" && eslint --fix src' nest-g",
     "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
     "start": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import ./dist/instrument.js dist/main.js",
     "start:prod": "node --import ./dist/instrument.js dist/main.js",
@@ -16,7 +17,6 @@
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
-    "@app/auth": "workspace:*",
     "@app/bootstrap": "workspace:*",
     "@app/cassandra": "workspace:*",
     "@app/common": "workspace:*",
@@ -30,31 +30,23 @@
     "@fastify/static": "catalog:",
     "@grpc/grpc-js": "catalog:",
     "@grpc/proto-loader": "catalog:",
-    "@nestjs-modules/mailer": "catalog:",
     "@nestjs/bullmq": "catalog:",
     "@nestjs/common": "catalog:",
     "@nestjs/config": "catalog:",
-    "@nestjs/core": "catalog:",
     "@nestjs/cqrs": "catalog:",
     "@nestjs/microservices": "catalog:",
     "@nestjs/platform-fastify": "catalog:",
     "@nestjs/schedule": "catalog:",
-    "@nestjs/websockets": "catalog:",
-    "bullmq": "catalog:",
     "cassandra-driver": "catalog:",
     "class-transformer": "catalog:",
     "class-validator": "catalog:",
-    "fastify": "catalog:",
     "ioredis": "catalog:",
     "kafkajs": "catalog:",
-    "nestjs-pino": "catalog:",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:"
   },
   "devDependencies": {
     "@app/testing": "workspace:*",
-    "@nestjs/testing": "catalog:",
-    "@types/supertest": "catalog:",
-    "supertest": "catalog:"
+    "@nestjs/testing": "catalog:"
   }
 }

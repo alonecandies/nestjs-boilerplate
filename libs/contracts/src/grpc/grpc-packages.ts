@@ -25,6 +25,14 @@ export interface GrpcPackageSpec {
   readonly services: readonly string[];
   /** DI token of the `ClientGrpc` registered for this package by `GrpcClientsModule`. */
   readonly clientToken: string;
+  /**
+   * Side-effect-free rpcs (proto method names, by unqualified service): the ONLY methods clients
+   * retry automatically on `UNAVAILABLE`. A server can commit a mutation and then die before
+   * answering; a replayed `RefreshTokens` would then trip refresh-token reuse detection, a
+   * replayed `Register` would fail with `EMAIL_TAKEN`, and so on. Add a method here only if
+   * running it twice is harmless.
+   */
+  readonly idempotentMethods: Readonly<Record<string, readonly string[]>>;
 }
 
 /**
@@ -38,18 +46,22 @@ export const GRPC_PACKAGES = {
     protoPath: ['identity/v1/identity.proto'],
     services: [AUTH_SERVICE_NAME, USERS_SERVICE_NAME],
     clientToken: 'IDENTITY_GRPC_CLIENT',
+    // AuthService (Register, Login, RefreshTokens, Logout) is deliberately absent.
+    idempotentMethods: { [USERS_SERVICE_NAME]: ['GetUser', 'GetUsersByIds', 'ListUsers'] },
   },
   notifications: {
     package: 'notifications.v1',
     protoPath: ['notifications/v1/notifications.proto'],
     services: [NOTIFICATIONS_SERVICE_NAME],
     clientToken: 'NOTIFICATIONS_GRPC_CLIENT',
+    idempotentMethods: { [NOTIFICATIONS_SERVICE_NAME]: ['ListNotifications'] },
   },
   billing: {
     package: 'billing.v1',
     protoPath: ['billing/v1/billing.proto'],
     services: [BILLING_SERVICE_NAME],
     clientToken: 'BILLING_GRPC_CLIENT',
+    idempotentMethods: { [BILLING_SERVICE_NAME]: ['ListPayments'] },
   },
 } as const satisfies Record<string, GrpcPackageSpec>;
 
@@ -99,6 +111,17 @@ export interface ResolvedGrpcPackages {
    * server reflection and service-config `methodConfig[].name[].service` expect.
    */
   readonly services: string[];
+  /**
+   * `{ service, method }` names (gRFC A6 `methodConfig[].name[]`) of every idempotent rpc of the
+   * packages (`GrpcPackageSpec.idempotentMethods`), with fully-qualified service names.
+   */
+  readonly idempotentMethods: GrpcMethodName[];
+}
+
+/** A fully-qualified service plus a proto method name (`identity.v1.UsersService` / `GetUser`). */
+export interface GrpcMethodName {
+  readonly service: string;
+  readonly method: string;
 }
 
 /**
@@ -111,5 +134,10 @@ export function resolveGrpcPackages(names: readonly GrpcPackageName[]): Resolved
     packages: specs.map((spec) => spec.package),
     protoPath: [...new Set(specs.flatMap((spec) => spec.protoPath))],
     services: specs.flatMap((spec) => spec.services.map((service) => `${spec.package}.${service}`)),
+    idempotentMethods: specs.flatMap((spec) =>
+      Object.entries(spec.idempotentMethods).flatMap(([service, methods]) =>
+        methods.map((method) => ({ service: `${spec.package}.${service}`, method })),
+      ),
+    ),
   };
 }

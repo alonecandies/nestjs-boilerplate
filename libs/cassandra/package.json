@@ -27,9 +27,7 @@
     "@nestjs/core": "catalog:",
     "@nestjs/terminus": "catalog:",
     "cassandra-driver": "catalog:",
-    "lodash-es": "catalog:",
-    "reflect-metadata": "catalog:",
-    "rxjs": "catalog:"
+    "lodash-es": "catalog:"
   },
   "devDependencies": {
     "@types/lodash-es": "catalog:"

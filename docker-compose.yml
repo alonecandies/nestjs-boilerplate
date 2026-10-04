@@ -38,6 +38,10 @@ x-env-base: &env-base
   METRICS_ENABLED: "true"
   REDIS_URL: redis://redis:6379
   KAFKA_BROKERS: kafka:9092
+  # NODE_ENV=production refuses plaintext gRPC and turns reflection off: local-only overrides so
+  # grpcurl/Postman work on the 127.0.0.1:5005x ports (production: GRPC_TLS_*, no reflection).
+  GRPC_ALLOW_INSECURE: "true"
+  GRPC_REFLECTION: "true"
   # Tracing: off unless DOCKER_OTEL_SDK_DISABLED=false (start the `observability` profile too).
   OTEL_SDK_DISABLED: ${DOCKER_OTEL_SDK_DISABLED:-true}
   OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
@@ -87,6 +91,9 @@ x-env-stripe: &env-stripe
 
 x-env-edge: &env-edge
   DOCS_ENABLED: ${DOCKER_DOCS_ENABLED:-true} # /docs (Scalar) + /openapi.json even in production mode
+  # LOCAL ONLY: trust X-Forwarded-For from private-network peers (k6 sends one per iteration to
+  # model many clients). In production list only your load balancer's IPs/CIDRs.
+  TRUST_PROXY: ${DOCKER_TRUST_PROXY:-uniquelocal}
 
 # ---- app container defaults ---------------------------------------------------------------------
 x-app: &app
@@ -371,6 +378,9 @@ services:
       RUSTFS_ACCESS_KEY: ${RUSTFS_ACCESS_KEY:-rustfsadmin}
       RUSTFS_SECRET_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
       RUSTFS_OBS_LOGGER_LEVEL: warn
+      # Browser presigned PUT/GET from a frontend origin needs CORS on the S3 listener (server-level
+      # allow-list; empty = no CORS headers). Defaults = the apps' CORS_ORIGINS defaults.
+      RUSTFS_CORS_ALLOWED_ORIGINS: ${DOCKER_S3_CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
     ports:
       - "127.0.0.1:${S3_HOST_PORT:-9000}:9000"
       - "127.0.0.1:${S3_CONSOLE_HOST_PORT:-9001}:9001"
@@ -481,6 +491,8 @@ services:
         - *env-edge
       SERVICE_NAME: monolith
       KAFKA_GROUP_ID: monolith
+      # Off-heap headroom (768 − 512 MiB) also holds streamed uploads' Buffers:
+      # STORAGE_MAX_CONCURRENT_UPLOADS (4) × ~15 MiB. Raise the limit with either knob.
       NODE_OPTIONS: --max-old-space-size=512
     ports: ["127.0.0.1:${API_HOST_PORT:-3000}:3000"]
     networks:
@@ -518,6 +530,8 @@ services:
       <<: [*env-base, *env-auth, *env-storage, *env-edge]
       SERVICE_NAME: gateway
       KAFKA_GROUP_ID: gateway-push
+      # Off-heap headroom (512 − 384 MiB) also holds streamed uploads' Buffers:
+      # STORAGE_MAX_CONCURRENT_UPLOADS (4) × ~15 MiB. Raise the limit with either knob.
       NODE_OPTIONS: --max-old-space-size=384
       # One address per service; grpc-js resolves every A record of a scaled service (round_robin).
       IDENTITY_GRPC_URL: identity-service:50051
@@ -839,10 +853,13 @@ services:
       K6_WEB_DASHBOARD_PERIOD: 2s
       K6_WEB_DASHBOARD_EXPORT: /reports/k6-report.html
     command: ["run", "/scripts/script.js"]
+    # Runs as the host user so it can write the report into the bind-mounted docker/k6/reports
+    # (the image's own uid 12345 cannot on Linux hosts). Linux: K6_UID=$(id -u) K6_GID=$(id -g).
+    user: "${K6_UID:-1000}:${K6_GID:-1000}"
     ports: ["127.0.0.1:${K6_DASHBOARD_HOST_PORT:-5665}:5665"]
     volumes:
       - ./docker/k6:/scripts:ro
-      - ./docker/k6/reports:/reports # gitignored; HTML report of the last run
+      - ./docker/k6/reports:/reports # HTML report of the last run (contents gitignored, dir committed)
     deploy:
       resources:
         limits: { cpus: "2.0", memory: 512M }

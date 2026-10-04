@@ -75,6 +75,15 @@ export class CannotRevokeOwnAdminRoleException extends BusinessRuleViolationExce
   }
 }
 
+/** 422 — the change would remove the admin role from the last remaining admin. */
+export class CannotRemoveLastAdminException extends BusinessRuleViolationException {
+  constructor() {
+    super('At least one admin must remain', {
+      code: IdentityErrorCode.CANNOT_REMOVE_LAST_ADMIN,
+    });
+  }
+}
+
 /** 422 — role list empty or containing unknown role names. */
 export class InvalidRolesException extends DomainValidationException {
   constructor(issues: readonly ValidationIssue[]) {

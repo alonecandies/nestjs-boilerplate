@@ -31,7 +31,6 @@
     "@nestjs/core": "catalog:",
     "@nestjs/microservices": "catalog:",
     "@nestjs/terminus": "catalog:",
-    "@nestjs/websockets": "catalog:",
     "grpc-health-check": "catalog:",
     "kafkajs": "catalog:",
     "lodash-es": "catalog:",
@@ -39,7 +38,6 @@
     "opossum": "catalog:",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
-    "uuid": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

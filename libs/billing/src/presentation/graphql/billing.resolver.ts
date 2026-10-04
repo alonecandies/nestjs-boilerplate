@@ -8,10 +8,14 @@ import { resolvePaymentsOwner } from '../payments-scope.js';
 import { PaymentsArgs } from './args/payments.args.js';
 import { CreateCheckoutSessionInput } from './inputs/create-checkout-session.input.js';
 import { CheckoutSessionModel } from './models/checkout-session.model.js';
-import { PaymentModel, toPaymentModel } from './models/payment.model.js';
+import {
+  PaymentConnectionModel,
+  PaymentModel,
+  toPaymentConnectionModel,
+} from './models/payment.model.js';
 
 /**
- * `payments(all, limit)` and `createCheckoutSession(input)`. Authentication/RBAC come from the
+ * `payments(all, limit, cursor)` (a keyset-paginated connection) and `createCheckoutSession(input)`. Authentication/RBAC come from the
  * global, context-aware guards; `Payment.user` is resolved through identity's `users` DataLoader,
  * so a page of N payments costs ONE batched user lookup (no N+1).
  */
@@ -19,20 +23,22 @@ import { PaymentModel, toPaymentModel } from './models/payment.model.js';
 export class BillingResolver {
   constructor(private readonly billing: BillingPort) {}
 
-  @Query(() => [PaymentModel], {
+  @Query(() => PaymentConnectionModel, {
     name: 'payments',
-    description: "Newest first. `all: true` lists every user's payments (billing:read-all).",
+    description:
+      "Newest first, one page at a time (`cursor` = the previous page's `nextCursor`). `all: true` lists every user's payments (billing:read-all).",
     complexity: 10,
   })
   async payments(
     @Args() args: PaymentsArgs,
     @CurrentUser() user: AuthUser,
-  ): Promise<PaymentModel[]> {
+  ): Promise<PaymentConnectionModel> {
     const list = await this.billing.listPayments({
       userId: resolvePaymentsOwner(user, args.all),
       limit: args.limit,
+      cursor: args.cursor ?? undefined,
     });
-    return list.items.map(toPaymentModel);
+    return toPaymentConnectionModel(list);
   }
 
   @Mutation(() => CheckoutSessionModel, {

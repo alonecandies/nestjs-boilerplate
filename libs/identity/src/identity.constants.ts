@@ -10,6 +10,8 @@ export const IDENTITY_LIMITS = {
   PASSWORD_MAX_LENGTH: 128,
   DISPLAY_NAME_MIN_LENGTH: 1,
   DISPLAY_NAME_MAX_LENGTH: 100,
+  /** pg_trgm indexes trigrams: a shorter `ILIKE '%q%'` term cannot use `users_search_trgm_idx`. */
+  SEARCH_MIN_LENGTH: 3,
   SEARCH_MAX_LENGTH: 100,
   /** A signed refresh JWT is ~300 bytes; anything much larger is garbage. */
   REFRESH_TOKEN_MAX_LENGTH: 4096,
@@ -28,6 +30,7 @@ export const IdentityErrorCode = {
   REFRESH_TOKEN_REUSED: 'REFRESH_TOKEN_REUSED',
   SESSION_EXPIRED: 'SESSION_EXPIRED',
   CANNOT_REVOKE_OWN_ADMIN: 'CANNOT_REVOKE_OWN_ADMIN',
+  CANNOT_REMOVE_LAST_ADMIN: 'CANNOT_REMOVE_LAST_ADMIN',
   INVALID_ROLES: 'INVALID_ROLES',
   INVALID_USER: 'INVALID_USER',
 } as const;
@@ -39,6 +42,13 @@ export const USERS_LOADER = 'users';
 /** Read-through cache of `GET /v1/users/:id` (blueprint §3.16): key `user:{id}`, 30 s. */
 export const USER_CACHE_TTL_MS = 30_000;
 export const userCacheKey = (id: string): string => `user:${id}`;
+
+/**
+ * Postgres transaction-scoped advisory lock key (`pg_advisory_xact_lock(hashtext(key))`) taken
+ * before counting admins: serialises admin demotions so two concurrent ones cannot both see
+ * "another admin remains" and leave the system with none.
+ */
+export const USER_ROLES_LOCK = 'identity:user-roles';
 
 /** Hourly purge of expired sessions, on one replica only (`@WithLock`). */
 export const PURGE_SESSIONS_LOCK = 'identity:purge-sessions';

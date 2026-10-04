@@ -21,7 +21,6 @@
   "dependencies": {
     "@app/common": "workspace:*",
     "@app/config": "workspace:*",
-    "@app/redis": "workspace:*",
     "@nestjs-modules/mailer": "catalog:",
     "@nestjs/bullmq": "catalog:",
     "@nestjs/common": "catalog:",
@@ -31,9 +30,7 @@
     "handlebars": "catalog:",
     "lodash": "catalog:",
     "lodash-es": "catalog:",
-    "nodemailer": "catalog:",
-    "reflect-metadata": "catalog:",
-    "rxjs": "catalog:"
+    "nodemailer": "catalog:"
   },
   "devDependencies": {
     "@types/lodash-es": "catalog:"

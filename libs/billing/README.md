@@ -72,22 +72,27 @@ What the edge (monolith / gateway) must provide:
 
 ### REST (`/v1/billing`)
 
-| Method & path             | Auth                                           | Input                                                                                                                                             | Response                                                                         |
-| ------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| `POST /checkout-sessions` | Bearer, `billing:checkout`                     | zod body `{ priceId: string(1..255), quantity?: int 1..100 = 1 }` (strict) + optional `Idempotency-Key` header (8–255 chars of `[A-Za-z0-9._:-]`) | `201 { id, url, paymentId }`                                                     |
-| `POST /webhooks/stripe`   | `@Public`, `@SkipThrottle`, `Stripe-Signature` | raw JSON body (verified byte-for-byte)                                                                                                            | `200 { received, eventId, eventType, duplicate }`                                |
-| `GET /payments`           | Bearer; `?all=true` needs `billing:read-all`   | zod query `{ all?: 'true'\|'false'\|'1'\|'0', limit?: 1..100 = 20 }`                                                                              | `200 { items: Payment[] }` newest first (`amountTotal` = minor units, ISO dates) |
+| Method & path             | Auth                                           | Input                                                                                                                                             | Response                                                                                                                       |
+| ------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /checkout-sessions` | Bearer, `billing:checkout`                     | zod body `{ priceId: string(1..255), quantity?: int 1..100 = 1 }` (strict) + optional `Idempotency-Key` header (8–255 chars of `[A-Za-z0-9._:-]`) | `201 { id, url, paymentId }`                                                                                                   |
+| `POST /webhooks/stripe`   | `@Public`, `@SkipThrottle`, `Stripe-Signature` | raw JSON body (verified byte-for-byte)                                                                                                            | `200 { received, eventId, eventType, duplicate }`                                                                              |
+| `GET /payments`           | Bearer; `?all=true` needs `billing:read-all`   | zod query `{ all?: 'true'\|'false'\|'1'\|'0', limit?: 1..100 = 20, cursor?: string }`                                                             | `200 { items: Payment[], nextCursor: string \| null }` newest first, keyset-paginated (`amountTotal` = minor units, ISO dates) |
 
 Errors are RFC 9457 `application/problem+json`: 400 (validation, `errors[]`), 401, 403, 409
 (`IDEMPOTENCY_KEY_REUSED`, `PAYMENT_CONCURRENTLY_MODIFIED`), 422 (`INVALID_WEBHOOK_SIGNATURE`,
-`INVALID_WEBHOOK_PAYLOAD`), 502 (`PAYMENT_PROVIDER_ERROR`, `CHECKOUT_URL_MISSING`). Responses are enforced by
+`INVALID_WEBHOOK_PAYLOAD`, `INVALID_CURSOR`), 502 (`PAYMENT_PROVIDER_ERROR`, `CHECKOUT_URL_MISSING`). Responses are enforced by
 `StandardSchemaSerializerInterceptor` (unknown fields are stripped) and documented in OpenAPI from the same zod schemas.
 
 ### GraphQL
 
 ```graphql
 type Query {
-  payments(all: Boolean! = false, limit: Int! = 20): [Payment!]! # all: true needs billing:read-all
+  # all: true needs billing:read-all; cursor = the previous page's nextCursor
+  payments(all: Boolean! = false, limit: Int! = 20, cursor: String): PaymentConnection!
+}
+type PaymentConnection {
+  items: [Payment!]!
+  nextCursor: String # null on the last page
 }
 type Mutation {
   createCheckoutSession(input: CreateCheckoutSessionInput!): CheckoutSession! # billing:checkout
@@ -128,11 +133,11 @@ input CreateCheckoutSessionInput {
 
 ### gRPC (`billing.v1.BillingService`, billing-service)
 
-| RPC                     | → bus                          | Notes                                                                                  |
-| ----------------------- | ------------------------------ | -------------------------------------------------------------------------------------- |
-| `CreateCheckoutSession` | `CreateCheckoutSessionCommand` | zod-validated; optional `success_url`/`cancel_url` (internal callers only)             |
-| `HandleStripeWebhook`   | `HandleStripeWebhookCommand`   | `payload` is `bytes` (Buffer): the service verifies the signature                      |
-| `ListPayments`          | `ListPaymentsQuery`            | `user_id` absent = all users (the gateway enforces `billing:read-all`); `limit` 0 = 20 |
+| RPC                     | → bus                          | Notes                                                                                                                                            |
+| ----------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CreateCheckoutSession` | `CreateCheckoutSessionCommand` | zod-validated; optional `success_url`/`cancel_url` (internal callers only)                                                                       |
+| `HandleStripeWebhook`   | `HandleStripeWebhookCommand`   | `payload` is `bytes` (Buffer): the service verifies the signature                                                                                |
+| `ListPayments`          | `ListPaymentsQuery`            | `user_id` absent = all users (the gateway enforces `billing:read-all`); `limit` 0 = 20; `cursor` in, `next_cursor` out (absent on the last page) |
 
 Payloads go through `ZodRpcValidationPipe` (`INVALID_ARGUMENT` + issues); `@GrpcController()` maps domain
 errors to gRPC statuses and `x-error-code` trailers, and `BillingGrpcAdapter` maps them back to the same
@@ -167,9 +172,21 @@ failure marks the payment `failed`; a retry with the same key reopens it and get
    - any other signed event → acknowledged and ignored.
 3. After COMMIT the aggregate's events are published; `PaymentSucceededRelay` sends the Kafka event.
 
-Unknown payments and impossible transitions are acknowledged with a warning (a retry could never succeed);
-infrastructure errors propagate, the transaction rolls back (forgetting the event id) and Stripe's retry is
-processed again.
+Unknown payments and impossible transitions are acknowledged with a warning (a retry could never succeed).
+A paid session with no usable currency (none in the event, none stored) is one of them: the payment stays
+`pending` and is NOT announced (`billing.payment-succeeded.v1` requires an ISO 4217 code), the handler warns and
+increments `billing_checkout_paid_without_currency_total` — alert on it and reconcile in the Stripe dashboard.
+Infrastructure errors propagate, the transaction rolls back (forgetting the event id) and Stripe's retry is
+processed again. Old receipts are purged: see **Retention** below.
+
+**Pagination.** `list` is keyset-paginated on the uuidv7 id (`@app/database` `keysetFetchLimit`/`keysetPage`):
+`WHERE user_id = $1 [AND id < $cursor] ORDER BY id DESC LIMIT n + 1` on `payments_user_id_id_idx` (the admin
+listing uses the primary key). Cursors are opaque; a forged one is a 422 `INVALID_CURSOR`, never SQL.
+
+**Retention.** `PurgeStripeEventsCron` (hourly, `@WithLock('billing:purge-stripe-events')` so one replica runs
+it) deletes `stripe_events` older than `STRIPE_EVENTS_RETENTION_DAYS` (30; Stripe redelivers for ≤ 3 days) in
+batches of 5,000 via `PurgeStripeEventsCommand`. It needs `ScheduleModule.forRoot()` and `RedisModule` in the
+app (billing-service and the monolith import both).
 
 **Consistency.** The relay publishes after commit and only logs failures, so a crash between COMMIT and the Kafka
 ack loses the event. Guaranteed delivery needs a transactional outbox (a `billing_outbox` row written inside the
@@ -181,11 +198,11 @@ dedupe replays either way.
 | Table           | Columns                                                                                                                                                                                                                                                                                                                                                       | Indexes                                                                                                 |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
 | `payments`      | `id uuid pk` (app uuidv7, DB default `uuidv7()`), `user_id uuid` (no FK: service boundary), `price_id`, `quantity int`, `amount_total int8` (minor units, NULL until priced), `currency`, `status payment_status`, `stripe_checkout_session_id` (unique), `stripe_payment_intent_id`, `idempotency_key`, `paid_at`, `version int`, `created_at`, `updated_at` | `(user_id, id)` for "my payments, newest first"; unique `(user_id, idempotency_key)`; unique session id |
-| `stripe_events` | `id text pk` (Stripe `evt_…`), `type`, `processed_at`                                                                                                                                                                                                                                                                                                         | PK = the idempotency key                                                                                |
+| `stripe_events` | `id text pk` (Stripe `evt_…`), `type`, `processed_at`                                                                                                                                                                                                                                                                                                         | PK = the idempotency key; `stripe_events_processed_at_idx` for the retention purge                      |
 
 `payment_status` enum: `pending`, `succeeded`, `failed`, `expired`. Constraint names are explicit snake_case
 (`payments_stripe_checkout_session_id_unique`). Migrations are generated by drizzle-kit into
-`libs/database/src/migrations` (initial: `0000_init.sql`) (the schema file imports only `drizzle-orm` and a dependency-free enum file, so
+`libs/database/src/migrations` (initial: `0000_init.sql`; `0002_stripe_events_processed_at_idx.sql`) (the schema file imports only `drizzle-orm` and a dependency-free enum file, so
 drizzle-kit can load it). Reads (`findById`, `list`) use prepared statements on the pool; writes and row locks go
 through `TransactionHost` and join the active transaction.
 

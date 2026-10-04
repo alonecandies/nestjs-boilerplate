@@ -1,3 +1,4 @@
+import { MAX_CURSOR_LENGTH } from '@app/common';
 import { z } from 'zod';
 import { BILLING_LIMITS } from '../../../billing.constants.js';
 
@@ -17,6 +18,12 @@ export const listPaymentsQuerySchema = z.object({
     .min(1)
     .max(BILLING_LIMITS.MAX_PAGE_SIZE)
     .default(BILLING_LIMITS.DEFAULT_PAGE_SIZE),
+  cursor: z
+    .string()
+    .min(1)
+    .max(MAX_CURSOR_LENGTH)
+    .optional()
+    .describe('`nextCursor` of the previous page'),
 });
 
 export type ListPaymentsQueryDto = z.infer<typeof listPaymentsQuerySchema>;

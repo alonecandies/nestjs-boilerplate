@@ -1,5 +1,6 @@
 import { type DrizzleTransactionalAdapter, TransactionHost } from '@app/database';
 import { Injectable } from '@nestjs/common';
+import { inArray, lt } from 'drizzle-orm';
 import type {
   StripeEventReceipt,
   StripeEventsRepository,
@@ -17,5 +18,23 @@ export class DrizzleStripeEventsRepository implements StripeEventsRepository {
       .onConflictDoNothing({ target: stripeEvents.id })
       .returning({ id: stripeEvents.id });
     return inserted.length > 0;
+  }
+
+  async deleteProcessedBefore(cutoff: Date, limit: number): Promise<number> {
+    const tx = this.txHost.tx;
+    // DELETE has no LIMIT in Postgres: bound it through the id subquery (index range scan).
+    const result = await tx
+      .delete(stripeEvents)
+      .where(
+        inArray(
+          stripeEvents.id,
+          tx
+            .select({ id: stripeEvents.id })
+            .from(stripeEvents)
+            .where(lt(stripeEvents.processedAt, cutoff))
+            .limit(limit),
+        ),
+      );
+    return result.count;
   }
 }

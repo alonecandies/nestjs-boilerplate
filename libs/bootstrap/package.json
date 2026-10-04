@@ -35,8 +35,6 @@
     "fastify": "catalog:",
     "lodash-es": "catalog:",
     "nestjs-pino": "catalog:",
-    "reflect-metadata": "catalog:",
-    "rxjs": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

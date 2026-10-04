@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { EmailAlreadyTakenException } from '../../domain/identity.errors.js';
 import { UserAggregate } from '../../domain/user.aggregate.js';
 import { DrizzleSessionsRepository } from './drizzle-sessions.repository.js';
+import { DrizzleTransactionRunner } from './drizzle-transaction.runner.js';
 import { DrizzleUsersRepository } from './drizzle-users.repository.js';
 import { type IdentitySchema, identitySchema } from './identity.schema.js';
 
@@ -30,9 +31,32 @@ const IMAGE = 'postgres:18.6-alpine3.24';
     ClsModule.forRoot({ global: true }),
     DatabaseModule.forRootAsync({ schema: identitySchema, runMigrations: true }),
   ],
-  providers: [DrizzleUsersRepository, DrizzleSessionsRepository],
+  providers: [DrizzleUsersRepository, DrizzleSessionsRepository, DrizzleTransactionRunner],
 })
 class IdentityPersistenceModule {}
+
+/** Same wiring on a ONE-connection pool: per-connection state (prepared statements) is observable. */
+@Module({
+  imports: [
+    AppConfigModule.forRoot(),
+    ClsModule.forRoot({ global: true }),
+    DatabaseModule.forRootAsync({ schema: identitySchema, postgres: { max: 1 } }),
+  ],
+  providers: [DrizzleUsersRepository],
+})
+class SingleConnectionModule {}
+
+const sleep = (ms: number): Promise<'timeout'> =>
+  new Promise((resolve) => setTimeout(() => resolve('timeout'), ms));
+
+/** A promise plus its resolver (hold a transaction open until the test says so). */
+function gate(): { promise: Promise<void>; open: () => void } {
+  let open = (): void => undefined;
+  const promise = new Promise<void>((resolve) => {
+    open = resolve;
+  });
+  return { promise, open };
+}
 
 const register = (email: string, displayName = 'Integration User'): UserAggregate =>
   UserAggregate.register({
@@ -49,6 +73,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
   let db: DrizzleDB<IdentitySchema>;
   let usersRepo: DrizzleUsersRepository;
   let sessionsRepo: DrizzleSessionsRepository;
+  let transaction: DrizzleTransactionRunner;
   const run = generateId().slice(-12);
   const email = (name: string): string => `${name}.${run}@example.com`;
 
@@ -68,6 +93,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     db = app.get(DRIZZLE);
     usersRepo = app.get(DrizzleUsersRepository);
     sessionsRepo = app.get(DrizzleSessionsRepository);
+    transaction = app.get(DrizzleTransactionRunner);
   });
 
   afterAll(async () => {
@@ -151,6 +177,87 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     await usersRepo.insert(user);
     await usersRepo.updateRoles(user.id, ['admin', 'user'], new Date());
     await expect(usersRepo.findById(user.id)).resolves.toMatchObject({ roles: ['admin', 'user'] });
+  });
+
+  it('findAggregate locks the row: a concurrent read-modify-write waits, then sees the committed roles', async () => {
+    const user = register(email('locked'));
+    await usersRepo.insert(user);
+    const [locked, release] = [gate(), gate()];
+
+    const first = transaction.run(async () => {
+      await usersRepo.findAggregate(user.id);
+      locked.open();
+      await release.promise;
+      await usersRepo.updateRoles(user.id, ['moderator', 'user'], new Date());
+    });
+    await locked.promise;
+    const second = transaction.run(async () => (await usersRepo.findAggregate(user.id))?.roles);
+
+    await expect(Promise.race([second, sleep(300)])).resolves.toBe('timeout');
+    release.open();
+    await first;
+    // Not the stale ['user'] it would have read without the lock (lost update / wrong audit).
+    await expect(second).resolves.toEqual(['moderator', 'user']);
+  });
+
+  it('countAdmins serialises demotions: a second caller waits for the first transaction', async () => {
+    const [locked, release] = [gate(), gate()];
+    const first = transaction.run(async () => {
+      const admins = await usersRepo.countAdmins();
+      locked.open();
+      await release.promise;
+      return admins;
+    });
+    await locked.promise;
+    const second = transaction.run(() => usersRepo.countAdmins());
+
+    await expect(Promise.race([second, sleep(300)])).resolves.toBe('timeout');
+    release.open();
+    await expect(first).resolves.toEqual(expect.any(Number));
+    await expect(second).resolves.toEqual(expect.any(Number));
+  });
+
+  it('drizzle queries are server-side prepared statements (DATABASE_PREPARE=true)', async () => {
+    const single = await NestFactory.createApplicationContext(SingleConnectionModule, {
+      logger: false,
+    });
+    try {
+      const repo = single.get(DrizzleUsersRepository);
+      const singleDb = single.get<DrizzleDB<IdentitySchema>>(DRIZZLE);
+      const user = register(email('prepared'));
+      await usersRepo.insert(user);
+
+      await repo.findById(user.id);
+      await repo.findByIds([user.id, generateId()]);
+      await repo.findByIds([user.id]);
+      // One connection: this sees the statements the calls above prepared on it.
+      const statements = await singleDb.execute<{ statement: string }>(sql`
+        select statement from pg_prepared_statements where not from_sql`);
+      const texts = statements.map((row) => row.statement);
+      expect(texts).toEqual(expect.arrayContaining([expect.stringMatching(/"users"\."id" = \$1/)]));
+      // Every batch size reuses ONE statement (`= any($1::uuid[])`), not one per `IN` arity.
+      expect(texts.filter((text) => text.includes('any($1::uuid[])'))).toHaveLength(1);
+    } finally {
+      await single.close();
+    }
+  });
+
+  it('search uses the pg_trgm GIN index (users_search_trgm_idx)', async () => {
+    const [index] = await db.execute<{ indexdef: string }>(sql`
+      select indexdef from pg_indexes where indexname = 'users_search_trgm_idx'`);
+    expect(index?.indexdef).toMatch(/USING gin \(email gin_trgm_ops, display_name gin_trgm_ops\)/);
+
+    const plan = await db.transaction(async (tx) => {
+      // A handful of rows: force the planner off the sequential/PK scans it would rightly pick.
+      await tx.execute(sql`set local enable_seqscan = off`);
+      await tx.execute(sql`set local enable_indexscan = off`);
+      const rows = await tx.execute<{ 'QUERY PLAN': string }>(sql`
+        explain select id from users
+        where email ilike '%zzq%' or display_name ilike '%zzq%'
+        order by id desc limit 21`);
+      return rows.map((row) => row['QUERY PLAN']).join('\n');
+    });
+    expect(plan).toContain('Bitmap Index Scan on users_search_trgm_idx');
   });
 
   it('the DB defaults (uuidv7 id, roles) cover raw SQL inserts', async () => {

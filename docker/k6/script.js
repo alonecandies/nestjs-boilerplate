@@ -9,8 +9,9 @@
 //
 // Open model (constant-arrival-rate): the request rate stays fixed whatever the latency, so the
 // percentiles are honest (a closed VU loop slows down with the server = coordinated omission).
-// Each iteration sends a distinct X-Forwarded-For (TRUST_PROXY=true), so the per-client auth
-// throttle (THROTTLE_AUTH_LIMIT per minute per IP) models many clients instead of one k6 box.
+// Each iteration sends a distinct X-Forwarded-For (compose sets TRUST_PROXY=uniquelocal, so the
+// private-network k6 container is a trusted proxy), so the per-client auth throttle
+// (THROTTLE_AUTH_LIMIT per minute per IP) models many clients instead of one k6 box.
 //
 // Env: BASE_URL, RATE (journeys/s, default 5), DURATION (default 1m), READ_RATE (iterations/s,
 // default 0), P95_MS (default 250), MAX_ERROR_RATE (default 0.01), MAX_DROPPED_RATIO (default

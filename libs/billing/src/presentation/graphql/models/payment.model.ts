@@ -1,4 +1,4 @@
-import type { Payment } from '@app/contracts';
+import type { Payment, PaymentList } from '@app/contracts';
 import { GraphQLUUID } from '@app/graphql';
 import { Field, Float, ID, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
 import { toUpper, zipObject } from 'lodash-es';
@@ -51,6 +51,25 @@ export class PaymentModel {
 
   @Field(() => Date, { nullable: true })
   updatedAt: Date | null;
+}
+
+@ObjectType('PaymentConnection', { description: 'One page of payments, newest first.' })
+export class PaymentConnectionModel {
+  @Field(() => [PaymentModel])
+  items: PaymentModel[];
+
+  @Field(() => String, {
+    nullable: true,
+    description: 'Pass as `cursor` to get the next page; null on the last page.',
+  })
+  nextCursor: string | null;
+}
+
+export function toPaymentConnectionModel(list: PaymentList): PaymentConnectionModel {
+  return Object.assign(new PaymentConnectionModel(), {
+    items: list.items.map(toPaymentModel),
+    nextCursor: list.nextCursor ?? null,
+  });
 }
 
 export function toPaymentModel(payment: Payment): PaymentModel {

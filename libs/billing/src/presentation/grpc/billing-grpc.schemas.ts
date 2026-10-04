@@ -1,3 +1,4 @@
+import { MAX_CURSOR_LENGTH } from '@app/common';
 import { z } from 'zod';
 import { BILLING_LIMITS, IDEMPOTENCY_KEY_PATTERN } from '../../billing.constants.js';
 
@@ -42,4 +43,10 @@ export const listPaymentsRpcSchema = z.object({
   userId: z.uuid().nullish().transform(absentAsUndefined),
   // 0 = "not set" in proto3; the query handler applies the default page size.
   limit: z.number().int().min(0).max(BILLING_LIMITS.MAX_PAGE_SIZE),
+  // Opaque; decoded (INVALID_CURSOR on garbage) by the repository. "" = absent.
+  cursor: z
+    .string()
+    .max(MAX_CURSOR_LENGTH)
+    .nullish()
+    .transform((cursor) => (cursor === '' ? undefined : absentAsUndefined(cursor))),
 });

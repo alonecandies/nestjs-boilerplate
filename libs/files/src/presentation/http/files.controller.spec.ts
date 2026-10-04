@@ -168,6 +168,60 @@ describe('FilesController (Fastify e2e, in-memory storage)', () => {
     });
   });
 
+  describe('POST /v1/files over STORAGE_MAX_CONCURRENT_UPLOADS', () => {
+    let busy: FilesTestApp;
+    let token: string;
+
+    beforeAll(async () => {
+      busy = await createFilesTestApp({
+        maxUploadBytes: MAX_UPLOAD_BYTES,
+        maxConcurrentUploads: 1,
+      });
+      token = await busy.tokenFor([Role.User]);
+    });
+    afterAll(async () => busy.app.close());
+
+    const uploadTo = (form: FormData) =>
+      busy.app.inject({ method: 'POST', url: '/v1/files', headers: bearer(token), payload: form });
+
+    it('sheds the extra upload with 503 UPLOAD_CAPACITY_EXCEEDED + Retry-After, then frees the slot', async () => {
+      const store = busy.storage.upload.bind(busy.storage);
+      let release!: () => void;
+      const slowBucket = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      let entered!: () => void;
+      const firstInStorage = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const spy = vi.spyOn(busy.storage, 'upload').mockImplementationOnce(async (input) => {
+        entered();
+        await slowBucket;
+        return store(input);
+      });
+
+      const first = uploadTo(fileForm('first'));
+      await firstInStorage;
+      const shed = await uploadTo(fileForm('second'));
+
+      expect(shed.statusCode).toBe(503);
+      expect(shed.headers['content-type']).toMatch(PROBLEM_JSON);
+      expect(shed.headers['retry-after']).toBe('5');
+      expect(shed.json<ProblemBody>()).toMatchObject({
+        status: 503,
+        code: 'UPLOAD_CAPACITY_EXCEEDED',
+      });
+      expect(spy).toHaveBeenCalledTimes(1);
+
+      release();
+      expect((await first).statusCode).toBe(201);
+      const next = await uploadTo(fileForm('third'));
+      expect(next.statusCode).toBe(201);
+      expect(next.headers['retry-after']).toBeUndefined();
+      spy.mockRestore();
+    });
+  });
+
   describe('POST /v1/files/presigned-uploads', () => {
     const presign = (token: string, payload: Record<string, unknown>) =>
       t.app.inject({

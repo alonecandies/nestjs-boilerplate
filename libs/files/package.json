@@ -33,15 +33,11 @@
     "class-validator": "catalog:",
     "graphql": "catalog:",
     "lodash-es": "catalog:",
-    "reflect-metadata": "catalog:",
-    "rxjs": "catalog:",
-    "uuid": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@app/testing": "workspace:*",
     "@nestjs/testing": "catalog:",
-    "@types/lodash-es": "catalog:",
-    "fastify": "catalog:"
+    "@types/lodash-es": "catalog:"
   }
 }

@@ -217,6 +217,46 @@ describe('Payment aggregate', () => {
       expect(payment.stripeCheckoutSessionId).toBe('cs_9');
     });
 
+    it.each([null, '', '  ', 'dollars'])(
+      'falls back to the stored currency when Stripe reports %j',
+      (reported) => {
+        const payment = makePayment({ stripeCheckoutSessionId: 'cs_1', currency: 'eur' });
+
+        expect(
+          payment.complete(
+            {
+              sessionId: 'cs_1',
+              paymentIntentId: null,
+              amountTotal: 5,
+              currency: reported,
+              paidAt,
+            },
+            now,
+          ),
+        ).toBe(true);
+
+        expect(payment.toSnapshot().currency).toBe('eur');
+        expect(payment.getUncommittedEvents()[0]).toMatchObject({ currency: 'eur' });
+      },
+    );
+
+    it('refuses to complete (no state change, no event) when no currency is known at all', () => {
+      // Stored '' = a row priced before currencies were validated.
+      for (const stored of [null, '']) {
+        const payment = makePayment({ stripeCheckoutSessionId: 'cs_1', currency: stored });
+
+        expect(
+          payment.complete(
+            { sessionId: 'cs_1', paymentIntentId: 'pi_1', amountTotal: 5, currency: '', paidAt },
+            now,
+          ),
+        ).toBe(false);
+
+        expect(payment.status).toBe(PaymentStatus.Pending);
+        expect(payment.getUncommittedEvents()).toEqual([]);
+      }
+    });
+
     it('does not apply to expired payments or foreign sessions', () => {
       const expired = makePayment({
         status: PaymentStatus.Expired,

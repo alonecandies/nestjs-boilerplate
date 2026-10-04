@@ -5,8 +5,9 @@
   "type": "module",
   "description": "billing-service: gRPC billing.v1 BillingService (Stripe Checkout sessions, verified idempotent webhooks, payments ledger) on Postgres, producing billing.payment-succeeded.v1; HTTP only for /health and /metrics.",
   "scripts": {
-    "dev": "node --watch --watch-preserve-output --env-file-if-exists=../../.env --env-file-if-exists=.env --enable-source-maps --conditions=@app/source --import @swc-node/register/esm-register src/main.ts",
+    "dev": "node --watch --watch-preserve-output --env-file-if-exists=../../.env --env-file-if-exists=.env --enable-source-maps --conditions=@app/source --import @swc-node/register/esm-register --import ./src/instrument.ts src/main.ts",
     "start:dev": "bun run dev",
+    "g": "sh -c 'nest g \"$@\" && eslint --fix src' nest-g",
     "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
     "start": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import ./dist/instrument.js dist/main.js",
     "start:prod": "node --import ./dist/instrument.js dist/main.js",
@@ -31,18 +32,14 @@
     "@grpc/proto-loader": "catalog:",
     "@nestjs/common": "catalog:",
     "@nestjs/config": "catalog:",
-    "@nestjs/core": "catalog:",
     "@nestjs/cqrs": "catalog:",
     "@nestjs/microservices": "catalog:",
     "@nestjs/platform-fastify": "catalog:",
-    "@nestjs/websockets": "catalog:",
+    "@nestjs/schedule": "catalog:",
     "class-transformer": "catalog:",
     "class-validator": "catalog:",
-    "fastify": "catalog:",
     "ioredis": "catalog:",
     "kafkajs": "catalog:",
-    "nestjs-pino": "catalog:",
-    "postgres": "catalog:",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
     "stripe": "catalog:"
@@ -50,8 +47,6 @@
   "devDependencies": {
     "@app/testing": "workspace:*",
     "@nestjs/testing": "catalog:",
-    "@types/supertest": "catalog:",
-    "drizzle-orm": "catalog:",
-    "supertest": "catalog:"
+    "drizzle-orm": "catalog:"
   }
 }

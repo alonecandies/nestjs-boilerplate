@@ -18,8 +18,10 @@ export interface AppGraphqlModuleOptions {
   /** Extra modules the Apollo factory needs (rare: auth/config/loaders are already wired). */
   imports?: ModuleMetadata['imports'];
   /**
-   * Refuse graphql-ws connections that carry no token. Default `false`: anonymous sockets are
-   * accepted, and each subscription's guards decide (invalid tokens are always refused).
+   * Refuse graphql-ws connections that carry no token. Default `true`: every subscription needs a
+   * user, and an anonymous socket would hold memory with no expiry timer and no rate limit. Set
+   * `false` only to serve public subscriptions: anonymous sockets are then accepted and each
+   * subscription's guards decide. Invalid tokens are always refused.
    */
   requireSubscriptionAuth?: boolean;
   /** Merged into `buildSchemaOptions` (`dateScalarMode: 'isoDate'` by default). */
@@ -71,7 +73,7 @@ export class AppGraphqlModule {
               wsAuth: createGraphqlWsAuthHandlers(
                 createSubscriptionAuthenticator(tokens, denylist),
                 {
-                  requireAuth: options.requireSubscriptionAuth ?? false,
+                  requireAuth: options.requireSubscriptionAuth ?? true,
                 },
               ),
               buildSchemaOptions: options.buildSchemaOptions,

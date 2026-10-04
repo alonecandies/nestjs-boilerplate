@@ -1,12 +1,17 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { mailConfig } from '@app/config';
-import { describe, expect, it } from 'vitest';
+import Handlebars from 'handlebars';
+import { describe, expect, it, vi } from 'vitest';
 import { AppMailerModule } from './app-mailer.module.js';
 import { MailProcessor } from './mail.processor.js';
 import { MailService } from './mail.service.js';
 import { MAIL_PARTIALS_DIR, MAIL_TEMPLATES, MAIL_TEMPLATES_DIR } from './mailer.constants.js';
-import { createMailerOptions, SMTP_TIMEOUTS } from './mailer-options.factory.js';
+import {
+  createMailerOptions,
+  registerMailPartials,
+  SMTP_TIMEOUTS,
+} from './mailer-options.factory.js';
 
 describe('AppMailerModule.forRootAsync', () => {
   it('is global, exports MailService and registers the worker by default', () => {
@@ -47,9 +52,28 @@ describe('createMailerOptions', () => {
     expect(options.defaults).toEqual({ from: 'Acme <no-reply@acme.test>' });
     expect(options.verifyTransporters).toBe(false);
     expect(options.template?.options).toEqual({ strict: true });
-    expect(options.options).toEqual({
-      partials: { dir: MAIL_PARTIALS_DIR, options: { strict: true } },
-    });
+    // Partials are registered once at boot, not re-read by the adapter on every mail.
+    expect(options.options).toBeUndefined();
+  });
+
+  it('precompiles and registers the shared partials once on the adapter Handlebars env', () => {
+    const registerPartial = vi.spyOn(Handlebars, 'registerPartial');
+
+    createMailerOptions(mailConfig.parse({}));
+
+    const registered = registerPartial.mock.calls.map((args: unknown[]) => [
+      args[0],
+      typeof args[1],
+    ]);
+    expect(registered).toEqual(
+      expect.arrayContaining([
+        ['header', 'function'],
+        ['footer', 'function'],
+        ['button', 'function'],
+      ]),
+    );
+    expect(registerMailPartials()).toEqual(['button', 'footer', 'header']);
+    expect(typeof Handlebars.partials.header).toBe('function');
   });
 
   it('omits auth when no SMTP credentials are configured (local Mailpit)', () => {

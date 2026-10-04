@@ -37,9 +37,15 @@ bun run --filter @app/gateway build   # swc → apps/gateway/dist (libs are buil
 cd apps/gateway && bun run start      # node --import ./dist/instrument.js dist/main.js
 ```
 
-`dist/instrument.js` is preloaded so OpenTelemetry hooks the modules before they are imported (a
-no-op unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set). `CLUSTER_WORKERS=N` (0 = one per core) runs N
-workers under a supervising primary; keep 1 under Kubernetes and scale pods instead.
+`dist/instrument.js` is preloaded (`src/instrument.ts` under `bun run dev`) so OpenTelemetry hooks
+the modules before they are imported (a no-op unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set).
+`CLUSTER_WORKERS=N` (0 = one per core) runs N workers under a supervising primary; keep 1 under
+Kubernetes and scale pods instead.
+
+Scaffold providers/controllers with `bun run g <schematic> <name>` from this folder (e.g.
+`bun run g service foo`): it runs `nest g` and then `eslint --fix src`, because the Nest
+schematics import `TestingModule` as a value and `consistent-type-imports` would fail
+`bun run check`.
 
 ## Environment
 
@@ -73,6 +79,9 @@ off.
 
 Errors are RFC 9457 `application/problem+json`; every response carries `x-request-id` and
 `x-correlation-id`, which also travel to the services as gRPC metadata.
+
+`/metrics`, `/docs` and `/openapi.*` share the API port: don't route them through the public ingress
+(set `METRICS_BEARER_TOKEN` for scrapes; see docs/DOCKER.md).
 
 ## How it is wired
 

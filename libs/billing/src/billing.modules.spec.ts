@@ -65,7 +65,8 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
     ).resolves.toEqual({
       items: [],
     });
-    expect(infra.queries.at(-1)?.params).toEqual([3]);
+    // LIMIT = page size + 1 look-ahead row (keyset pagination).
+    expect(infra.queries.at(-1)?.params).toEqual([4]);
   });
 
   it('monolith: BillingApiModule.forLocal() binds BillingPort to the CQRS buses', async () => {
@@ -83,7 +84,7 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
     const port = context.get(BillingPort, { strict: false });
     expect(port).toBeInstanceOf(BillingLocalAdapter);
     await expect(port.listPayments({ limit: 4 })).resolves.toEqual({ items: [] });
-    expect(infra.queries.at(-1)?.params).toEqual([4]);
+    expect(infra.queries.at(-1)?.params).toEqual([5]);
   });
 
   it('gateway: BillingApiModule.forRemote() binds BillingPort to gRPC and needs no core', async () => {

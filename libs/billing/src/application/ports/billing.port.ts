@@ -22,6 +22,9 @@ export abstract class BillingPort {
     input: HandleStripeWebhookRequest,
   ): Promise<HandleStripeWebhookResponse>;
 
-  /** Newest first. `userId` omitted = every user's payments (callers enforce `billing:read-all`). */
+  /**
+   * One page, newest first. `userId` omitted = every user's payments (callers enforce
+   * `billing:read-all`); pass `nextCursor` back as `cursor` for the next page.
+   */
   abstract listPayments(input: ListPaymentsRequest): Promise<PaymentList>;
 }

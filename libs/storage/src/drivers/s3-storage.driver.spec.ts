@@ -4,7 +4,7 @@ import { DomainValidationException, ExternalServiceException } from '@app/common
 import { storageConfig } from '@app/config';
 import { S3Client } from '@aws-sdk/client-s3';
 import { describe, expect, it, vi } from 'vitest';
-import { S3_UPLOAD_PART_SIZE, S3StorageDriver } from './s3-storage.driver.js';
+import { S3_UPLOAD_PART_SIZE, S3_UPLOAD_QUEUE_SIZE, S3StorageDriver } from './s3-storage.driver.js';
 
 const cfg = storageConfig.parse({
   STORAGE_DRIVER: 's3',
@@ -50,7 +50,7 @@ async function bodyBytes(body: unknown): Promise<Buffer> {
  * multipart logic and SigV4 signing all run for real — only the socket is faked.
  */
 function fakeS3(
-  reply: (req: Recorded) => FakeResponse = () => ({}),
+  reply: (req: Recorded) => FakeResponse | Promise<FakeResponse> = () => ({}),
   endpoint: string = cfg.s3.endpoint,
 ): {
   client: S3Client;
@@ -67,7 +67,7 @@ function fakeS3(
         body: await bodyBytes(request.body),
       };
       requests.push(recorded);
-      const res = reply(recorded);
+      const res = await reply(recorded);
       return {
         response: {
           statusCode: res.status ?? 200,
@@ -161,7 +161,7 @@ describe('S3StorageDriver.upload', () => {
   });
 
   it('streams an unknown-length body as a multipart upload', async () => {
-    const total = 2 * S3_UPLOAD_PART_SIZE + 1024 * 1024; // 17 MiB → parts of 8 + 8 + 1 MiB
+    const total = 2 * S3_UPLOAD_PART_SIZE + 1024 * 1024; // → parts of 5 + 5 + 1 MiB
     const { client, requests } = fakeS3(multipartReply());
     const driver = new S3StorageDriver(cfg, { client });
 
@@ -180,6 +180,33 @@ describe('S3StorageDriver.upload', () => {
     expect(requests[0]).toMatchObject({ method: 'POST', path: '/uploads/users/u1/big.bin' });
     expect(requests.at(-1)?.body.toString()).toContain('<PartNumber>3</PartNumber>');
     expect(stored).toMatchObject({ key: 'users/u1/big.bin', size: total, etag: 'final-3' });
+  });
+
+  it('bounds the memory of a streamed upload: S3 minimum part size, at most 2 parts in flight', async () => {
+    expect(S3_UPLOAD_PART_SIZE).toBe(5 * 1024 * 1024);
+    expect(S3_UPLOAD_QUEUE_SIZE).toBe(2);
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const replyMultipart = multipartReply();
+    const { client, requests } = fakeS3(async (req) => {
+      if (req.query.partNumber === undefined) return replyMultipart(req);
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      // A slow bucket: parts pile up unless lib-storage's queue bounds them.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+      return replyMultipart(req);
+    });
+    const driver = new S3StorageDriver(cfg, { client });
+
+    await driver.upload({
+      key: 'users/u1/big.bin',
+      body: generatedStream(6 * S3_UPLOAD_PART_SIZE),
+      contentType: 'application/octet-stream',
+    });
+
+    expect(requests.filter((r) => r.query.partNumber !== undefined)).toHaveLength(6);
+    expect(maxInFlight).toBe(S3_UPLOAD_QUEUE_SIZE);
   });
 
   it('aborts the multipart upload and maps SDK failures to a generic 502', async () => {

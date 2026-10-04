@@ -1,3 +1,4 @@
+import type { CursorPage } from '@app/common';
 import type { Payment as PaymentContract, PaymentList } from '@app/contracts';
 import type { Payment } from '../../domain/payment.aggregate.js';
 
@@ -24,6 +25,10 @@ export function toPaymentContract(payment: Payment): PaymentContract {
   };
 }
 
-export function toPaymentListContract(payments: readonly Payment[]): PaymentList {
-  return { items: payments.map(toPaymentContract) };
+/** A page → `billing.v1.PaymentList`; `nextCursor` is omitted (proto `optional`) on the last page. */
+export function toPaymentListContract(page: CursorPage<Payment>): PaymentList {
+  return {
+    items: page.items.map(toPaymentContract),
+    ...(page.nextCursor === null ? {} : { nextCursor: page.nextCursor }),
+  };
 }

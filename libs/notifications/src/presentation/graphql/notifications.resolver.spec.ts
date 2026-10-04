@@ -1,8 +1,8 @@
 import { Role } from '@app/auth';
 import type { NotificationCreatedPayload } from '@app/contracts';
-import type { GqlContext } from '@app/graphql';
+import { type GqlContext, GRAPHQL_PUB_SUB, type GraphqlPubSub } from '@app/graphql';
 import { GraphQLSchemaHost } from '@nestjs/graphql';
-import { printSchema } from 'graphql';
+import { type ExecutionResult, parse, printSchema, subscribe } from 'graphql';
 import { PubSub } from 'graphql-subscriptions';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -19,7 +19,7 @@ import {
   USER_ID,
 } from '../../../test/support/fixtures.js';
 import { NotificationNotFoundException } from '../../domain/notification.errors.js';
-import { NOTIFICATION_CREATED_TRIGGER } from '../../notifications.constants.js';
+import { notificationCreatedTrigger } from '../../notifications.constants.js';
 import {
   isOwnNotification,
   NotificationsResolver,
@@ -27,6 +27,16 @@ import {
 } from './notifications.resolver.js';
 
 const NOTIFICATION_ID = '01920000-0000-7000-8000-00000000abcd';
+
+const subscriptionPayload: NotificationCreatedPayload = {
+  notificationId: NOTIFICATION_ID,
+  userId: USER_ID,
+  type: 'welcome',
+  title: 'Welcome aboard!',
+  body: 'Hi',
+  data: {},
+  createdAt: CREATED_AT.toISOString(),
+};
 
 const LIST = /* GraphQL */ `
   query List($limit: Int, $pageState: String) {
@@ -153,6 +163,32 @@ describe('NotificationsResolver (Apollo on Fastify, real guards, fake port)', ()
     });
   });
 
+  it('subscription notificationCreated: listens on the caller’s own trigger only (real guards)', async () => {
+    const pubSub = app.get<GraphqlPubSub>(GRAPHQL_PUB_SUB);
+    const result = await subscribe({
+      schema: app.get(GraphQLSchemaHost).schema,
+      document: parse('subscription { notificationCreated { id title } }'),
+      contextValue: { req: { headers: { authorization: userToken } }, loaders: {} },
+    });
+    if (!(Symbol.asyncIterator in result)) throw new Error(JSON.stringify(result.errors));
+    const stream = result as AsyncGenerator<ExecutionResult>;
+    const next = stream.next();
+
+    const own = { ...subscriptionPayload, userId: USER_ID };
+    await pubSub.publish(notificationCreatedTrigger(OTHER_USER_ID), {
+      ...own,
+      userId: OTHER_USER_ID,
+      title: 'not mine',
+    });
+    await pubSub.publish(notificationCreatedTrigger(USER_ID), own);
+
+    await expect(next).resolves.toEqual({
+      value: { data: { notificationCreated: { id: NOTIFICATION_ID, title: own.title } } },
+      done: false,
+    });
+    await stream.return(undefined);
+  });
+
   it('rejects a non-UUID id at the scalar', async () => {
     const res = await gql(MARK, { id: 'nope' }, userToken);
     expect(res.errors?.length).toBeGreaterThan(0);
@@ -194,12 +230,13 @@ describe('notificationCreated subscription', () => {
     });
   });
 
-  it('iterates the notificationCreated trigger of the GraphQL PubSub', async () => {
+  it('iterates the subscriber’s own per-user trigger of the GraphQL PubSub', async () => {
     const pubSub = new PubSub();
     const resolver = new NotificationsResolver(createFakePort(), pubSub);
-    const iterator = resolver.notificationCreated();
+    const iterator = resolver.notificationCreated(USER_ID);
     const next = iterator.next();
-    await pubSub.publish(NOTIFICATION_CREATED_TRIGGER, payload);
+    expect(notificationCreatedTrigger(USER_ID)).toBe(`notificationCreated:${USER_ID}`);
+    await pubSub.publish(notificationCreatedTrigger(USER_ID), payload);
     await expect(next).resolves.toEqual({ value: payload, done: false });
     await iterator.return?.();
   });

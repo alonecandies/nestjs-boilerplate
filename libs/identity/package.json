@@ -28,7 +28,6 @@
     "@app/redis": "workspace:*",
     "@app/transport": "workspace:*",
     "@grpc/grpc-js": "catalog:",
-    "@nestjs-cls/transactional": "catalog:",
     "@nestjs/common": "catalog:",
     "@nestjs/config": "catalog:",
     "@nestjs/core": "catalog:",
@@ -38,18 +37,14 @@
     "@nestjs/passport": "catalog:",
     "@nestjs/schedule": "catalog:",
     "@nestjs/swagger": "catalog:",
-    "@nestjs/websockets": "catalog:",
     "class-transformer": "catalog:",
     "class-validator": "catalog:",
     "dataloader": "catalog:",
     "drizzle-orm": "catalog:",
-    "graphql": "catalog:",
     "lodash-es": "catalog:",
     "nestjs-cls": "catalog:",
     "passport-local": "catalog:",
-    "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
-    "uuid": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
@@ -57,7 +52,6 @@
     "@nestjs/testing": "catalog:",
     "@testcontainers/postgresql": "catalog:",
     "@types/lodash-es": "catalog:",
-    "@types/passport-local": "catalog:",
-    "fastify": "catalog:"
+    "@types/passport-local": "catalog:"
   }
 }

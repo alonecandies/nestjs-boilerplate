@@ -38,9 +38,15 @@ bun run --filter @app/monolith build   # swc → apps/monolith/dist (libs are bu
 cd apps/monolith && bun run start      # node --import ./dist/instrument.js dist/main.js
 ```
 
-`dist/instrument.js` is preloaded so OpenTelemetry hooks the modules before they are imported (a
-no-op unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set). `CLUSTER_WORKERS=N` (0 = one per core) runs N
-workers under a supervising primary; keep 1 under Kubernetes and scale pods instead.
+`dist/instrument.js` is preloaded (`src/instrument.ts` under `bun run dev`) so OpenTelemetry hooks
+the modules before they are imported (a no-op unless `OTEL_EXPORTER_OTLP_ENDPOINT` is set).
+`CLUSTER_WORKERS=N` (0 = one per core) runs N workers under a supervising primary; keep 1 under
+Kubernetes and scale pods instead.
+
+Scaffold providers/controllers with `bun run g <schematic> <name>` from this folder (e.g.
+`bun run g service foo`): it runs `nest g` and then `eslint --fix src`, because the Nest
+schematics import `TestingModule` as a value and `consistent-type-imports` would fail
+`bun run check`.
 
 ## Environment
 
@@ -65,7 +71,7 @@ The Kafka topics (and their `.dlq`) must exist — auto-creation is off: `identi
 
 | Surface  | Where                                                                                                                                                                                                                                                                                                                                  |
 | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Ops      | `GET /health/live`, `GET /health/ready` (postgres, cassandra, redis, kafka), `GET /metrics`, `GET /docs` (Scalar), `GET /openapi.json`, `GET /openapi.yaml`                                                                                                                                                                            |
+| Ops      | `GET /health/live`, `GET /health/ready` (postgres, cassandra, redis — not Kafka: events are best-effort, a broker outage must not take the API out of rotation), `GET /metrics`, `GET /docs` (Scalar), `GET /openapi.json`, `GET /openapi.yaml`                                                                                        |
 | Identity | `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/refresh`, `POST /v1/auth/logout`, `GET /v1/auth/me`, `GET /v1/users`, `GET /v1/users/:id`, `PATCH /v1/users/:id/roles`                                                                                                                                                 |
 | Notifs   | `GET /v1/notifications`, `POST /v1/notifications/:id/read`; Socket.IO namespace `/notifications` (`auth: { token }`, websocket transport)                                                                                                                                                                                              |
 | Billing  | `POST /v1/billing/checkout-sessions`, `POST /v1/billing/webhooks/stripe` (raw body, signature-verified), `GET /v1/billing/payments`                                                                                                                                                                                                    |
@@ -74,6 +80,9 @@ The Kafka topics (and their `.dlq`) must exist — auto-creation is off: `identi
 
 Errors are RFC 9457 `application/problem+json` (`type`, `title`, `status`, `detail`, `code`,
 `requestId`, `errors[]`); every response carries `x-request-id` and `x-correlation-id`.
+
+`/metrics`, `/docs` and `/openapi.*` share the API port: don't route them through the public ingress
+(set `METRICS_BEARER_TOKEN` for scrapes; see docs/DOCKER.md).
 
 ## How it is wired
 
@@ -90,8 +99,9 @@ Errors are RFC 9457 `application/problem+json` (`type`, `title`, `status`, `deta
 - **Startup is fail-fast.** Redis must answer within `REDIS_CONNECT_TIMEOUT_MS`, Postgres and
   Cassandra are retried briefly, and the Kafka consumer must connect; otherwise the process logs
   one `fatal` line and exits 1 (verified against no infrastructure: Postgres unreachable → exit 1
-  after ~7 s). Once running, dependencies degrade per request (readiness turns 503, calls fail as
-  problem+json) and reconnect on their own.
+  after ~7 s). Once running, dependencies degrade per request (readiness turns 503 for Postgres,
+  Cassandra or Redis, calls fail as problem+json) and reconnect on their own; a Kafka outage keeps
+  the app ready and only delays or drops integration events (logged, no outbox yet).
 - **Shutdown** (SIGTERM/SIGINT): Fastify stops accepting, in-flight requests and Kafka messages
   finish, then pools/clients close and logs flush; a hard deadline (`SHUTDOWN_TIMEOUT_MS`) exits 1
   if anything hangs.

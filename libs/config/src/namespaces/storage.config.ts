@@ -13,6 +13,7 @@ export const storageEnvSchema = z
   .object({
     STORAGE_DRIVER: zEnum(STORAGE_DRIVERS, 's3'),
     STORAGE_MAX_UPLOAD_BYTES: zInt(26_214_400, { min: 1 }),
+    STORAGE_MAX_CONCURRENT_UPLOADS: zInt(4, { min: 1 }),
     STORAGE_SIGNED_URL_TTL_SEC: zInt(900, { min: 1, max: MAX_SIGNED_URL_TTL_SEC }),
     S3_ENDPOINT: zUrl('http://localhost:9000'),
     S3_PUBLIC_ENDPOINT: zUrl(),
@@ -29,6 +30,8 @@ export const storageEnvSchema = z
   .transform((env) => ({
     driver: env.STORAGE_DRIVER,
     maxUploadBytes: env.STORAGE_MAX_UPLOAD_BYTES,
+    /** Streamed (API-proxied) uploads in flight per process; more get a 503 (memory bound). */
+    maxConcurrentUploads: env.STORAGE_MAX_CONCURRENT_UPLOADS,
     signedUrlTtlSec: env.STORAGE_SIGNED_URL_TTL_SEC,
     s3: {
       endpoint: env.S3_ENDPOINT,

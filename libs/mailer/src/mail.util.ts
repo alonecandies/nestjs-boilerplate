@@ -1,5 +1,6 @@
 import { sha256Hex } from '@app/common';
-import { trim } from 'lodash-es';
+import type { Logger } from '@nestjs/common';
+import { throttle, trim } from 'lodash-es';
 import type { BaseMailContext, MailMessage, MailTemplateContextMap } from './mail.types.js';
 import { DEFAULT_MAIL_APP_NAME, type MailTemplate } from './mailer.constants.js';
 
@@ -67,4 +68,27 @@ export function defineMail<T extends MailTemplate>(mail: {
 }): MailMessage {
   const { context, ...rest } = mail;
   return { ...rest, context: { ...context } };
+}
+
+/** Minimum gap between two logged BullMQ connection errors (same as the ioredis clients). */
+export const BULL_ERROR_LOG_INTERVAL_MS = 5_000;
+
+/**
+ * `error` listener for a BullMQ `Queue` or `Worker`. Without one, BullMQ falls back to
+ * `console.error(err)`: a raw multi-line stack that bypasses pino and LOG_LEVEL, printed for every
+ * reconnect attempt of every connection during a Redis outage. This logs through the Nest logger
+ * instead, at most once per `intervalMs` (each listener throttles on its own).
+ */
+export function createThrottledErrorLog(
+  logger: Logger,
+  source: string,
+  intervalMs: number = BULL_ERROR_LOG_INTERVAL_MS,
+): (error: Error) => void {
+  return throttle(
+    (error: Error): void => {
+      logger.error(`${source}: ${error.message}`);
+    },
+    intervalMs,
+    { trailing: false },
+  );
 }

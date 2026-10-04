@@ -1,7 +1,7 @@
 import { DomainValidationException } from '@app/common';
 import { Logger } from '@nestjs/common';
 import { EventPublisher, type IEvent } from '@nestjs/cqrs';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import {
   createTestStripeService,
   InMemoryBillingStore,
@@ -28,6 +28,7 @@ describe('HandleStripeWebhookHandler', () => {
   let publishedDuringTransaction: boolean;
   let handler: HandleStripeWebhookHandler;
   let payment: Payment;
+  let paidWithoutCurrency: { inc: Mock<() => void> };
 
   const deliver = (webhook: SignedWebhook) =>
     handler.execute(new HandleStripeWebhookCommand(webhook.payload, webhook.signature));
@@ -67,11 +68,13 @@ describe('HandleStripeWebhookHandler', () => {
         published.push(...events);
       }),
     };
+    paidWithoutCurrency = { inc: vi.fn<() => void>() };
     handler = new HandleStripeWebhookHandler(
       createTestStripeService(),
       new InMemoryStripeEventsRepository(store),
       payments,
       new EventPublisher(eventBus as never),
+      paidWithoutCurrency,
     );
     payment = makePayment({
       stripeCheckoutSessionId: 'cs_paid_1',
@@ -111,6 +114,42 @@ describe('HandleStripeWebhookHandler', () => {
       currency: 'usd',
     });
     expect(publishedDuringTransaction).toBe(false);
+  });
+
+  it('uses the stored currency when the completed session reports none', async () => {
+    await deliver(completed({ currency: null }, 'evt_no_currency_1'));
+
+    expect(store.payment(payment.id)).toMatchObject({
+      status: PaymentStatus.Succeeded,
+      currency: 'usd',
+    });
+    expect(published[0]).toMatchObject({ currency: 'usd' });
+    expect(paidWithoutCurrency.inc).not.toHaveBeenCalled();
+  });
+
+  it('paid session without any currency: acknowledged, warned + counted, never announced with ""', async () => {
+    const unpriced = makePayment({ stripeCheckoutSessionId: 'cs_unpriced_1' });
+    store.seed(unpriced);
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+
+    const response = await deliver(
+      completed(
+        { id: 'cs_unpriced_1', client_reference_id: unpriced.id, currency: '' },
+        'evt_no_currency_2',
+      ),
+    );
+
+    expect(response).toMatchObject({ received: true, duplicate: false });
+    expect(store.state.events.has('evt_no_currency_2')).toBe(true);
+    expect(store.payment(unpriced.id)).toMatchObject({
+      status: PaymentStatus.Pending,
+      version: 0,
+    });
+    expect(published).toEqual([]);
+    expect(paidWithoutCurrency.inc).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('neither it nor payment'));
+    expect(tx.rolledBack).toBe(0);
+    warn.mockRestore();
   });
 
   it('acknowledges a duplicate delivery without re-applying it', async () => {

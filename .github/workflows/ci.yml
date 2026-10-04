@@ -1,5 +1,6 @@
-# CI: quality gate (lint + typecheck + tests + build), one production image per app (built, not
-# pushed) and a boot check of the docker compose infra stack.
+# CI: quality gate (lint + typecheck + tests + build + generated-artefact drift + commitlint), the
+# integration tests against real Postgres/Redis, one production image per app (built, not pushed)
+# and a boot check of the docker compose infra stack.
 name: CI
 
 on:
@@ -69,10 +70,68 @@ jobs:
       - name: Build (swc, all packages)
         run: bun run build
 
+      # A .proto or *.schema.ts change committed without regenerating fails here. The porcelain
+      # check also catches NEW (untracked) migration files, which `git diff` alone misses.
+      - name: Generated artefacts drift (protos, migrations) + buf lint
+        run: |
+          bun run proto:gen
+          bun run --filter @app/contracts proto:lint
+          bun run db:generate
+          git diff --exit-code -- libs/contracts/src/generated libs/database/src/migrations
+          test -z "$(git status --porcelain -- libs/contracts/src/generated libs/database/src/migrations)"
+
+      # Releases (lerna --conventional-commits) derive versions and changelogs from commit messages;
+      # husky's commit-msg hook is skipped by --no-verify and web edits, so validate the PR range.
+      - name: Commit messages (commitlint)
+        if: github.event_name == 'pull_request'
+        run: >-
+          bunx commitlint --verbose
+          --from ${{ github.event.pull_request.base.sha }}
+          --to ${{ github.event.pull_request.head.sha }}
+
       - name: Config drift (.env.example, Kafka topics)
         run: |
           node scripts/check-env-example.mjs
           node scripts/docker/check-kafka-topics.mjs
+
+  integration:
+    name: Integration tests (real Postgres + Redis)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # *.int-spec.ts only run with INTEGRATION=1 (`bun run test:int` = every '<pkg>:int' project).
+    # Postgres comes from testcontainers (Docker is available on the runner); the Redis specs use
+    # REDIS_URL, served by this service container.
+    services:
+      redis:
+        image: redis:8.10.2-alpine3.23
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 2s --health-retries 30
+    env:
+      REDIS_URL: redis://localhost:6379
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Cache Bun downloads
+        uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+
+      - name: Install (frozen lockfile)
+        run: bun install --frozen-lockfile
+
+      - name: Integration tests (INTEGRATION=1, testcontainers + service containers)
+        run: bun run test:int
 
   image:
     name: Image ${{ matrix.app }}

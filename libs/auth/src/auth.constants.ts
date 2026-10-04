@@ -17,6 +17,14 @@ export const JWT_ALGORITHM = 'HS256';
  */
 export const JWT_CLOCK_TOLERANCE_SEC = 5;
 
+/**
+ * Upper bound on the denylist EXISTS run by every authenticated request (it runs in the guard,
+ * before `TimeoutInterceptor`). During a Redis outage ioredis parks commands in its offline queue
+ * for up to `maxRetriesPerRequest` reconnect attempts; this bound fails closed (503) after 250 ms
+ * instead, while still riding out sub-second reconnect blips.
+ */
+export const DENYLIST_CHECK_TIMEOUT_MS = 250;
+
 /** Longest password accepted for hashing/verification (argon2 cost DoS guard). */
 export const MAX_PASSWORD_LENGTH = 1_024;
 

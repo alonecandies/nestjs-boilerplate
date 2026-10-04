@@ -29,9 +29,16 @@ import {
   unquoteEtag,
 } from '../storage-key.util.js';
 
-/** lib-storage multipart tuning: memory per upload ≈ queueSize × partSize (4 × 8 MiB). */
-export const S3_UPLOAD_PART_SIZE = 8 * 1024 * 1024;
-export const S3_UPLOAD_QUEUE_SIZE = 4;
+/**
+ * lib-storage multipart tuning. A streamed upload is NOT zero-copy: lib-storage cuts the stream
+ * into `partSize` Buffers, holds one per in-flight part and fills the next one meanwhile, so one
+ * upload pins up to ≈ (queueSize + 1) × partSize = 3 × 5 MiB = 15 MiB of off-heap memory (outside
+ * `--max-old-space-size`). Kept at the S3 minimum part size and a queue of 2 because these uploads
+ * run inside API processes; callers bound how many run at once (`STORAGE_MAX_CONCURRENT_UPLOADS`
+ * in `@app/files`). Bodies of at most one part are sent as a single PutObject.
+ */
+export const S3_UPLOAD_PART_SIZE = 5 * 1024 * 1024;
+export const S3_UPLOAD_QUEUE_SIZE = 2;
 
 /** `content-type` is unsignable by default in the S3 presigner — force it into the signature. */
 const SIGNED_UPLOAD_HEADERS = new Set(['content-type']);
@@ -105,8 +112,10 @@ export class S3StorageDriver extends StorageService implements OnModuleDestroy {
 
   /**
    * lib-storage `Upload`: bodies up to one part are a single PutObject, larger/unknown-length
-   * streams become a concurrent multipart upload (a plain PutObject of a stream without
-   * ContentLength fails). Failed multipart uploads are aborted (`leavePartsOnError: false`).
+   * streams become a multipart upload with at most `S3_UPLOAD_QUEUE_SIZE` parts in flight (a plain
+   * PutObject of a stream without ContentLength fails). Each part is buffered (see
+   * `S3_UPLOAD_PART_SIZE` for the memory cost). Failed multipart uploads are aborted
+   * (`leavePartsOnError: false`).
    */
   override async upload(input: UploadInput): Promise<StoredObject> {
     const key = assertStorageKey(input.key);

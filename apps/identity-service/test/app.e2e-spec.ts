@@ -128,18 +128,17 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
       expect(response.body).toContain('# TYPE http_request_duration_seconds histogram');
     });
 
-    it('GET /health/ready → checks exactly postgres, redis and kafka (no broker → 503)', async () => {
+    it('GET /health/ready → 200 on postgres + redis alone: an unreachable Kafka never un-readies the service', async () => {
+      // KAFKA_BROKERS points at a closed port: event publishing is best-effort, so login/register
+      // must stay in rotation during a broker outage.
       const response = await app.inject({ method: 'GET', url: '/health/ready' });
-      const body = response.json<{ info: object; error: object }>();
-      expect(Object.keys({ ...body.info, ...body.error }).sort()).toEqual([
-        'kafka',
-        'postgres',
-        'redis',
-      ]);
+      const body = response.json<{ status: string; info: object; error: object }>();
+      expect(response.statusCode).toBe(200);
+      expect(body.status).toBe('ok');
+      expect(Object.keys({ ...body.info, ...body.error }).sort()).toEqual(['postgres', 'redis']);
       expect(body.info).toMatchObject({ postgres: { status: 'up' }, redis: { status: 'up' } });
-      expect(body.error).toMatchObject({ kafka: { status: 'down' } });
-      expect(response.statusCode).toBe(503);
-    }, 15_000);
+      expect(body.error).toEqual({});
+    });
 
     it('an unknown route is a problem+json 404 (common enhancers)', async () => {
       const response = await app.inject({ method: 'GET', url: '/v1/users' });

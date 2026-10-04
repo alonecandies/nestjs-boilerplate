@@ -3,6 +3,7 @@ import {
   type DomainExceptionOptions,
   EntityNotFoundException,
   PermissionDeniedException,
+  ServiceUnavailableException,
   type ValidationIssue,
 } from '@app/common';
 import { HttpStatus } from '@nestjs/common';
@@ -16,6 +17,7 @@ export const FilesErrorCode = {
   FILE_NOT_FOUND: 'FILE_NOT_FOUND',
   FILE_TOO_LARGE: 'FILE_TOO_LARGE',
   UNSUPPORTED_FILE_TYPE: 'UNSUPPORTED_FILE_TYPE',
+  UPLOAD_CAPACITY_EXCEEDED: 'UPLOAD_CAPACITY_EXCEEDED',
 } as const;
 
 export type FilesErrorCode = (typeof FilesErrorCode)[keyof typeof FilesErrorCode];
@@ -84,5 +86,27 @@ export class UnsupportedFileTypeException extends DomainException {
       details: { ...options?.details, contentType: shown },
     });
     this.contentType = shown;
+  }
+}
+
+/**
+ * 503 — this process already streams `STORAGE_MAX_CONCURRENT_UPLOADS` files to storage. Load
+ * shedding, not a fault: each streamed upload pins up to ~15 MiB of off-heap Buffers, so the cap
+ * keeps a burst of uploads from OOM-killing the API container. Raised before a byte is read (the
+ * multipart interceptor then discards the body); the HTTP edge adds `Retry-After: retryAfterSec`.
+ * Clients should retry later or switch to a presigned upload. Like every 5xx it is logged at
+ * `error` by the exception filter.
+ */
+export class UploadCapacityExceededException extends ServiceUnavailableException {
+  constructor(
+    readonly maxConcurrentUploads: number,
+    readonly retryAfterSec: number,
+    options?: DomainExceptionOptions,
+  ) {
+    super('Too many uploads in progress, retry later or use a presigned upload', {
+      ...options,
+      code: FilesErrorCode.UPLOAD_CAPACITY_EXCEEDED,
+      details: { ...options?.details, maxConcurrentUploads, retryAfterSec },
+    });
   }
 }

@@ -93,6 +93,8 @@ export function createFakeQueue() {
       return { id: `job-${jobs.length}`, name, data };
     },
     close: async (): Promise<void> => undefined,
+    // MailService attaches its connection-error logger at init.
+    on: (): void => undefined,
   };
 }
 

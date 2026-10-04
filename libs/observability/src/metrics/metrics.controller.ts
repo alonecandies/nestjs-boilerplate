@@ -1,10 +1,19 @@
 import { Public } from '@app/common';
 import { type ObservabilityConfig, observabilityConfig } from '@app/config';
-import { Controller, Get, Inject, NotFoundException, Res, VERSION_NEUTRAL } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Inject,
+  NotFoundException,
+  Res,
+  UseGuards,
+  VERSION_NEUTRAL,
+} from '@nestjs/common';
 import { PrometheusController } from '@willsoto/nestjs-prometheus';
 import type { FastifyReply } from 'fastify';
 import { register } from 'prom-client';
 import { requestClusterMetrics } from './cluster-metrics.js';
+import { MetricsTokenGuard } from './metrics-token.guard.js';
 
 /**
  * `GET /metrics` (Prometheus text format). VERSION_NEUTRAL (no `/v1`), `@Public()` (auth guards
@@ -12,9 +21,12 @@ import { requestClusterMetrics } from './cluster-metrics.js';
  * `runClustered()` it serves the cluster-wide aggregate (see `cluster-metrics.ts`).
  *
  * Returns 404 when `METRICS_ENABLED=false` — the route itself can't be conditional, because
- * controllers are fixed before config is resolved.
+ * controllers are fixed before config is resolved — and, when `METRICS_BEARER_TOKEN` is set, to any
+ * scrape without `Authorization: Bearer <token>` (`MetricsTokenGuard`). It is served on the API
+ * port: never route `/metrics` through the public ingress.
  */
 @Public()
+@UseGuards(MetricsTokenGuard)
 @Controller({ path: 'metrics', version: VERSION_NEUTRAL })
 export class MetricsController extends PrometheusController {
   constructor(@Inject(observabilityConfig.KEY) private readonly config: ObservabilityConfig) {

@@ -54,7 +54,11 @@ export class BillingGrpcController implements BillingServiceController {
     @Payload(new ZodRpcValidationPipe(listPaymentsRpcSchema)) request: ListPaymentsRequest,
   ): Promise<PaymentList> {
     return this.queryBus.execute(
-      new ListPaymentsQuery({ userId: request.userId, limit: request.limit }),
+      new ListPaymentsQuery({
+        userId: request.userId,
+        limit: request.limit,
+        cursor: request.cursor,
+      }),
     );
   }
 }

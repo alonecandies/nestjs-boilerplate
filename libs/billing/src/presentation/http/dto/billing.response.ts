@@ -1,4 +1,4 @@
-import type { Payment } from '@app/contracts';
+import type { Payment, PaymentList } from '@app/contracts';
 import { z } from 'zod';
 import { PAYMENT_STATUSES } from '../../../domain/payment-status.enum.js';
 
@@ -35,7 +35,13 @@ export const paymentResponseSchema = z
 export type PaymentResponse = z.infer<typeof paymentResponseSchema>;
 
 export const paymentListResponseSchema = z
-  .object({ items: z.array(paymentResponseSchema) })
+  .object({
+    items: z.array(paymentResponseSchema),
+    nextCursor: z
+      .string()
+      .nullable()
+      .describe('Pass as `cursor` to get the next page; `null` on the last page'),
+  })
   .meta({ id: 'PaymentList' });
 export type PaymentListResponse = z.infer<typeof paymentListResponseSchema>;
 
@@ -50,6 +56,10 @@ export const stripeWebhookResponseSchema = z
 export type StripeWebhookResponse = z.infer<typeof stripeWebhookResponseSchema>;
 
 const isoOrNull = (value: Date | undefined): string | null => value?.toISOString() ?? null;
+
+export function toPaymentListResponse(list: PaymentList): PaymentListResponse {
+  return { items: list.items.map(toPaymentResponse), nextCursor: list.nextCursor ?? null };
+}
 
 export function toPaymentResponse(payment: Payment): PaymentResponse {
   return {

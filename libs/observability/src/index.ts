@@ -23,6 +23,7 @@ export { HealthController } from './health/health.controller.js';
 export type { ResolvedHealthOptions } from './health/health.types.js';
 export { HealthContributor } from './health/health-contributor.js';
 export { HealthContributorRegistry } from './health/health-contributor.registry.js';
+export { createBootstrapLogger } from './logging/bootstrap-logger.js';
 export {
   buildLoggerParams,
   LOG_REDACT_PATHS,

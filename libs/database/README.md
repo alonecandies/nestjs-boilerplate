@@ -76,12 +76,18 @@ bun run db:migrate:dev     # same, from TS sources
 bun run db:studio
 ```
 
+The `migrate.ts` CLI logs one JSON object per line (`ConsoleLogger({ json: true })`, what log shippers ingest
+from deploy jobs); `LOG_PRETTY=true` (default in development) switches to coloured text. Exit code 0 = schema
+current, 1 = failure.
+
 `src/migrations/0000_init.sql` is the committed initial migration for identity + billing: the `user_role`
 and `payment_status` enums, `users` (unique `users_email_unique`), `sessions` (FK `user_id → users.id`
 `ON DELETE CASCADE`, `sessions_user_id_idx`, `sessions_expires_at_idx`), `payments` (unique
 `payments_stripe_checkout_session_id_unique`, `payments_user_id_id_idx`, unique
 `payments_user_id_idempotency_key_uq`) and `stripe_events`. Both uuid primary keys default to PG18's
-`uuidv7()`. Identity's `users.repository.int-spec.ts` applies it to a real Postgres 18. Schema changes: edit a
+`uuidv7()`. `0001_users_search_trgm.sql` adds `CREATE EXTENSION IF NOT EXISTS pg_trgm` (hand-added on top of
+the generated SQL) and the `users_search_trgm_idx` GIN index (`email`, `display_name` `gin_trgm_ops`) for the
+identity user search. Identity's `users.repository.int-spec.ts` applies them to a real Postgres 18. Schema changes: edit a
 domain `*.schema.ts`, run `db:generate --name <change>`, commit the new file plus `meta/`. Never edit an applied
 migration.
 

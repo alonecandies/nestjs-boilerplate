@@ -68,6 +68,15 @@ bun run --filter @app/notifications-service build       # SWC → dist/ (the .cq
 bun run --filter @app/notifications-service start       # node --import ./dist/instrument.js dist/main.js
 ```
 
+`src/instrument.ts` is preloaded (`--import`) by `start` (from `dist/`) and by `bun run dev` (from
+the TS sources, after the swc-node loader), so tracing works in the dev loop too; it is a no-op
+without an OTLP endpoint.
+
+Scaffold providers/controllers with `bun run g <schematic> <name>` from this folder (e.g.
+`bun run g service foo`): it runs `nest g` and then `eslint --fix src`, because the Nest
+schematics import `TestingModule` as a value and `consistent-type-imports` would fail
+`bun run check`.
+
 ## Boot, degradation and shutdown
 
 Measured with the dist entrypoint (`NODE_ENV=production`) against throwaway containers:

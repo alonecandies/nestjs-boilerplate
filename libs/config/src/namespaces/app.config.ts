@@ -1,7 +1,16 @@
 import type { ConfigType } from '@nestjs/config';
 import { z } from 'zod';
 import { defineConfigNamespace } from '../define-config-namespace.js';
-import { zBool, zCsv, zInt, zNodeEnv, zPort, zServiceName, zStr } from '../env/env.helpers.js';
+import {
+  zBool,
+  zCsv,
+  zInt,
+  zNodeEnv,
+  zPort,
+  zServiceName,
+  zStr,
+  zTrustProxy,
+} from '../env/env.helpers.js';
 
 export const appEnvSchema = z
   .object({
@@ -10,7 +19,10 @@ export const appEnvSchema = z
     HOST: zStr('0.0.0.0'),
     PORT: zPort(3000),
     CORS_ORIGINS: zCsv('http://localhost:3000,http://localhost:5173'),
-    TRUST_PROXY: zBool(true),
+    // Default: trust nobody (req.ip = socket address). Behind a load balancer / ingress, list ITS
+    // addresses or CIDRs. `true` trusts every hop, so any client could pick its own req.ip (and its
+    // own per-IP throttle bucket) with X-Forwarded-For: rejected in production below.
+    TRUST_PROXY: zTrustProxy(false),
     BODY_LIMIT_BYTES: zInt(1_048_576, { min: 1 }),
     // > the load balancer's idle timeout (typically 60s), otherwise the LB reuses sockets the
     // server already closed → sporadic 502s.
@@ -20,6 +32,16 @@ export const appEnvSchema = z
     SHUTDOWN_TIMEOUT_MS: zInt(10_000, { min: 0 }),
     MAINTENANCE_MODE: zBool(false),
     DOCS_ENABLED: zBool(),
+  })
+  .superRefine((env, ctx) => {
+    if (env.NODE_ENV === 'production' && env.TRUST_PROXY === true) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['TRUST_PROXY'],
+        message:
+          'TRUST_PROXY=true trusts a client-supplied X-Forwarded-For: in production list the load balancer IPs/CIDRs instead',
+      });
+    }
   })
   .transform((env) => ({
     nodeEnv: env.NODE_ENV,

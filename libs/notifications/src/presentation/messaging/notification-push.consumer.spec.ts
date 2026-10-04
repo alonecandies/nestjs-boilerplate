@@ -1,5 +1,9 @@
+import { generateId } from '@app/common';
+import { redisConfig } from '@app/config';
 import { createEventEnvelope, KAFKA_TOPICS, type NotificationCreatedPayload } from '@app/contracts';
 import { GRAPHQL_PUB_SUB } from '@app/graphql';
+import { REDIS_CLIENT, RedisKeyService } from '@app/redis';
+import { InMemoryRedis } from '@app/redis/testing';
 import { Test } from '@nestjs/testing';
 import { PubSub } from 'graphql-subscriptions';
 import {
@@ -14,7 +18,7 @@ import {
 } from 'vitest';
 import { CREATED_AT, USER_ID } from '../../../test/support/fixtures.js';
 import { InMemoryKafkaServer } from '../../../test/support/in-memory-kafka.server.js';
-import { NOTIFICATION_CREATED_TRIGGER } from '../../notifications.constants.js';
+import { notificationCreatedTrigger } from '../../notifications.constants.js';
 import { NotificationsGateway } from '../ws/notifications.gateway.js';
 import { NotificationPushConsumer } from './notification-push.consumer.js';
 
@@ -32,6 +36,7 @@ const payload: NotificationCreatedPayload = {
 describe('NotificationPushConsumer (edge fan-out)', () => {
   const gateway = { pushToUser: vi.fn() };
   const pubSub = new PubSub();
+  const redis = new InMemoryRedis().asRedis();
   // The root config sets restoreMocks: spies must be (re)created per test.
   let publish: MockInstance<PubSub['publish']>;
   const server = new InMemoryKafkaServer();
@@ -43,6 +48,8 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
       providers: [
         { provide: NotificationsGateway, useValue: gateway },
         { provide: GRAPHQL_PUB_SUB, useValue: pubSub },
+        { provide: REDIS_CLIENT, useValue: redis },
+        { provide: RedisKeyService, useValue: new RedisKeyService(redisConfig.parse()) },
       ],
     }).compile();
     const microservice = moduleRef.createNestMicroservice({ strategy: server, logger: false });
@@ -77,7 +84,8 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
       data: { paymentId: 'p1' },
       createdAt: CREATED_AT.toISOString(),
     });
-    expect(publish).toHaveBeenCalledWith(NOTIFICATION_CREATED_TRIGGER, payload);
+    expect(publish).toHaveBeenCalledWith(`notificationCreated:${USER_ID}`, payload);
+    expect(publish).toHaveBeenCalledWith(notificationCreatedTrigger(USER_ID), payload);
     expect(server.deadLetters()).toHaveLength(0);
   });
 
@@ -86,5 +94,33 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
     expect(gateway.pushToUser).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
     expect(server.deadLetters()[0]?.topic).toBe(`${KAFKA_TOPICS.NOTIFICATION_CREATED}.dlq`);
+  });
+
+  it('pushes a redelivered event (same envelope id) only once', async () => {
+    const envelope = createEventEnvelope(KAFKA_TOPICS.NOTIFICATION_CREATED, payload, {
+      id: generateId(),
+      source: 'notifications-service',
+    });
+
+    await server.dispatch(KAFKA_TOPICS.NOTIFICATION_CREATED, envelope, USER_ID);
+    await server.dispatch(KAFKA_TOPICS.NOTIFICATION_CREATED, envelope, USER_ID);
+
+    expect(gateway.pushToUser).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledOnce();
+    expect(server.deadLetters()).toHaveLength(0);
+  });
+
+  it('fails open: pushes anyway when the dedupe store is unavailable', async () => {
+    vi.spyOn(redis, 'set').mockRejectedValueOnce(new Error('Connection is closed.'));
+    const envelope = createEventEnvelope(KAFKA_TOPICS.NOTIFICATION_CREATED, payload, {
+      id: generateId(),
+      source: 'notifications-service',
+    });
+
+    await server.dispatch(KAFKA_TOPICS.NOTIFICATION_CREATED, envelope, USER_ID);
+
+    expect(gateway.pushToUser).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledOnce();
+    expect(server.deadLetters()).toHaveLength(0);
   });
 });

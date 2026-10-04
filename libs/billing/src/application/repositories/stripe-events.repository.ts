@@ -12,4 +12,10 @@ export abstract class StripeEventsRepository {
    * A concurrent duplicate blocks on the primary key until the first transaction ends.
    */
   abstract markProcessed(event: StripeEventReceipt): Promise<boolean>;
+
+  /**
+   * Deletes at most `limit` events processed before `cutoff` (one short statement, backed by the
+   * `processed_at` index) and returns how many rows went. Callers loop until a partial batch.
+   */
+  abstract deleteProcessedBefore(cutoff: Date, limit: number): Promise<number>;
 }

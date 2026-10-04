@@ -40,7 +40,8 @@ import { startServiceTestApp } from './support/service-test-app.js';
  */
 
 const USER_ID = '01920000-0000-7000-8000-000000000001';
-const WELCOME_ID = '01920000-0000-7000-8000-00000000000a';
+// A live uuidv7: markRead skips ids whose embedded time is past the 90-day inbox TTL.
+const WELCOME_ID = generateId();
 const RECEIPT_ID = '01920000-0000-7000-8000-00000000000b';
 const WELCOME_AT = new Date('2026-09-29T08:00:00.000Z');
 const RECEIPT_AT = new Date('2026-09-29T08:30:00.250Z');
@@ -77,14 +78,16 @@ const store = createFakeCassandra((cql, params) => {
   if (cql.includes('FROM notifications_by_user WHERE user_id = ?')) {
     return params[0] === USER_ID ? { rows: INBOX_ROWS, pageState: 'c0ffee' } : {};
   }
-  if (cql.startsWith('UPDATE notifications_by_user SET read = true')) {
-    return { applied: params[1] === WELCOME_ID }; // LWT: IF EXISTS
+  if (cql.startsWith('UPDATE notifications_by_user USING TTL ? SET read = true')) {
+    return { applied: params[2] === WELCOME_ID }; // LWT: IF EXISTS (params: ttl, user, id)
   }
   return {}; // inserts / upserts
 });
 
 const mailQueue = {
   add: vi.fn(async () => ({ id: 'job-1' })),
+  // MailService attaches its connection-error logger at init.
+  on: vi.fn(),
   close: vi.fn(async () => undefined),
 };
 const kafkaProducer = new FakeKafkaProducer({ source: 'notifications-service' });

@@ -1,8 +1,8 @@
 import { DEFAULT_PAGE_LIMIT, MAX_CURSOR_LENGTH, MAX_PAGE_LIMIT } from '@app/common';
 import { ArgsType, Field, Int } from '@nestjs/graphql';
-import { IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { IsInt, IsOptional, IsString, Max, MaxLength, Min, MinLength } from 'class-validator';
 import { IDENTITY_LIMITS } from '../../../identity.constants.js';
-import { TrimString } from '../../shared/transforms.js';
+import { TrimToUndefined } from '../../shared/transforms.js';
 
 @ArgsType()
 export class UsersArgs {
@@ -19,10 +19,14 @@ export class UsersArgs {
   @MaxLength(MAX_CURSOR_LENGTH)
   cursor?: string | null;
 
-  @Field(() => String, { nullable: true, description: 'Substring of email or display name' })
+  @Field(() => String, {
+    nullable: true,
+    description: 'Substring of email or display name (3-100 characters; blank = no filter)',
+  })
   @IsOptional()
-  @TrimString()
+  @TrimToUndefined()
   @IsString()
+  @MinLength(IDENTITY_LIMITS.SEARCH_MIN_LENGTH)
   @MaxLength(IDENTITY_LIMITS.SEARCH_MAX_LENGTH)
   search?: string | null;
 }

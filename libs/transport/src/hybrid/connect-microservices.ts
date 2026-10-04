@@ -1,6 +1,7 @@
 import { type GrpcConfig, grpcConfig, type KafkaConfig, kafkaConfig } from '@app/config';
 import type { GrpcPackageName } from '@app/contracts';
 import type { INestApplication, INestApplicationContext, INestMicroservice } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import type { CustomStrategy, KafkaOptions } from '@nestjs/microservices';
 import {
   createGrpcServerStrategy,
@@ -9,7 +10,8 @@ import {
 import { createKafkaServerOptions, type KafkaServerOptionsExtras } from '../kafka/kafka.options.js';
 
 interface ConfigNamespaceLike<T> {
-  readonly KEY: string | symbol;
+  /** The `registerAs` token, which is also the key `ConfigModule.forFeature` merges the value under. */
+  readonly namespace: string;
   parse(): T;
 }
 
@@ -17,13 +19,26 @@ interface ConfigNamespaceLike<T> {
  * The namespace value from the app container when some module loaded it
  * (`ConfigModule.forFeature`), else parsed from the environment with the same schema. A gRPC-only
  * service may never inject `grpcConfig` anywhere except here.
+ *
+ * It never probes `app.get(namespace.KEY)`: on a `NestFactory` app every method runs in Nest's
+ * exception zone, which logs a miss (`UnknownElementException: Nest could not find
+ * CONFIGURATION(kafka)`) at ERROR before rethrowing, so a normal fallback looked like a boot
+ * failure. `ConfigService.get(namespace)` returns the merged value, or `undefined`, without
+ * throwing. `ConfigService` exists in every app that uses `@app/config`; the catch only covers a
+ * bare context without it.
  */
-function resolveConfig<T>(app: INestApplicationContext, namespace: ConfigNamespaceLike<T>): T {
+function resolveConfig<T extends object>(
+  app: INestApplicationContext,
+  namespace: ConfigNamespaceLike<T>,
+): T {
+  let loaded: unknown;
   try {
-    return app.get<T, T>(namespace.KEY, { strict: false });
+    loaded = app.get(ConfigService, { strict: false }).get<unknown>(namespace.namespace);
   } catch {
-    return namespace.parse();
+    loaded = undefined;
   }
+  // An object only: ConfigService falls back to `process.env[namespace]`, which is a string.
+  return typeof loaded === 'object' && loaded !== null ? (loaded as T) : namespace.parse();
 }
 
 /**

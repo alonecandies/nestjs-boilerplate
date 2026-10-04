@@ -31,7 +31,10 @@
       "cache": true
     },
     "typecheck": { "inputs": ["default", "^production"], "cache": true },
-    "test": { "inputs": ["default", "^production"], "cache": true },
+    "test": {
+      "inputs": ["default", "^production", "{workspaceRoot}/vitest.config.ts"],
+      "cache": true
+    },
     "clean": { "cache": false }
   }
 }

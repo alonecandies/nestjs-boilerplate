@@ -261,6 +261,29 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
       });
     });
 
+    it('search: < 3 characters → 400 (trigram index); a blank search means no filter', async () => {
+      const short = await app.inject({
+        method: 'GET',
+        url: '/v1/users?search=%20ab%20',
+        headers: bearer(admin),
+      });
+      expect(short.statusCode).toBe(400);
+
+      usersPort.listUsers.mockResolvedValue({ items: [] });
+      const blank = await app.inject({
+        method: 'GET',
+        url: '/v1/users?search=%20%20',
+        headers: bearer(admin),
+      });
+      expect(blank.statusCode).toBe(200);
+      expect(usersPort.listUsers).toHaveBeenCalledTimes(1);
+      expect(usersPort.listUsers).toHaveBeenCalledWith({
+        limit: 20,
+        cursor: undefined,
+        search: undefined,
+      });
+    });
+
     it('400 for limit out of range', async () => {
       const res = await app.inject({
         method: 'GET',

@@ -27,7 +27,7 @@ import {
   RedisModule,
 } from '@app/redis';
 import { StorageModule } from '@app/storage';
-import { KafkaHealthIndicator, KafkaProducerModule } from '@app/transport';
+import { KafkaProducerModule } from '@app/transport';
 import { type MiddlewareConsumer, Module, type NestModule, RequestMethod } from '@nestjs/common';
 import { CqrsModule } from '@nestjs/cqrs';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -51,13 +51,12 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
 @Module({
   imports: [
     AppConfigModule.forRoot(),
+    // Readiness = the stores a request needs. Kafka is deliberately NOT a contributor: events are
+    // best-effort publishes after commit (a failure is logged, never fails the request) and the
+    // consumers just resume once the broker is back, so a Kafka outage must not take the whole
+    // REST/GraphQL API out of rotation.
     ObservabilityModule.forRoot({
-      healthContributors: [
-        DatabaseHealthIndicator,
-        CassandraHealthIndicator,
-        RedisHealthIndicator,
-        KafkaHealthIndicator,
-      ],
+      healthContributors: [DatabaseHealthIndicator, CassandraHealthIndicator, RedisHealthIndicator],
     }),
     CqrsModule.forRoot(),
     ScheduleModule.forRoot(),

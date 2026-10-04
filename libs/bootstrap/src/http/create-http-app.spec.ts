@@ -1,17 +1,20 @@
 import { CorrelationIdMiddleware, HTTP_HEADERS, isUuidV7 } from '@app/common';
-import { AppConfigModule, appConfig } from '@app/config';
+import { AppConfigModule, appConfig, observabilityConfig } from '@app/config';
 import { HealthContributor, ObservabilityModule, RequestContextService } from '@app/observability';
 import {
   Controller,
   Get,
   Injectable,
+  Logger,
+  type LoggerService,
   type MiddlewareConsumer,
   Module,
   type NestModule,
   RequestMethod,
 } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import Fastify from 'fastify';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildFastifyOptions, createHttpApp } from './create-http-app.js';
 import { listen } from './listen.js';
 
@@ -172,6 +175,100 @@ describe('readiness over HTTP', () => {
   });
 });
 
+describe('GET /metrics with METRICS_BEARER_TOKEN', () => {
+  const TOKEN = 'scrape-token-0123456789abcdef';
+
+  it('answers 404 without the right bearer token and 200 with it', async () => {
+    process.env['METRICS_BEARER_TOKEN'] = TOKEN;
+    const app = await createHttpApp(SmokeModule, { processHandlers: false, shutdownHooks: false });
+    try {
+      await app.init();
+      await app.getHttpAdapter().getInstance().ready();
+      const scrape = (authorization?: string) =>
+        app.inject({
+          method: 'GET',
+          url: '/metrics',
+          ...(authorization === undefined ? {} : { headers: { authorization } }),
+        });
+      expect((await scrape()).statusCode).toBe(404);
+      expect((await scrape('Bearer wrong-token-0123456789abcdef')).statusCode).toBe(404);
+      expect((await scrape(TOKEN)).statusCode).toBe(404);
+      const ok = await scrape(`Bearer ${TOKEN}`);
+      expect(ok.statusCode).toBe(200);
+      expect(ok.body).toContain('process_resident_memory_bytes');
+    } finally {
+      delete process.env['METRICS_BEARER_TOKEN'];
+      await app.close();
+    }
+  });
+});
+
+const UNREACHABLE = 'UNREACHABLE_DEPENDENCY';
+
+@Module({
+  imports: [AppConfigModule.forRoot(), ObservabilityModule.forRoot({ observe: false })],
+  providers: [
+    {
+      provide: UNREACHABLE,
+      useFactory: () => {
+        throw new Error('connect ECONNREFUSED 127.0.0.1:6379');
+      },
+    },
+  ],
+})
+class UnreachableDependencyModule {}
+
+describe('createHttpApp boot failure (inside NestFactory.create, before pino is attached)', () => {
+  // The create phase installs a process-global static logger: restore the previous one afterwards.
+  const staticLogger = Logger as unknown as { staticInstanceRef?: LoggerService };
+  let previous: LoggerService | undefined;
+
+  beforeEach(() => {
+    previous = staticLogger.staticInstanceRef;
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    Logger.overrideLogger(previous ?? false);
+  });
+
+  it('prints the error as ONE line of JSON when logs are JSON (production)', async () => {
+    const env = { NODE_ENV: 'production', SERVICE_NAME: 'orders', LOG_LEVEL: 'info' };
+    const written: string[] = [];
+    const capture = (chunk: string | Uint8Array): boolean => {
+      written.push(String(chunk));
+      return true;
+    };
+    vi.spyOn(process.stdout, 'write').mockImplementation(capture);
+    vi.spyOn(process.stderr, 'write').mockImplementation(capture);
+
+    await expect(
+      createHttpApp(UnreachableDependencyModule, {
+        config: appConfig.parse(env),
+        observability: observabilityConfig.parse(env),
+        processHandlers: false,
+        shutdownHooks: false,
+      }),
+    ).rejects.toThrow('ECONNREFUSED');
+    vi.restoreAllMocks();
+
+    const lines = written
+      .join('')
+      .split('\n')
+      .filter((line) => line.length > 0);
+    expect(lines.length).toBeGreaterThan(0);
+    // Every line (buffered bootstrap logs included) is parseable JSON — no ANSI colours.
+    const records = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+    const failure = records.find((record) => record['context'] === 'ExceptionHandler');
+    expect(failure).toMatchObject({
+      level: 'error',
+      service: 'orders',
+      message: 'connect ECONNREFUSED 127.0.0.1:6379',
+      error: { name: 'Error', stack: expect.stringContaining('ECONNREFUSED') },
+    });
+  });
+});
+
 describe('listen', () => {
   it('binds HOST/PORT (port 0 → free port) and returns the URL', async () => {
     const app = await createHttpApp(SmokeModule, { processHandlers: false });
@@ -195,12 +292,46 @@ describe('buildFastifyOptions', () => {
       bodyLimit: 2048,
       keepAliveTimeout: 72_000,
       requestTimeout: 30_000,
-      trustProxy: true,
+      trustProxy: false,
       requestIdHeader: false,
       forceCloseConnections: 'idle',
       return503OnClosing: true,
     });
     expect(options).not.toHaveProperty('multipart');
+  });
+
+  describe('client address (req.ip feeds the per-IP throttle and session ip)', () => {
+    const LB = '10.0.0.5';
+    const CLIENT = '203.0.113.7';
+
+    async function ipSeenBy(env: Record<string, string>, remoteAddress: string, xff: string) {
+      const server = Fastify(buildFastifyOptions(appConfig.parse(env)));
+      server.get('/ip', (request) => ({ ip: request.ip }));
+      try {
+        const response = await server.inject({
+          method: 'GET',
+          url: '/ip',
+          remoteAddress,
+          headers: { 'x-forwarded-for': xff },
+        });
+        return response.json<{ ip: string }>().ip;
+      } finally {
+        await server.close();
+      }
+    }
+
+    it('ignores a client-supplied X-Forwarded-For by default', async () => {
+      expect(await ipSeenBy({}, CLIENT, '6.6.6.1')).toBe(CLIENT);
+      expect(await ipSeenBy({ NODE_ENV: 'production' }, CLIENT, '6.6.6.2')).toBe(CLIENT);
+    });
+
+    it('a proxy CIDR list takes what the load balancer appended, never a spoofed entry', async () => {
+      const env = { NODE_ENV: 'production', TRUST_PROXY: '10.0.0.0/8' };
+      // The client sent "6.6.6.1"; the LB (trusted) appended the real peer address.
+      expect(await ipSeenBy(env, LB, `6.6.6.1, ${CLIENT}`)).toBe(CLIENT);
+      // A direct (untrusted) peer can't pick its address either.
+      expect(await ipSeenBy(env, CLIENT, '6.6.6.1')).toBe(CLIENT);
+    });
   });
 
   it('bounds multipart when enabled and disables it explicitly for services', () => {

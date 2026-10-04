@@ -1,3 +1,4 @@
+import type { CursorPage } from '@app/common';
 import type { Payment } from '../../domain/payment.aggregate.js';
 
 export interface CreatePaymentResult {
@@ -10,6 +11,8 @@ export interface ListPaymentsCriteria {
   /** Omitted = every user's payments (admin listing). */
   userId?: string | undefined;
   limit: number;
+  /** Opaque keyset cursor (`nextCursor` of the previous page); absent = first page. */
+  cursor?: string | undefined;
 }
 
 /**
@@ -41,6 +44,10 @@ export abstract class PaymentsRepository {
    */
   abstract save(payment: Payment): Promise<void>;
 
-  /** Newest first (uuidv7 order). */
-  abstract list(criteria: ListPaymentsCriteria): Promise<Payment[]>;
+  /**
+   * One page, newest first (uuidv7 order), resuming after `cursor` (keyset: `id < $cursor`).
+   * `nextCursor` is `null` on the last page.
+   * @throws DomainValidationException (`INVALID_CURSOR`) a cursor this API did not issue
+   */
+  abstract list(criteria: ListPaymentsCriteria): Promise<CursorPage<Payment>>;
 }

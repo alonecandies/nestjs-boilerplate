@@ -1,7 +1,7 @@
 import { AccessTokenDenylist, AuthModule, Role, TokenService } from '@app/auth';
 import { AppConfigModule } from '@app/config';
 import { Test } from '@nestjs/testing';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeRedisModule } from '../../../test/support/edge-test-app.js';
 import { createFakePort, USER_ID } from '../../../test/support/fixtures.js';
 import { NOTIFICATIONS_WS_EVENTS, userRoom } from '../../notifications.constants.js';
@@ -10,6 +10,7 @@ import {
   NotificationsGateway,
   type NotificationsNamespace,
   type NotificationsSocket,
+  WS_REVOCATION_SWEEP_INTERVAL_MS,
 } from './notifications.gateway.js';
 
 const NOTIFICATION_ID = '01920000-0000-7000-8000-00000000abcd';
@@ -27,8 +28,24 @@ function fakeSocket(handshake: {
     disconnect: vi.fn(),
   } as unknown as NotificationsSocket & {
     join: ReturnType<typeof vi.fn>;
+    emit: ReturnType<typeof vi.fn>;
     disconnect: ReturnType<typeof vi.fn>;
   };
+}
+
+const nowSec = (): number => Math.floor(Date.now() / 1_000);
+
+function authedSocket(user: { jti?: string; exp?: number } = {}) {
+  const socket = fakeSocket({});
+  socket.data.user = {
+    id: USER_ID,
+    email: 'a@b.io',
+    roles: [],
+    permissions: [],
+    jti: user.jti ?? 'jti-1',
+    exp: user.exp ?? nowSec() + 900,
+  };
+  return socket;
 }
 
 describe('NotificationsGateway', () => {
@@ -52,6 +69,10 @@ describe('NotificationsGateway', () => {
 
   beforeEach(() => {
     gateway = new NotificationsGateway(tokens, denylist, port);
+  });
+
+  afterEach(() => {
+    gateway.onModuleDestroy();
   });
 
   describe('handshake authentication (namespace middleware)', () => {
@@ -105,18 +126,43 @@ describe('NotificationsGateway', () => {
   });
 
   describe('connection', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
     it('joins the user room', async () => {
-      const socket = fakeSocket({});
-      socket.data.user = {
-        id: USER_ID,
-        email: 'a@b.io',
-        roles: [],
-        permissions: [],
-        jti: 'j',
-        exp: 0,
-      };
+      const socket = authedSocket();
       await gateway.handleConnection(socket);
       expect(socket.join).toHaveBeenCalledWith(userRoom(USER_ID));
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('disconnects the socket when its access token expires (TOKEN_EXPIRED exception first)', async () => {
+      vi.useFakeTimers();
+      const socket = authedSocket({ exp: nowSec() + 60 });
+      await gateway.handleConnection(socket);
+
+      vi.advanceTimersByTime(59_000);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+
+      vi.advanceTimersByTime(1_000);
+      expect(socket.emit).toHaveBeenCalledWith(
+        NOTIFICATIONS_WS_EVENTS.EXCEPTION,
+        expect.objectContaining({ status: 401, code: 'TOKEN_EXPIRED' }),
+      );
+      expect(socket.disconnect).toHaveBeenCalledWith(true);
+    });
+
+    it('clears the expiry timer when the socket disconnects first', async () => {
+      vi.useFakeTimers();
+      const socket = authedSocket({ exp: nowSec() + 60 });
+      await gateway.handleConnection(socket);
+
+      gateway.handleDisconnect(socket);
+      vi.advanceTimersByTime(120_000);
+
+      expect(vi.getTimerCount()).toBe(0);
+      expect(socket.disconnect).not.toHaveBeenCalled();
     });
 
     it('never keeps an anonymous socket', async () => {
@@ -124,6 +170,57 @@ describe('NotificationsGateway', () => {
       await gateway.handleConnection(socket);
       expect(socket.disconnect).toHaveBeenCalledWith(true);
       expect(socket.join).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('revocation sweep (logout → denylist)', () => {
+    const serve = (...sockets: NotificationsSocket[]) =>
+      Object.assign(gateway, { server: { sockets: new Map(sockets.map((x, i) => [`s${i}`, x])) } });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('disconnects only the sockets whose token was revoked, with a TOKEN_REVOKED exception', async () => {
+      const revokedTab = authedSocket({ jti: 'revoked' });
+      const revokedOtherTab = authedSocket({ jti: 'revoked' });
+      const live = authedSocket({ jti: 'live' });
+      serve(revokedTab, revokedOtherTab, live, fakeSocket({}));
+      await denylist.deny('revoked', nowSec() + 900);
+
+      await expect(gateway.disconnectRevokedSockets()).resolves.toBe(2);
+
+      for (const socket of [revokedTab, revokedOtherTab]) {
+        expect(socket.emit).toHaveBeenCalledWith(
+          NOTIFICATIONS_WS_EVENTS.EXCEPTION,
+          expect.objectContaining({ status: 401, code: 'TOKEN_REVOKED' }),
+        );
+        expect(socket.disconnect).toHaveBeenCalledWith(true);
+      }
+      expect(live.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('keeps every socket when the denylist cannot answer (next sweep retries)', async () => {
+      const socket = authedSocket({ jti: 'any' });
+      serve(socket);
+      vi.spyOn(denylist, 'isDenied').mockRejectedValueOnce(new Error('Redis down'));
+
+      await expect(gateway.disconnectRevokedSockets()).resolves.toBe(0);
+      expect(socket.disconnect).not.toHaveBeenCalled();
+    });
+
+    it('runs on an interval started by afterInit and stopped on module destroy', async () => {
+      vi.useFakeTimers();
+      const socket = authedSocket({ jti: 'logged-out' });
+      serve(socket);
+      gateway.afterInit({ use: vi.fn() } as unknown as NotificationsNamespace);
+      await denylist.deny('logged-out', nowSec() + 900);
+
+      await vi.advanceTimersByTimeAsync(WS_REVOCATION_SWEEP_INTERVAL_MS);
+      expect(socket.disconnect).toHaveBeenCalledWith(true);
+
+      gateway.onModuleDestroy();
+      expect(vi.getTimerCount()).toBe(0);
     });
   });
 

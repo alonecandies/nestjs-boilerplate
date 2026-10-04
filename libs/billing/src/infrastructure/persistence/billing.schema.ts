@@ -60,14 +60,20 @@ export const payments = pgTable(
 
 /**
  * Processed Stripe webhook events: the primary key makes delivery idempotent
- * (`INSERT … ON CONFLICT DO NOTHING` in the same transaction as the payment update).
+ * (`INSERT … ON CONFLICT DO NOTHING` in the same transaction as the payment update). Rows older
+ * than `STRIPE_EVENTS_RETENTION_DAYS` are purged hourly (`PurgeStripeEventsCron`).
  */
-export const stripeEvents = pgTable('stripe_events', {
-  /** Stripe event id (`evt_…`). */
-  id: text().primaryKey(),
-  type: text().notNull(),
-  processedAt: timestamptz().notNull().defaultNow(),
-});
+export const stripeEvents = pgTable(
+  'stripe_events',
+  {
+    /** Stripe event id (`evt_…`). */
+    id: text().primaryKey(),
+    type: text().notNull(),
+    processedAt: timestamptz().notNull().defaultNow(),
+  },
+  // The purge's `WHERE processed_at < $cutoff` range scan.
+  (t) => [index('stripe_events_processed_at_idx').on(t.processedAt)],
+);
 
 export type PaymentRow = typeof payments.$inferSelect;
 export type NewPaymentRow = typeof payments.$inferInsert;

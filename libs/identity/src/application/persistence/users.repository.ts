@@ -28,7 +28,19 @@ export abstract class UsersRepository {
   /** `email` must be normalised. Includes the password hash. */
   abstract findCredentialsByEmail(email: string): Promise<UserSnapshot | null>;
 
+  /**
+   * Loads the aggregate FOR A WRITE: the row is locked (`SELECT … FOR UPDATE`) until the end of
+   * the current transaction, so call it inside `TransactionRunner.run()` — concurrent
+   * read-modify-writes of one user then queue instead of overwriting each other.
+   */
   abstract findAggregate(id: string): Promise<UserAggregate | null>;
+
+  /**
+   * Number of users holding the admin role, after taking a transaction-scoped lock that
+   * serialises every caller (call it inside `TransactionRunner.run()`, before a demotion): the
+   * count cannot go stale before the caller's transaction commits.
+   */
+  abstract countAdmins(): Promise<number>;
 
   abstract existsByEmail(email: string): Promise<boolean>;
 

@@ -93,6 +93,27 @@ describe('GRPC_PACKAGES', () => {
     }
   });
 
+  it('lists only rpcs that exist, and never a mutation, as idempotent (auto-retried)', () => {
+    for (const { service, method } of allPackages.idempotentMethods) {
+      expect(root.lookupService(service).methods[method], `${service}/${method}`).toBeDefined();
+    }
+    const retried = allPackages.idempotentMethods.map(
+      ({ service, method }) => `${service}/${method}`,
+    );
+    for (const mutation of [
+      'identity.v1.AuthService/Register',
+      'identity.v1.AuthService/Login',
+      'identity.v1.AuthService/RefreshTokens',
+      'identity.v1.AuthService/Logout',
+      'identity.v1.UsersService/UpdateUserRoles',
+      'notifications.v1.NotificationsService/MarkNotificationRead',
+      'billing.v1.BillingService/CreateCheckoutSession',
+      'billing.v1.BillingService/HandleStripeWebhook',
+    ]) {
+      expect(retried).not.toContain(mutation);
+    }
+  });
+
   it('declares the protobuf package each proto file actually uses', () => {
     for (const name of GRPC_PACKAGE_NAMES) {
       const spec = GRPC_PACKAGES[name];
@@ -142,11 +163,22 @@ describe('resolveGrpcPackages', () => {
         'identity.v1.AuthService',
         'identity.v1.UsersService',
       ],
+      idempotentMethods: [
+        { service: 'billing.v1.BillingService', method: 'ListPayments' },
+        { service: 'identity.v1.UsersService', method: 'GetUser' },
+        { service: 'identity.v1.UsersService', method: 'GetUsersByIds' },
+        { service: 'identity.v1.UsersService', method: 'ListUsers' },
+      ],
     });
   });
 
   it('returns empty arrays for no packages', () => {
-    expect(resolveGrpcPackages([])).toEqual({ packages: [], protoPath: [], services: [] });
+    expect(resolveGrpcPackages([])).toEqual({
+      packages: [],
+      protoPath: [],
+      services: [],
+      idempotentMethods: [],
+    });
   });
 
   it('narrows package names', () => {

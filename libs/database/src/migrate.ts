@@ -1,8 +1,8 @@
 import 'reflect-metadata';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { appConfig, databaseConfig } from '@app/config';
-import { Logger } from '@nestjs/common';
+import { appConfig, databaseConfig, observabilityConfig } from '@app/config';
+import { createMigrateCliLogger } from './migrator/cli-logger.js';
 import { runMigrations } from './migrator/run-migrations.js';
 
 /*
@@ -13,10 +13,14 @@ import { runMigrations } from './migrator/run-migrations.js';
  * `reflect-metadata` first: @app/config pulls in @nestjs/config, whose decorators need it.
  *
  *   --migrations-folder <dir>   apply another drizzle-kit output folder (default: the bundled one)
+ *
+ * Logs are JSON lines (log shippers); `LOG_PRETTY` (default on in development) switches to
+ * coloured text. JSON is the fallback, so even a config error is reported as JSON.
  */
-const logger = new Logger('DatabaseMigrate');
+let logger = createMigrateCliLogger(false);
 
 try {
+  if (observabilityConfig.parse().logPretty) logger = createMigrateCliLogger(true);
   const { values } = parseArgs({
     options: { 'migrations-folder': { type: 'string' } },
     strict: true,

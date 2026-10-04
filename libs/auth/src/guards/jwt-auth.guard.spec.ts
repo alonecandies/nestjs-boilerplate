@@ -73,6 +73,57 @@ describe('JwtAuthGuard', () => {
     expect(req.user).toMatchObject({ roles: [Role.Admin] });
   });
 
+  it('verifies a GraphQL operation once, not once per root field', async () => {
+    const { token } = await bearer();
+    const isDenied = vi.spyOn(denylist, 'isDenied');
+    // Every root field of one operation runs the global guards against the same ctx.req.
+    const req: Record<string, unknown> = { headers: { authorization: `Bearer ${token}` } };
+    try {
+      for (const _field of ['me', 'payments', 'notifications']) {
+        await expect(guard.canActivate(executionContext('graphql', target(), req))).resolves.toBe(
+          true,
+        );
+      }
+      expect(isDenied).toHaveBeenCalledTimes(1);
+
+      // A new operation (new request) is verified again.
+      const next: Record<string, unknown> = { headers: { authorization: `Bearer ${token}` } };
+      await guard.canActivate(executionContext('graphql', target(), next));
+      expect(isDenied).toHaveBeenCalledTimes(2);
+    } finally {
+      isDenied.mockRestore();
+    }
+  });
+
+  it('does not trust a GraphQL req.user it did not authenticate itself', async () => {
+    // e.g. a subscription request built with the connection's user but no usable Bearer header.
+    const req: Record<string, unknown> = { headers: {}, user: makeAuthUser() };
+    await expect(
+      failureCode(guard.canActivate(executionContext('graphql', target(), req))),
+    ).resolves.toBe('MISSING_TOKEN');
+  });
+
+  it('re-verifies a GraphQL request once the cached user expired or was replaced', async () => {
+    const { token } = await bearer();
+    const req: Record<string, unknown> = { headers: { authorization: `Bearer ${token}` } };
+    await guard.canActivate(executionContext('graphql', target(), req));
+
+    const isDenied = vi.spyOn(denylist, 'isDenied');
+    try {
+      req.user = makeAuthUser();
+      await guard.canActivate(executionContext('graphql', target(), req));
+      expect(isDenied).toHaveBeenCalledTimes(1);
+
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(Date.now() + (config.accessTtlSec + 10) * 1_000);
+      await expect(
+        failureCode(guard.canActivate(executionContext('graphql', target(), req))),
+      ).resolves.toBe('TOKEN_EXPIRED');
+    } finally {
+      isDenied.mockRestore();
+    }
+  });
+
   it('rejects missing, malformed, revoked and expired tokens with distinct codes', async () => {
     const run = (headers: Record<string, string>, type: Transport = 'http') =>
       guard.canActivate(executionContext(type, target(), { headers }));

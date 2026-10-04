@@ -98,17 +98,20 @@ describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () =
 
   it('ListPayments: same shape as the local path (int64 string, Date, absent optionals)', async () => {
     const userId = generateId();
-    const local = toPaymentListContract([
-      makePayment({ userId }), // pending: no amount, no currency, no checkout session yet
-      makePayment({
-        userId,
-        status: PaymentStatus.Succeeded,
-        amountTotal: 9_007_199_254,
-        currency: 'jpy',
-        stripeCheckoutSessionId: 'cs_test_1',
-        paidAt: new Date('2026-09-02T00:00:00.000Z'),
-      }),
-    ]);
+    const local = toPaymentListContract({
+      items: [
+        makePayment({ userId }), // pending: no amount, no currency, no checkout session yet
+        makePayment({
+          userId,
+          status: PaymentStatus.Succeeded,
+          amountTotal: 9_007_199_254,
+          currency: 'jpy',
+          stripeCheckoutSessionId: 'cs_test_1',
+          paidAt: new Date('2026-09-02T00:00:00.000Z'),
+        }),
+      ],
+      nextCursor: null,
+    });
     queryBus.execute.mockResolvedValue(local);
 
     const remote = await port.listPayments({ userId, limit: 5 });
@@ -125,12 +128,28 @@ describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () =
   it('ListPayments without user id (admin "all") arrives as undefined, not null', async () => {
     queryBus.execute.mockResolvedValue({ items: [] });
 
-    await expect(port.listPayments({ limit: 0 })).resolves.toEqual({ items: [] });
+    const list = await port.listPayments({ limit: 0 });
+    expect(list).toEqual({ items: [] });
+    // An absent next_cursor must not come back as null/"" (the port omits it).
+    expect(list).not.toHaveProperty('nextCursor');
     const [query] = queryBus.execute.mock.calls[0] as [ListPaymentsQuery];
     expect(query).toBeInstanceOf(ListPaymentsQuery);
     // `toEqual` treats null and undefined differently: proto-loader's null must not leak through.
     expect(query.criteria.userId).toBeUndefined();
+    expect(query.criteria.cursor).toBeUndefined();
     expect(query.criteria.limit).toBe(0);
+  });
+
+  it('ListPayments pages over gRPC: cursor in, next_cursor out', async () => {
+    const userId = generateId();
+    queryBus.execute.mockResolvedValue({ items: [], nextCursor: 'cursor-2' });
+
+    await expect(port.listPayments({ userId, limit: 2, cursor: 'cursor-1' })).resolves.toEqual({
+      items: [],
+      nextCursor: 'cursor-2',
+    });
+    const [query] = queryBus.execute.mock.calls[0] as [ListPaymentsQuery];
+    expect(query.criteria).toEqual({ userId, limit: 2, cursor: 'cursor-1' });
   });
 
   it('CreateCheckoutSession: absent optional fields reach the command as undefined', async () => {

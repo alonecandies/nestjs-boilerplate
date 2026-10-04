@@ -3,6 +3,7 @@ import { authConfig, redisConfig } from '@app/config';
 import { RedisKeyService } from '@app/redis';
 import { InMemoryRedis } from '@app/redis/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { DENYLIST_CHECK_TIMEOUT_MS } from '../auth.constants.js';
 import { AccessTokenDenylist } from './access-token-denylist.service.js';
 
 const keys = new RedisKeyService(redisConfig.parse({ REDIS_KEY_PREFIX: 'svc' }));
@@ -53,5 +54,31 @@ describe('AccessTokenDenylist', () => {
     const denylist = new AccessTokenDenylist(redis.asRedis(), keys, enabled);
     redis.simulateOutage();
     await expect(denylist.isDenied('jti-1')).rejects.toBeInstanceOf(ServiceUnavailableException);
+  });
+});
+
+describe('AccessTokenDenylist while Redis is unreachable but not yet failing', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('fails closed (503) within the timeout instead of waiting in the offline queue', async () => {
+    vi.useFakeTimers();
+    const redis = new InMemoryRedis();
+    // A command parked in ioredis' offline queue (blackholed host): it never settles in time.
+    vi.spyOn(redis, 'exists').mockImplementation(() => new Promise<number>(() => undefined));
+    const denylist = new AccessTokenDenylist(redis.asRedis(), keys, enabled);
+
+    let settled = false;
+    const check = denylist.isDenied('jti-1').finally(() => {
+      settled = true;
+    });
+    const assertion = expect(check).rejects.toBeInstanceOf(ServiceUnavailableException);
+
+    await vi.advanceTimersByTimeAsync(DENYLIST_CHECK_TIMEOUT_MS - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await assertion;
   });
 });

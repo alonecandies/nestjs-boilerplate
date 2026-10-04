@@ -10,8 +10,9 @@ export interface UploadFileParams {
   /** Declared media type (checked against the allow-list). */
   contentType: string;
   /**
-   * The file bytes, streamed straight to storage (never buffered). The caller bounds it: the
-   * HTTP edge sets `limits.fileSize = STORAGE_MAX_UPLOAD_BYTES` on the multipart parser.
+   * The file bytes, streamed to storage (never as one whole-file buffer; the driver holds bounded
+   * chunks). The caller bounds it: the HTTP edge sets `limits.fileSize = STORAGE_MAX_UPLOAD_BYTES`
+   * on the multipart parser.
    */
   body: Readable;
 }

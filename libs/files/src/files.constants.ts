@@ -6,6 +6,9 @@ export const USER_FILES_ROOT = 'users';
 /** Multipart field that carries the file on `POST /v1/files`. */
 export const UPLOAD_FILE_FIELD = 'file';
 
+/** `Retry-After` (seconds) sent with the 503 `UPLOAD_CAPACITY_EXCEEDED` of a streamed upload. */
+export const UPLOAD_RETRY_AFTER_SEC = 5;
+
 /** Longest client-supplied filename accepted (it is sanitized and capped to 120 chars in the key). */
 export const MAX_FILENAME_LENGTH = 255;
 

@@ -54,14 +54,17 @@ class UsersLoaderStub implements OnModuleInit {
 }
 
 const PAYMENTS_QUERY = /* GraphQL */ `
-  query Payments($all: Boolean) {
-    payments(all: $all, limit: 10) {
-      id
-      status
-      amountTotal
-      currency
-      createdAt
-      user { id displayName }
+  query Payments($all: Boolean, $cursor: String) {
+    payments(all: $all, limit: 10, cursor: $cursor) {
+      items {
+        id
+        status
+        amountTotal
+        currency
+        createdAt
+        user { id displayName }
+      }
+      nextCursor
     }
   }
 `;
@@ -168,7 +171,12 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
 
       expect(body.errors).toBeUndefined();
       expect(port.listPayments).toHaveBeenCalledWith({ userId: user.id, limit: 10 });
-      const items = body.data?.['payments'] as Record<string, unknown>[];
+      const connection = body.data?.['payments'] as {
+        items: Record<string, unknown>[];
+        nextCursor: string | null;
+      };
+      expect(connection.nextCursor).toBeNull();
+      const { items } = connection;
       expect(items).toHaveLength(3);
       expect(items[0]).toMatchObject({
         status: 'SUCCEEDED',
@@ -194,6 +202,20 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
 
       expect(body.errors).toBeUndefined();
       expect(port.listPayments).toHaveBeenCalledWith({ userId: undefined, limit: 10 });
+    });
+
+    it('pages: cursor in, nextCursor out', async () => {
+      port.listPayments.mockResolvedValue({ items: [payment(user.id)], nextCursor: 'cursor-2' });
+
+      const body = await gql(PAYMENTS_QUERY, { cursor: 'cursor-1' }, user);
+
+      expect(body.errors).toBeUndefined();
+      expect(port.listPayments).toHaveBeenCalledWith({
+        userId: user.id,
+        limit: 10,
+        cursor: 'cursor-1',
+      });
+      expect(body.data?.['payments']).toMatchObject({ nextCursor: 'cursor-2' });
     });
 
     it('requires authentication', async () => {

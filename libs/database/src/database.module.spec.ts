@@ -130,7 +130,8 @@ describe('DatabaseModule', () => {
       );
       expect(fake.queries).toEqual(['select 1']);
       const db = app.get<DrizzleDB<typeof schema>>(DRIZZLE);
-      expect(db.$client).toBe(fake);
+      // The pool behind the prepared-statements wrapper (see drizzle/prepared-statements.ts).
+      expect(db.$client.options).toBe(fake.options);
       expect(db.query.items).toBeDefined(); // typed relational API from the passed schema
       expect(runMigrations).not.toHaveBeenCalled(); // DATABASE_RUN_MIGRATIONS defaults to false
     });

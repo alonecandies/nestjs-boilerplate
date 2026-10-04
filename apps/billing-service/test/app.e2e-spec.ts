@@ -179,18 +179,17 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
       expect(response.body).toContain('# TYPE http_request_duration_seconds histogram');
     });
 
-    it('GET /health/ready → checks exactly postgres, redis and kafka (no broker → 503)', async () => {
+    it('GET /health/ready → 200 on postgres + redis alone: an unreachable Kafka never un-readies the service', async () => {
+      // KAFKA_BROKERS points at a closed port: event publishing is best-effort, so checkout and
+      // webhooks must stay in rotation during a broker outage.
       const response = await app.inject({ method: 'GET', url: '/health/ready' });
-      const body = response.json<{ info: object; error: object }>();
-      expect(Object.keys({ ...body.info, ...body.error }).sort()).toEqual([
-        'kafka',
-        'postgres',
-        'redis',
-      ]);
+      const body = response.json<{ status: string; info: object; error: object }>();
+      expect(response.statusCode).toBe(200);
+      expect(body.status).toBe('ok');
+      expect(Object.keys({ ...body.info, ...body.error }).sort()).toEqual(['postgres', 'redis']);
       expect(body.info).toMatchObject({ postgres: { status: 'up' }, redis: { status: 'up' } });
-      expect(body.error).toMatchObject({ kafka: { status: 'down' } });
-      expect(response.statusCode).toBe(503);
-    }, 15_000);
+      expect(body.error).toEqual({});
+    });
 
     it('no webhook route here: the gateway receives Stripe and forwards over gRPC', async () => {
       const response = await app.inject({ method: 'POST', url: '/v1/billing/webhooks/stripe' });
@@ -229,7 +228,28 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
       });
       expect(paid?.createdAt).toBeInstanceOf(Date);
       expect(pending).toMatchObject({ id: PENDING_ID, status: 'pending', amountTotal: '0' });
-      expect(postgres.executed.at(-1)).toMatchObject({ params: [USER_ID, 5] });
+      // LIMIT = page size + 1 look-ahead row; both rows fit, so this is the last page.
+      expect(postgres.executed.at(-1)).toMatchObject({ params: [USER_ID, 6] });
+      expect(list.nextCursor).toBeUndefined();
+    });
+
+    it('ListPayments pages with a keyset cursor (next_cursor out, cursor in → id < $cursor)', async () => {
+      const first: PaymentList = await call(
+        billing.listPayments({ userId: USER_ID, limit: 1 }),
+        'BillingService.ListPayments',
+      );
+      expect(first.items.map((p) => p.id)).toEqual([PAID_ID]);
+      expect(first.nextCursor).toEqual(expect.any(String));
+
+      const second: PaymentList = await call(
+        billing.listPayments({ userId: USER_ID, limit: 1, cursor: first.nextCursor }),
+        'BillingService.ListPayments',
+      );
+      // The fake answers only the first-page statement: the resumed query is a different one.
+      expect(second.items).toEqual([]);
+      const resumed = postgres.executed.at(-1);
+      expect(resumed?.sql).toContain('"payments"."id" < $2');
+      expect(resumed?.params).toEqual([USER_ID, PAID_ID, 2]);
     });
 
     it('ListPayments with a malformed user id → INVALID_ARGUMENT before any SQL', async () => {

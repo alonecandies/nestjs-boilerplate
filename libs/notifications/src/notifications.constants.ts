@@ -22,8 +22,17 @@ export const NOTIFICATIONS_WS_EVENTS = {
 /** Every socket joins its user's room, so a push reaches all of that user's tabs/devices. */
 export const userRoom = (userId: string): string => `user:${userId}`;
 
-/** GraphQL PubSub trigger of the `notificationCreated` subscription. */
+/** Prefix of the GraphQL PubSub triggers of the `notificationCreated` subscription. */
 export const NOTIFICATION_CREATED_TRIGGER = 'notificationCreated';
+
+/**
+ * Per-user trigger (`notificationCreated:<userId>`): the push consumer publishes to the owner's
+ * trigger and each subscription listens to its own user's only. With RedisPubSub that is one
+ * Redis channel per connected user per replica, so an event wakes only the iterators of its owner
+ * instead of every subscriber on every replica.
+ */
+export const notificationCreatedTrigger = (userId: string): string =>
+  `${NOTIFICATION_CREATED_TRIGGER}:${userId}`;
 
 /** Inbox page size (REST `limit`, GraphQL `limit`, gRPC `limit`; 0 over gRPC = default). */
 export const DEFAULT_NOTIFICATIONS_PAGE_SIZE = 20;

@@ -97,6 +97,12 @@ s3="$(compose exec -T rustfs curl -s -o /dev/null -w '%{http_code}' -I \
 gcs="$(compose exec -T gcs wget -q -O - http://127.0.0.1:4443/storage/v1/b/uploads)"
 grep -q '"name": *"uploads"' <<<"${gcs}" || fail "GCS bucket uploads: ${gcs}"
 echo "  s3 HEAD /uploads=${s3}; gcs bucket uploads present"
+# Browser presigned uploads: a CORS preflight from the default frontend origin must be allowed.
+cors="$(compose exec -T rustfs curl -s -o /dev/null -D - -X OPTIONS \
+  -H 'Origin: http://localhost:5173' -H 'Access-Control-Request-Method: PUT' \
+  http://127.0.0.1:9000/uploads/cors-probe | tr -d '\r' | grep -i '^access-control-allow-origin:' || true)"
+[ -n "${cors}" ] || fail "S3 CORS preflight from http://localhost:5173: no Access-Control-Allow-Origin"
+echo "  s3 CORS preflight: ${cors}"
 
 log "host ports (127.0.0.1) accept TCP connections"
 for pair in "postgres:${POSTGRES_HOST_PORT:-5432}" "redis:${REDIS_HOST_PORT:-6379}" \

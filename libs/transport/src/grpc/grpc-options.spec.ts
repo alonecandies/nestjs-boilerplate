@@ -1,8 +1,12 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { grpcConfig } from '@app/config';
 import { PROTO_DIR } from '@app/contracts';
+import { credentials, ServerCredentials } from '@grpc/grpc-js';
 import type { PackageDefinition } from '@grpc/proto-loader';
 import { ServerGrpc, Transport } from '@nestjs/microservices';
-import { describe, expect, it, vi } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import { buildGrpcServiceConfig, createGrpcClientOptions } from './grpc-client.options.js';
 import { GrpcHealthService, type HealthServer } from './grpc-health.js';
 import {
@@ -19,31 +23,78 @@ const cfg = grpcConfig.parse({
 });
 
 interface MethodConfig {
-  name: { service: string }[];
+  name: { service: string; method?: string }[];
   timeout: { seconds: number; nanos: number };
   retryPolicy?: { maxAttempts: number; retryableStatusCodes: string[] };
 }
 
+/** The entry grpc-js picks for `service/method`: an exact method name beats a service-wide one. */
+function configFor(methodConfig: MethodConfig[], service: string, method: string): MethodConfig {
+  const exact = methodConfig.find(({ name }) =>
+    name.some((n) => n.service === service && n.method === method),
+  );
+  const serviceWide = methodConfig.find(({ name }) =>
+    name.some((n) => n.service === service && n.method === undefined),
+  );
+  const match = exact ?? serviceWide;
+  if (match === undefined) throw new Error(`no method config for ${service}/${method}`);
+  return match;
+}
+
+function serviceConfigOf(options: { channelOptions?: Record<string, unknown> }): {
+  methodConfig: MethodConfig[];
+} {
+  return JSON.parse(String(options.channelOptions?.['grpc.service_config'])) as {
+    methodConfig: MethodConfig[];
+  };
+}
+
+const READ = { service: 'identity.v1.UsersService', method: 'GetUser' };
+
 describe('buildGrpcServiceConfig', () => {
-  it('sets a real deadline, UNAVAILABLE retries and round_robin', () => {
+  it('sets a real deadline on every method, round_robin and retry throttling', () => {
     const config = buildGrpcServiceConfig(['identity.v1.AuthService'], { timeoutMs: 1500 });
     expect(config.loadBalancingConfig).toEqual([{ round_robin: {} }]);
-    const [method] = config.methodConfig as MethodConfig[];
+    const [method, ...rest] = config.methodConfig as MethodConfig[];
+    expect(rest).toEqual([]);
     expect(method?.name).toEqual([{ service: 'identity.v1.AuthService' }]);
     // Object form: grpc-js 1.14 misparses fractional strings such as '1.5s'.
     expect(method?.timeout).toEqual({ seconds: 1, nanos: 500_000_000 });
-    expect(method?.retryPolicy).toMatchObject({
-      maxAttempts: 3,
-      retryableStatusCodes: ['UNAVAILABLE'],
-    });
+    // No retryable methods given: nothing is retried.
+    expect(method?.retryPolicy).toBeUndefined();
     expect(config.retryThrottling).toEqual({ maxTokens: 10, tokenRatio: 0.1 });
   });
 
+  it('retries UNAVAILABLE only for the retryable methods of the configured services', () => {
+    const config = buildGrpcServiceConfig(['identity.v1.UsersService'], {
+      timeoutMs: 1500,
+      retryableMethods: [READ, { service: 'other.v1.Unknown', method: 'Get' }],
+    });
+    const methods = config.methodConfig as MethodConfig[];
+    expect(configFor(methods, READ.service, READ.method)).toMatchObject({
+      name: [READ],
+      timeout: { seconds: 1, nanos: 500_000_000 },
+      retryPolicy: { maxAttempts: 3, retryableStatusCodes: ['UNAVAILABLE'] },
+    });
+    expect(configFor(methods, READ.service, 'UpdateUserRoles').retryPolicy).toBeUndefined();
+  });
+
   it('clamps attempts to the grpc-js maximum and can disable retries', () => {
-    const clamped = buildGrpcServiceConfig(['s'], { timeoutMs: 100, maxAttempts: 99 });
-    expect((clamped.methodConfig as MethodConfig[])[0]?.retryPolicy?.maxAttempts).toBe(5);
-    const disabled = buildGrpcServiceConfig(['s'], { timeoutMs: 100, maxAttempts: 1 });
-    expect((disabled.methodConfig as MethodConfig[])[0]?.retryPolicy).toBeUndefined();
+    const clamped = buildGrpcServiceConfig([READ.service], {
+      timeoutMs: 100,
+      maxAttempts: 99,
+      retryableMethods: [READ],
+    });
+    const clampedMethods = clamped.methodConfig as MethodConfig[];
+    expect(configFor(clampedMethods, READ.service, READ.method).retryPolicy?.maxAttempts).toBe(5);
+    const disabled = buildGrpcServiceConfig([READ.service], {
+      timeoutMs: 100,
+      maxAttempts: 1,
+      retryableMethods: [READ],
+    });
+    for (const entry of disabled.methodConfig as MethodConfig[]) {
+      expect(entry.retryPolicy).toBeUndefined();
+    }
   });
 });
 
@@ -69,14 +120,46 @@ describe('createGrpcClientOptions', () => {
     const channel = options.channelOptions ?? {};
     expect(channel['grpc.enable_retries']).toBe(1);
     expect(channel['grpc.service_config_disable_resolver']).toBe(1);
-    const serviceConfig = JSON.parse(String(channel['grpc.service_config'])) as {
-      methodConfig: MethodConfig[];
-    };
-    expect(serviceConfig.methodConfig[0]?.name).toEqual([
+    const { methodConfig } = serviceConfigOf(options);
+    const auth = configFor(methodConfig, 'identity.v1.AuthService', 'Login');
+    expect(auth.name).toEqual([
       { service: 'identity.v1.AuthService' },
       { service: 'identity.v1.UsersService' },
     ]);
-    expect(serviceConfig.methodConfig[0]?.timeout).toEqual({ seconds: 2, nanos: 500_000_000 });
+    expect(auth.timeout).toEqual({ seconds: 2, nanos: 500_000_000 });
+  });
+
+  it.each([
+    ['identity', 'identity.v1.AuthService', 'Register'],
+    ['identity', 'identity.v1.AuthService', 'Login'],
+    ['identity', 'identity.v1.AuthService', 'RefreshTokens'],
+    ['identity', 'identity.v1.AuthService', 'Logout'],
+    ['identity', 'identity.v1.UsersService', 'UpdateUserRoles'],
+    ['notifications', 'notifications.v1.NotificationsService', 'MarkNotificationRead'],
+    ['billing', 'billing.v1.BillingService', 'CreateCheckoutSession'],
+    ['billing', 'billing.v1.BillingService', 'HandleStripeWebhook'],
+  ] as const)(
+    'never retries the %s mutation %s/%s (a replay would repeat its side effect)',
+    (name, service, method) => {
+      const { methodConfig } = serviceConfigOf(createGrpcClientOptions(cfg, name).options);
+      const entry = configFor(methodConfig, service, method);
+      expect(entry.retryPolicy).toBeUndefined();
+      expect(entry.timeout).toEqual({ seconds: 2, nanos: 500_000_000 });
+    },
+  );
+
+  it.each([
+    ['identity', 'identity.v1.UsersService', 'GetUser'],
+    ['identity', 'identity.v1.UsersService', 'GetUsersByIds'],
+    ['identity', 'identity.v1.UsersService', 'ListUsers'],
+    ['notifications', 'notifications.v1.NotificationsService', 'ListNotifications'],
+    ['billing', 'billing.v1.BillingService', 'ListPayments'],
+  ] as const)('retries UNAVAILABLE for the %s read %s/%s', (name, service, method) => {
+    const { methodConfig } = serviceConfigOf(createGrpcClientOptions(cfg, name).options);
+    expect(configFor(methodConfig, service, method)).toMatchObject({
+      timeout: { seconds: 2, nanos: 500_000_000 },
+      retryPolicy: { maxAttempts: 3, retryableStatusCodes: ['UNAVAILABLE'] },
+    });
   });
 
   it('accepts per-registration deadline and channel overrides', () => {
@@ -137,6 +220,85 @@ describe('createGrpcServerOptions', () => {
     const { options } = createGrpcServerOptions(cfg, ['identity'], { reflection: false });
     options.onLoadPackageDefinition?.({}, { addService });
     expect(addService).toHaveBeenCalledTimes(1);
+  });
+
+  it('turns reflection off by default in production', () => {
+    const production = grpcConfig.parse({ NODE_ENV: 'production', GRPC_ALLOW_INSECURE: 'true' });
+    const addService = vi.fn();
+    createGrpcServerOptions(production, ['identity']).options.onLoadPackageDefinition?.(
+      {},
+      { addService },
+    );
+    expect(addService).toHaveBeenCalledTimes(1); // health only
+
+    const optedIn = grpcConfig.parse({
+      NODE_ENV: 'production',
+      GRPC_ALLOW_INSECURE: 'true',
+      GRPC_REFLECTION: 'true',
+    });
+    const withReflection = vi.fn();
+    createGrpcServerOptions(optedIn, ['identity']).options.onLoadPackageDefinition?.(
+      {},
+      { addService: withReflection },
+    );
+    expect(withReflection.mock.calls.length).toBeGreaterThan(1); // health + reflection
+  });
+
+  it('binds plaintext (no credentials) without TLS config', () => {
+    expect(createGrpcServerOptions(cfg, ['identity']).options).not.toHaveProperty('credentials');
+    expect(createGrpcClientOptions(cfg, 'identity').options).not.toHaveProperty('credentials');
+  });
+});
+
+describe('gRPC TLS', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'grpc-tls-'));
+  const pem = (name: string): string => {
+    const path = join(dir, name);
+    writeFileSync(path, `-----${name}-----`);
+    return path;
+  };
+  const tlsCfg = grpcConfig.parse({
+    NODE_ENV: 'production',
+    GRPC_TLS_CA_PATH: pem('ca.pem'),
+    GRPC_TLS_CERT_PATH: pem('cert.pem'),
+    GRPC_TLS_KEY_PATH: pem('key.pem'),
+  });
+
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  it('serves mutual TLS: own cert + key, client certificates verified against the CA', () => {
+    const sentinel = ServerCredentials.createInsecure();
+    const createSsl = vi.spyOn(ServerCredentials, 'createSsl').mockReturnValue(sentinel);
+
+    const { options } = createGrpcServerOptions(tlsCfg, ['identity']);
+
+    expect(options.credentials).toBe(sentinel);
+    expect(createSsl).toHaveBeenCalledWith(
+      Buffer.from('-----ca.pem-----'),
+      [
+        {
+          cert_chain: Buffer.from('-----cert.pem-----'),
+          private_key: Buffer.from('-----key.pem-----'),
+        },
+      ],
+      true,
+    );
+    createSsl.mockRestore();
+  });
+
+  it('dials with TLS, verifying the server against the CA and presenting its own certificate', () => {
+    const sentinel = credentials.createInsecure();
+    const createSsl = vi.spyOn(credentials, 'createSsl').mockReturnValue(sentinel);
+
+    const { options } = createGrpcClientOptions(tlsCfg, 'billing');
+
+    expect(options.credentials).toBe(sentinel);
+    expect(createSsl).toHaveBeenCalledWith(
+      Buffer.from('-----ca.pem-----'),
+      Buffer.from('-----key.pem-----'),
+      Buffer.from('-----cert.pem-----'),
+    );
+    createSsl.mockRestore();
   });
 });
 

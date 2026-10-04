@@ -46,7 +46,7 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       host: '0.0.0.0',
       port: 3000,
       corsOrigins: ['http://localhost:3000', 'http://localhost:5173'],
-      trustProxy: true,
+      trustProxy: false,
       bodyLimitBytes: 1_048_576,
       keepAliveTimeoutMs: 72_000,
       requestTimeoutMs: 30_000,
@@ -63,6 +63,7 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       logLevel: 'info',
       logPretty: true,
       metricsEnabled: true,
+      metricsBearerToken: undefined,
       tracingEnabled: false,
       otlpEndpoint: undefined,
       observe: { enabled: false, appKey: undefined, appSecret: undefined, serviceId: 'app' },
@@ -108,6 +109,8 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       },
       deadlineMs: 5000,
       maxMessageBytes: 4_194_304,
+      tls: undefined,
+      reflection: true,
     });
     expect(mailConfig.parse({})).toMatchObject({
       host: 'localhost',
@@ -117,6 +120,7 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
     });
     expect(storageConfig.parse({})).toMatchObject({
       driver: 's3',
+      maxConcurrentUploads: 4,
       s3: {
         endpoint: 'http://localhost:9000',
         publicEndpoint: 'http://localhost:9000',
@@ -237,9 +241,12 @@ describe('config namespaces — invalid values produce errors naming the env var
     [mailConfig, { SMTP_SECURE: 'yes' }, 'SMTP_SECURE'],
     [storageConfig, { STORAGE_DRIVER: 'azure' }, 'STORAGE_DRIVER'],
     [storageConfig, { STORAGE_SIGNED_URL_TTL_SEC: '999999' }, 'STORAGE_SIGNED_URL_TTL_SEC'],
+    [storageConfig, { STORAGE_MAX_CONCURRENT_UPLOADS: '0' }, 'STORAGE_MAX_CONCURRENT_UPLOADS'],
     [cacheConfig, { CACHE_L1_TTL_MS: '60000' }, 'CACHE_L1_TTL_MS'],
     [stripeConfig, { STRIPE_WEBHOOK_SECRET: 'nope' }, 'STRIPE_WEBHOOK_SECRET'],
+    [observabilityConfig, { METRICS_BEARER_TOKEN: 'short' }, 'METRICS_BEARER_TOKEN'],
     [authConfig, { JWT_ACCESS_SECRET: 'short' }, 'JWT_ACCESS_SECRET'],
+    [appConfig, { TRUST_PROXY: 'yes' }, 'TRUST_PROXY'],
   ] as const)('%# → %s', (ns, env, variable) => {
     const error = errorOf(() => ns.parse(env));
     expect(error.namespace).toBe(ns.namespace);
@@ -252,6 +259,42 @@ describe('config namespaces — invalid values produce errors naming the env var
     expect(error.namespace).toBe('*');
     expect(error.message).toContain('→ at app.PORT');
     expect(error.message).toContain('→ at redis.REDIS_URL');
+  });
+});
+
+describe('app TRUST_PROXY', () => {
+  const trustProxyOf = (TRUST_PROXY: string, NODE_ENV = 'development'): AppConfig['trustProxy'] =>
+    appConfig.parse({ NODE_ENV, TRUST_PROXY }).trustProxy;
+
+  it('trusts nobody by default, so X-Forwarded-For cannot choose req.ip', () => {
+    expect(appConfig.parse({}).trustProxy).toBe(false);
+    expect(appConfig.parse({ NODE_ENV: 'production' }).trustProxy).toBe(false);
+  });
+
+  it('parses booleans and IP/CIDR/preset lists', () => {
+    expect(trustProxyOf('TRUE')).toBe(true);
+    expect(trustProxyOf('1')).toBe(true);
+    expect(trustProxyOf('false')).toBe(false);
+    expect(trustProxyOf('0')).toBe(false);
+    expect(trustProxyOf('10.0.0.0/8, 192.168.1.7,fd00::/8 , uniquelocal', 'production')).toEqual([
+      '10.0.0.0/8',
+      '192.168.1.7',
+      'fd00::/8',
+      'uniquelocal',
+    ]);
+  });
+
+  it('rejects TRUST_PROXY=true in production (every hop trusted = spoofable client IP)', () => {
+    for (const TRUST_PROXY of ['true', '1']) {
+      const error = errorOf(() => appConfig.parse({ NODE_ENV: 'production', TRUST_PROXY }));
+      expect(error.message).toContain('→ at TRUST_PROXY');
+    }
+  });
+
+  it('rejects hop counts (Fastify fails closed on them) and malformed entries', () => {
+    for (const TRUST_PROXY of ['2', '10.0.0.0/33', '10.0.0.0/8, lb.internal']) {
+      expect(errorOf(() => appConfig.parse({ TRUST_PROXY })).message).toContain('→ at TRUST_PROXY');
+    }
   });
 });
 
@@ -284,6 +327,57 @@ describe('auth production secret guard', () => {
       }).accessSecret,
     ).toBe('a'.repeat(48));
     expect(authConfig.parse({ NODE_ENV: 'test' }).accessSecret).toBe(DEV_JWT_ACCESS_SECRET);
+  });
+});
+
+describe('grpc TLS and production guard', () => {
+  const TLS = {
+    GRPC_TLS_CA_PATH: '/etc/grpc/ca.pem',
+    GRPC_TLS_CERT_PATH: '/etc/grpc/tls.crt',
+    GRPC_TLS_KEY_PATH: '/etc/grpc/tls.key',
+  };
+
+  it('refuses plaintext gRPC in production unless explicitly allowed', () => {
+    const error = errorOf(() => grpcConfig.parse({ NODE_ENV: 'production' }));
+    expect(error.message).toContain('→ at GRPC_TLS_CERT_PATH');
+    expect(error.message).toContain('GRPC_ALLOW_INSECURE');
+    expect(grpcConfig.parse({ NODE_ENV: 'production', GRPC_ALLOW_INSECURE: 'true' })).toMatchObject(
+      { tls: undefined, reflection: false },
+    );
+  });
+
+  it('builds mutual TLS from the PEM paths (client certs required by default)', () => {
+    expect(grpcConfig.parse({ NODE_ENV: 'production', ...TLS })).toMatchObject({
+      tls: {
+        caPath: '/etc/grpc/ca.pem',
+        certPath: '/etc/grpc/tls.crt',
+        keyPath: '/etc/grpc/tls.key',
+        requireClientCert: true,
+      },
+      reflection: false,
+    });
+  });
+
+  it('rejects a cert without a key, and required client certs without a CA', () => {
+    expect(errorOf(() => grpcConfig.parse({ GRPC_TLS_CERT_PATH: '/c' })).message).toContain(
+      '→ at GRPC_TLS_KEY_PATH',
+    );
+    expect(
+      errorOf(() => grpcConfig.parse({ GRPC_TLS_CERT_PATH: '/c', GRPC_TLS_KEY_PATH: '/k' }))
+        .message,
+    ).toContain('→ at GRPC_TLS_CA_PATH');
+    expect(
+      grpcConfig.parse({
+        GRPC_TLS_CERT_PATH: '/c',
+        GRPC_TLS_KEY_PATH: '/k',
+        GRPC_TLS_REQUIRE_CLIENT_CERT: 'false',
+      }).tls,
+    ).toEqual({ caPath: undefined, certPath: '/c', keyPath: '/k', requireClientCert: false });
+  });
+
+  it('keeps reflection on outside production unless disabled', () => {
+    expect(grpcConfig.parse({ NODE_ENV: 'test' }).reflection).toBe(true);
+    expect(grpcConfig.parse({ GRPC_REFLECTION: 'false' }).reflection).toBe(false);
   });
 });
 

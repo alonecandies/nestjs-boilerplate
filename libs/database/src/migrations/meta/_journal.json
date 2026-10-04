@@ -8,6 +8,20 @@
       "when": 1790666288369,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1791139706481,
+      "tag": "0001_users_search_trgm",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1791140041450,
+      "tag": "0002_stripe_events_processed_at_idx",
+      "breakpoints": true
     }
   ]
 }

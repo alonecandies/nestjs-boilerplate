@@ -8,7 +8,7 @@ Files: [`Dockerfile`](../Dockerfile), [`.dockerignore`](../.dockerignore), [`doc
 
 ```bash
 docker compose up -d --wait                                  # infra only (Postgres, Redis, Cassandra, Kafka, Mailpit, RustFS, fake-gcs)
-bun run dev                                                  # monolith on the HOST against that infra (fastest loop, zero .env)
+bun run dev                                                  # monolith on the HOST against that infra (creates missing .env files first)
 
 docker compose --profile monolith up -d --build --wait       # or: the monolith in a container       -> http://localhost:3000
 docker compose --profile microservices up -d --build --wait  # or: gateway + identity/notifications/billing -> http://localhost:3000
@@ -69,13 +69,18 @@ every app container listens on HTTP **3000** (API or health + metrics) and gRPC 
 ## Dev loops
 
 1. **Apps on the host, infra in Docker (fastest).** `docker compose up -d --wait`, then `bun run dev` (monolith) or
-   `bun run dev:microservices`. The `@app/config` defaults target the published ports, so no `.env` is needed
-   (Kafka: `localhost:9094`, the EXTERNAL listener). `bun run setup:env` creates `.env` files if you want to tweak.
+   `bun run dev:microservices`. Every root `dev*` script first runs `bun run setup:env`, which copies each missing
+   `.env` from its `.env.example` (never overwrites). The shared `@app/config` defaults target the published ports
+   (Kafka: `localhost:9094`, the EXTERNAL listener), but the per-app values that must differ live **only** in
+   `apps/*/.env` (`SERVICE_NAME`, `PORT` 3000/3001/3002/3003, `GRPC_URL` 0.0.0.0:50051/50052/50053,
+   `DATABASE_RUN_MIGRATIONS=true`). Without those files every app would bind HTTP 3000 and gRPC 50051, and the
+   monolith would boot against an empty schema. Starting an app another way (e.g. `bun run dev` inside `apps/<app>`)
+   needs `bun run setup:env` once.
 2. **Apps in Docker.** `docker compose --profile microservices watch` rebuilds and recreates an app when its folder,
    `libs/`, `package.json` or `bun.lock` changes. Dependency layers stay cached, so a source change costs ~30 s.
    `APP_TARGET=dev` swaps in the `dev` target (TS sources, no compile step, see below).
 3. **Hybrid.** Services in Docker, one app on the host: the services publish their gRPC ports on the host-dev
-   defaults (50051/50052/50053), so `bun run dev:gateway` reaches them with zero config.
+   defaults (50051/50052/50053), so `bun run dev:gateway` reaches them with the `.env` it creates.
 
 Root `.env` vs. containers: Compose reads the root `.env` **only for `${VAR}` interpolation**. Containers get their
 environment from `docker-compose.yml` (plus an optional, gitignored **`.env.docker`**). Compose-only knobs are
@@ -98,7 +103,7 @@ Env names are exactly those of `@app/config` (all documented, with defaults, in 
 | `S3_PUBLIC_ENDPOINT`                       | `http://localhost:${S3_HOST_PORT}`      | presigned URLs must be reachable from the host, not `rustfs:9000`                |
 | `IDENTITY/NOTIFICATIONS/BILLING_GRPC_URL`  | `<service>:50051`                       | grpc-js resolves every A record of a scaled service (round robin)                |
 | `CLUSTER_WORKERS`                          | `1`                                     | scale with replicas (`--scale`), not `node:cluster`, in containers               |
-| `NODE_OPTIONS`                             | `--max-old-space-size=…`                | ≈ 70–75 % of the container memory limit                                          |
+| `NODE_OPTIONS`                             | `--max-old-space-size=…`                | ≈ 70–75 % of the container memory limit; the rest is off-heap (see budget below) |
 
 Tracing end to end:
 `DOCKER_OTEL_SDK_DISABLED=false docker compose --profile monolith --profile observability up -d --wait`, then open
@@ -113,7 +118,10 @@ Jaeger (http://localhost:16686) or Grafana → Explore → Jaeger. Host apps: se
 - **Cassandra**: `cassandra-init` creates `CREATE KEYSPACE IF NOT EXISTS <CASSANDRA_KEYSPACE>` with
   `NetworkTopologyStrategy {'datacenter1': 1}` and asserts the node's DC equals the apps' `CASSANDRA_LOCAL_DC`. Tables
   come from the services' own CQL migrations (`@app/cassandra`, LWT-locked) at boot.
-- **Buckets**: `uploads` in RustFS (SigV4-signed `PUT` via curl) and in fake-gcs, verified with a HEAD/GET.
+- **Buckets**: `uploads` in RustFS (SigV4-signed `PUT` via curl) and in fake-gcs, verified with a HEAD/GET. RustFS
+  answers browser CORS for the origins in `RUSTFS_CORS_ALLOWED_ORIGINS` (`DOCKER_S3_CORS_ORIGINS`, default
+  `http://localhost:3000,http://localhost:5173` like the apps' `CORS_ORIGINS`), so a frontend can `PUT` to a
+  presigned URL directly; `scripts/docker/check-infra.sh` asserts the preflight.
 - **Postgres**: `docker/postgres/init/01-extensions.sql` (first start only) adds `pg_stat_statements` and `pg_trgm`.
   Tables come from the Drizzle migrations (`libs/database/src/migrations`), applied at boot under an advisory lock
   (`DATABASE_RUN_MIGRATIONS=true`). In production, run them as a release job with the same image:
@@ -223,7 +231,9 @@ The gateway ships as much as the monolith because the domain-lib barrels import 
 
 - **`journey`** (`RATE`/s): `POST /v1/auth/register` (unique email) → `POST /v1/auth/login` → `GET /v1/auth/me` →
   `GET /v1/users/:id` (cache hit) → `POST /graphql { me }`. Each iteration sends its own `X-Forwarded-For`, so the
-  per-IP auth throttle models many clients (`TRUST_PROXY=true`).
+  per-IP auth throttle models many clients. That works because compose sets `TRUST_PROXY=uniquelocal`
+  (`DOCKER_TRUST_PROXY`, local only: private-network peers are trusted proxies); the app default is
+  `false`, and production must list only the load balancer's IPs/CIDRs (`true` is rejected).
 - **`browse`** (`READ_RATE`/s, off by default): the three authenticated reads by a pool of users registered in
   `setup()`, sized to stay under the per-user `THROTTLE_LIMIT`.
 - **Thresholds**: error rate < `MAX_ERROR_RATE` (1 %), p95 < `P95_MS` (250 ms), cached-read p95 < `P95_MS/2`, checks
@@ -235,6 +245,10 @@ K6_RATE=5 K6_READ_RATE=20 K6_DURATION=2m docker compose --profile loadtest run -
 K6_OUT= docker compose --profile loadtest run --rm k6        # without the observability profile (no remote write)
 open docker/k6/reports/k6-report.html                        # HTML report of the last run; live: http://localhost:5665
 ```
+
+k6 runs as `${K6_UID:-1000}:${K6_GID:-1000}` so it can write the report into the bind-mounted `docker/k6/reports/`
+(committed with a `.gitkeep`, contents gitignored). On a Linux host whose user is not uid 1000, pass yours:
+`K6_UID=$(id -u) K6_GID=$(id -g) bun run loadtest`. Docker Desktop (macOS/Windows) maps ownership and needs nothing.
 
 Measured (same laptop, k6 in the same 4-CPU VM): monolith, `RATE=5 READ_RATE=20` for 40 s: **p95 36 ms**, cached
 read p95 9.6 ms, 0 errors. Gateway + services, defaults (`RATE=5`, 1 min): **p95 91 ms**, cached read p95 12 ms,
@@ -254,6 +268,11 @@ Memory limits are caps (sum > 4 GB on purpose); measured RSS once idle:
 | monolith                                     | 768 MB                   | 230 MB                   | heap cap 512 MB                                                     |
 | gateway · identity · notifications · billing | 512 · 448 · 448 · 448 MB | 180 · 130 · 160 · 120 MB | heap caps 384/320 MB                                                |
 
+Off-heap headroom (limit − heap cap: 256 MB monolith, 128 MB gateway) also holds the Buffers of streamed uploads
+(`POST /v1/files`): up to ~15 MiB each (S3 multipart, 3 × 5 MiB parts), at most `STORAGE_MAX_CONCURRENT_UPLOADS` (4)
+per process, i.e. ~60 MiB; extra uploads get 503 + `Retry-After`. Raising that cap means raising the memory limit
+(or lowering the heap cap) by ~15 MiB per upload; presigned uploads cost the API nothing.
+
 Infra ≈ 1.6 GB, + one topology ≈ 0.25 (monolith) / 0.6 GB (microservices), + observability ≈ 0.4 GB. Running
 **everything at once** (both extra profiles + `logs` + `tools`) exceeds 4 GB and the VM starts reclaiming memory:
 start what you need, or raise Docker Desktop's memory.
@@ -261,10 +280,15 @@ start what you need, or raise Docker Desktop's memory.
 ## CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml))
 
 - **verify**: Node 24 (`.nvmrc`) + Bun 1.4.2, `bun install --frozen-lockfile`, `bun run check` (Biome, ESLint,
-  Prettier, tsc), `bun run test`, `bun run build`, then the drift checks (`.env.example`, Kafka topics).
+  Prettier, tsc), `bun run test`, `bun run build`, generated-artefact drift (`proto:gen` + `buf lint` + `db:generate`,
+  then a clean `git diff`/`git status` of `libs/contracts/src/generated` and `libs/database/src/migrations`),
+  commitlint over the PR's commits (pull requests only), then the config drift checks (`.env.example`, Kafka topics).
+- **integration**: `bun run test:int` (`INTEGRATION=1`, every `<package>:int` project): Postgres from testcontainers,
+  Redis from a job service container (`REDIS_URL=redis://localhost:6379`).
 - **image** (matrix of the 5 apps): `docker buildx` of the `runtime` target, not pushed, GitHub Actions cache per app.
 - **compose**: `scripts/docker/validate-compose.sh` (`docker compose config` for every profile combination + one `api`
-  per topology) and `scripts/docker/check-infra.sh` (boots and asserts the infra, then tears it down).
+  per topology) and `scripts/docker/check-infra.sh` (boots and asserts the infra, including the S3 CORS preflight,
+  then tears it down).
 
 ## Gotchas (all hit or verified while building this)
 
@@ -297,4 +321,17 @@ start what you need, or raise Docker Desktop's memory.
 No Redis password or TLS, default RustFS/Grafana/Postgres credentials, known JWT secrets, Kafka PLAINTEXT with RF=1,
 Cassandra RF=1, in-memory Jaeger, anonymous Grafana viewer and migrations at boot. Production: managed/secured
 services, secrets from a secret store, `DATABASE_RUN_MIGRATIONS=false` plus a migration job, and replicas
-behind a load balancer whose idle timeout is below `HTTP_KEEP_ALIVE_TIMEOUT_MS` (72 s).
+behind a load balancer whose idle timeout is below `HTTP_KEEP_ALIVE_TIMEOUT_MS` (72 s), with `TRUST_PROXY` set to that
+load balancer's IPs/CIDRs (compose's `uniquelocal` and `true` are not for production).
+
+**Internal gRPC is plaintext and unauthenticated here** (`GRPC_ALLOW_INSECURE=true`, `GRPC_REFLECTION=true`). The services trust every
+caller: anyone who reaches port 50051 can call `UpdateUserRoles` with any `actorId`, list users or payments, and (with
+reflection on) discover every method. `NODE_ENV=production` refuses to start without TLS unless that opt-out is set.
+Production: mutual TLS (`GRPC_TLS_CA_PATH`/`GRPC_TLS_CERT_PATH`/`GRPC_TLS_KEY_PATH`; server certificates must name the
+`*_GRPC_URL` hosts) or a service mesh doing mTLS, plus a NetworkPolicy that only lets the gateway reach the services'
+gRPC ports. Reflection defaults to off in production; compose turns it back on for local grpcurl/Postman.
+
+**Never expose the ops routes through the public ingress.** `/metrics` (route-level traffic, error rates, queue and
+heap internals) and `/docs` + `/openapi.*` are served on the API port: route only `/v1`, `/graphql` and
+`/notifications` (Socket.IO) publicly, keep `DOCS_ENABLED` off, and let Prometheus scrape the pods directly. Set
+`METRICS_BEARER_TOKEN` (Prometheus `authorization: { credentials: … }`) so `/metrics` answers 404 to anyone else.

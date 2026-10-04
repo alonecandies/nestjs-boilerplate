@@ -18,13 +18,23 @@ const missingToken = (): UnauthenticatedException =>
   new UnauthenticatedException('Missing bearer token', { code: AuthErrorCode.MISSING_TOKEN });
 
 /**
+ * GraphQL requests this guard has already authenticated, with the user it set. Global guards run
+ * once per ROOT FIELD, and every root field of an operation shares `ctx.req`, so later fields
+ * reuse the first verification instead of repeating the JWT verify + denylist EXISTS. A user put
+ * on `req` by anything else (e.g. copied from graphql-ws connection params) is not in here and
+ * is still verified.
+ */
+const authenticatedGraphqlRequests = new WeakMap<object, AuthUser>();
+
+/**
  * Global authentication guard, transport-aware (hybrid apps run global guards everywhere):
  * - `rpc`: pass — gRPC/Kafka are internal; the edge already authenticated the caller.
  * - `@Public()`: pass (no token parsing at all).
  * - `ws`: the socket was authenticated once at the handshake (`authenticateSocket` →
  *   `socket.data.user`); here we only require that user and reject it once the token expired.
  * - `http` / `graphql`: passport `jwt` strategy on the request (`ctx.req` for GraphQL, including
- *   subscriptions whose request is synthesized from connection params).
+ *   subscriptions whose request is synthesized from connection params). For GraphQL, the result
+ *   is reused by the other root fields of the same operation while the token has not expired.
  */
 @Injectable()
 export class JwtAuthGuard extends AuthGuard(JWT_STRATEGY) {
@@ -36,13 +46,19 @@ export class JwtAuthGuard extends AuthGuard(JWT_STRATEGY) {
     const type = getContextType(context);
     if (type === 'rpc' || this.isPublic(context)) return true;
     if (type === 'ws') return this.assertSocketUser(context);
-    if (!this.getRequest(context)) {
+    const req = this.getRequest(context);
+    if (!req) {
       throw new UnauthenticatedException('Authentication required', {
         code: AuthErrorCode.MISSING_TOKEN,
       });
     }
+    if (type === 'graphql' && isAlreadyAuthenticated(req)) return true;
     const result = super.canActivate(context);
-    return isObservable(result) ? firstValueFrom(result) : result;
+    const allowed = isObservable(result) ? await firstValueFrom(result) : await result;
+    if (allowed && type === 'graphql' && isAuthUser(req.user)) {
+      authenticatedGraphqlRequests.set(req, req.user);
+    }
+    return allowed;
   }
 
   override getRequest(context: ExecutionContext): RequestLike | undefined {
@@ -78,4 +94,10 @@ export class JwtAuthGuard extends AuthGuard(JWT_STRATEGY) {
     }
     return true;
   }
+}
+
+/** `req` was authenticated by an earlier root field of this operation, and its token is live. */
+function isAlreadyAuthenticated(req: RequestLike): boolean {
+  const user = authenticatedGraphqlRequests.get(req);
+  return user !== undefined && req.user === user && user.exp * 1_000 > Date.now();
 }

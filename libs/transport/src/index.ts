@@ -8,7 +8,6 @@
  *   `@KafkaConsumerController()`, `KafkaHealthIndicator`.
  * - Hybrid apps: `connectGrpcServer` / `connectKafkaConsumer` (`inheritAppConfig: true`).
  */
-export * from './context/realm.js';
 export * from './context/transport-context.js';
 export * from './grpc/domain-to-grpc-exception.filter.js';
 export * from './grpc/grpc.constants.js';
@@ -23,10 +22,12 @@ export * from './grpc/grpc-health.js';
 export * from './grpc/grpc-metadata.js';
 export * from './grpc/grpc-server.options.js';
 export * from './grpc/grpc-status.mapping.js';
+export * from './grpc/grpc-tls.js';
 export * from './grpc/rpc-status.exception.js';
 export * from './grpc/zod-rpc-validation.pipe.js';
 export * from './hybrid/connect-microservices.js';
 export * from './kafka/dead-letter.js';
+export * from './kafka/dead-letter-replay.js';
 export * from './kafka/kafka.constants.js';
 export * from './kafka/kafka.errors.js';
 export * from './kafka/kafka.health.js';
@@ -35,7 +36,9 @@ export * from './kafka/kafka-consumer.decorator.js';
 export * from './kafka/kafka-context.interceptor.js';
 export * from './kafka/kafka-dead-letter.filter.js';
 export * from './kafka/kafka-event-pattern.decorator.js';
+export * from './kafka/kafka-logger.js';
 export * from './kafka/kafka-producer.module.js';
 export * from './kafka/kafka-producer.service.js';
+export * from './kafka/kafka-retry.interceptor.js';
 export * from './kafka/parse-event-envelope.pipe.js';
 export * from './kafka/testing/fake-kafka-producer.js';

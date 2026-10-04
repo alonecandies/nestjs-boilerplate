@@ -11,9 +11,11 @@ import { USER_ROLES } from '../../domain/user-role.js';
  * inserts (seeds, psql). uuidv7 is time-ordered, so `ORDER BY id DESC` = newest first and the PK
  * index serves keyset pagination (scanned backwards — no extra index needed).
  *
- * Search note: `ILIKE '%q%'` on email/display_name cannot use a btree. At scale add, in a
- * hand-written migration: `CREATE EXTENSION IF NOT EXISTS pg_trgm;` +
- * `CREATE INDEX users_search_trgm_idx ON users USING gin (email gin_trgm_ops, display_name gin_trgm_ops);`
+ * Search: `ILIKE '%q%'` on email/display_name cannot use a btree, so `users_search_trgm_idx` is a
+ * pg_trgm GIN index on both columns (the `OR` becomes a BitmapOr). Trigrams need >= 3 characters,
+ * hence `IDENTITY_LIMITS.SEARCH_MIN_LENGTH`. The migration that creates it starts with
+ * `CREATE EXTENSION IF NOT EXISTS pg_trgm` (hand-added: drizzle-kit does not emit extensions;
+ * pg_trgm is a trusted extension, so the database owner may create it).
  */
 
 const timestamptz = () => timestamp({ withTimezone: true, precision: 3, mode: 'date' });
@@ -21,19 +23,30 @@ const timestamptz = () => timestamp({ withTimezone: true, precision: 3, mode: 'd
 /** RBAC roles (values = @app/auth `Role`). */
 export const userRole = pgEnum('user_role', USER_ROLES);
 
-export const users = pgTable('users', {
-  id: uuid().primaryKey().default(sql`uuidv7()`),
-  /** Normalised (trimmed + lowercase) before it gets here, so a plain unique constraint is enough. */
-  email: text().notNull().unique('users_email_unique'),
-  passwordHash: text().notNull(),
-  displayName: text().notNull(),
-  roles: userRole().array().notNull().default(sql`ARRAY['user']::user_role[]`),
-  createdAt: timestamptz().notNull().defaultNow(),
-  updatedAt: timestamptz()
-    .notNull()
-    .defaultNow()
-    .$onUpdate(() => new Date()),
-});
+export const users = pgTable(
+  'users',
+  {
+    id: uuid().primaryKey().default(sql`uuidv7()`),
+    /** Normalised (trimmed + lowercase) before it gets here, so a plain unique constraint is enough. */
+    email: text().notNull().unique('users_email_unique'),
+    passwordHash: text().notNull(),
+    displayName: text().notNull(),
+    roles: userRole().array().notNull().default(sql`ARRAY['user']::user_role[]`),
+    createdAt: timestamptz().notNull().defaultNow(),
+    updatedAt: timestamptz()
+      .notNull()
+      .defaultNow()
+      .$onUpdate(() => new Date()),
+  },
+  (t) => [
+    // admin user search: `email ILIKE '%q%' OR display_name ILIKE '%q%'`.
+    index('users_search_trgm_idx').using(
+      'gin',
+      t.email.op('gin_trgm_ops'),
+      t.displayName.op('gin_trgm_ops'),
+    ),
+  ],
+);
 
 export const sessions = pgTable(
   'sessions',

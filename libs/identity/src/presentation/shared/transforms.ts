@@ -12,6 +12,14 @@ import { isString } from 'lodash-es';
 export const TrimString = (): PropertyDecorator =>
   Transform(({ value }: TransformFnParams): unknown => (isString(value) ? value.trim() : value));
 
+/** Trims; a blank string becomes `undefined` ("not provided": `@IsOptional()` then skips it). */
+export const TrimToUndefined = (): PropertyDecorator =>
+  Transform(({ value }: TransformFnParams): unknown => {
+    if (!isString(value)) return value;
+    const trimmed = value.trim();
+    return trimmed === '' ? undefined : trimmed;
+  });
+
 /** Trim + lowercase (emails are stored normalised; lookups are then exact matches). */
 export const NormalizeEmail = (): PropertyDecorator =>
   Transform(({ value }: TransformFnParams): unknown =>

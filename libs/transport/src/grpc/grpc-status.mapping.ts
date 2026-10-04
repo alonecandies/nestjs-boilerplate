@@ -23,7 +23,6 @@ import { GrpcException, GrpcStatus, RpcException } from '@nestjs/microservices';
 import { isArray, isNumber, isPlainObject, isString } from 'lodash-es';
 import { TimeoutError } from 'rxjs';
 import { z } from 'zod';
-import { isInstanceAcrossRealms } from '../context/realm.js';
 import {
   createErrorTrailers,
   isGrpcMetadata,
@@ -410,11 +409,10 @@ export function exceptionToGrpcError(
       exception.details,
     );
   }
-  // Across realms: Nest throws these from @nestjs/core's copy of @nestjs/microservices (realm.ts).
-  if (isInstanceAcrossRealms(exception, GrpcException, 'GrpcException')) {
+  if (exception instanceof GrpcException) {
     return { code: exception.getCode(), message: exception.message };
   }
-  if (isInstanceAcrossRealms(exception, RpcException, 'RpcException')) {
+  if (exception instanceof RpcException) {
     return fromRpcException(exception);
   }
   if (exception instanceof HttpException) return fromHttpException(exception, exposeInternal);

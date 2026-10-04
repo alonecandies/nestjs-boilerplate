@@ -6,6 +6,7 @@ import {
   FilesErrorCode,
   FileTooLargeException,
   UnsupportedFileTypeException,
+  UploadCapacityExceededException,
 } from './files.errors.js';
 
 const problemOf = (error: unknown) => toProblemDetails(error, { exposeInternal: false });
@@ -30,12 +31,20 @@ describe('files domain errors', () => {
       status: 415,
       code: FilesErrorCode.UNSUPPORTED_FILE_TYPE,
     });
+    expect(problemOf(new UploadCapacityExceededException(4, 5))).toMatchObject({
+      status: 503,
+      code: FilesErrorCode.UPLOAD_CAPACITY_EXCEEDED,
+    });
   });
 
   it('carry client-safe details', () => {
     expect(new FileTooLargeException(10, 'contentLength').details).toEqual({
       maxBytes: 10,
       issues: [{ path: 'contentLength', message: 'must be at most 10 bytes', code: 'too_big' }],
+    });
+    expect(new UploadCapacityExceededException(4, 5).details).toEqual({
+      maxConcurrentUploads: 4,
+      retryAfterSec: 5,
     });
     expect(new FileAccessDeniedException().details).toBeUndefined();
     expect(new FileNotFoundException('users/u/k').details).toMatchObject({

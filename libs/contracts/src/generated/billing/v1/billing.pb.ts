@@ -67,10 +67,14 @@ export interface ListPaymentsRequest {
   /** Absent = all users (requires billing:read-all at the edge). */
   userId?: string | undefined;
   limit: number;
+  /** Opaque keyset cursor: the `next_cursor` of the previous page. Absent = first page. */
+  cursor?: string | undefined;
 }
 
 export interface PaymentList {
   items: Payment[];
+  /** Pass as `cursor` to get the next page; absent on the last page. */
+  nextCursor?: string | undefined;
 }
 
 wrappers[".google.protobuf.Timestamp"] = {

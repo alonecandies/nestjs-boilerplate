@@ -39,7 +39,7 @@ import {
   paymentListResponseSchema,
   type StripeWebhookResponse,
   stripeWebhookResponseSchema,
-  toPaymentResponse,
+  toPaymentListResponse,
 } from './dto/billing.response.js';
 import {
   type CreateCheckoutSessionBody,
@@ -128,12 +128,13 @@ export class BillingController {
   @ApiOperation({
     summary: 'List payments',
     description:
-      "Newest first. `all=true` lists every user's payments (requires billing:read-all).",
+      "Newest first, keyset-paginated (`cursor` = the previous page's `nextCursor`). `all=true` lists every user's payments (requires billing:read-all).",
   })
   @ApiOkResponse({ standardSchema: paymentListResponseSchema })
   @ApiBadRequestResponse({ description: 'Invalid query' })
   @ApiUnauthorizedResponse({ description: 'Missing or invalid access token' })
   @ApiForbiddenResponse({ description: '`all=true` without billing:read-all' })
+  @ApiUnprocessableEntityResponse({ description: 'Malformed `cursor` (INVALID_CURSOR)' })
   @SerializeOptions({ schema: paymentListResponseSchema })
   async listPayments(
     @Query({ schema: listPaymentsQuerySchema }) query: ListPaymentsQueryDto,
@@ -142,7 +143,8 @@ export class BillingController {
     const list = await this.billing.listPayments({
       userId: resolvePaymentsOwner(user, query.all),
       limit: query.limit,
+      cursor: query.cursor,
     });
-    return { items: list.items.map(toPaymentResponse) };
+    return toPaymentListResponse(list);
   }
 }

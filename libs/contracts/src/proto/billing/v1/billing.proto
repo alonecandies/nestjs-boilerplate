@@ -67,8 +67,12 @@ message ListPaymentsRequest {
   // Absent = all users (requires billing:read-all at the edge).
   optional string user_id = 1;
   int32 limit = 2;
+  // Opaque keyset cursor: the `next_cursor` of the previous page. Absent = first page.
+  optional string cursor = 3;
 }
 
 message PaymentList {
   repeated Payment items = 1;
+  // Pass as `cursor` to get the next page; absent on the last page.
+  optional string next_cursor = 2;
 }

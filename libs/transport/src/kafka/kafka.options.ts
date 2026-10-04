@@ -1,6 +1,7 @@
 import type { KafkaConfig as KafkaNamespaceConfig } from '@app/config';
 import { type KafkaOptions, Transport } from '@nestjs/microservices';
 import { CompressionTypes, logLevel, Partitioners } from 'kafkajs';
+import { createKafkaLogCreator } from './kafka-logger.js';
 
 /**
  * Nest's copy of the kafkajs `KafkaConfig`. It is structurally compatible with kafkajs' own type,
@@ -31,6 +32,10 @@ function toSaslOptions({
  * this level: kafkajs merges it into the idempotent producer's retry and then warns that limiting
  * retries may break exactly-once delivery (nest-distributed §9.12). Consumers set their own
  * `consumer.retry`.
+ *
+ * `logCreator` routes kafkajs logs through Nest's `Logger` (pino) and downgrades its retry and
+ * reconnect noise to WARN (`createKafkaLogCreator`). Nest spreads `client` over its own default
+ * `logCreator`, so this one wins for the consumer and producer clients too.
  */
 export function createKafkaClientConfig(
   cfg: KafkaNamespaceConfig,
@@ -44,6 +49,7 @@ export function createKafkaClientConfig(
     connectionTimeout: cfg.connectionTimeoutMs,
     requestTimeout: cfg.requestTimeoutMs,
     logLevel: logLevel.WARN,
+    logCreator: createKafkaLogCreator(),
     retry: { initialRetryTime: 300, maxRetryTime: 30_000 },
   };
 }

@@ -32,15 +32,10 @@
     "lodash-es": "catalog:",
     "passport": "catalog:",
     "passport-jwt": "catalog:",
-    "passport-local": "catalog:",
-    "reflect-metadata": "catalog:",
-    "rxjs": "catalog:",
-    "uuid": "catalog:"
+    "rxjs": "catalog:"
   },
   "devDependencies": {
     "@types/lodash-es": "catalog:",
-    "@types/passport-jwt": "catalog:",
-    "@types/passport-local": "catalog:",
-    "fastify": "catalog:"
+    "@types/passport-jwt": "catalog:"
   }
 }

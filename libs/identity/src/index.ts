@@ -36,6 +36,7 @@ export { ListUsersQuery } from './application/queries/list-users/list-users.quer
 export { UserRegisteredEvent } from './domain/events/user-registered.event.js';
 export { UserRolesChangedEvent } from './domain/events/user-roles-changed.event.js';
 export {
+  CannotRemoveLastAdminException,
   CannotRevokeOwnAdminRoleException,
   EmailAlreadyTakenException,
   InvalidCredentialsException,

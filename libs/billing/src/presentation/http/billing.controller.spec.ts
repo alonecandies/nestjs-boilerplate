@@ -282,7 +282,26 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
             updatedAt: null,
           },
         ],
+        nextCursor: null,
       });
+    });
+
+    it('pages: ?cursor is passed through and nextCursor returned', async () => {
+      port.listPayments.mockResolvedValue({ items: [payment], nextCursor: 'cursor-2' });
+
+      const res = await app.inject({
+        method: 'GET',
+        url: `${PAYMENTS_URL}?limit=1&cursor=cursor-1`,
+        headers: { authorization: user.authorization },
+      });
+
+      expect(res.statusCode).toBe(200);
+      expect(port.listPayments).toHaveBeenCalledWith({
+        userId: user.id,
+        limit: 1,
+        cursor: 'cursor-1',
+      });
+      expect(res.json()).toMatchObject({ nextCursor: 'cursor-2' });
     });
 
     it('403 for all=true without billing:read-all', async () => {
@@ -309,16 +328,19 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
       expect(port.listPayments).toHaveBeenCalledWith({ userId: undefined, limit: 5 });
     });
 
-    it.each(['limit=abc', 'limit=0', 'limit=1000', 'all=maybe'])('400 for ?%s', async (query) => {
-      const res = await app.inject({
-        method: 'GET',
-        url: `${PAYMENTS_URL}?${query}`,
-        headers: { authorization: user.authorization },
-      });
+    it.each(['limit=abc', 'limit=0', 'limit=1000', 'all=maybe', 'cursor='])(
+      '400 for ?%s',
+      async (query) => {
+        const res = await app.inject({
+          method: 'GET',
+          url: `${PAYMENTS_URL}?${query}`,
+          headers: { authorization: user.authorization },
+        });
 
-      expect(res.statusCode).toBe(400);
-      expect(port.listPayments).not.toHaveBeenCalled();
-    });
+        expect(res.statusCode).toBe(400);
+        expect(port.listPayments).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it('documents every route in OpenAPI (zod schemas converted)', () => {
@@ -327,7 +349,9 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
     expect(document.paths[CHECKOUT_URL]?.post?.requestBody).toBeDefined();
     expect(document.paths[WEBHOOK_URL]?.post).toBeDefined();
     const parameters = (document.paths[PAYMENTS_URL]?.get?.parameters ?? []) as { name: string }[];
-    expect(parameters.map((p) => p.name)).toEqual(expect.arrayContaining(['all', 'limit']));
+    expect(parameters.map((p) => p.name)).toEqual(
+      expect.arrayContaining(['all', 'limit', 'cursor']),
+    );
     expect(Object.keys(document.components?.schemas ?? {})).toEqual(
       expect.arrayContaining([
         'CreateCheckoutSessionBody',

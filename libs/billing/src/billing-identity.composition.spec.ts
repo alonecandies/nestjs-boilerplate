@@ -89,9 +89,12 @@ class FakeInfrastructureModule {}
 const PAYMENTS_QUERY = /* GraphQL */ `
   query Payments {
     payments(all: true, limit: 10) {
-      id
-      status
-      user { id email displayName roles }
+      items {
+        id
+        status
+        user { id email displayName roles }
+      }
+      nextCursor
     }
   }
 `;
@@ -176,16 +179,22 @@ describe('identity + billing composed in one app (monolith wiring, real identity
     });
 
     const body = res.json<{
-      data?: { payments: { id: string; user: { id: string; email: string } | null }[] };
+      data?: {
+        payments: {
+          items: { id: string; user: { id: string; email: string } | null }[];
+          nextCursor: string | null;
+        };
+      };
       errors?: unknown[];
     }>();
     expect(body.errors).toBeUndefined();
-    expect(body.data?.payments).toHaveLength(3);
+    expect(body.data?.payments.items).toHaveLength(3);
+    expect(body.data?.payments.nextCursor).toBeNull();
     // Every payment got its owner: Ada has two payments, Alan one.
-    expect(body.data?.payments.map((p) => p.user?.email).sort()).toEqual(
+    expect(body.data?.payments.items.map((p) => p.user?.email).sort()).toEqual(
       [ada.email, ada.email, alan.email].sort(),
     );
-    expect(body.data?.payments.map((p) => p.user)).toContainEqual({
+    expect(body.data?.payments.items.map((p) => p.user)).toContainEqual({
       id: alan.id,
       email: alan.email,
       displayName: 'Alan',

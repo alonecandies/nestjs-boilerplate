@@ -43,6 +43,8 @@ class FilesTestModule {}
 export interface FilesTestAppOptions {
   /** `STORAGE_MAX_UPLOAD_BYTES` (default 4096). */
   maxUploadBytes?: number;
+  /** `STORAGE_MAX_CONCURRENT_UPLOADS` (default: the config default). */
+  maxConcurrentUploads?: number;
   /** e.g. an adapter that pre-registers @fastify/multipart, like `createHttpApp({ multipart })`. */
   adapter?: FastifyAdapter;
 }
@@ -53,7 +55,12 @@ export async function createFilesTestApp(options: FilesTestAppOptions = {}): Pro
     .useValue(openDenylist)
     .overrideProvider(storageConfig.KEY)
     .useValue(
-      storageConfig.parse({ STORAGE_MAX_UPLOAD_BYTES: String(options.maxUploadBytes ?? 4096) }),
+      storageConfig.parse({
+        STORAGE_MAX_UPLOAD_BYTES: String(options.maxUploadBytes ?? 4096),
+        ...(options.maxConcurrentUploads === undefined
+          ? {}
+          : { STORAGE_MAX_CONCURRENT_UPLOADS: String(options.maxConcurrentUploads) }),
+      }),
     );
   const app = await createFastifyTestApp(builder, undefined, {
     appOptions: { logger: false },

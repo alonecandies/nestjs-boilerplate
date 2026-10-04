@@ -57,8 +57,18 @@ export interface CheckoutCompletion {
 
 const OPEN_STATUSES: readonly PaymentStatus[] = [PaymentStatus.Pending, PaymentStatus.Failed];
 
-const normalizeCurrency = (currency: string | null): string | null =>
-  isNil(currency) ? null : toLower(trim(currency));
+const ISO_4217_CODE = /^[a-z]{3}$/;
+
+/**
+ * Stripe currency → lowercase ISO 4217 code, or `null` when absent or not a 3-letter code (`""`
+ * included), so callers fall back to the stored currency instead of persisting a value that the
+ * `billing.payment-succeeded.v1` schema (`length(3)`) would reject.
+ */
+export const normalizeCurrency = (currency: string | null | undefined): string | null => {
+  if (isNil(currency)) return null;
+  const code = toLower(trim(currency));
+  return ISO_4217_CODE.test(code) ? code : null;
+};
 
 /**
  * Payment aggregate: one Stripe Checkout of `quantity × priceId` for a user. It owns the status
@@ -147,6 +157,11 @@ export class Payment extends AggregateRoot {
     return this.state.stripeCheckoutSessionId;
   }
 
+  /** ISO 4217, lowercase; `null` until Stripe priced the Checkout Session. */
+  get currency(): string | null {
+    return this.state.currency;
+  }
+
   get version(): number {
     return this.state.version;
   }
@@ -193,16 +208,20 @@ export class Payment extends AggregateRoot {
 
   /**
    * `pending` → `succeeded`, applying `PaymentSucceededEvent` (also from `failed`: an async
-   * payment that was retried). Returns `false` for replays (already succeeded), expired payments
-   * and sessions that do not belong to this payment.
+   * payment that was retried). Returns `false` for replays (already succeeded), expired payments,
+   * sessions that do not belong to this payment, and when no currency is known (neither Stripe's
+   * completion nor the stored pricing has one): `PaymentSucceededEvent` must carry a valid
+   * ISO 4217 code, so the payment is left untouched rather than announced with a blank currency.
    */
   complete(completion: CheckoutCompletion, now: Date): boolean {
     const current = this.state.stripeCheckoutSessionId;
     if (!OPEN_STATUSES.includes(this.state.status)) return false;
     if (current !== null && current !== completion.sessionId) return false;
 
+    const currency =
+      normalizeCurrency(completion.currency) ?? normalizeCurrency(this.state.currency);
+    if (currency === null) return false;
     const amountTotal = completion.amountTotal ?? this.state.amountTotal ?? 0;
-    const currency = normalizeCurrency(completion.currency) ?? this.state.currency ?? '';
     this.state = {
       ...this.state,
       status: PaymentStatus.Succeeded,

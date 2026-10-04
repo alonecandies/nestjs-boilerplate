@@ -6,7 +6,10 @@ export type StorageDriverName = StorageDriver | 'memory';
 
 export interface UploadInput {
   key: string;
-  /** A stream is uploaded without buffering the whole object (multipart for large bodies). */
+  /**
+   * A stream is uploaded in bounded chunks, never as one whole-object buffer (S3: 5 MiB multipart
+   * parts, ≈ 15 MiB held per upload — see `S3_UPLOAD_PART_SIZE`).
+   */
   body: Readable | Buffer;
   contentType: string;
   /** Known size in bytes (skips length detection; must be exact when set). */

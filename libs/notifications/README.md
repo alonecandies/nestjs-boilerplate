@@ -18,7 +18,7 @@ billing.payment-succeeded.v1 ─┼─► Messaging consumers ─┤   Cassandra
                               │                                      └─► notifications.notification-created.v1
 edge (gateway / monolith) ◄───┴── NotificationPushConsumer ◄──────────────┘
    ├─► socket.io room user:{id} ('notification.created')   — fanned out by the Redis adapter
-   └─► GRAPHQL_PUB_SUB 'notificationCreated'               — RedisPubSub, filtered per subscriber
+   └─► GRAPHQL_PUB_SUB 'notificationCreated:{userId}'      — RedisPubSub, one channel per user
 ```
 
 ## Modules
@@ -124,9 +124,13 @@ enum NotificationType {
 ```
 
 Every operation requires `notifications:read`, enforced by the global guards (they are
-GraphQL-aware). Args/inputs are validated with class-validator. The subscription filter compares
-`payload.userId` with `ctx.req.user.id`; `resolve` maps the JSON payload (from RedisPubSub) to
-the model.
+GraphQL-aware). Args/inputs are validated with class-validator. The subscription listens on its
+user's own trigger, `notificationCreated:{userId}` (`notificationCreatedTrigger`), and the push
+consumer publishes to the owner's trigger. With RedisPubSub that is one Redis channel per
+connected user per replica (Redis handles many channels well), so an event only wakes its owner's
+iterators instead of every subscriber on every replica. The filter (`payload.userId` ===
+`ctx.req.user.id`) stays as defence in depth; `resolve` maps the JSON payload (from RedisPubSub)
+to the model.
 
 ### WebSocket (socket.io namespace `/notifications`)
 
@@ -142,8 +146,17 @@ Connect with `io('<host>/notifications', { auth: { token: '<access jwt>' } })` (
 
 The handshake is authenticated by a namespace middleware (`authenticateSocket`, including the
 denylist) before the connection is accepted, so no message can race authentication. Each socket
-joins room `user:{id}`. Per-message guards: `JwtAuthGuard` (token not expired), RBAC, and
+joins room `user:{id}`. Per-message guards: `JwtAuthGuard` (token not expired), RBAC,
+`WsSessionGuard` (denylist: a token revoked by logout gets `TOKEN_REVOKED`, like HTTP) and
 `WsThrottlerGuard` (`markRead`: 30 per 10 s).
+
+Sockets do not outlive their session. When the access token expires the socket receives an
+`exception` event (`TOKEN_EXPIRED`) and is disconnected (like graphql-ws's 4401 close). Every
+30 s (`WS_REVOCATION_SWEEP_INTERVAL_MS`) each replica disconnects its sockets whose token was put
+on the denylist (logout), after an `exception` event (`TOKEN_REVOKED`). This works in every
+topology (logout may run in identity-service) at the cost of one auto-pipelined EXISTS per
+distinct token per sweep. A server-side disconnect is not retried by socket.io clients: reconnect
+with a fresh token.
 
 ### gRPC (`notifications.v1.NotificationsService`, service side)
 
@@ -174,7 +187,7 @@ controller-scoped dead-letter filter: any failure, including an invalid envelope
 | Class                               | Effect                                                                                                                                   |
 | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `CreateNotificationCommand`         | `NotificationEntity.create()` → insert → `NotificationCreatedEvent`. With `idempotency: { key, occurredAt }` the id is derived (upsert). |
-| `MarkNotificationReadCommand`       | `UPDATE … IF EXISTS`; 404 `NOTIFICATION_NOT_FOUND` when not in the user's inbox                                                          |
+| `MarkNotificationReadCommand`       | `UPDATE … USING TTL <remaining> … IF EXISTS`; 404 `NOTIFICATION_NOT_FOUND` when not in the user's inbox (or past its 90 days)            |
 | `PublishNotificationCreatedCommand` | Kafka publish (key = user id, envelope id = notification id). Never throws; resolves `false` on failure                                  |
 | `WelcomeUserCommand`                | Upsert recipient, welcome notification (`welcome:{userId}`), welcome mail (`welcome-{userId}`)                                           |
 | `SendPaymentReceiptCommand`         | Receipt notification (`receipt:{paymentId}`), receipt mail (`receipt-{paymentId}`) when the recipient is known                           |
@@ -195,8 +208,10 @@ Delivery is at-least-once, so every consumer path is idempotent:
 - Mails use business idempotency keys (BullMQ job ids, 24 h retention). Keys are derived from the
   user or payment id rather than the envelope id, so a re-published event with a fresh envelope id
   is still deduplicated.
-- The notification-created envelope id equals the notification id, so edge consumers can
-  deduplicate re-publishes.
+- The notification-created envelope id equals the notification id. Before pushing, the edge push
+  consumer claims `<prefix>:notifications:push:dedupe:{envelope id}` (`SET NX EX 600`), so a
+  re-published event does not show the same toast twice. If Redis is unavailable it pushes anyway
+  (fail open).
 
 ## Data model (Cassandra, `src/infrastructure/persistence/migrations/*.cql`)
 
@@ -213,6 +228,13 @@ CREATE TABLE IF NOT EXISTS notification_recipients (
   user_id uuid PRIMARY KEY, email text, display_name text, updated_at timestamp);
 ```
 
+Rows expire with the table's default TTL, and that TTL applies to UPDATEs too: a plain
+`UPDATE … SET read = true` would give `read` a fresh 90 days and leave a "ghost" row (only `read`,
+no row marker) in the inbox after the real cells expired. `markRead` therefore binds
+`USING TTL` = the row's remaining lifetime, computed from the uuidv7 id and
+`NOTIFICATIONS_TTL_SEC` (which must equal `default_time_to_live`; the migrations spec checks it).
+Listings also skip any row with neither `type` nor `created_at` (ghosts written before this fix).
+
 `notificationsCassandraMigrations = { dir }` points at that folder. SWC `copyFiles` ships the `.cql`
 files to `dist`. All statements are prepared constants that hit one partition (no
 `ALLOW FILTERING`). Only the digest scans `notification_recipients`, and it does so paged and
@@ -220,7 +242,7 @@ capped.
 
 ## Tests
 
-`bunx vitest run --project notifications`: 25 files and 111 tests. None need infrastructure.
+`bunx vitest run --project notifications`: 26 files and 128 tests. None need infrastructure.
 
 - Domain: aggregate invariants and events, deterministic ids. Mapper round-trips, validated against the registered Kafka envelope schema.
 - Every command/query handler (`*.handler.spec.ts`) with mocked repositories, buses, mail and `FakeKafkaProducer`. The saga (`ofType` mapping).
@@ -229,16 +251,15 @@ capped.
 - REST and GraphQL through a Fastify test app: real `AuthModule` (real tokens), common enhancers and Apollo, with a **fake port**. The specs cover 200/204, 400 validation (zod and class-validator), 401, 403 and 404 problem details, the schema SDL, and the subscription filter, resolve and iterator.
 - gRPC controller and Kafka consumers run through Nest's real RPC pipeline on in-memory transports (`test/support/in-memory-{grpc,kafka}.server.ts`): bus mapping, `INVALID_ARGUMENT`, NOT_FOUND trailers, and DLQ records for invalid envelopes and failing commands.
 - gRPC round trip (`presentation/grpc/notifications-grpc.roundtrip.spec.ts`): `NotificationsGrpcAdapter` ↔ `NotificationsGrpcController` over real loopback gRPC. The remote adapter returns the local mapper's exact shape (map data, Date, `nextPageState` absent on the last page) and keeps `NOTIFICATION_NOT_FOUND` across the hop.
-- WebSocket gateway: handshake middleware (valid, Bearer header, missing, revoked, forged), room join, `markRead` ack, `ping`, room push.
+- WebSocket gateway: handshake middleware (valid, Bearer header, missing, revoked, forged), room join, disconnect at token expiry (and timer cleanup), the revocation sweep, `WsSessionGuard` (TOKEN_REVOKED), `markRead` ack, `ping`, room push.
 - Module composition for every topology: the Core welcome flow end to end (command → aggregate → saga → Kafka), `forLocal()`/`forRemote()` port binding, and the gRPC/Messaging controllers.
 
 ## Gotchas
 
-- The consumers use `@app/transport`'s `@KafkaConsumerController()` (dead-letter filter + CLS
-  interceptor). Bun installs two peer-variant copies of `@nestjs/microservices` (`@nestjs/core`
-  loads one at runtime, `@app/transport` imports the other), so transport recognises the
-  `KafkaContext` structurally (`isKafkaContext`) rather than with `instanceof`. The consumer
-  specs run on this package's own copy, so they cover that cross-copy path.
+- The consumers use `@app/transport`'s `@KafkaConsumerController()` (dead-letter filter, CLS
+  interceptor and bounded in-process retry of transient failures). Transport recognises the
+  `KafkaContext` with `instanceof`, which relies on the hoisted linker installing a single
+  `@nestjs/microservices` copy (see `libs/transport/README.md`).
 - The push is best-effort. The inbox row is written before the event is published, but a crash
   between the two loses only the push; a transactional outbox would close that gap.
 - `executePage` can return a page state at the exact end of a partition. The next page is then
