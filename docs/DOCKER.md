@@ -4,6 +4,10 @@ Everything you need to run the stack locally, build production images, observe t
 Files: [`Dockerfile`](../Dockerfile), [`.dockerignore`](../.dockerignore), [`docker-compose.yml`](../docker-compose.yml),
 [`docker/`](../docker) (service configs), [`scripts/docker/`](../scripts/docker), [`.github/workflows/ci.yml`](../.github/workflows/ci.yml).
 
+Related: [README](../README.md) · [Architecture](ARCHITECTURE.md) · [Development](DEVELOPMENT.md) ·
+[Configuration](CONFIGURATION.md) · [API](API.md) · [Observability](OBSERVABILITY.md) · [Performance](PERFORMANCE.md) ·
+[Testing](TESTING.md) · [Releasing](RELEASING.md) · [Security](SECURITY.md).
+
 ## TL;DR
 
 ```bash
@@ -18,7 +22,8 @@ docker compose --profile '*' down -v                         # stop everything, 
 ```
 
 The root `package.json` wraps the common ones: `bun run docker:infra | docker:monolith | docker:microservices |
-docker:observability | docker:down | loadtest`.
+docker:observability | docker:down | loadtest`. `bun run docker:down` is `docker compose --profile '*' down`
+**without** `-v`: it keeps the named volumes (data survives); add `-v` yourself to wipe them.
 
 Requirements: Docker Desktop / Engine with Compose **v2.24+** (tested with Compose v5.5.1, Engine 29.8) and BuildKit.
 Budget: the stack is sized for **4 CPUs / 4 GB** of Docker Desktop memory (see [Resource budget](#resource-budget-4-gb)).
@@ -52,8 +57,26 @@ Budget: the stack is sized for **4 CPUs / 4 GB** of Docker Desktop memory (see [
 | `kafka-ui`              | `kafbat/kafka-ui:v1.5.0`                        | 8080                         | tools               | topics, consumer groups, lag                       |
 | `k6`                    | `grafana/k6:2.3.0`                              | 5665 (live dashboard)        | loadtest            | load test, HTML report in `docker/k6/reports/`     |
 
-Every host port binds **127.0.0.1 only** and can be moved with a `*_HOST_PORT` variable (list at the bottom of
-[`.env.example`](../.env.example)), e.g. `POSTGRES_HOST_PORT=15432 docker compose up -d` when 5432 is taken.
+Every host port binds **127.0.0.1 only** and can be moved with a `*_HOST_PORT` variable (shell or root `.env`; also
+listed at the bottom of [`.env.example`](../.env.example)), e.g. `POSTGRES_HOST_PORT=15432 docker compose up -d` when
+5432 is taken:
+
+| Variable                                                                              | Default               | Service                         |
+| ------------------------------------------------------------------------------------- | --------------------- | ------------------------------- |
+| `API_HOST_PORT`                                                                       | 3000                  | `monolith` or `gateway` (`api`) |
+| `POSTGRES_HOST_PORT` · `REDIS_HOST_PORT` · `CASSANDRA_HOST_PORT`                      | 5432 · 6379 · 9042    | postgres · redis · cassandra    |
+| `KAFKA_HOST_PORT`                                                                     | 9094                  | kafka EXTERNAL listener         |
+| `MAILPIT_SMTP_HOST_PORT` · `MAILPIT_UI_HOST_PORT`                                     | 1025 · 8025           | mailpit                         |
+| `S3_HOST_PORT` · `S3_CONSOLE_HOST_PORT` · `GCS_HOST_PORT`                             | 9000 · 9001 · 4443    | rustfs (S3, console) · gcs      |
+| `IDENTITY_GRPC_HOST_PORT` · `NOTIFICATIONS_GRPC_HOST_PORT` · `BILLING_GRPC_HOST_PORT` | 50051 · 50052 · 50053 | the three services' gRPC        |
+| `PROMETHEUS_HOST_PORT` · `GRAFANA_HOST_PORT`                                          | 9090 · **3300**       | prometheus · grafana            |
+| `JAEGER_UI_HOST_PORT` · `OTLP_GRPC_HOST_PORT` · `OTLP_HTTP_HOST_PORT`                 | 16686 · 4317 · 4318   | jaeger                          |
+| `LOKI_HOST_PORT` · `ALLOY_HOST_PORT`                                                  | 3100 · 12345          | loki · alloy                    |
+| `KAFKA_UI_HOST_PORT` · `K6_DASHBOARD_HOST_PORT`                                       | 8080 · 5665           | kafka-ui · k6 live dashboard    |
+
+`S3_HOST_PORT` also feeds the apps' `S3_PUBLIC_ENDPOINT` and `KAFKA_HOST_PORT` the advertised EXTERNAL listener, so
+moving them keeps presigned URLs and host-side Kafka clients working. `GCS_HOST_PORT` likewise feeds fake-gcs's
+`-public-host`.
 Inside the `backend` network containers use service names (`postgres:5432`, `kafka:9092`, `identity-service:50051`…);
 every app container listens on HTTP **3000** (API or health + metrics) and gRPC **50051**.
 
@@ -65,8 +88,33 @@ every app container listens on HTTP **3000** (API or health + metrics) and gRPC 
   publishes host port 3000, so k6, docs and your browser don't care which one runs.
 - **`observability`**, **`logs`**, **`tools`**, **`loadtest`** stack on top of either.
 - `COMPOSE_PROFILES=microservices,observability` (in the shell or the root `.env`) replaces the `--profile` flags.
+- `grafana` belongs to both `observability` and `logs`; `logs` alone gives Loki + Alloy + Grafana (Explore) without
+  Prometheus/Jaeger.
+- `docker compose --profile '*' …` addresses every profile (used by `down`); never `up` with it, since that would start
+  both topologies.
+
+```mermaid
+flowchart LR
+  subgraph infra["no profile (always)"]
+    PG[(postgres)] --- RD[(redis)] --- CS[(cassandra)] --- KF[[kafka]] --- MP[mailpit] --- S3[rustfs / gcs]
+  end
+  subgraph mono["monolith"]
+    M[monolith<br/>alias api :3000]
+  end
+  subgraph micro["microservices"]
+    G[gateway<br/>alias api :3000] -->|gRPC :50051| I[identity-service]
+    G -->|gRPC| N[notifications-service]
+    G -->|gRPC| B[billing-service]
+  end
+  M --> infra
+  micro --> infra
+  OBS["observability: prometheus · grafana · jaeger · exporters"] -. scrape /metrics .-> mono & micro
+  K6["loadtest: k6"] -->|http://api:3000| mono & micro
+```
 
 ## Dev loops
+
+Day-to-day workflow, scripts and debugging are in [DEVELOPMENT.md](DEVELOPMENT.md); the Docker side:
 
 1. **Apps on the host, infra in Docker (fastest).** `docker compose up -d --wait`, then `bun run dev` (monolith) or
    `bun run dev:microservices`. Every root `dev*` script first runs `bun run setup:env`, which copies each missing
@@ -80,7 +128,10 @@ every app container listens on HTTP **3000** (API or health + metrics) and gRPC 
    `libs/`, `package.json` or `bun.lock` changes. Dependency layers stay cached, so a source change costs ~30 s.
    `APP_TARGET=dev` swaps in the `dev` target (TS sources, no compile step, see below).
 3. **Hybrid.** Services in Docker, one app on the host: the services publish their gRPC ports on the host-dev
-   defaults (50051/50052/50053), so `bun run dev:gateway` reaches them with the `.env` it creates.
+   defaults (50051/50052/50053 = the `IDENTITY/NOTIFICATIONS/BILLING_GRPC_URL` defaults `localhost:5005x`), so
+   `bun run dev:gateway` reaches them with the `.env` it creates. Start only the services you need
+   (`docker compose --profile microservices up -d --build --wait identity-service notifications-service billing-service`)
+   so the containerised gateway does not also claim host port 3000.
 
 Root `.env` vs. containers: Compose reads the root `.env` **only for `${VAR}` interpolation**. Containers get their
 environment from `docker-compose.yml` (plus an optional, gitignored **`.env.docker`**). Compose-only knobs are
@@ -90,24 +141,57 @@ the Postgres/RustFS credentials.
 
 ## Configuration of the app containers
 
-Env names are exactly those of `@app/config` (all documented, with defaults, in [`.env.example`](../.env.example);
-`node scripts/check-env-example.mjs` fails on drift). Notable compose choices:
+Env names are exactly those of `@app/config` (all documented, with defaults, in [`.env.example`](../.env.example) and
+[CONFIGURATION.md](CONFIGURATION.md); `node scripts/check-env-example.mjs` fails on drift). Extra app env for the
+containers only goes in an optional `.env.docker` at the repo root (gitignored by the `.env.*` rule). Notable compose
+choices:
 
-| Setting                                    | Value                                   | Why                                                                              |
-| ------------------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------- |
-| `NODE_ENV`                                 | `production` (`DOCKER_NODE_ENV`)        | same code paths as prod (docs stay on via `DOCKER_DOCS_ENABLED=true`)            |
-| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | `compose-local-…` (`DOCKER_JWT_*`)      | production mode rejects the dev-default secrets; these are NOT secret            |
-| `OTEL_SDK_DISABLED`                        | `true` (`DOCKER_OTEL_SDK_DISABLED`)     | set `false` **and** start `observability` to send traces to `http://jaeger:4318` |
-| `DATABASE_RUN_MIGRATIONS`                  | `true`                                  | advisory-locked; see [Migrations](#bootstrap-jobs--migrations)                   |
-| `KAFKA_GROUP_ID`                           | `monolith`, `gateway-push`, `<service>` | explicit consumer groups                                                         |
-| `S3_PUBLIC_ENDPOINT`                       | `http://localhost:${S3_HOST_PORT}`      | presigned URLs must be reachable from the host, not `rustfs:9000`                |
-| `IDENTITY/NOTIFICATIONS/BILLING_GRPC_URL`  | `<service>:50051`                       | grpc-js resolves every A record of a scaled service (round robin)                |
-| `CLUSTER_WORKERS`                          | `1`                                     | scale with replicas (`--scale`), not `node:cluster`, in containers               |
-| `NODE_OPTIONS`                             | `--max-old-space-size=…`                | ≈ 70–75 % of the container memory limit; the rest is off-heap (see budget below) |
+| Setting                                    | Value                                   | Why                                                                                                                  |
+| ------------------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                 | `production` (`DOCKER_NODE_ENV`)        | same code paths as prod (docs stay on via `DOCKER_DOCS_ENABLED=true`)                                                |
+| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | `compose-local-…` (`DOCKER_JWT_*`)      | production mode rejects the dev-default secrets; these are NOT secret                                                |
+| `OTEL_SDK_DISABLED`                        | `true` (`DOCKER_OTEL_SDK_DISABLED`)     | set `false` **and** start `observability` to send traces to `http://jaeger:4318`                                     |
+| `DATABASE_RUN_MIGRATIONS`                  | `true`                                  | advisory-locked; see [Migrations](#bootstrap-jobs--migrations)                                                       |
+| `KAFKA_GROUP_ID`                           | `monolith`, `gateway-push`, `<service>` | explicit consumer groups                                                                                             |
+| `S3_PUBLIC_ENDPOINT`                       | `http://localhost:${S3_HOST_PORT}`      | presigned URLs must be reachable from the host, not `rustfs:9000`                                                    |
+| `IDENTITY/NOTIFICATIONS/BILLING_GRPC_URL`  | `<service>:50051`                       | grpc-js resolves every A record of a scaled service (round robin)                                                    |
+| `CLUSTER_WORKERS`                          | `1`                                     | scale with replicas (`--scale`), not `node:cluster`, in containers                                                   |
+| `NODE_OPTIONS`                             | `--max-old-space-size=…`                | ≈ 70–75 % of the container memory limit; the rest is off-heap (see budget below)                                     |
+| `SHUTDOWN_TIMEOUT_MS`                      | `15000`                                 | below `stop_grace_period: 20s`, so graceful shutdown finishes before SIGKILL                                         |
+| `GRPC_ALLOW_INSECURE` / `GRPC_REFLECTION`  | `true` / `true`                         | production mode refuses plaintext gRPC; local opt-out (see [below](#what-is-local-only-dont-ship-this-compose-file)) |
+| `TRUST_PROXY` (edge apps)                  | `uniquelocal` (`DOCKER_TRUST_PROXY`)    | k6 sends `X-Forwarded-For` from the private network; local only                                                      |
+| `DOCS_ENABLED` (edge apps)                 | `true` (`DOCKER_DOCS_ENABLED`)          | `/docs` + `/openapi.json` + `/openapi.yaml` despite `NODE_ENV=production`                                            |
+| `STORAGE_DRIVER`                           | `s3` (`DOCKER_STORAGE_DRIVER`)          | `gcs` switches to fake-gcs (`GCS_API_ENDPOINT=http://gcs:4443`)                                                      |
+| `LOG_LEVEL` / `LOG_PRETTY`                 | `info` (`DOCKER_LOG_LEVEL`) / `false`   | JSON logs, so Alloy/Loki can parse them                                                                              |
+
+### Compose-only variables
+
+Read by Compose for `${VAR}` interpolation (shell or root `.env`). They are compose-only, never read by the apps on the host, **except** the rows marked _pass-through_ (`CASSANDRA_KEYSPACE`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`), which are also app variables:
+
+| Variable                                                 | Default                                                                               | Effect                                                                                                                                                             |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `COMPOSE_PROFILES`                                       | —                                                                                     | profiles to start without `--profile`                                                                                                                              |
+| `APP_TARGET`                                             | `runtime`                                                                             | app build target: `runtime` (distroless), `runtime-alpine`, `dev`                                                                                                  |
+| `TAG`                                                    | `local`                                                                               | app image tag (`boilerplate/<app>:${TAG}`)                                                                                                                         |
+| `DOCKER_NODE_ENV` / `DOCKER_LOG_LEVEL`                   | `production` / `info`                                                                 | app `NODE_ENV` / `LOG_LEVEL`                                                                                                                                       |
+| `DOCKER_OTEL_SDK_DISABLED` / `DOCKER_OTEL_SAMPLER_RATIO` | `true` / `1.0`                                                                        | tracing on/off, head-sampling ratio                                                                                                                                |
+| `DOCKER_DOCS_ENABLED` / `DOCKER_STORAGE_DRIVER`          | `true` / `s3`                                                                         | see table above                                                                                                                                                    |
+| `DOCKER_JWT_ACCESS_SECRET` / `DOCKER_JWT_REFRESH_SECRET` | `compose-local-…`                                                                     | local JWT secrets (≥ 32 chars, not secret)                                                                                                                         |
+| `DOCKER_TRUST_PROXY`                                     | `uniquelocal`                                                                         | edge apps' `TRUST_PROXY`                                                                                                                                           |
+| `DOCKER_S3_CORS_ORIGINS`                                 | `http://localhost:3000,http://localhost:5173`                                         | RustFS `RUSTFS_CORS_ALLOWED_ORIGINS` (browser presigned PUT/GET)                                                                                                   |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`    | `app` / `app` / `app`                                                                 | Postgres + the containers' `DATABASE_URL` + postgres-exporter                                                                                                      |
+| `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY`                | `rustfsadmin` / `rustfsadmin`                                                         | RustFS + the containers' `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`                                                                                                 |
+| `CASSANDRA_DC` / `CASSANDRA_HEAP` / `CASSANDRA_KEYSPACE` | `datacenter1` / `512M` / `app`                                                        | node DC (= apps' `CASSANDRA_LOCAL_DC`), `MAX_HEAP_SIZE`, keyspace (_pass-through_)                                                                                 |
+| `KAFKA_CLUSTER_ID`                                       | `5L6g3nShT-eMCtK--X86sw`                                                              | KRaft cluster id                                                                                                                                                   |
+| `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`          | `admin` / `admin`                                                                     | Grafana admin login                                                                                                                                                |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`            | `sk_test_compose_local_not_for_production` / `whsec_compose_local_not_for_production` | _pass-through_ to monolith/billing (put a real **test** key in `.env`); the fallbacks are compose-local because `NODE_ENV=production` rejects the dev placeholders |
+| `K6_*`, `K6_UID` / `K6_GID`                              | see [Load testing](#load-testing-k6)                                                  | k6 parameters and container user                                                                                                                                   |
+| `*_HOST_PORT`                                            | see [Stack map](#stack-map)                                                           | host port bindings                                                                                                                                                 |
 
 Tracing end to end:
 `DOCKER_OTEL_SDK_DISABLED=false docker compose --profile monolith --profile observability up -d --wait`, then open
 Jaeger (http://localhost:16686) or Grafana → Explore → Jaeger. Host apps: set `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`.
+Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
 
 ## Bootstrap jobs & migrations
 
@@ -116,7 +200,8 @@ Jaeger (http://localhost:16686) or Grafana → Explore → Jaeger. Host apps: se
   production: a missing topic fails loudly at consumer start instead of being created by a typo.
   `node scripts/docker/check-kafka-topics.mjs` (after `bun run build`) fails when the file drifts from the contracts.
 - **Cassandra**: `cassandra-init` creates `CREATE KEYSPACE IF NOT EXISTS <CASSANDRA_KEYSPACE>` with
-  `NetworkTopologyStrategy {'datacenter1': 1}` and asserts the node's DC equals the apps' `CASSANDRA_LOCAL_DC`. Tables
+  `NetworkTopologyStrategy {'<CASSANDRA_DC>': 1}` (default `datacenter1`) and asserts the node's DC equals the apps'
+  `CASSANDRA_LOCAL_DC`. Tables
   come from the services' own CQL migrations (`@app/cassandra`, LWT-locked) at boot.
 - **Buckets**: `uploads` in RustFS (SigV4-signed `PUT` via curl) and in fake-gcs, verified with a HEAD/GET. RustFS
   answers browser CORS for the origins in `RUSTFS_CORS_ALLOWED_ORIGINS` (`DOCKER_S3_CORS_ORIGINS`, default
@@ -126,7 +211,8 @@ Jaeger (http://localhost:16686) or Grafana → Explore → Jaeger. Host apps: se
   Tables come from the Drizzle migrations (`libs/database/src/migrations`), applied at boot under an advisory lock
   (`DATABASE_RUN_MIGRATIONS=true`). In production, run them as a release job with the same image:
   `docker compose run --rm --no-deps -w /app/libs/database identity-service dist/migrate.js` (Kubernetes: a Job
-  with `workingDir: /app/libs/database`, `args: [dist/migrate.js]`) and set `DATABASE_RUN_MIGRATIONS=false`.
+  with `workingDir: /app/libs/database`, `args: [dist/migrate.js]`) and set `DATABASE_RUN_MIGRATIONS=false`. The
+  image's entrypoint is `node`, so the args replace only the default `CMD`. Release flow: [RELEASING.md](RELEASING.md).
 - **`infra-ready`**: `docker compose up --wait` only accepts a one-shot container that _exited_ when an enabled service
   depends on it with `service_completed_successfully`. Without an app profile nothing would, and `--wait` would fail
   with `kafka-init exited (0)`. This idle 1 MB container depends on the three init jobs, and so means "infra bootstrapped".
@@ -156,11 +242,18 @@ node:24-trixie-slim ── toolchain ── manifests (package.json × N, bun.lo
 docker build --build-arg APP=identity-service -t boilerplate/identity-service .                           # distroless
 docker build --build-arg APP=identity-service --target runtime-alpine -t boilerplate/identity-service:debug .
 docker build --build-arg APP=identity-service --build-arg VCS_REF=$(git rev-parse HEAD) -t … .           # OCI revision label
+docker build --build-arg APP=gateway --target dev -t boilerplate/gateway:dev .                            # TS sources, no build
 ```
 
+Build args: `APP` (required; the build fails fast without it), `NODE_VERSION` (24.21.0), `BUN_VERSION` (1.4.2),
+`ALPINE_VERSION` (3.24), `DISTROLESS_IMAGE`, `UV_THREADPOOL_SIZE` (4), `PRUNE_NODE_MODULES` (true), `VCS_REF`.
+Compose builds the same targets (`APP_TARGET`, tag `boilerplate/<app>:${TAG:-local}`).
+
 - **Bun installs, Node runs.** The toolchain is `node:24-trixie-slim` with the Bun binary copied in, so swc runs on
-  real Node 24. The runtime has no Bun at all.
-- **Hoisted linker.** `bunfig.toml` uses `linker = "hoisted"`: one copy of each package in the **root**
+  real Node 24. The runtime has no Bun at all. Installs use `--frozen-lockfile --ignore-scripts --backend=copyfile`
+  with a BuildKit cache mount; `patches/` (the kafkajs patch) is copied before install, as bun requires.
+- **Hoisted linker.** `bunfig.toml` uses `linker = "hoisted"` (the isolated linker produced duplicate `@nestjs/core`
+  copies through NestJS's cyclic optional peers): one copy of each package in the **root**
   `node_modules`, workspace packages symlinked as `node_modules/@app/<name>` (relative links, preserved by `COPY`).
   The image copies that root tree; there are no per-package `node_modules`.
 - **Only the app's closure ships.** The filtered production install contains only the dependencies of the app and
@@ -170,12 +263,16 @@ docker build --build-arg APP=identity-service --build-arg VCS_REF=$(git rev-pars
     from its `dist/` (swc `copyFiles`),
   - a declared runtime dependency of any closure package is not installed, or a workspace symlink dangles,
   - `dist/main.js` or `dist/instrument.js` is missing.
+
+  It also removes install-only files (`bun.lock`, `bunfig.toml`, `patches/`) from the runtime tree.
+
 - **Pruned `node_modules`** (`PRUNE_NODE_MODULES=true`, default): `*.d.ts`, `*.map`, TS sources (Node refuses to
   strip types under `node_modules`), Markdown (license/notice files kept) and the `typescript` package (an optional
   peer of `@nestjs/graphql`/`@nestjs/swagger`, used only by their CLI plugins). It is removed only if no installed
   package hard-depends on it. This takes the monolith from 465 MB to 294 MB. Build with
   `--build-arg PRUNE_NODE_MODULES=false` to keep them (e.g. for `--enable-source-maps` debugging).
-- **Runtime**: `NODE_ENV=production`, `HOST=0.0.0.0`, `PORT=3000`, non-root (65532 distroless / `node` alpine),
+- **Runtime**: `NODE_ENV=production`, `HOST=0.0.0.0`, `PORT=3000`, numeric non-root user (65532 distroless /
+  1000 = `node` on alpine, which runs under `tini`), `EXPOSE 3000 50051`,
   `WORKDIR /app/apps/$APP`, `CMD ["--import", "./dist/instrument.js", "dist/main.js"]` (OpenTelemetry hooks load
   before any instrumented module). `HEALTHCHECK` = Node `fetch` of `/health/live` (no shell in distroless;
   `--start-interval=2s` makes containers healthy within seconds). Kubernetes ignores it: use `httpGet` probes on
@@ -184,7 +281,7 @@ docker build --build-arg APP=identity-service --build-arg VCS_REF=$(git rev-pars
   **Keep it ≤ the CPUs available to the container.** Measured with the monolith capped at 2 CPUs under k6
   (5 sign-ups/s + 20 reads/s): 4 threads gave p95 **36 ms** (cached read p95 9.6 ms, 0 dropped iterations); 16 threads
   gave p95 **304 ms … 7.2 s** with dropped iterations. Busy threads beyond the CFS quota get the whole cgroup throttled,
-  event loop included. Raise it together with the CPU limit.
+  event loop included. Raise it together with the CPU limit. More measurements: [PERFORMANCE.md](PERFORMANCE.md).
 - No `--enable-source-maps` by default: it makes every `Error.stack` access pay a source-map lookup.
 - **`dev` target**: the full dev `node_modules` + sources, runs `bun run dev` from TS (no build step). It is large
   (the entire toolchain) and slow to export on Docker Desktop; prefer dev loop 1 unless you need Linux-only behaviour.
@@ -193,16 +290,57 @@ Measured (Apple silicon, Docker Desktop 4 CPU / 4 GB, other containers running):
 
 | Image                   | Size (distroless, pruned) | Workspace packages | Assets verified | Runtime deps checked |
 | ----------------------- | ------------------------- | ------------------ | --------------- | -------------------- |
-| `monolith`              | 294 MB                    | 19                 | 14              | 384                  |
+| `monolith`              | 294 MB (294,437,864 B)    | 19                 | 18              | 326                  |
 | `gateway`               | 294 MB                    | 19                 | 14              | —                    |
 | `notifications-service` | 280 MB                    | 13                 | —               | —                    |
 | `billing-service`       | 245 MB                    | 14                 | —               | —                    |
 | `identity-service`      | 242 MB (alpine: 247 MB)   | 12                 | 6               | 231                  |
 
-Build time: ~5.5 min cold (the full and the filtered install share a locked cache, so they serialize), **~30 s** for
+The monolith row was re-measured on a cold build (the other rows are from the original measurement). The assemble step reported 19 workspace packages, 18 assets
+verified and 326 runtime dependencies resolved, then pruned 27,817 files plus `typescript` (162.8 MiB) from
+`node_modules`. Inside the image `/app/node_modules` is about 124 MiB, `apps/` holds only `monolith`, `libs/` its 18
+closure libs, and `bun.lock`, `bunfig.toml`, `patches/` and `typescript` are gone. `swagger-ui-dist` stays (a hard
+dependency of `@nestjs/swagger`) although `/docs` uses Scalar.
+
+Build time: ~5–5.5 min cold (about 2 min of it is the distroless base pull on a fresh machine; the full and the
+filtered install share a locked cache, so they serialize; swc compiles all libs + the app in ~1.5 s), **~30 s** for
 a source-only change (dependency layers cached), ~40 s for another app once the full install is cached.
 The gateway ships as much as the monolith because the domain-lib barrels import their infrastructure
-(`@app/notifications` → cassandra/mailer…); `@app/<x>/api` subpath exports would slim it.
+(`@app/notifications` → cassandra/mailer…). Per-domain `@app/<x>/api` subpath exports would slim it; that is a known
+follow-up, not done yet (see [Known follow-ups](#known-follow-ups)).
+
+### Running a prebuilt image, and what a healthy container looks like
+
+Compose services use `image: boilerplate/<app>:${TAG:-local}` plus a `build:` section. To run an image you built
+separately, tag it and skip the build:
+
+```bash
+docker tag <image> boilerplate/monolith:mytag
+TAG=mytag docker compose --profile monolith up -d --no-deps --no-build --pull never monolith
+docker compose --profile monolith rm -sf monolith    # stop and remove only that container
+```
+
+When infra host ports are remapped, pass `S3_HOST_PORT` to that command as well: the container's
+`S3_PUBLIC_ENDPOINT` is `http://localhost:${S3_HOST_PORT:-9000}` and presigned URLs embed it. `STRIPE_SECRET_KEY` and
+`STRIPE_WEBHOOK_SECRET` pass through from the invoking environment or the root `.env` (default: the compose-local
+`*_compose_local_not_for_production` values); sign test events with whichever webhook secret the container got.
+
+Verified with the monolith image (24/24 smoke checks through the container):
+
+- Healthy about 6 s after start (about 4 s of cold module import, then ~170 ms to listening), 0 restarts. It runs as
+  uid 65532 under `init: true` (tini is PID 1, so the app is pid 7), `NODE_ENV=production`, Node 24.21.0,
+  `NODE_OPTIONS=--max-old-space-size=512`, limit 768 MB / 2 CPUs; about 255 MiB used after the smoke run.
+- The log says `monolith listening on http://127.0.0.1:3000 (pid 7, production)` although it binds `0.0.0.0`: Nest's
+  `getUrl()` rewrites the wildcard address; the published port works.
+- `DOCS_ENABLED=true` (via `DOCKER_DOCS_ENABLED`), so `/docs` and `/openapi.json` are served even in production mode.
+  GraphQL errors carry no `extensions.stacktrace` (production).
+- Logs are 100 % single-line pino JSON (no duplicate keys); expected 4xx are `warn`, never `error`.
+- `docker compose stop` → `SIGTERM received; forcing exit in 15000 ms if still running` (compose sets
+  `SHUTDOWN_TIMEOUT_MS=15000`, below `stop_grace_period: 20s`) → Cassandra and Postgres closed →
+  `Shutdown complete (SIGTERM)` after about 2.4 s, exit code 0, Kafka consumer lag 0.
+
+Full teardown of a stack, volumes and network included: `docker compose --profile '*' down -v --remove-orphans` (add
+`-p <project>` if you started it under another project name).
 
 ## Observability
 
@@ -239,6 +377,12 @@ The gateway ships as much as the monolith because the domain-lib barrels import 
 - **Thresholds**: error rate < `MAX_ERROR_RATE` (1 %), p95 < `P95_MS` (250 ms), cached-read p95 < `P95_MS/2`, checks
   > 99 %, dropped iterations ≤ `MAX_DROPPED_RATIO` (1 %) of the planned ones. `setup()` traffic is excluded.
 
+Compose maps `K6_BASE_URL`, `K6_RATE`, `K6_READ_RATE`, `K6_DURATION`, `K6_P95_MS` and `K6_MAX_ERROR_RATE` (shell or
+root `.env`) to the script's `BASE_URL`/`RATE`/… variables. The script's other knobs (`MAX_DROPPED_RATIO`,
+`THROTTLE_LIMIT`, `PASSWORD`, `RUN_ID`) are not mapped: pass them with `-e`, e.g.
+`docker compose --profile loadtest run --rm -e MAX_DROPPED_RATIO=0.05 k6`. Methodology and results:
+[PERFORMANCE.md](PERFORMANCE.md).
+
 ```bash
 docker compose --profile microservices --profile observability up -d --build --wait
 K6_RATE=5 K6_READ_RATE=20 K6_DURATION=2m docker compose --profile loadtest run --rm k6
@@ -267,6 +411,8 @@ Memory limits are caps (sum > 4 GB on purpose); measured RSS once idle:
 | rustfs / redis / mailpit / gcs               | 256 / 256 / 128 / 128 MB | 55–90 / 15 / 17 / 12 MB  | Redis `maxmemory 192mb noeviction` (BullMQ)                         |
 | monolith                                     | 768 MB                   | 230 MB                   | heap cap 512 MB                                                     |
 | gateway · identity · notifications · billing | 512 · 448 · 448 · 448 MB | 180 · 130 · 160 · 120 MB | heap caps 384/320 MB                                                |
+| jaeger · prometheus · grafana · exporters    | 512 · 384 · 256 · 64 MB  | —                        | `observability`; Jaeger keeps traces in memory                      |
+| loki · alloy · kafka-ui · k6                 | 384 · 192 · 448 · 512 MB | —                        | `logs` / `tools` / `loadtest`                                       |
 
 Off-heap headroom (limit − heap cap: 256 MB monolith, 128 MB gateway) also holds the Buffers of streamed uploads
 (`POST /v1/files`): up to ~15 MiB each (S3 multipart, 3 × 5 MiB parts), at most `STORAGE_MAX_CONCURRENT_UPLOADS` (4)
@@ -278,6 +424,8 @@ Infra ≈ 1.6 GB, + one topology ≈ 0.25 (monolith) / 0.6 GB (microservices), +
 start what you need, or raise Docker Desktop's memory.
 
 ## CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml))
+
+Runs on pushes to `master` and on pull requests. Test layout and the integration projects: [TESTING.md](TESTING.md).
 
 - **verify**: Node 24 (`.nvmrc`) + Bun 1.4.2, `bun install --frozen-lockfile`, `bun run check` (Biome, ESLint,
   Prettier, tsc), `bun run test`, `bun run build`, generated-artefact drift (`proto:gen` + `buf lint` + `db:generate`,
@@ -318,6 +466,8 @@ start what you need, or raise Docker Desktop's memory.
 
 ## What is local-only (don't ship this compose file)
 
+The production hardening checklist lives in [SECURITY.md](SECURITY.md); the compose-specific shortcuts are:
+
 No Redis password or TLS, default RustFS/Grafana/Postgres credentials, known JWT secrets, Kafka PLAINTEXT with RF=1,
 Cassandra RF=1, in-memory Jaeger, anonymous Grafana viewer and migrations at boot. Production: managed/secured
 services, secrets from a secret store, `DATABASE_RUN_MIGRATIONS=false` plus a migration job, and replicas
@@ -335,3 +485,15 @@ gRPC ports. Reflection defaults to off in production; compose turns it back on f
 heap internals) and `/docs` + `/openapi.*` are served on the API port: route only `/v1`, `/graphql` and
 `/notifications` (Socket.IO) publicly, keep `DOCS_ENABLED` off, and let Prometheus scrape the pods directly. Set
 `METRICS_BEARER_TOKEN` (Prometheus `authorization: { credentials: … }`) so `/metrics` answers 404 to anyone else.
+A separate metrics listener (its own port) is not implemented yet, so this routing rule is the control today.
+
+## Known follow-ups
+
+Stated honestly: none of these are done yet.
+
+| Follow-up                                                              | Docker impact                                                                                                |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| Per-domain `@app/<x>/api` subpath exports                              | the gateway image would stop shipping the domain libs' infrastructure (it is as large as the monolith today) |
+| Separate metrics listener                                              | `/metrics` could leave the API port; until then keep it off the public ingress + `METRICS_BEARER_TOKEN`      |
+| Transactional outbox                                                   | events are published after commit today; a crash between commit and publish can lose the event               |
+| Real-database integration specs for billing/notifications repositories | the CI `integration` job covers Postgres + Redis only through the existing `*:int` projects                  |

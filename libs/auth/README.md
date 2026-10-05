@@ -71,7 +71,7 @@ These variables come from the `auth` namespace of `@app/config`:
 - `ARGON2_MEMORY_COST`, `ARGON2_TIME_COST`, `ARGON2_PARALLELISM`: default 19456, 2 and 1.
 - `AUTH_DENYLIST_ENABLED`: default `true`.
 
-The Redis keys use the `redis` namespace (`REDIS_KEY_PREFIX`). Set `UV_THREADPOOL_SIZE` (for example 16) as a process environment variable on login-heavy services, because Argon2 runs on the libuv threadpool.
+The Redis keys use the `redis` namespace (`REDIS_KEY_PREFIX`). Argon2 runs on the libuv threadpool (`UV_THREADPOOL_SIZE`, image default 4). Keep it at or below the CPUs the container gets and raise it only together with the CPU limit: on a 2-CPU cap, 16 threads raised login p95 from 36 ms to 304 ms (see [docs/DOCKER.md](../../docs/DOCKER.md#images-dockerfile)).
 
 ## Gotchas
 

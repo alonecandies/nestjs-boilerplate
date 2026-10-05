@@ -64,7 +64,8 @@ const event = this.stripe.constructWebhookEvent(req.rawBody, headers['stripe-sig
 ## Environment
 
 From the `stripe` namespace of `@app/config`: `STRIPE_SECRET_KEY` (must start `sk_`/`rk_`),
-`STRIPE_WEBHOOK_SECRET` (must start `whsec_`), `STRIPE_MAX_NETWORK_RETRIES` (2), `STRIPE_TIMEOUT_MS`
+`STRIPE_WEBHOOK_SECRET` (must start `whsec_`; both dev placeholders are rejected when
+`NODE_ENV=production`), `STRIPE_MAX_NETWORK_RETRIES` (2), `STRIPE_TIMEOUT_MS`
 (20000). `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` are read by the billing domain, not here.
 
 ## Gotchas

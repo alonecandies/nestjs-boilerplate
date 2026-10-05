@@ -52,15 +52,15 @@ Errors cross the wire as gRPC statuses plus an `x-error-code` trailer (`NOT_FOUN
 `.env.example` holds only what differs per service; `bun run setup:env` copies it to `.env`.
 Everything else comes from the root `.env` / the environment ([`@app/config`](../../libs/config)):
 
-| Variable                                                    | Value here                 | Notes                                                                              |
-| ----------------------------------------------------------- | -------------------------- | ---------------------------------------------------------------------------------- |
-| `SERVICE_NAME`                                              | `identity-service`         | log `service`, Kafka client id, envelope `source`, pool `application_name`         |
-| `PORT` / `GRPC_URL`                                         | `3001` / `0.0.0.0:50051`   | the gateway dials `IDENTITY_GRPC_URL`                                              |
-| `KAFKA_GROUP_ID`                                            | `identity-service`         | no consumer today; explicit so a future one never shares a group                   |
-| `DATABASE_RUN_MIGRATIONS`                                   | `true`                     | advisory-locked; set `false` when a `bun run db:migrate` job owns it               |
-| `DATABASE_URL`, `REDIS_URL`, `KAFKA_BROKERS`                | root `.env`                |                                                                                    |
-| `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`                   | root `.env` / secret store | the dev defaults are rejected when `NODE_ENV=production`                           |
-| `ARGON2_*`, `GRPC_MAX_MESSAGE_BYTES`, `SHUTDOWN_TIMEOUT_MS` | defaults                   | Argon2 hashing runs on the libuv pool; raise `UV_THREADPOOL_SIZE` under login load |
+| Variable                                                    | Value here                 | Notes                                                                                                       |
+| ----------------------------------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `SERVICE_NAME`                                              | `identity-service`         | log `service`, Kafka client id, envelope `source`, pool `application_name`                                  |
+| `PORT` / `GRPC_URL`                                         | `3001` / `0.0.0.0:50051`   | the gateway dials `IDENTITY_GRPC_URL`                                                                       |
+| `KAFKA_GROUP_ID`                                            | `identity-service`         | no consumer today; explicit so a future one never shares a group                                            |
+| `DATABASE_RUN_MIGRATIONS`                                   | `true`                     | advisory-locked; set `false` when a `bun run db:migrate` job owns it                                        |
+| `DATABASE_URL`, `REDIS_URL`, `KAFKA_BROKERS`                | root `.env`                |                                                                                                             |
+| `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`                   | root `.env` / secret store | the dev defaults are rejected when `NODE_ENV=production`                                                    |
+| `ARGON2_*`, `GRPC_MAX_MESSAGE_BYTES`, `SHUTDOWN_TIMEOUT_MS` | defaults                   | Argon2 hashing runs on the libuv pool; keep `UV_THREADPOOL_SIZE` ≤ the container CPUs (raise both together) |
 
 ## Running
 
