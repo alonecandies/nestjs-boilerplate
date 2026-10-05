@@ -18,7 +18,11 @@ import { mailConfig } from './mail.config.js';
 import { observabilityConfig } from './observability.config.js';
 import { redisConfig } from './redis.config.js';
 import { storageConfig } from './storage.config.js';
-import { stripeConfig } from './stripe.config.js';
+import {
+  PLACEHOLDER_STRIPE_SECRET_KEY,
+  PLACEHOLDER_STRIPE_WEBHOOK_SECRET,
+  stripeConfig,
+} from './stripe.config.js';
 
 const errorOf = (fn: () => unknown): EnvValidationError => {
   try {
@@ -327,6 +331,26 @@ describe('auth production secret guard', () => {
       }).accessSecret,
     ).toBe('a'.repeat(48));
     expect(authConfig.parse({ NODE_ENV: 'test' }).accessSecret).toBe(DEV_JWT_ACCESS_SECRET);
+  });
+});
+
+describe('stripe production placeholder guard', () => {
+  it('rejects the development placeholders in production (forged webhooks would verify)', () => {
+    const error = errorOf(() => stripeConfig.parse({ NODE_ENV: 'production' }));
+    expect(error.message).toContain('→ at STRIPE_SECRET_KEY');
+    expect(error.message).toContain('→ at STRIPE_WEBHOOK_SECRET');
+  });
+
+  it('accepts real values in production and the placeholders elsewhere', () => {
+    expect(
+      stripeConfig.parse({
+        NODE_ENV: 'production',
+        STRIPE_SECRET_KEY: 'sk_live_51Hx',
+        STRIPE_WEBHOOK_SECRET: 'whsec_1a2b3c',
+      }).webhookSecret,
+    ).toBe('whsec_1a2b3c');
+    expect(stripeConfig.parse({ NODE_ENV: 'test' }).secretKey).toBe(PLACEHOLDER_STRIPE_SECRET_KEY);
+    expect(stripeConfig.parse({}).webhookSecret).toBe(PLACEHOLDER_STRIPE_WEBHOOK_SECRET);
   });
 });
 

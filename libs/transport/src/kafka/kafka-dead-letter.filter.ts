@@ -29,7 +29,7 @@ import { errorTypeOf, sendToDeadLetter } from './dead-letter.js';
  * - Non-Kafka contexts are rethrown untouched.
  * - Transient failures reach it only after `KafkaRetryInterceptor` (applied by
  *   `@KafkaConsumerController()`) has retried them; replay the dead-letter topic with
- *   `replayDeadLetters` (`scripts/kafka-dlq-replay.mjs`) once the cause is fixed.
+ *   `replayDeadLetters` (`libs/transport/scripts/kafka-dlq-replay.mjs`) once the cause is fixed.
  */
 @Catch()
 export class KafkaDeadLetterFilter implements RpcExceptionFilter<unknown> {

@@ -14,8 +14,10 @@ const ARGON2ID = 2;
 /**
  * Argon2id password hashing (@node-rs/argon2, native). Cost parameters come from `ARGON2_*` env
  * (OWASP baseline m=19 MiB, t=2, p=1 ≈ 10 ms/hash). Hashing runs on the libuv threadpool, which it
- * shares with fs/dns/zlib/crypto: raise `UV_THREADPOOL_SIZE` (env, e.g. 16) on login-heavy services;
- * each concurrent hash holds `memoryCost × parallelism` KiB.
+ * shares with fs/dns/zlib/crypto. Keep `UV_THREADPOOL_SIZE` (env, default 4) at or below the CPUs
+ * the container may use: more busy hashing threads than CPUs throttle the whole cgroup, event loop
+ * included (measured: 16 threads on a 2-CPU cap took p95 from 36 ms to 304 ms — see
+ * docs/PERFORMANCE.md). Each concurrent hash holds `memoryCost × parallelism` KiB.
  */
 @Injectable()
 export class PasswordHasher {

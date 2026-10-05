@@ -144,11 +144,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
     });
   }
 
+  /**
+   * No `requestId` field: in HTTP (the only branch that knows it) the request-scoped pino logger
+   * already binds `requestId`, and pino does not dedupe bindings against log fields, so passing it
+   * again wrote the key twice on every line (strict JSON parsers reject or drop such lines).
+   */
   private log(exception: unknown, problem: ProblemDetails, method?: string): void {
     const fields = {
       status: problem.status,
       code: problem.code,
-      requestId: problem.requestId,
       method,
       path: problem.instance,
     };

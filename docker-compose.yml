@@ -85,9 +85,11 @@ x-env-storage: &env-storage
   GCS_BUCKET: uploads
 
 # Pass-through on purpose: a real Stripe TEST key in the root .env reaches the containers.
+# The fallbacks are compose-local values (NOT the *_placeholder dev defaults, which
+# NODE_ENV=production rejects); webhooks signed with the fallback secret verify locally.
 x-env-stripe: &env-stripe
-  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_placeholder}
-  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_placeholder}
+  STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_compose_local_not_for_production}
+  STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_compose_local_not_for_production}
 
 x-env-edge: &env-edge
   DOCS_ENABLED: ${DOCKER_DOCS_ENABLED:-true} # /docs (Scalar) + /openapi.json even in production mode

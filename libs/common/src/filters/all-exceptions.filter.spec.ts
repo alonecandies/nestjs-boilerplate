@@ -75,6 +75,22 @@ describe('AllExceptionsFilter', () => {
       expect(errorSpy).not.toHaveBeenCalled();
     });
 
+    it('does not log requestId itself (the request-scoped pino logger binds it: no duplicate key)', () => {
+      const { host } = fakeAdapterHost();
+      const filter = new AllExceptionsFilter(host);
+      const request = { id: 'req-7', url: '/v1/billing/payments', method: 'GET', headers: {} };
+
+      filter.catch(new Error('upstream down'), httpHost(request, fastifyReply()));
+      filter.catch(new NotFoundException(), httpHost(request, fastifyReply()));
+
+      const errorFields = errorSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+      const debugFields = debugSpy.mock.calls[0]?.[0] as Record<string, unknown>;
+      for (const fields of [errorFields, debugFields]) {
+        expect(fields).toMatchObject({ method: 'GET', path: '/v1/billing/payments' });
+        expect(fields).not.toHaveProperty('requestId');
+      }
+    });
+
     it('falls back to the x-request-id header and hides internals by default', () => {
       const { host, adapter } = fakeAdapterHost();
       const filter = new AllExceptionsFilter(host);
