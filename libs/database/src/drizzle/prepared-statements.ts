@@ -9,14 +9,15 @@ type ScopeOpener = (...args: [ScopedCallback] | [string, ScopedCallback]) => Pro
 /**
  * Makes drizzle's queries use server-side prepared statements when the client has `prepare: true`.
  *
- * drizzle-orm's postgres-js driver sends EVERY query (including `.prepare('name')`d ones) through
- * `client.unsafe(text, params)` without options, and postgres.js defaults `unsafe()` to
- * `prepare: false`: each call was an unnamed Parse/Bind/Execute, parsed and planned again. This
- * switches that default to `prepare: true` on the pool client and on the transaction / savepoint
- * clients it hands out (`begin`, `savepoint`). postgres.js only prepares when the CLIENT option is
- * true as well, so `DATABASE_PREPARE=false` (PgBouncer transaction mode, RDS Proxy) still sends
- * unnamed statements. An explicit `prepare` in the call's options always wins. Returns a wrapper;
- * the client passed in is left untouched (postgres.js' own internals keep their defaults).
+ * drizzle-orm's postgres-js driver sends EVERY query through `client.unsafe(text, params, options)`.
+ * postgres.js defaults `unsafe()` to `prepare: false`, and since drizzle-orm 0.45.4 drizzle itself
+ * passes `{ prepare: <query has a .prepare('name')> }`, so every ad-hoc query would be an unnamed
+ * Parse/Bind/Execute, parsed and planned again. This forces `prepare: true` on the pool client and
+ * on the transaction / savepoint clients it hands out (`begin`, `savepoint`), overriding the
+ * per-call option. postgres.js only prepares when the CLIENT option is true as well, so
+ * `DATABASE_PREPARE=false` (PgBouncer transaction mode, RDS Proxy) alone decides, and still sends
+ * unnamed statements. Returns a wrapper; the client passed in is left untouched (postgres.js' own
+ * internals keep their defaults).
  *
  * Statements are cached per connection, keyed by SQL text, without eviction: keep query text
  * bounded (one array parameter — `= any($1::uuid[])` — rather than `IN ($1…$n)` lists).
@@ -26,7 +27,7 @@ export function preferPreparedStatements<T extends AnySql>(client: T): T {
   const unsafe: Unsafe = client.unsafe.bind(client);
   const prepared = (...args: Parameters<Unsafe>): ReturnType<Unsafe> => {
     const [query, parameters, options] = args;
-    return unsafe(query, parameters ?? [], { prepare: true, ...options });
+    return unsafe(query, parameters ?? [], { ...options, prepare: true });
   };
   const begin = scopeOpener(client, 'begin');
   const savepoint = scopeOpener(client, 'savepoint');

@@ -1,3 +1,7 @@
+import { generateKeyPairSync } from 'node:crypto';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { Readable, Writable } from 'node:stream';
 import { ApiError, type Storage } from '@google-cloud/storage';
 import { DomainValidationException, ExternalServiceException } from '@platform/common';
@@ -66,6 +70,57 @@ describe('isGoogleStorageEndpoint', () => {
     expect(isGoogleStorageEndpoint('https://storage.europe-west1.rep.googleapis.com')).toBe(true);
     expect(isGoogleStorageEndpoint('http://localhost:4443')).toBe(false);
     expect(isGoogleStorageEndpoint('not a url')).toBe(false);
+  });
+});
+
+describe('createGcsClient credentials (GCS_KEY_FILE)', () => {
+  const realGcs = { ...cfg.gcs, apiEndpoint: 'https://storage.googleapis.com' };
+
+  function writeKeyFile(contents: unknown): string {
+    const path = join(mkdtempSync(join(tmpdir(), 'gcs-key-')), 'key.json');
+    writeFileSync(path, typeof contents === 'string' ? contents : JSON.stringify(contents));
+    return path;
+  }
+
+  function serviceAccountKey(): Record<string, string> {
+    const { privateKey } = generateKeyPairSync('rsa', {
+      modulusLength: 2048,
+      privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      publicKeyEncoding: { type: 'spki', format: 'pem' },
+    });
+    return {
+      type: 'service_account',
+      project_id: 'local-project',
+      client_email: 'uploader@local-project.iam.gserviceaccount.com',
+      private_key: privateKey,
+    };
+  }
+
+  it('signs v4 URLs locally with a validated service-account key (no network)', async () => {
+    const storage = createGcsClient({ ...realGcs, keyFilename: writeKeyFile(serviceAccountKey()) });
+    const [url] = await storage
+      .bucket('uploads')
+      .file('a.txt')
+      .getSignedUrl({ version: 'v4', action: 'read', expires: Date.now() + 60_000 });
+    expect(new URL(url).searchParams.get('X-Goog-Credential')).toMatch(
+      /^uploader@local-project\.iam\.gserviceaccount\.com\//,
+    );
+  });
+
+  it('rejects a key file that is not a service-account key', () => {
+    const externalAccount = { type: 'external_account', audience: '//iam.googleapis.com/x' };
+    expect(() =>
+      createGcsClient({ ...realGcs, keyFilename: writeKeyFile(externalAccount) }),
+    ).toThrow(/GCS_KEY_FILE.*service_account/);
+  });
+
+  it('rejects a key file that is missing or not JSON', () => {
+    expect(() => createGcsClient({ ...realGcs, keyFilename: writeKeyFile('{ not json') })).toThrow(
+      /GCS_KEY_FILE/,
+    );
+    expect(() => createGcsClient({ ...realGcs, keyFilename: '/nonexistent/key.json' })).toThrow(
+      /GCS_KEY_FILE/,
+    );
   });
 });
 

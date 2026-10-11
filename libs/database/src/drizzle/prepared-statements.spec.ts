@@ -35,26 +35,28 @@ describe('preferPreparedStatements', () => {
 
     const wrapped = preferPreparedStatements(real);
     expect(optionsOf(wrapped.unsafe('select $1', [1]))).toMatchObject({ prepare: true });
-    // An explicit choice still wins; the original client is untouched.
+    // drizzle-orm >= 0.45.4 passes `{ prepare: <has a name?> }` on every call: the wrapper overrides
+    // that per-call default (the CLIENT option decides). The original client is untouched.
     expect(optionsOf(wrapped.unsafe('select $1', [1], { prepare: false }))).toMatchObject({
-      prepare: false,
+      prepare: true,
     });
     expect(optionsOf(real.unsafe('select $1', [1]))).toMatchObject({ prepare: false });
     expect(wrapped.options).toBe(real.options);
   });
 
-  it('defaults unsafe() to prepare: true, keeping params and other options', () => {
+  it('forces prepare: true on unsafe(), keeping params', () => {
     const { client, sql: raw } = fakeClient();
     const original = client.unsafe;
     const sql = preferPreparedStatements(raw);
 
     void sql.unsafe('select $1', [1]);
     void sql.unsafe('select 1');
+    // What drizzle-orm >= 0.45.4 sends for an unnamed query: the per-call false must not win.
     void sql.unsafe('select $1', [1], { prepare: false });
     expect(original.mock.calls).toEqual([
       ['select $1', [1], { prepare: true }],
       ['select 1', [], { prepare: true }],
-      ['select $1', [1], { prepare: false }],
+      ['select $1', [1], { prepare: true }],
     ]);
   });
 

@@ -1,4 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import {
   ApiError,
@@ -9,7 +10,7 @@ import {
   type StorageOptions,
 } from '@google-cloud/storage';
 import type { StorageConfig } from '@platform/config';
-import { endsWith, isNil, mapValues, omitBy } from 'lodash-es';
+import { endsWith, isNil, isPlainObject, isString, mapValues, omitBy } from 'lodash-es';
 import { toStorageException } from '../storage.errors.js';
 import { StorageService } from '../storage.service.js';
 import type {
@@ -29,6 +30,7 @@ import {
 } from '../storage-key.util.js';
 
 type GcsSettings = StorageConfig['gcs'];
+type ServiceAccountKey = { client_email: string; private_key: string };
 
 /** Real Google endpoints (vs. an emulator such as fake-gcs-server). */
 export function isGoogleStorageEndpoint(apiEndpoint: string): boolean {
@@ -44,7 +46,7 @@ export function isGoogleStorageEndpoint(apiEndpoint: string): boolean {
  * fake-gcs-server doesn't verify signatures — without ANY key, `getSignedUrl` throws
  * "Cannot sign data without `client_email`".
  */
-function ephemeralCredentials(projectId: string): { client_email: string; private_key: string } {
+function ephemeralCredentials(projectId: string): ServiceAccountKey {
   const { privateKey } = generateKeyPairSync('rsa', {
     modulusLength: 2048,
     privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
@@ -54,10 +56,36 @@ function ephemeralCredentials(projectId: string): { client_email: string; privat
 }
 
 /**
+ * Reads `GCS_KEY_FILE` and accepts ONLY a service-account key. The SDK's `keyFilename` option
+ * (deprecated in @google-cloud/storage 8.4) loads whatever credential type the file declares
+ * (external_account, impersonated, …): a credential-injection risk when the file is not fully
+ * under your control. Fails at boot with a message that names the variable. Use Application
+ * Default Credentials (leave GCS_KEY_FILE unset) for Workload Identity or federation.
+ */
+function readServiceAccountKey(path: string): ServiceAccountKey {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    throw new Error(`GCS_KEY_FILE ${path} could not be read as JSON: ${String(error)}`);
+  }
+  // Every field is checked below, so an object of unknown values is all this needs to assume.
+  const key = (isPlainObject(parsed) ? parsed : {}) as Partial<
+    Record<keyof ServiceAccountKey | 'type', unknown>
+  >;
+  if (key.type !== 'service_account' || !isString(key.client_email) || !isString(key.private_key)) {
+    throw new Error(
+      `GCS_KEY_FILE ${path} must be a service_account key with client_email and private_key`,
+    );
+  }
+  return { client_email: key.client_email, private_key: key.private_key };
+}
+
+/**
  * Builds the GCS client. For the real service the API endpoint is left to the SDK (a custom
  * `apiEndpoint` disables authentication unless `useAuthWithCustomEndpoint`); credentials come from
- * `GCS_KEY_FILE` or Application Default Credentials (Workload Identity — needs
- * `iam.serviceAccounts.signBlob` for signed URLs).
+ * a validated `GCS_KEY_FILE` service-account key, or from Application Default Credentials
+ * (Workload Identity — needs `iam.serviceAccounts.signBlob` for signed URLs).
  */
 export function createGcsClient(gcs: GcsSettings): Storage {
   const emulator = !isGoogleStorageEndpoint(gcs.apiEndpoint);
@@ -65,10 +93,19 @@ export function createGcsClient(gcs: GcsSettings): Storage {
     projectId: gcs.projectId,
     retryOptions: { autoRetry: true, maxRetries: 3 },
   };
-  if (gcs.keyFilename !== undefined) options.keyFilename = gcs.keyFilename;
-  if (emulator) {
-    options.apiEndpoint = gcs.apiEndpoint;
-    if (gcs.keyFilename === undefined) options.credentials = ephemeralCredentials(gcs.projectId);
+  if (emulator) options.apiEndpoint = gcs.apiEndpoint;
+  const key =
+    gcs.keyFilename !== undefined
+      ? readServiceAccountKey(gcs.keyFilename)
+      : emulator
+        ? ephemeralCredentials(gcs.projectId)
+        : undefined;
+  if (key !== undefined) {
+    // The SDK signs v4 URLs only with credentials it was given (it never derives them from an
+    // `authClient`, and `fromJSON` is deprecated too). The deprecation targets UNVALIDATED configs;
+    // this key is a checked service-account key, which is the mitigation Google documents.
+    // eslint-disable-next-line @typescript-eslint/no-deprecated
+    options.credentials = key;
   }
   return new Storage(options);
 }

@@ -329,23 +329,23 @@ usage in [API.md](API.md)
 
 [`storage.config.ts`](../libs/config/src/namespaces/storage.config.ts) · gateway, monolith
 
-| Variable                         | Default                 | Description                                                                                                                   |
-| -------------------------------- | ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `STORAGE_DRIVER`                 | `s3`                    | `s3` (RustFS locally) \| `gcs` (fake-gcs-server locally).                                                                     |
-| `STORAGE_MAX_UPLOAD_BYTES`       | `26214400`              | 25 MiB.                                                                                                                       |
-| `STORAGE_MAX_CONCURRENT_UPLOADS` | `4`                     | Streamed uploads (`POST /v1/files`) in flight per process; more get `503` + `Retry-After`. Each holds up to ~15 MiB off-heap. |
-| `STORAGE_SIGNED_URL_TTL_SEC`     | `900`                   | Presigned URL lifetime, max `604800` (7 days, the S3 cap).                                                                    |
-| `S3_ENDPOINT`                    | `http://localhost:9000` | S3 API endpoint.                                                                                                              |
-| `S3_PUBLIC_ENDPOINT`             | `S3_ENDPOINT`           | Host baked into presigned URLs; must be reachable by the client.                                                              |
-| `S3_REGION`                      | `us-east-1`             |                                                                                                                               |
-| `S3_FORCE_PATH_STYLE`            | `true`                  | Required by RustFS/MinIO-style endpoints without wildcard DNS.                                                                |
-| `S3_ACCESS_KEY_ID`               | `rustfsadmin`           | Local RustFS credentials.                                                                                                     |
-| `S3_SECRET_ACCESS_KEY`           | `rustfsadmin`           | Local RustFS credentials.                                                                                                     |
-| `S3_BUCKET`                      | `uploads`               |                                                                                                                               |
-| `GCS_PROJECT_ID`                 | `local-project`         |                                                                                                                               |
-| `GCS_BUCKET`                     | `uploads`               |                                                                                                                               |
-| `GCS_API_ENDPOINT`               | `http://localhost:4443` | A non-`googleapis.com` host = emulator mode; real GCS: `https://storage.googleapis.com`.                                      |
-| `GCS_KEY_FILE`                   | —                       | Service-account key file; unset = Application Default Credentials.                                                            |
+| Variable                         | Default                 | Description                                                                                                                                                                          |
+| -------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `STORAGE_DRIVER`                 | `s3`                    | `s3` (RustFS locally) \| `gcs` (fake-gcs-server locally).                                                                                                                            |
+| `STORAGE_MAX_UPLOAD_BYTES`       | `26214400`              | 25 MiB.                                                                                                                                                                              |
+| `STORAGE_MAX_CONCURRENT_UPLOADS` | `4`                     | Streamed uploads (`POST /v1/files`) in flight per process; more get `503` + `Retry-After`. Each holds up to ~15 MiB off-heap.                                                        |
+| `STORAGE_SIGNED_URL_TTL_SEC`     | `900`                   | Presigned URL lifetime, max `604800` (7 days, the S3 cap).                                                                                                                           |
+| `S3_ENDPOINT`                    | `http://localhost:9000` | S3 API endpoint.                                                                                                                                                                     |
+| `S3_PUBLIC_ENDPOINT`             | `S3_ENDPOINT`           | Host baked into presigned URLs; must be reachable by the client.                                                                                                                     |
+| `S3_REGION`                      | `us-east-1`             |                                                                                                                                                                                      |
+| `S3_FORCE_PATH_STYLE`            | `true`                  | Required by RustFS/MinIO-style endpoints without wildcard DNS.                                                                                                                       |
+| `S3_ACCESS_KEY_ID`               | `rustfsadmin`           | Local RustFS credentials.                                                                                                                                                            |
+| `S3_SECRET_ACCESS_KEY`           | `rustfsadmin`           | Local RustFS credentials.                                                                                                                                                            |
+| `S3_BUCKET`                      | `uploads`               |                                                                                                                                                                                      |
+| `GCS_PROJECT_ID`                 | `local-project`         |                                                                                                                                                                                      |
+| `GCS_BUCKET`                     | `uploads`               |                                                                                                                                                                                      |
+| `GCS_API_ENDPOINT`               | `http://localhost:4443` | A non-`googleapis.com` host = emulator mode; real GCS: `https://storage.googleapis.com`.                                                                                             |
+| `GCS_KEY_FILE`                   | —                       | Service-account key file. Only `type: "service_account"` keys are accepted (checked at boot); unset = Application Default Credentials (use ADC for Workload Identity or federation). |
 
 ### `stripe` — Checkout + webhooks
 

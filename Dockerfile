@@ -13,7 +13,7 @@
 # node_modules/{@app,@domain,@platform}/* (no per-package node_modules). See docs/DOCKER.md.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 ARG NODE_VERSION=24.21.0
-ARG BUN_VERSION=1.4.2
+ARG BUN_VERSION=1.4.3
 ARG ALPINE_VERSION=3.24
 ARG DISTROLESS_IMAGE=gcr.io/distroless/nodejs24-debian13:nonroot
 

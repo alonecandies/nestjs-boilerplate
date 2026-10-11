@@ -79,7 +79,7 @@ StorageModule.forRootAsync({ driver: 'memory' });
 - **GCS:** the real service needs `GCS_API_ENDPOINT=https://storage.googleapis.com`. Any other
   host is treated as an emulator (fake-gcs-server): no auth, and URLs are signed with a throwaway
   RSA key. Signed URLs on GKE need `iam.serviceAccounts.signBlob`
-  (`roles/iam.serviceAccountTokenCreator`) or `GCS_KEY_FILE`.
+  (`roles/iam.serviceAccountTokenCreator`) or `GCS_KEY_FILE`. `GCS_KEY_FILE` must hold a `service_account` key: any other credential type (external_account, impersonated…) is rejected at boot, because the SDK would load it unvalidated.
 - Keys are authorization boundaries (ownership = `users/{id}/…` prefix). `assertStorageKey` rejects
   `..`, empty segments, leading `/`, control characters and backslashes. Check ownership with
   `isKeyWithinPrefix` (it is not fooled by `users/u10` vs `users/u1`).

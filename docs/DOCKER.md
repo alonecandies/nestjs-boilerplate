@@ -245,7 +245,7 @@ docker build --build-arg APP=identity-service --build-arg VCS_REF=$(git rev-pars
 docker build --build-arg APP=gateway --target dev -t boilerplate/gateway:dev .                            # TS sources, no build
 ```
 
-Build args: `APP` (required; the build fails fast without it), `NODE_VERSION` (24.21.0), `BUN_VERSION` (1.4.2),
+Build args: `APP` (required; the build fails fast without it), `NODE_VERSION` (24.21.0), `BUN_VERSION` (1.4.3),
 `ALPINE_VERSION` (3.24), `DISTROLESS_IMAGE`, `UV_THREADPOOL_SIZE` (4), `PRUNE_NODE_MODULES` (true), `VCS_REF`.
 Compose builds the same targets (`APP_TARGET`, tag `boilerplate/<app>:${TAG:-local}`).
 
@@ -427,7 +427,7 @@ start what you need, or raise Docker Desktop's memory.
 
 Runs on pushes to `master` and on pull requests. Test layout and the integration projects: [TESTING.md](TESTING.md).
 
-- **verify**: Node 24 (`.nvmrc`) + Bun 1.4.2, `bun install --frozen-lockfile`, `bun run check` (Biome, ESLint,
+- **verify**: Node 24 (`.nvmrc`) + Bun 1.4.3, `bun install --frozen-lockfile`, `bun run check` (Biome, ESLint,
   Prettier, tsc), `bun run test`, `bun run build`, generated-artefact drift (`proto:gen` + `buf lint` + `db:generate`,
   then a clean `git diff`/`git status` of `libs/contracts/src/generated` and `libs/database/src/migrations`),
   commitlint over the PR's commits (pull requests only), then the config drift checks (`.env.example`, Kafka topics).
