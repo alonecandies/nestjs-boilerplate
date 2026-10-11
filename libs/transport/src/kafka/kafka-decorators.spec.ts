@@ -1,4 +1,3 @@
-import { KAFKA_TOPICS } from '@app/contracts';
 import { EXCEPTION_FILTERS_METADATA, INTERCEPTORS_METADATA } from '@nestjs/common/constants.js';
 import { Ctx, type KafkaContext, Payload, Transport } from '@nestjs/microservices';
 import {
@@ -6,6 +5,7 @@ import {
   PATTERN_METADATA,
   TRANSPORT_METADATA,
 } from '@nestjs/microservices/constants.js';
+import { KAFKA_TOPICS } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { KafkaConsumerController } from './kafka-consumer.decorator.js';
 import { KafkaContextInterceptor } from './kafka-context.interceptor.js';

@@ -1,4 +1,5 @@
 import type { IncomingHttpHeaders } from 'node:http';
+import type { ArgumentsHost, ExecutionContext } from '@nestjs/common';
 import {
   type AppContextType,
   generateId,
@@ -6,8 +7,7 @@ import {
   HTTP_HEADERS,
   isSafeRequestId,
   type RequestLike,
-} from '@app/common';
-import type { ArgumentsHost, ExecutionContext } from '@nestjs/common';
+} from '@platform/common';
 import { head, isObjectLike, isString } from 'lodash-es';
 
 /** Anything with Node-style (lower-cased) headers: `IncomingMessage`, `FastifyRequest`, … */

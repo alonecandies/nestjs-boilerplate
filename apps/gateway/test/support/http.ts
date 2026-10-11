@@ -1,4 +1,4 @@
-import { HTTP_HEADERS, PROBLEM_JSON_CONTENT_TYPE, type ProblemDetails } from '@app/common';
+import { HTTP_HEADERS, PROBLEM_JSON_CONTENT_TYPE, type ProblemDetails } from '@platform/common';
 import { expect } from 'vitest';
 
 /** The slice of Fastify's `inject()` response the assertions read. */

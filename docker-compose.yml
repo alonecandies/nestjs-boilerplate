@@ -26,7 +26,7 @@ x-logging: &logging
     max-size: 10m
     max-file: "3"
 
-# ---- app environment (names = @app/config env vars) -------------------------------------------
+# ---- app environment (names = @platform/config env vars) -------------------------------------------
 x-env-base: &env-base
   NODE_ENV: ${DOCKER_NODE_ENV:-production}
   LOG_LEVEL: ${DOCKER_LOG_LEVEL:-info}
@@ -115,6 +115,7 @@ x-app: &app
 
 # `develop.watch` rules shared by every app. `rebuild` works for both build targets (BuildKit keeps
 # the dependency layers cached; the dev target has no compile step at all).
+x-watch-domains: &watch-domains { action: rebuild, path: ./domains, ignore: [node_modules/, dist/] }
 x-watch-libs: &watch-libs { action: rebuild, path: ./libs, ignore: [node_modules/, dist/] }
 x-watch-manifest: &watch-manifest { action: rebuild, path: ./package.json }
 x-watch-lockfile: &watch-lockfile { action: rebuild, path: ./bun.lock }
@@ -515,6 +516,7 @@ services:
         - action: rebuild
           path: ./apps/monolith
           ignore: [node_modules/, dist/, test/]
+        - *watch-domains
         - *watch-libs
         - *watch-manifest
         - *watch-lockfile
@@ -560,6 +562,7 @@ services:
         - action: rebuild
           path: ./apps/gateway
           ignore: [node_modules/, dist/, test/]
+        - *watch-domains
         - *watch-libs
         - *watch-manifest
         - *watch-lockfile
@@ -592,6 +595,7 @@ services:
         - action: rebuild
           path: ./apps/identity-service
           ignore: [node_modules/, dist/, test/]
+        - *watch-domains
         - *watch-libs
         - *watch-manifest
         - *watch-lockfile
@@ -624,6 +628,7 @@ services:
         - action: rebuild
           path: ./apps/notifications-service
           ignore: [node_modules/, dist/, test/]
+        - *watch-domains
         - *watch-libs
         - *watch-manifest
         - *watch-lockfile
@@ -655,6 +660,7 @@ services:
         - action: rebuild
           path: ./apps/billing-service
           ignore: [node_modules/, dist/, test/]
+        - *watch-domains
         - *watch-libs
         - *watch-manifest
         - *watch-lockfile

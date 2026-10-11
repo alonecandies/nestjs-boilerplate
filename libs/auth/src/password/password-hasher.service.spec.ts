@@ -1,5 +1,5 @@
-import { DomainValidationException } from '@app/common';
-import { authConfig } from '@app/config';
+import { DomainValidationException } from '@platform/common';
+import { authConfig } from '@platform/config';
 import { describe, expect, it } from 'vitest';
 import { MAX_PASSWORD_LENGTH } from '../auth.constants.js';
 import { PasswordHasher } from './password-hasher.service.js';

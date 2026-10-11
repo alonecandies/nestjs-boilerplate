@@ -1,5 +1,5 @@
-import type { DeadLetterTopic, KafkaTopic } from '@app/contracts';
 import { EventPattern, Transport } from '@nestjs/microservices';
+import type { DeadLetterTopic, KafkaTopic } from '@platform/contracts';
 
 /**
  * `@EventPattern` for a Kafka integration-event topic. Use it instead of `@EventPattern(topic)`:

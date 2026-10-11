@@ -1,6 +1,6 @@
-import { UnauthenticatedException } from '@app/common';
 import type { ExecutionContext } from '@nestjs/common';
 import { ROUTE_ARGS_METADATA } from '@nestjs/common/constants.js';
+import { UnauthenticatedException } from '@platform/common';
 import { describe, expect, it } from 'vitest';
 import { executionContext } from '../guards/execution-context.test.js';
 import { makeAuthUser } from '../testing/auth-test.utils.js';

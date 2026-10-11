@@ -1,18 +1,18 @@
+import { Inject, Injectable, Logger, type OnApplicationBootstrap, Optional } from '@nestjs/common';
 import {
   ExternalServiceException,
   generateId,
   isDomainException,
   type RetryOptions,
   retry,
-} from '@app/common';
+} from '@platform/common';
 import {
   createEventEnvelope,
   type EventEnvelopeFor,
   type EventPayload,
   KAFKA_HEADERS,
   type KafkaTopic,
-} from '@app/contracts';
-import { Inject, Injectable, Logger, type OnApplicationBootstrap, Optional } from '@nestjs/common';
+} from '@platform/contracts';
 import { ClsService } from 'nestjs-cls';
 import { lastValueFrom, type Observable } from 'rxjs';
 import { z } from 'zod';

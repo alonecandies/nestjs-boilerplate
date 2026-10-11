@@ -1,4 +1,4 @@
-import { DomainValidationException } from '@app/common';
+import { DomainValidationException } from '@platform/common';
 import { describe, expect, it } from 'vitest';
 import {
   assertStorageKey,

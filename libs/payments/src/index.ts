@@ -1,5 +1,5 @@
 /**
- * @app/payments — Stripe integration: global `StripeModule` (SDK client + `StripeService`),
+ * @platform/payments — Stripe integration: global `StripeModule` (SDK client + `StripeService`),
  * webhook signature verification and SDK-error → `DomainException` mapping.
  */
 export * from './stripe.constants.js';

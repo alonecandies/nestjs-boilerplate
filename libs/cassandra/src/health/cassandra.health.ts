@@ -1,6 +1,6 @@
-import { HealthContributor } from '@app/observability';
 import { Injectable } from '@nestjs/common';
 import { type HealthIndicatorResult, HealthIndicatorService } from '@nestjs/terminus';
+import { HealthContributor } from '@platform/observability';
 import { InjectCassandra } from '../cassandra.constants.js';
 import type { CassandraClient } from '../cassandra.types.js';
 

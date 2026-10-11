@@ -5,10 +5,10 @@ import {
   DomainValidationException,
   ExternalServiceException,
   ServiceUnavailableException,
-} from '@app/common';
+} from '@platform/common';
 import Stripe from 'stripe';
 
-/** Stable error codes emitted by `@app/payments` (part of the public API — never rename). */
+/** Stable error codes emitted by `@platform/payments` (part of the public API — never rename). */
 export const PaymentErrorCode = {
   INVALID_WEBHOOK_SIGNATURE: 'INVALID_WEBHOOK_SIGNATURE',
   INVALID_WEBHOOK_PAYLOAD: 'INVALID_WEBHOOK_PAYLOAD',

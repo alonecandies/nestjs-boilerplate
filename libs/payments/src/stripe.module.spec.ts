@@ -1,6 +1,6 @@
-import { AppConfigModule } from '@app/config';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { AppConfigModule } from '@platform/config';
 import Stripe from 'stripe';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { STRIPE_CLIENT } from './stripe.constants.js';

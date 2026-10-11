@@ -1,3 +1,6 @@
+import type { Metadata } from '@grpc/grpc-js';
+import { HttpException, HttpStatus } from '@nestjs/common';
+import { GrpcException, GrpcStatus, RpcException } from '@nestjs/microservices';
 import {
   BusinessRuleViolationException,
   DomainConflictException,
@@ -16,10 +19,7 @@ import {
   toValidationIssues,
   UnauthenticatedException,
   type ValidationIssue,
-} from '@app/common';
-import type { Metadata } from '@grpc/grpc-js';
-import { HttpException, HttpStatus } from '@nestjs/common';
-import { GrpcException, GrpcStatus, RpcException } from '@nestjs/microservices';
+} from '@platform/common';
 import { isArray, isNumber, isPlainObject, isString } from 'lodash-es';
 import { TimeoutError } from 'rxjs';
 import { z } from 'zod';
@@ -352,7 +352,7 @@ function fromHttpException(exception: HttpException, exposeInternal: boolean): G
   const status = exception.getStatus();
   const code = grpcStatusFromHttpStatus(status);
   const response = exception.getResponse();
-  // `@app/common` validation pipes send `{ message, errors: ValidationIssue[] }`.
+  // `@platform/common` validation pipes send `{ message, errors: ValidationIssue[] }`.
   const errors = isPlainObject(response)
     ? toValidationIssueList((response as { errors?: unknown }).errors)
     : undefined;

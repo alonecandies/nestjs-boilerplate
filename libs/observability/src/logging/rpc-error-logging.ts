@@ -1,5 +1,5 @@
-import { isDomainException, toProblemDetails } from '@app/common';
 import { HttpException } from '@nestjs/common';
+import { isDomainException, toProblemDetails } from '@platform/common';
 import { isNumber, isPlainObject, isString } from 'lodash-es';
 import type { LevelWithSilent } from 'pino';
 

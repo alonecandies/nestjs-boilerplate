@@ -1,4 +1,4 @@
-import { ExternalServiceException } from '@app/common';
+import { ExternalServiceException } from '@platform/common';
 import { includes, isObject, isString } from 'lodash-es';
 
 export const STORAGE_ERROR = 'STORAGE_ERROR';

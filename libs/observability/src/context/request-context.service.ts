@@ -1,5 +1,5 @@
-import { generateId, isSafeRequestId } from '@app/common';
 import { Injectable } from '@nestjs/common';
+import { generateId, isSafeRequestId } from '@platform/common';
 import { CLS_ID, ClsService } from 'nestjs-cls';
 import { CLS_CORRELATION_ID, CLS_USER_ID } from '../observability.constants.js';
 

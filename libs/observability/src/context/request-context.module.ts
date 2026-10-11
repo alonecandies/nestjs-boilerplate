@@ -16,7 +16,7 @@ type ClsRawRequest = RequestIdCarrier & { id?: unknown };
 /**
  * nestjs-cls wiring (internal to `ObservabilityModule`). `ClsModule.forRoot` lives HERE and only
  * here; other packages extend it with `ClsModule.registerPlugins(...)` (e.g. the transactional
- * plugin of `@app/database`).
+ * plugin of `@platform/database`).
  *
  * The context id IS the request id: `idGenerator` reuses Fastify's `request.id` (copied onto the
  * raw request by middie, produced by `resolveRequestId`), so `cls.getId()`, the log field

@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { sleep } from '@app/common';
 import { Logger, type LoggerService } from '@nestjs/common';
+import { sleep } from '@platform/common';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { noop } from 'lodash-es';

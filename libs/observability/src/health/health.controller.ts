@@ -1,4 +1,3 @@
-import { Public, withTimeout } from '@app/common';
 import {
   Controller,
   Get,
@@ -17,6 +16,7 @@ import {
   type HealthIndicatorResult,
   HealthIndicatorService,
 } from '@nestjs/terminus';
+import { Public, withTimeout } from '@platform/common';
 import type { FastifyReply } from 'fastify';
 import { mapValues } from 'lodash-es';
 import { HEALTH_OPTIONS } from '../observability.constants.js';

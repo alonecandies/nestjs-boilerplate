@@ -1,3 +1,11 @@
+import { Metadata } from '@grpc/grpc-js';
+import {
+  BadRequestException,
+  ForbiddenException,
+  HttpStatus,
+  InternalServerErrorException,
+} from '@nestjs/common';
+import { GrpcNotFoundException, GrpcStatus, RpcException } from '@nestjs/microservices';
 import {
   BusinessRuleViolationException,
   DomainConflictException,
@@ -10,15 +18,7 @@ import {
   PermissionDeniedException,
   ServiceUnavailableException,
   UnauthenticatedException,
-} from '@app/common';
-import { Metadata } from '@grpc/grpc-js';
-import {
-  BadRequestException,
-  ForbiddenException,
-  HttpStatus,
-  InternalServerErrorException,
-} from '@nestjs/common';
-import { GrpcNotFoundException, GrpcStatus, RpcException } from '@nestjs/microservices';
+} from '@platform/common';
 import { lastValueFrom, NEVER, TimeoutError, timeout } from 'rxjs';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';

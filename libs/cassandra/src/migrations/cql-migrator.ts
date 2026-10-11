@@ -1,8 +1,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { basename, join } from 'node:path';
-import { sha256Hex, sleep } from '@app/common';
 import { Logger, type LoggerService } from '@nestjs/common';
+import { sha256Hex, sleep } from '@platform/common';
 import cassandra from 'cassandra-driver';
 import { countBy, flatMap, keyBy, orderBy, pickBy } from 'lodash-es';
 import type { CassandraClient, CassandraMigrationSource } from '../cassandra.types.js';

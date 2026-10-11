@@ -1,6 +1,6 @@
-import { HealthContributor } from '@app/observability';
 import { Injectable } from '@nestjs/common';
 import { type HealthIndicatorResult, HealthIndicatorService } from '@nestjs/terminus';
+import { HealthContributor } from '@platform/observability';
 import type { DrizzleDB } from '../drizzle/drizzle.types.js';
 import { InjectDrizzle } from '../drizzle/inject-drizzle.decorator.js';
 

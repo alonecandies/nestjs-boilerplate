@@ -3,49 +3,16 @@
  * infrastructure. Everything is the real module / provider except `REDIS_CLIENT`, which is swapped
  * for `InMemoryRedis` (so the Redis-backed denylist, throttler storage and health check really run).
  *
- *   @app/config        AppConfigModule (+ forFeature namespaces pulled in by each lib)
- *   @app/observability ObservabilityModule — pino, nestjs-cls, /health, /metrics (Fastify hook)
- *   @app/redis         RedisModule (+ RedisHealthIndicator as readiness contributor), AppThrottlerModule
- *   @app/auth          AuthModule with global guards (JwtAuthGuard → RolesGuard → PermissionsGuard)
- *   @app/common        provideCommonEnhancersAsync (problem+json filter, pipes, timeout),
+ *   @platform/config        AppConfigModule (+ forFeature namespaces pulled in by each lib)
+ *   @platform/observability ObservabilityModule — pino, nestjs-cls, /health, /metrics (Fastify hook)
+ *   @platform/redis         RedisModule (+ RedisHealthIndicator as readiness contributor), AppThrottlerModule
+ *   @platform/auth          AuthModule with global guards (JwtAuthGuard → RolesGuard → PermissionsGuard)
+ *   @platform/common        provideCommonEnhancersAsync (problem+json filter, pipes, timeout),
  *                      CorrelationIdMiddleware, MaintenanceModeMiddleware, @Public
- *   @app/bootstrap     buildFastifyOptions + configureHttpApp (the production wiring)
- *   @app/testing       createFastifyTestApp
+ *   @platform/bootstrap     buildFastifyOptions + configureHttpApp (the production wiring)
+ *   @platform/testing       createFastifyTestApp
  */
 
-import {
-  AccessTokenDenylist,
-  AuthModule,
-  type AuthUser,
-  CurrentUser,
-  Permission,
-  RequirePermissions,
-  Role,
-  TokenService,
-} from '@app/auth';
-import {
-  CorrelationIdMiddleware,
-  EntityNotFoundException,
-  generateId,
-  HTTP_HEADERS,
-  isUuidV7,
-  MaintenanceModeMiddleware,
-  PROBLEM_JSON_CONTENT_TYPE,
-  type ProblemDetails,
-  Public,
-  provideCommonEnhancersAsync,
-} from '@app/common';
-import { type AppConfig, AppConfigModule, appConfig } from '@app/config';
-import { ObservabilityModule, RequestContextService } from '@app/observability';
-import {
-  AppThrottlerModule,
-  AuthThrottle,
-  REDIS_CLIENT,
-  RedisHealthIndicator,
-  RedisModule,
-} from '@app/redis';
-import { InMemoryRedis } from '@app/redis/testing';
-import { createFastifyTestApp } from '@app/testing';
 import {
   Body,
   Controller,
@@ -60,6 +27,39 @@ import {
 } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
+import {
+  AccessTokenDenylist,
+  AuthModule,
+  type AuthUser,
+  CurrentUser,
+  Permission,
+  RequirePermissions,
+  Role,
+  TokenService,
+} from '@platform/auth';
+import {
+  CorrelationIdMiddleware,
+  EntityNotFoundException,
+  generateId,
+  HTTP_HEADERS,
+  isUuidV7,
+  MaintenanceModeMiddleware,
+  PROBLEM_JSON_CONTENT_TYPE,
+  type ProblemDetails,
+  Public,
+  provideCommonEnhancersAsync,
+} from '@platform/common';
+import { type AppConfig, AppConfigModule, appConfig } from '@platform/config';
+import { ObservabilityModule, RequestContextService } from '@platform/observability';
+import {
+  AppThrottlerModule,
+  AuthThrottle,
+  REDIS_CLIENT,
+  RedisHealthIndicator,
+  RedisModule,
+} from '@platform/redis';
+import { InMemoryRedis } from '@platform/redis/testing';
+import { createFastifyTestApp } from '@platform/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { buildFastifyOptions, configureHttpApp } from './index.js';

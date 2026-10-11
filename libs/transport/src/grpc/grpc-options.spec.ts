@@ -1,11 +1,11 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { grpcConfig } from '@app/config';
-import { PROTO_DIR } from '@app/contracts';
 import { credentials, ServerCredentials } from '@grpc/grpc-js';
 import type { PackageDefinition } from '@grpc/proto-loader';
 import { ServerGrpc, Transport } from '@nestjs/microservices';
+import { grpcConfig } from '@platform/config';
+import { PROTO_DIR } from '@platform/contracts';
 import { afterAll, describe, expect, it, vi } from 'vitest';
 import { buildGrpcServiceConfig, createGrpcClientOptions } from './grpc-client.options.js';
 import { GrpcHealthService, type HealthServer } from './grpc-health.js';

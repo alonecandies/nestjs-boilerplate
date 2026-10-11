@@ -1,5 +1,5 @@
-import type { KafkaConfig as KafkaNamespaceConfig } from '@app/config';
 import { type KafkaOptions, Transport } from '@nestjs/microservices';
+import type { KafkaConfig as KafkaNamespaceConfig } from '@platform/config';
 import { CompressionTypes, logLevel, Partitioners } from 'kafkajs';
 import { createKafkaLogCreator } from './kafka-logger.js';
 

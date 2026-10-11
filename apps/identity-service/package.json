@@ -5,7 +5,7 @@
   "type": "module",
   "description": "identity-service: gRPC identity.v1 AuthService + UsersService (users, argon2 login, JWT sessions with refresh rotation) on Postgres/Redis, producing identity.user-registered.v1; HTTP only for /health and /metrics.",
   "scripts": {
-    "dev": "node --watch --watch-preserve-output --env-file-if-exists=../../.env --env-file-if-exists=.env --enable-source-maps --conditions=@app/source --import @swc-node/register/esm-register --import ./src/instrument.ts src/main.ts",
+    "dev": "node --watch --watch-preserve-output --env-file-if-exists=../../.env --env-file-if-exists=.env --enable-source-maps --conditions=@repo/source --import @swc-node/register/esm-register --import ./src/instrument.ts src/main.ts",
     "start:dev": "bun run dev",
     "g": "sh -c 'nest g \"$@\" && eslint --fix src' nest-g",
     "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
@@ -17,16 +17,16 @@
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
-    "@app/auth": "workspace:*",
-    "@app/bootstrap": "workspace:*",
-    "@app/common": "workspace:*",
-    "@app/config": "workspace:*",
-    "@app/contracts": "workspace:*",
-    "@app/database": "workspace:*",
-    "@app/identity": "workspace:*",
-    "@app/observability": "workspace:*",
-    "@app/redis": "workspace:*",
-    "@app/transport": "workspace:*",
+    "@platform/auth": "workspace:*",
+    "@platform/bootstrap": "workspace:*",
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
+    "@platform/contracts": "workspace:*",
+    "@platform/database": "workspace:*",
+    "@domain/identity": "workspace:*",
+    "@platform/observability": "workspace:*",
+    "@platform/redis": "workspace:*",
+    "@platform/transport": "workspace:*",
     "@fastify/static": "catalog:",
     "@grpc/grpc-js": "catalog:",
     "@grpc/proto-loader": "catalog:",
@@ -44,7 +44,7 @@
     "rxjs": "catalog:"
   },
   "devDependencies": {
-    "@app/testing": "workspace:*",
+    "@platform/testing": "workspace:*",
     "@nestjs/testing": "catalog:",
     "drizzle-orm": "catalog:"
   }

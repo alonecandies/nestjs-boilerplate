@@ -1,5 +1,5 @@
-import { sha256Hex } from '@app/common';
 import type { Logger } from '@nestjs/common';
+import { sha256Hex } from '@platform/common';
 import { throttle, trim } from 'lodash-es';
 import type { BaseMailContext, MailMessage, MailTemplateContextMap } from './mail.types.js';
 import { DEFAULT_MAIL_APP_NAME, type MailTemplate } from './mailer.constants.js';

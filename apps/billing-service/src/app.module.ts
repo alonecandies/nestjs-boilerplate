@@ -1,15 +1,15 @@
-import { BillingGrpcModule, billingSchema } from '@app/billing';
-import { CorrelationIdMiddleware, provideCommonEnhancersAsync } from '@app/common';
-import { type AppConfig, AppConfigModule, appConfig, grpcConfig } from '@app/config';
-import { DatabaseHealthIndicator, DatabaseModule } from '@app/database';
-import { ObservabilityModule } from '@app/observability';
-import { StripeModule } from '@app/payments';
-import { RedisHealthIndicator, RedisModule } from '@app/redis';
-import { KafkaProducerModule } from '@app/transport';
+import { BillingGrpcModule, billingSchema } from '@domain/billing';
 import { type MiddlewareConsumer, Module, type NestModule, RequestMethod } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { CqrsModule } from '@nestjs/cqrs';
 import { ScheduleModule } from '@nestjs/schedule';
+import { CorrelationIdMiddleware, provideCommonEnhancersAsync } from '@platform/common';
+import { type AppConfig, AppConfigModule, appConfig, grpcConfig } from '@platform/config';
+import { DatabaseHealthIndicator, DatabaseModule } from '@platform/database';
+import { ObservabilityModule } from '@platform/observability';
+import { StripeModule } from '@platform/payments';
+import { RedisHealthIndicator, RedisModule } from '@platform/redis';
+import { KafkaProducerModule } from '@platform/transport';
 
 /**
  * billing-service: `billing.v1.BillingService` over gRPC (served by `connectGrpcServer` in

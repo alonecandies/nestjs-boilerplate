@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
-import { validateAllEnv } from '@app/config';
+import { validateAllEnv } from '@platform/config';
 import { describe, expect, it } from 'vitest';
 
 /**

@@ -1,5 +1,5 @@
-import { mailConfig } from '@app/config';
 import { Logger } from '@nestjs/common';
+import { mailConfig } from '@platform/config';
 import { type Job, UnrecoverableError } from 'bullmq';
 import Handlebars from 'handlebars';
 import { describe, expect, it, vi } from 'vitest';

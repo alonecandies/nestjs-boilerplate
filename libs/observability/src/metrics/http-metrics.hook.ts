@@ -1,8 +1,8 @@
-import { type ObservabilityConfig, observabilityConfig } from '@app/config';
 import { Inject, Injectable, Logger, type OnModuleInit } from '@nestjs/common';
 import { type AbstractHttpAdapter, HttpAdapterHost } from '@nestjs/core';
 import { trace } from '@opentelemetry/api';
 import { ATTR_HTTP_ROUTE } from '@opentelemetry/semantic-conventions';
+import { type ObservabilityConfig, observabilityConfig } from '@platform/config';
 import { InjectMetric } from '@willsoto/nestjs-prometheus';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isNil } from 'lodash-es';

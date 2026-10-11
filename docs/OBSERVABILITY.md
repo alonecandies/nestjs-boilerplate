@@ -2,7 +2,7 @@
 
 How the boilerplate emits logs, metrics, traces and health signals, and how to read them.
 Everything here is wired by one global module, `ObservabilityModule.forRoot()` from
-[`@app/observability`](../libs/observability/README.md), which every app imports right after
+[`@platform/observability`](../libs/observability/README.md), which every app imports right after
 `AppConfigModule.forRoot()`. For the local stack (Prometheus, Grafana, Jaeger, Loki) see
 [DOCKER.md](DOCKER.md). For the env var catalogue see [CONFIGURATION.md](CONFIGURATION.md).
 
@@ -170,7 +170,7 @@ by `postgres-exporter` and `redis-exporter` in the `observability` profile.
 Add your own with the re-exported helpers:
 
 ```ts
-import { InjectMetric, makeCounterProvider } from '@app/observability';
+import { InjectMetric, makeCounterProvider } from '@platform/observability';
 import type { Counter } from 'prom-client';
 
 // module providers
@@ -260,7 +260,7 @@ imported. Under ESM that means a loader hook registered before the app's own imp
 has a preload file, `apps/<app>/src/instrument.ts`:
 
 ```ts
-import { startTracing } from '@app/observability/otel';
+import { startTracing } from '@platform/observability/otel';
 await startTracing({ serviceName: 'gateway' });
 ```
 
@@ -273,7 +273,7 @@ It is loaded with `--import`, in every way an app starts:
 | Docker image                       | `CMD ["--import", "./dist/instrument.js", "dist/main.js"]`                                         |
 | Cluster workers                    | inherit `execArgv`, so each worker preloads it too                                                 |
 
-`@app/observability/otel` imports nothing from Nest or `@app/config` (anything it imported would
+`@platform/observability/otel` imports nothing from Nest or `@platform/config` (anything it imported would
 load before the hook and never be patched), so it is the one place outside `libs/config` that reads
 `process.env`. The SDK is imported lazily: with tracing off, `startTracing()` returns at once and
 the ~40 auto-instrumentation packages are never loaded. Spans are flushed on shutdown by
@@ -313,7 +313,7 @@ would probe AWS/GCP/Azure metadata endpoints at startup.
 | pino: `trace_id`/`span_id` injected into log lines                                                      | Log export over OTLP (logs ship from stdout) and OTLP metrics (`metricReaders: []`)                                                                                                                    |
 
 ```ts
-import { Span } from '@app/observability';
+import { Span } from '@platform/observability';
 
 @Span('UsersRepository.findById')
 async findById(id: string): Promise<User | null> { … }
@@ -330,14 +330,14 @@ returns 404 and trace search breaks. Revisit when Grafana's datasource moves to 
 
 `@nestjs/observe` (provider-level spans, request timelines) is wired **only when both
 `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` are set**. Otherwise no `ObserveModule` exists and no
-provider is proxied, so it costs nothing. `@app/bootstrap` passes `observeInstrument()` to
+provider is proxied, so it costs nothing. `@platform/bootstrap` passes `observeInstrument()` to
 `NestFactory.create(…, { instrument })`, and `ObservabilityModule.forRoot()` adds the module.
 
-| Variable                                | Meaning                                                           |
-| --------------------------------------- | ----------------------------------------------------------------- |
-| `OBSERVE_APP_KEY`, `OBSERVE_APP_SECRET` | Credentials; both required to enable it                           |
-| `OBSERVE_SERVICE_ID`                    | Service id; defaults to `SERVICE_NAME`                            |
-| `OBSERVE_ENDPOINT`                      | Read by `@nestjs/observe` itself (not validated by `@app/config`) |
+| Variable                                | Meaning                                                                |
+| --------------------------------------- | ---------------------------------------------------------------------- |
+| `OBSERVE_APP_KEY`, `OBSERVE_APP_SECRET` | Credentials; both required to enable it                                |
+| `OBSERVE_SERVICE_ID`                    | Service id; defaults to `SERVICE_NAME`                                 |
+| `OBSERVE_ENDPOINT`                      | Read by `@nestjs/observe` itself (not validated by `@platform/config`) |
 
 Deliberate defaults, and why:
 
@@ -401,7 +401,7 @@ on `/health/live` and `/health/ready` (it ignores the image `HEALTHCHECK`), and 
 
 ## Configuration reference
 
-All validated by the `observability` / `app` namespaces of [`@app/config`](../libs/config/src/namespaces/observability.config.ts)
+All validated by the `observability` / `app` namespaces of [`@platform/config`](../libs/config/src/namespaces/observability.config.ts)
 except the `OTEL_*` variables that only `otel.ts` reads. Full catalogue: [CONFIGURATION.md](CONFIGURATION.md).
 
 | Variable                                                                                                                                                 | Default                                              | Notes                                                                  |

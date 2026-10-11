@@ -1,4 +1,4 @@
-import type { ApiDocsOptions } from '@app/bootstrap';
+import type { ApiDocsOptions } from '@platform/bootstrap';
 
 /**
  * `service.name` of the traces when neither `OTEL_SERVICE_NAME` nor `SERVICE_NAME` is set.

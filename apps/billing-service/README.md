@@ -12,8 +12,8 @@ verified.
 | HTTP    | `PORT` `3003`              | `GET /health/live`, `GET /health/ready`, `GET /metrics` only                 |
 | Kafka   | produces                   | `billing.payment-succeeded.v1` (key `userId`; envelope id = domain event id) |
 
-The domain logic lives in [`@app/billing`](../../libs/billing); this app is only the composition
-root. (`@app/billing` imports `@app/identity` for the GraphQL `Payment.user` field, so its code is
+The domain logic lives in [`@domain/billing`](../../domains/billing); this app is only the composition
+root. (`@domain/billing` imports `@domain/identity` for the GraphQL `Payment.user` field, so its code is
 loaded here too, though unused.)
 
 ## Composition (`src/app.module.ts`)
@@ -46,7 +46,7 @@ database failures are `INTERNAL` with the message hidden (the gateway maps them 
 ## Configuration
 
 `.env.example` holds only what differs per service; `bun run setup:env` copies it to `.env`.
-Everything else comes from the root `.env` / the environment ([`@app/config`](../../libs/config)):
+Everything else comes from the root `.env` / the environment ([`@platform/config`](../../libs/config)):
 
 | Variable                                     | Value here               | Notes                                                                  |
 | -------------------------------------------- | ------------------------ | ---------------------------------------------------------------------- |

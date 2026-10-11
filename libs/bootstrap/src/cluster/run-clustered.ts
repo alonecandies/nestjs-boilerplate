@@ -1,9 +1,9 @@
 import cluster from 'node:cluster';
 import { availableParallelism } from 'node:os';
-import { computeBackoffDelay } from '@app/common';
-import { appConfig } from '@app/config';
-import { createStandaloneLogger, enableClusterMetricsAggregation } from '@app/observability';
 import type { LoggerService } from '@nestjs/common';
+import { computeBackoffDelay } from '@platform/common';
+import { appConfig } from '@platform/config';
+import { createStandaloneLogger, enableClusterMetricsAggregation } from '@platform/observability';
 import { once, times } from 'lodash-es';
 
 export interface RunClusteredOptions {

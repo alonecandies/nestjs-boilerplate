@@ -1,6 +1,6 @@
 # Configuration
 
-Every runtime setting is an environment variable, validated at boot by `@app/config`
+Every runtime setting is an environment variable, validated at boot by `@platform/config`
 ([libs/config/src](../libs/config/src)). The apps also boot with **no `.env` at all**: every default
 targets the local `docker compose` infra (see [DOCKER.md](DOCKER.md)).
 
@@ -11,7 +11,7 @@ flowchart LR
   shell["Real environment<br/>(shell, orchestrator, secret store)"] --> penv
   appenv["apps/&lt;app&gt;/.env"] --> penv
   rootenv[".env (repo root)"] --> penv
-  penv["process.env"] --> ns["@app/config namespace<br/>(zod schema → typed camelCase object)"]
+  penv["process.env"] --> ns["@platform/config namespace<br/>(zod schema → typed camelCase object)"]
   ns --> di["@Inject(xConfig.KEY)"]
 ```
 
@@ -34,9 +34,9 @@ flowchart LR
   already in the container.
 - **Fail fast, never leak.** An invalid value throws `EnvValidationError` at boot, naming **every**
   offending variable of the namespace (`Invalid environment for "auth": … → at JWT_ACCESS_SECRET`)
-  and never echoing values. `validateAllEnv()` (exported by `@app/config`) checks all 14 shared
+  and never echoing values. `validateAllEnv()` (exported by `@platform/config`) checks all 14 shared
   namespaces at once, for scripts and CI.
-- **Only `@app/config` reads `process.env`.** Documented exceptions: the OpenTelemetry preload
+- **Only `@platform/config` reads `process.env`.** Documented exceptions: the OpenTelemetry preload
   (`libs/observability/src/otel.ts`, standard `OTEL_*` variables) and
   `libs/database/drizzle.config.ts` (`DATABASE_URL` for drizzle-kit).
 
@@ -59,7 +59,7 @@ Shared by every field builder in [env.helpers.ts](../libs/config/src/env/env.hel
 
 | File                              | Committed | Holds                                                                                                                                                        |
 | --------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| [`.env.example`](../.env.example) | yes       | Every `@app/config` variable, grouped by namespace (defaults; tuning knobs commented out), Node runtime variables, then the compose-only section             |
+| [`.env.example`](../.env.example) | yes       | Every `@platform/config` variable, grouped by namespace (defaults; tuning knobs commented out), Node runtime variables, then the compose-only section        |
 | `apps/<app>/.env.example`         | yes       | Per-app overrides only: `SERVICE_NAME`, `PORT`, `GRPC_URL`, `KAFKA_GROUP_ID`, migration toggles; the gateway also lists its gRPC client targets and deadline |
 | `.env`, `apps/<app>/.env`         | no        | Your local copies, read by the host apps (`bun run dev*`, `bun run start`) and, for the root file, by `bun run db:migrate`                                   |
 | `.env.docker`                     | no        | Optional extra app environment for the **containers only** (`env_file` with `required: false` in `docker-compose.yml`)                                       |
@@ -376,7 +376,7 @@ Both are parsed in `main.ts` (`gatewayConfig.parse()` / `monolithConfig.parse()`
 
 ## Runtime variables (Node / OpenTelemetry)
 
-Read by Node or the OpenTelemetry SDK themselves, not by `@app/config` (they are listed in
+Read by Node or the OpenTelemetry SDK themselves, not by `@platform/config` (they are listed in
 `.env.example` and allow-listed by `scripts/check-env-example.mjs`).
 
 | Variable                      | Default (unset)                         | Description                                                                                                                                                                                                                                                                                                  |
@@ -562,7 +562,7 @@ What the containers get regardless of your `.env` (local-only conveniences):
 
 Adding a variable:
 
-1. Add the field to the namespace schema (use the `z*` builders from `@app/config`, which keep the
+1. Add the field to the namespace schema (use the `z*` builders from `@platform/config`, which keep the
    blank-means-unset convention) and map it in `.transform()`.
 2. Add it to the matching section of the root `.env.example` (commented out if it is a tuning knob).
 3. If it belongs in containers, add it to the right `x-env-*` anchor in `docker-compose.yml` (through
@@ -584,4 +584,4 @@ The compose-only section of `.env.example` is not checked by the script; `DOCKER
 - [DOCKER.md](DOCKER.md) — images, compose profiles, container settings
 - [TESTING.md](TESTING.md) — unit, e2e and integration suites
 - [RELEASING.md](RELEASING.md) — versioning and changelogs
-- [`libs/config/README.md`](../libs/config/README.md) — the `@app/config` package API
+- [`libs/config/README.md`](../libs/config/README.md) — the `@platform/config` package API

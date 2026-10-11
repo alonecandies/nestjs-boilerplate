@@ -1,6 +1,6 @@
-import { DomainValidationException } from '@app/common';
 import { type ArgumentsHost, Logger } from '@nestjs/common';
 import { KafkaContext, KafkaRetriableException } from '@nestjs/microservices';
+import { DomainValidationException } from '@platform/common';
 import { firstValueFrom, lastValueFrom, type Observable } from 'rxjs';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { buildDeadLetterRecord, errorTypeOf } from './dead-letter.js';

@@ -1,8 +1,8 @@
 import type { ApolloServerPlugin, BaseContext, GraphQLRequestListener } from '@apollo/server';
-import { type GraphqlConfig, graphqlConfig } from '@app/config';
 import { Plugin } from '@nestjs/apollo';
 import { Inject } from '@nestjs/common';
 import { GraphQLSchemaHost } from '@nestjs/graphql';
+import { type GraphqlConfig, graphqlConfig } from '@platform/config';
 import {
   type DocumentNode,
   GraphQLError,

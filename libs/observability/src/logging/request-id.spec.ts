@@ -1,6 +1,6 @@
 import type { IncomingHttpHeaders } from 'node:http';
-import { HTTP_HEADERS, isUuidV7 } from '@app/common';
 import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context-host.js';
+import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
 import { describe, expect, it } from 'vitest';
 import {
   incomingCorrelationId,

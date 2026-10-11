@@ -1,5 +1,5 @@
-import { PermissionDeniedException, UnauthenticatedException } from '@app/common';
 import { Reflector } from '@nestjs/core';
+import { PermissionDeniedException, UnauthenticatedException } from '@platform/common';
 import { describe, expect, it } from 'vitest';
 import {
   RequireAnyPermission,

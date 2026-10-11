@@ -1,15 +1,15 @@
 import type { IncomingMessage } from 'node:http';
-import type { AuthUser } from '@app/auth';
-import type { RequestLike } from '@app/common';
 import type { ExecutionContext } from '@nestjs/common';
 import { GqlExecutionContext } from '@nestjs/graphql';
+import type { AuthUser } from '@platform/auth';
+import type { RequestLike } from '@platform/common';
 import type DataLoader from 'dataloader';
 
 /**
- * Per-operation DataLoaders by registered name. It is an interface so domain libs can type their
+ * Per-operation DataLoaders by registered name. It is an interface so domain packages can type their
  * loaders through declaration merging:
  * ```ts
- * declare module '@app/graphql' {
+ * declare module '@platform/graphql' {
  *   interface GraphqlLoaders { users: DataLoader<string, User | null> }
  * }
  * ```

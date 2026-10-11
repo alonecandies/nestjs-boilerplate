@@ -1,10 +1,10 @@
-import { defineConfigNamespace, zStr } from '@app/config';
 import type { ConfigType } from '@nestjs/config';
+import { defineConfigNamespace, zStr } from '@platform/config';
 import { z } from 'zod';
 import { MONOLITH_KAFKA_GROUP_ID } from './app.constants.js';
 
 /**
- * Monolith-only settings, validated with the same machinery as the shared `@app/config`
+ * Monolith-only settings, validated with the same machinery as the shared `@platform/config`
  * namespaces (errors name the variable).
  *
  * `KAFKA_GROUP_ID` is also read by the shared `kafka` namespace, whose default is `SERVICE_NAME`;

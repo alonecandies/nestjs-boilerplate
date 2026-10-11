@@ -1,5 +1,5 @@
-import type { EventEnvelopeFor, KafkaTopic } from '@app/contracts';
 import { Inject, Injectable, Optional } from '@nestjs/common';
+import type { EventEnvelopeFor, KafkaTopic } from '@platform/contracts';
 import { ClsService } from 'nestjs-cls';
 import { EMPTY } from 'rxjs';
 import { KAFKA_PRODUCER_OPTIONS } from '../kafka.constants.js';

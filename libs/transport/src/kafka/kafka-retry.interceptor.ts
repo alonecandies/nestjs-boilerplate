@@ -1,4 +1,3 @@
-import { computeBackoffDelay, getContextType, isDomainException } from '@app/common';
 import {
   type CallHandler,
   type ExecutionContext,
@@ -7,6 +6,7 @@ import {
   type NestInterceptor,
 } from '@nestjs/common';
 import { KafkaContext, KafkaRetriableException } from '@nestjs/microservices';
+import { computeBackoffDelay, getContextType, isDomainException } from '@platform/common';
 import { type Observable, retry, throwError, timer } from 'rxjs';
 import { z } from 'zod';
 import { errorTypeOf } from './dead-letter.js';

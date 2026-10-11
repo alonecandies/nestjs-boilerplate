@@ -4,7 +4,7 @@ import {
   decodeCursor,
   encodeCursor,
   MAX_PAGE_LIMIT,
-} from '@app/common';
+} from '@platform/common';
 import { asc, desc, gt, lt, type SQL } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 import { clamp, isNil, last } from 'lodash-es';

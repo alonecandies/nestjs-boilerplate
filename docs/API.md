@@ -233,7 +233,7 @@ The `AuthTokens` response looks like this:
 
 ## Error format
 
-All transports share one error vocabulary. Domain code throws `DomainException` subclasses from `@app/common`, each with
+All transports share one error vocabulary. Domain code throws `DomainException` subclasses from `@platform/common`, each with
 a stable `code` and an HTTP status. Each transport turns that exception into its own error format:
 
 | Transport | Error format                                                                                                                        |
@@ -291,27 +291,27 @@ a stable `code` and an HTTP status. Each transport turns that exception into its
 
 ### Domain codes
 
-| Code                                                                                      | Status | Source                                                                                                                 |
-| ----------------------------------------------------------------------------------------- | ------ | ---------------------------------------------------------------------------------------------------------------------- |
-| `MISSING_CREDENTIALS`, `MISSING_TOKEN`, `INVALID_TOKEN`, `TOKEN_EXPIRED`, `TOKEN_REVOKED` | 401    | `@app/auth` (`AuthErrorCode`)                                                                                          |
-| `INVALID_CREDENTIALS`, `INVALID_REFRESH_TOKEN`, `SESSION_EXPIRED`, `REFRESH_TOKEN_REUSED` | 401    | identity                                                                                                               |
-| `EMAIL_TAKEN`                                                                             | 409    | identity                                                                                                               |
-| `CANNOT_REVOKE_OWN_ADMIN`, `CANNOT_REMOVE_LAST_ADMIN`                                     | 422    | identity                                                                                                               |
-| `INVALID_ROLES`, `INVALID_USER`                                                           | 422    | identity                                                                                                               |
-| `NOTIFICATION_NOT_FOUND`                                                                  | 404    | notifications                                                                                                          |
-| `PAYMENT_NOT_FOUND`                                                                       | 404    | billing                                                                                                                |
-| `IDEMPOTENCY_KEY_REUSED`, `PAYMENT_CONCURRENTLY_MODIFIED`, `CHECKOUT_SESSION_MISMATCH`    | 409    | billing                                                                                                                |
-| `INVALID_PAYMENT`                                                                         | 422    | billing                                                                                                                |
-| `CHECKOUT_URL_MISSING`                                                                    | 502    | billing                                                                                                                |
-| `INVALID_WEBHOOK_SIGNATURE`                                                               | 422    | `@app/payments` (Stripe). It also defines `PAYMENT_DECLINED`, `PAYMENT_PROVIDER_ERROR` and others (`PaymentErrorCode`) |
-| `FILE_ACCESS_DENIED`                                                                      | 403    | files                                                                                                                  |
-| `FILE_NOT_FOUND`                                                                          | 404    | files                                                                                                                  |
-| `FILE_TOO_LARGE`                                                                          | 413    | files                                                                                                                  |
-| `UNSUPPORTED_FILE_TYPE`                                                                   | 415    | files                                                                                                                  |
-| `UPLOAD_CAPACITY_EXCEEDED`                                                                | 503    | files (with `Retry-After`)                                                                                             |
-| `INVALID_CURSOR`                                                                          | 422    | keyset pagination (`@app/common`, `@app/database`)                                                                     |
-| `INVALID_PAGE_STATE`                                                                      | 422    | Cassandra paging (`@app/cassandra`)                                                                                    |
-| `QUERY_TOO_COMPLEX`                                                                       | 400    | GraphQL only: query cost above `GRAPHQL_MAX_COMPLEXITY` (default 250)                                                  |
+| Code                                                                                      | Status | Source                                                                                                                      |
+| ----------------------------------------------------------------------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `MISSING_CREDENTIALS`, `MISSING_TOKEN`, `INVALID_TOKEN`, `TOKEN_EXPIRED`, `TOKEN_REVOKED` | 401    | `@platform/auth` (`AuthErrorCode`)                                                                                          |
+| `INVALID_CREDENTIALS`, `INVALID_REFRESH_TOKEN`, `SESSION_EXPIRED`, `REFRESH_TOKEN_REUSED` | 401    | identity                                                                                                                    |
+| `EMAIL_TAKEN`                                                                             | 409    | identity                                                                                                                    |
+| `CANNOT_REVOKE_OWN_ADMIN`, `CANNOT_REMOVE_LAST_ADMIN`                                     | 422    | identity                                                                                                                    |
+| `INVALID_ROLES`, `INVALID_USER`                                                           | 422    | identity                                                                                                                    |
+| `NOTIFICATION_NOT_FOUND`                                                                  | 404    | notifications                                                                                                               |
+| `PAYMENT_NOT_FOUND`                                                                       | 404    | billing                                                                                                                     |
+| `IDEMPOTENCY_KEY_REUSED`, `PAYMENT_CONCURRENTLY_MODIFIED`, `CHECKOUT_SESSION_MISMATCH`    | 409    | billing                                                                                                                     |
+| `INVALID_PAYMENT`                                                                         | 422    | billing                                                                                                                     |
+| `CHECKOUT_URL_MISSING`                                                                    | 502    | billing                                                                                                                     |
+| `INVALID_WEBHOOK_SIGNATURE`                                                               | 422    | `@platform/payments` (Stripe). It also defines `PAYMENT_DECLINED`, `PAYMENT_PROVIDER_ERROR` and others (`PaymentErrorCode`) |
+| `FILE_ACCESS_DENIED`                                                                      | 403    | files                                                                                                                       |
+| `FILE_NOT_FOUND`                                                                          | 404    | files                                                                                                                       |
+| `FILE_TOO_LARGE`                                                                          | 413    | files                                                                                                                       |
+| `UNSUPPORTED_FILE_TYPE`                                                                   | 415    | files                                                                                                                       |
+| `UPLOAD_CAPACITY_EXCEEDED`                                                                | 503    | files (with `Retry-After`)                                                                                                  |
+| `INVALID_CURSOR`                                                                          | 422    | keyset pagination (`@platform/common`, `@platform/database`)                                                                |
+| `INVALID_PAGE_STATE`                                                                      | 422    | Cassandra paging (`@platform/cassandra`)                                                                                    |
+| `QUERY_TOO_COMPLEX`                                                                       | 400    | GraphQL only: query cost above `GRAPHQL_MAX_COMPLEXITY` (default 250)                                                       |
 
 ## Pagination
 
@@ -696,7 +696,7 @@ gateway reports that as 422.
 
 Kafka carries integration events between bounded contexts. It is used in both topologies: the monolith produces and
 consumes its own events. Topic names follow `<context>.<event-name>.v<major>` and are defined in `KAFKA_TOPICS`
-(`@app/contracts`). A breaking payload change ships as a new `.v2` topic, consumed alongside the old one. Additive
+(`@platform/contracts`). A breaking payload change ships as a new `.v2` topic, consumed alongside the old one. Additive
 changes stay on the same topic, because readers ignore fields they do not know: zod strips unknown keys instead of
 rejecting them.
 
@@ -820,8 +820,8 @@ Project-wide guides:
 
 Package docs with the API of each library:
 
-- Domain libraries: [`@app/identity`](../libs/identity/README.md), [`@app/notifications`](../libs/notifications/README.md),
-  [`@app/billing`](../libs/billing/README.md), [`@app/files`](../libs/files/README.md).
-- Cross-cutting libraries: [`@app/contracts`](../libs/contracts/README.md), [`@app/transport`](../libs/transport/README.md),
-  [`@app/graphql`](../libs/graphql/README.md), [`@app/common`](../libs/common/README.md).
+- Domain libraries: [`@domain/identity`](../domains/identity/README.md), [`@domain/notifications`](../domains/notifications/README.md),
+  [`@domain/billing`](../domains/billing/README.md), [`@domain/files`](../domains/files/README.md).
+- Cross-cutting libraries: [`@platform/contracts`](../libs/contracts/README.md), [`@platform/transport`](../libs/transport/README.md),
+  [`@platform/graphql`](../libs/graphql/README.md), [`@platform/common`](../libs/common/README.md).
 - Apps: [monolith](../apps/monolith/README.md), [gateway](../apps/gateway/README.md).

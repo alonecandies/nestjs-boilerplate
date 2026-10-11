@@ -1,4 +1,4 @@
-import { DomainValidationException, encodeCursor, MAX_PAGE_LIMIT } from '@app/common';
+import { DomainValidationException, encodeCursor, MAX_PAGE_LIMIT } from '@platform/common';
 import { and, eq } from 'drizzle-orm';
 import { pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';

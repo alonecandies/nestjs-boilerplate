@@ -1,12 +1,12 @@
 {
-  "name": "@app/transport",
+  "name": "@platform/transport",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "gRPC and Kafka infrastructure: server/client options (health, reflection, deadlines, retries), DomainException <-> gRPC <-> HTTP mapping, circuit breakers, validated Kafka envelopes, dead-lettering and hybrid-app wiring.",
   "exports": {
     ".": {
-      "@app/source": "./src/index.ts",
+      "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
@@ -19,10 +19,10 @@
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
-    "@app/common": "workspace:*",
-    "@app/config": "workspace:*",
-    "@app/contracts": "workspace:*",
-    "@app/observability": "workspace:*",
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
+    "@platform/contracts": "workspace:*",
+    "@platform/observability": "workspace:*",
     "@grpc/grpc-js": "catalog:",
     "@grpc/proto-loader": "catalog:",
     "@grpc/reflection": "catalog:",

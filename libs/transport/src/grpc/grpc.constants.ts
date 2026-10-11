@@ -1,4 +1,4 @@
-import { HTTP_HEADERS } from '@app/common';
+import { HTTP_HEADERS } from '@platform/common';
 
 /**
  * gRPC metadata keys used between services. gRPC requires lower-case ASCII keys, and a `-bin`

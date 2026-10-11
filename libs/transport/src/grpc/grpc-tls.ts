@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
-import type { GrpcConfig } from '@app/config';
 import { type ChannelCredentials, credentials, ServerCredentials } from '@grpc/grpc-js';
+import type { GrpcConfig } from '@platform/config';
 
 type GrpcTlsConfig = NonNullable<GrpcConfig['tls']>;
 

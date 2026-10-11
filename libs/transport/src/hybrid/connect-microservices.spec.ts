@@ -1,4 +1,3 @@
-import { grpcConfig, kafkaConfig } from '@app/config';
 import {
   type DynamicModule,
   type INestApplication,
@@ -9,6 +8,7 @@ import {
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { Transport } from '@nestjs/microservices';
+import { grpcConfig, kafkaConfig } from '@platform/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HealthReportingGrpcServer } from '../grpc/grpc-server.options.js';
 import { connectGrpcServer, connectKafkaConsumer } from './connect-microservices.js';

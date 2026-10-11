@@ -1,12 +1,12 @@
 {
-  "name": "@app/storage",
+  "name": "@platform/storage",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "Driver-agnostic object storage (S3-compatible or GCS): streaming uploads, presigned URLs, in-memory test double",
   "exports": {
     ".": {
-      "@app/source": "./src/index.ts",
+      "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
@@ -19,8 +19,8 @@
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
-    "@app/common": "workspace:*",
-    "@app/config": "workspace:*",
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
     "@aws-sdk/client-s3": "catalog:",
     "@aws-sdk/lib-storage": "catalog:",
     "@aws-sdk/s3-request-presigner": "catalog:",

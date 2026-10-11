@@ -1,12 +1,12 @@
 {
-  "name": "@app/common",
+  "name": "@platform/common",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "Cross-cutting primitives: DomainException family, RFC 9457 problem details, transport-aware global enhancers (filter, timeout, validation pipes), middleware, pagination DTOs, utilities.",
   "exports": {
     ".": {
-      "@app/source": "./src/index.ts",
+      "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },

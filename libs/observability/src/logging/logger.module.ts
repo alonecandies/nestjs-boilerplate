@@ -1,10 +1,10 @@
+import { Module } from '@nestjs/common';
 import {
   type AppConfig,
   appConfig,
   type ObservabilityConfig,
   observabilityConfig,
-} from '@app/config';
-import { Module } from '@nestjs/common';
+} from '@platform/config';
 import { LoggerModule } from 'nestjs-pino';
 import { buildLoggerParams } from './logger-params.js';
 

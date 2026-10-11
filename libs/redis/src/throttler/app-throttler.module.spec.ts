@@ -1,8 +1,8 @@
-import { redisConfig } from '@app/config';
 import { Global, type INestApplicationContext, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { getStorageToken, type ThrottlerStorage } from '@nestjs/throttler';
+import { redisConfig } from '@platform/config';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RedisKeyService } from '../keys/redis-key.service.js';
 import { REDIS_CLIENT } from '../redis.constants.js';

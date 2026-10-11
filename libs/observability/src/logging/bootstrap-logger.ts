@@ -1,5 +1,5 @@
-import type { ObservabilityConfig, LogLevel as PinoLogLevel } from '@app/config';
 import { ConsoleLogger, type LoggerService, type LogLevel } from '@nestjs/common';
+import type { ObservabilityConfig, LogLevel as PinoLogLevel } from '@platform/config';
 
 /** Nest log levels enabled by each `LOG_LEVEL` (pino `info` = Nest `log`, `trace` = `verbose`). */
 const NEST_LOG_LEVELS: Readonly<Record<PinoLogLevel, readonly LogLevel[]>> = {

@@ -1,0 +1,58 @@
+{
+  "name": "@domain/billing",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Billing bounded context: Stripe Checkout sessions, idempotent signed webhooks, payments ledger (Drizzle) and the billing.payment-succeeded.v1 integration event - REST, GraphQL and gRPC presentation over CQRS.",
+  "exports": {
+    ".": {
+      "@repo/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project billing",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@platform/auth": "workspace:*",
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
+    "@platform/contracts": "workspace:*",
+    "@platform/database": "workspace:*",
+    "@platform/graphql": "workspace:*",
+    "@domain/identity": "workspace:*",
+    "@platform/observability": "workspace:*",
+    "@platform/payments": "workspace:*",
+    "@platform/redis": "workspace:*",
+    "@platform/transport": "workspace:*",
+    "@grpc/grpc-js": "catalog:",
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "@nestjs/core": "catalog:",
+    "@nestjs/cqrs": "catalog:",
+    "@nestjs/graphql": "catalog:",
+    "@nestjs/microservices": "catalog:",
+    "@nestjs/schedule": "catalog:",
+    "@nestjs/swagger": "catalog:",
+    "@nestjs/throttler": "catalog:",
+    "class-validator": "catalog:",
+    "dataloader": "catalog:",
+    "drizzle-orm": "catalog:",
+    "graphql": "catalog:",
+    "lodash-es": "catalog:",
+    "nestjs-cls": "catalog:",
+    "rxjs": "catalog:",
+    "stripe": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@platform/testing": "workspace:*",
+    "@nestjs/testing": "catalog:",
+    "@types/lodash-es": "catalog:"
+  }
+}

@@ -1,7 +1,7 @@
 import { Readable, Writable } from 'node:stream';
-import { DomainValidationException, ExternalServiceException } from '@app/common';
-import { storageConfig } from '@app/config';
 import { ApiError, type Storage } from '@google-cloud/storage';
+import { DomainValidationException, ExternalServiceException } from '@platform/common';
+import { storageConfig } from '@platform/config';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createGcsClient,

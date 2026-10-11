@@ -1,5 +1,5 @@
-import { type ObservabilityConfig, observabilityConfig } from '@app/config';
 import { type DynamicModule, Module, type Type } from '@nestjs/common';
+import { type ObservabilityConfig, observabilityConfig } from '@platform/config';
 import { RequestContextModule } from './context/request-context.module.js';
 import { HealthModule } from './health/health.module.js';
 import type { HealthContributor } from './health/health-contributor.js';
@@ -28,7 +28,7 @@ export interface ObservabilityModuleOptions {
   exposeHealthDetails?: boolean;
   /**
    * Wire `@nestjs/observe`. Default: both `OBSERVE_APP_KEY` and `OBSERVE_APP_SECRET` are set.
-   * Pair with `observeInstrument()` in `NestFactory.create` (done by `@app/bootstrap`).
+   * Pair with `observeInstrument()` in `NestFactory.create` (done by `@platform/bootstrap`).
    */
   observe?: boolean;
 }

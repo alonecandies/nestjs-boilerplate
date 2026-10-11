@@ -39,7 +39,7 @@ const pendingRequests = new Map<number, (response: ClusterMetricsResponse) => vo
 
 /**
  * PRIMARY: answers workers' scrape requests with the aggregated metrics of all workers. Idempotent;
- * a no-op outside a cluster primary. Called by `@app/bootstrap`'s `runClustered()`.
+ * a no-op outside a cluster primary. Called by `@platform/bootstrap`'s `runClustered()`.
  */
 export function enableClusterMetricsAggregation(): void {
   if (primaryEnabled || !cluster.isPrimary) return;

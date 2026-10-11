@@ -1,6 +1,6 @@
-import { UnauthenticatedException } from '@app/common';
 import { type ExecutionContext, Injectable } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
+import { UnauthenticatedException } from '@platform/common';
 import { firstValueFrom, isObservable } from 'rxjs';
 import { LOCAL_STRATEGY } from '../auth.constants.js';
 import { passportFailure } from './auth-errors.js';
@@ -11,7 +11,7 @@ const invalidCredentials = (): UnauthenticatedException =>
 
 /**
  * `@UseGuards(LocalAuthGuard)` on the HTTP login route (`@Public()`): runs the `local` passport
- * strategy (email + password from the body), which @app/identity implements (`LocalStrategy`).
+ * strategy (email + password from the body), which @domain/identity implements (`LocalStrategy`).
  * Failures surface as our 401s instead of passport's bare `UnauthorizedException`.
  */
 @Injectable()

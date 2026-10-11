@@ -1,5 +1,5 @@
-import { appConfig, observabilityConfig } from '@app/config';
 import { INVALID_SPAN_CONTEXT, trace } from '@opentelemetry/api';
+import { appConfig, observabilityConfig } from '@platform/config';
 import type { Options as PinoHttpOptions } from 'pino-http';
 import { describe, expect, it, vi } from 'vitest';
 import { buildLoggerParams, LOG_REDACT_PATHS, traceContextMixin } from './logger-params.js';

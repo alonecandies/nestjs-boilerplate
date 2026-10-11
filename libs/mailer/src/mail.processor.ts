@@ -1,7 +1,7 @@
-import { maskEmail } from '@app/common';
-import { type MailConfig, mailConfig } from '@app/config';
 import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Inject, Logger, type OnApplicationBootstrap } from '@nestjs/common';
+import { maskEmail } from '@platform/common';
+import { type MailConfig, mailConfig } from '@platform/config';
 import { Job, UnrecoverableError } from 'bullmq';
 import { isPermanentMailError } from './mail.errors.js';
 import { MailService } from './mail.service.js';

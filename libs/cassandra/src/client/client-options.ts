@@ -1,4 +1,4 @@
-import type { CassandraConfig, CassandraConsistency } from '@app/config';
+import type { CassandraConfig, CassandraConsistency } from '@platform/config';
 import cassandra from 'cassandra-driver';
 import { isInteger, map, toPairs } from 'lodash-es';
 import { DEFAULT_FETCH_SIZE } from '../cassandra.constants.js';

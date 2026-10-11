@@ -1,11 +1,11 @@
+import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import {
   DomainConflictException,
   DomainValidationException,
   EntityNotFoundException,
   ExternalServiceException,
   UnauthenticatedException,
-} from '@app/common';
-import { BadRequestException, InternalServerErrorException } from '@nestjs/common';
+} from '@platform/common';
 import pino from 'pino';
 import { describe, expect, it } from 'vitest';
 import { isRpcClientError, rpcErrorObject, rpcLogLevel } from './rpc-error-logging.js';

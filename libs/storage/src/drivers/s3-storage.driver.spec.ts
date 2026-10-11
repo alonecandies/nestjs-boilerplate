@@ -1,8 +1,8 @@
 import { Readable } from 'node:stream';
 import { buffer as readAll } from 'node:stream/consumers';
-import { DomainValidationException, ExternalServiceException } from '@app/common';
-import { storageConfig } from '@app/config';
 import { S3Client } from '@aws-sdk/client-s3';
+import { DomainValidationException, ExternalServiceException } from '@platform/common';
+import { storageConfig } from '@platform/config';
 import { describe, expect, it, vi } from 'vitest';
 import { S3_UPLOAD_PART_SIZE, S3_UPLOAD_QUEUE_SIZE, S3StorageDriver } from './s3-storage.driver.js';
 

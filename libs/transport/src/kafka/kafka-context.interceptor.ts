@@ -1,5 +1,3 @@
-import { generateId, getContextType, isSafeRequestId } from '@app/common';
-import { KAFKA_HEADERS } from '@app/contracts';
 import {
   type CallHandler,
   type ExecutionContext,
@@ -8,6 +6,8 @@ import {
   Optional,
 } from '@nestjs/common';
 import { KafkaContext } from '@nestjs/microservices';
+import { generateId, getContextType, isSafeRequestId } from '@platform/common';
+import { KAFKA_HEADERS } from '@platform/contracts';
 import { CLS_ID, ClsService } from 'nestjs-cls';
 import { Observable } from 'rxjs';
 import { RPC_CLS_KEYS } from '../context/transport-context.js';

@@ -1,11 +1,11 @@
+import type { PipeTransform } from '@nestjs/common';
 import {
   type EventEnvelopeFor,
   isKafkaTopic,
   type KafkaTopic,
   safeParseEventEnvelope,
   topicVersion,
-} from '@app/contracts';
-import type { PipeTransform } from '@nestjs/common';
+} from '@platform/contracts';
 import { InvalidEventException } from './kafka.errors.js';
 
 /**

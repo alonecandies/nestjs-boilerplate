@@ -3,6 +3,6 @@
  * module loader BEFORE Nest, pg/postgres.js, ioredis, kafkajs or grpc-js are imported, so this file
  * imports nothing but the Nest-free `./otel` subpath. No-op unless an OTLP endpoint is configured.
  */
-import { startTracing } from '@app/observability/otel';
+import { startTracing } from '@platform/observability/otel';
 
 await startTracing({ serviceName: 'identity-service' });

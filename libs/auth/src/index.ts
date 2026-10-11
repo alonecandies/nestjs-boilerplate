@@ -1,5 +1,5 @@
 /**
- * @app/auth — JWT authentication (passport-jwt, HS256, verified locally at every service),
+ * @platform/auth — JWT authentication (passport-jwt, HS256, verified locally at every service),
  * refresh tokens, the Redis access-token denylist, Argon2id password hashing and RBAC
  * (roles → permissions, guards, decorators) for HTTP, GraphQL and WebSocket handlers.
  */

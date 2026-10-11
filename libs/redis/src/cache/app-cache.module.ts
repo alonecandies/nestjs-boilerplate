@@ -1,8 +1,8 @@
-import { type CacheConfig, cacheConfig, type RedisConfig, redisConfig } from '@app/config';
 import { createKeyv as createRedisKeyv, defaultReconnectStrategy } from '@keyv/redis';
 import { CacheModule, type CacheModuleOptions } from '@nestjs/cache-manager';
 import { type DynamicModule, Logger, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { type CacheConfig, cacheConfig, type RedisConfig, redisConfig } from '@platform/config';
 import type { Keyv } from 'keyv';
 import { throttle } from 'lodash-es';
 import { joinKey } from '../keys/key.util.js';

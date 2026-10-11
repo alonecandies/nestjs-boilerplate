@@ -110,7 +110,7 @@ bunx vitest run --project gateway:e2e      # e2e (test/app.e2e-spec.ts) — no D
 
 The e2e suite boots the real `AppModule` with the production HTTP wiring and binds `AuthPort`,
 `UsersPort` and `NotificationsPort` to in-memory fake services (`test/support/fake-upstreams.ts`)
-that return the same `@app/contracts` shapes and DomainExceptions as the gRPC adapters. Billing
+that return the same `@platform/contracts` shapes and DomainExceptions as the gRPC adapters. Billing
 keeps its real gRPC adapter, pointed at a dead upstream, to assert the 503 mapping. `REDIS_CLIENT`
 → `InMemoryRedis`, `CACHE_MANAGER` → L1 only, `GRAPHQL_PUB_SUB` → in-process PubSub,
 `StorageService` → in-memory.

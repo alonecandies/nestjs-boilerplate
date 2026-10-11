@@ -1,6 +1,6 @@
-import { type StorageConfig, storageConfig } from '@app/config';
 import { type DynamicModule, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { type StorageConfig, storageConfig } from '@platform/config';
 import { GcsStorageDriver } from './drivers/gcs-storage.driver.js';
 import { S3StorageDriver } from './drivers/s3-storage.driver.js';
 import { StorageService } from './storage.service.js';

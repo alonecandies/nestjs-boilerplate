@@ -1,6 +1,6 @@
-import { DomainValidationException, ServiceUnavailableException } from '@app/common';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
 import { KafkaContext, KafkaRetriableException } from '@nestjs/microservices';
+import { DomainValidationException, ServiceUnavailableException } from '@platform/common';
 import { defer, lastValueFrom } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';

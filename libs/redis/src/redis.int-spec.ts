@@ -4,9 +4,9 @@
  * is removed afterwards.
  */
 import { createServer } from 'node:http';
-import { generateId } from '@app/common';
-import { cacheConfig, redisConfig } from '@app/config';
 import type { INestApplicationContext } from '@nestjs/common';
+import { generateId } from '@platform/common';
+import { cacheConfig, redisConfig } from '@platform/config';
 import { Redlock } from '@sesamecare-oss/redlock';
 import { type Cache, createCache } from 'cache-manager';
 import type { Redis } from 'ioredis';

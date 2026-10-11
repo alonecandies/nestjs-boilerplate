@@ -28,8 +28,8 @@ bun run docker:infra     # local infrastructure from the root docker-compose.yml
 bun run dev:monolith     # = `bun run dev` — node --watch on the TS sources (no build step)
 ```
 
-The dev loop runs straight from the sources of the app and every lib (`@app/source` export
-condition + `@swc-node/register`): an edit in `libs/**` restarts the process too.
+The dev loop runs straight from the sources of the app and every lib (`@repo/source` export
+condition + `@swc-node/register`): an edit in `domains/**` or `libs/**` restarts the process too.
 
 Production build and start (what the Docker image runs):
 

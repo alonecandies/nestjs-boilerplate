@@ -1,8 +1,8 @@
-import { type AppConfig, appConfig, type KafkaConfig, kafkaConfig } from '@app/config';
 import { type DynamicModule, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ClientsModule, type KafkaOptions } from '@nestjs/microservices';
 import { TerminusModule } from '@nestjs/terminus';
+import { type AppConfig, appConfig, type KafkaConfig, kafkaConfig } from '@platform/config';
 import { KAFKA_PRODUCER_CLIENT, KAFKA_PRODUCER_OPTIONS } from './kafka.constants.js';
 import { KafkaHealthIndicator } from './kafka.health.js';
 import { createKafkaClientOptions } from './kafka.options.js';

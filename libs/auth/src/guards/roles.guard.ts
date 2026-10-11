@@ -1,6 +1,6 @@
-import { getContextType, PermissionDeniedException } from '@app/common';
 import { type CanActivate, type ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { getContextType, PermissionDeniedException } from '@platform/common';
 import { intersection, isEmpty } from 'lodash-es';
 import { ROLES_KEY } from '../auth.constants.js';
 import type { Role } from '../rbac/role.enum.js';

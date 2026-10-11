@@ -18,7 +18,7 @@ reacts to other services' integration events:
 | HTTP    | `PORT` `3002`              | `GET /health/live`, `GET /health/ready`, `GET /metrics` only          |
 | Kafka   | consumes / produces        | see above; every topic and its `.dlq` must exist (auto-create is off) |
 
-The domain logic lives in [`@app/notifications`](../../libs/notifications/README.md); this app is
+The domain logic lives in [`@domain/notifications`](../../domains/notifications/README.md); this app is
 only the composition root.
 
 ## Composition (`src/app.module.ts`)
@@ -48,7 +48,7 @@ idempotent (deterministic notification ids, mail job ids `welcome-{userId}` / `r
 ## Configuration
 
 `.env.example` holds only what differs per service; `bun run setup:env` copies it to `.env`.
-Everything else comes from the root `.env` / the environment ([`@app/config`](../../libs/config)):
+Everything else comes from the root `.env` / the environment ([`@platform/config`](../../libs/config)):
 
 | Variable                                                                      | Value here               | Notes                                                 |
 | ----------------------------------------------------------------------------- | ------------------------ | ----------------------------------------------------- |
@@ -64,7 +64,7 @@ Everything else comes from the root `.env` / the environment ([`@app/config`](..
 ```bash
 bun run docker:infra                                    # Cassandra, Redis, Kafka (+ topics), Mailpit
 bun run dev:notifications                               # node --watch on the TS sources (no build)
-bun run --filter @app/notifications-service build       # SWC → dist/ (the .cql migrations ship with @app/notifications)
+bun run --filter @app/notifications-service build       # SWC → dist/ (the .cql migrations ship with @domain/notifications)
 bun run --filter @app/notifications-service start       # node --import ./dist/instrument.js dist/main.js
 ```
 

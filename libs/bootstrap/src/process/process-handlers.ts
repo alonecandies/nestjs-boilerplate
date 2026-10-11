@@ -1,5 +1,5 @@
-import { flushLogs } from '@app/observability';
 import { Logger, type LoggerService } from '@nestjs/common';
+import { flushLogs } from '@platform/observability';
 
 export interface ProcessHandlersOptions {
   /**

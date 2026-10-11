@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
-import { redisConfig } from '@app/config';
 import type { INestApplicationContext } from '@nestjs/common';
+import { redisConfig } from '@platform/config';
 import { describe, expect, it } from 'vitest';
 import { RedisIoAdapter } from './redis-io.adapter.js';
 

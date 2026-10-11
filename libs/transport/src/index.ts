@@ -1,5 +1,5 @@
 /**
- * @app/transport — gRPC and Kafka infrastructure shared by every service:
+ * @platform/transport — gRPC and Kafka infrastructure shared by every service:
  * - gRPC: server/client options (health, reflection, service config with deadlines, retries and
  *   round_robin, keepalive), `GrpcClientsModule`, `grpcCall` + circuit breakers, status mapping
  *   (DomainException <-> gRPC <-> HTTP), metadata helpers, `@GrpcController()`, zod payload pipe.

@@ -1,4 +1,4 @@
-import type { CassandraClient } from '@app/cassandra';
+import type { CassandraClient } from '@platform/cassandra';
 import type cassandra from 'cassandra-driver';
 import { vi } from 'vitest';
 

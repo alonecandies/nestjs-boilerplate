@@ -1,7 +1,7 @@
-# @app/config
+# @platform/config
 
 Typed, zod-validated, namespaced environment configuration. **The only package allowed to read
-`process.env`** (documented exceptions: `@app/observability/otel`, `drizzle.config.ts`, test setup).
+`process.env`** (documented exceptions: `@platform/observability/otel`, `drizzle.config.ts`, test setup).
 Every namespace schema is keyed by the **env var names** (so errors name the variable to fix) and
 transformed into a camelCase object. Defaults make `bun run dev` work against the local
 docker-compose infra with zero `.env`.
@@ -44,7 +44,7 @@ Helper conventions: empty/blank values count as **unset** (fall back to the defa
 | `storage`       | `STORAGE_DRIVER` (s3\|gcs), `STORAGE_MAX_UPLOAD_BYTES` (25 MiB), `STORAGE_SIGNED_URL_TTL_SEC` (900, ≤ 7 d), `S3_ENDPOINT` (http://localhost:9000), `S3_PUBLIC_ENDPOINT` (= endpoint), `S3_REGION`, `S3_FORCE_PATH_STYLE` (true), `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` (rustfsadmin), `S3_BUCKET` (uploads), `GCS_PROJECT_ID`, `GCS_BUCKET`, `GCS_API_ENDPOINT` (http://localhost:4443), `GCS_KEY_FILE`                                                                                |
 | `stripe`        | `STRIPE_SECRET_KEY` (sk_test_placeholder, rejected in production; `sk_`/`rk_` prefix), `STRIPE_WEBHOOK_SECRET` (whsec_placeholder, rejected in production), `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`, `STRIPE_MAX_NETWORK_RETRIES` (2), `STRIPE_TIMEOUT_MS` (20000)                                                                                                                                                                                                                       |
 
-`storage` also reads `STORAGE_MAX_CONCURRENT_UPLOADS` (4): streamed uploads in flight per process (`@app/files`
+`storage` also reads `STORAGE_MAX_CONCURRENT_UPLOADS` (4): streamed uploads in flight per process (`@domain/files`
 answers 503 beyond it; each one holds ~15 MiB off-heap).
 
 ## Usage

@@ -1,4 +1,4 @@
-# @app/observability
+# @platform/observability
 
 Everything a process needs to be observable, wired by one global module: **pino JSON logs**
 (nestjs-pino) with `requestId` + `trace_id`/`span_id` on every line, a **request context**
@@ -30,22 +30,22 @@ nestjs-cls' `idGenerator`, so `request.id`, the log field `requestId`, `cls.getI
 | `requestIdOf(req)`, `incomingCorrelationId(req)`                                                  | reuse `req.id`; valid `x-correlation-id` or `undefined`                                                                                                                                                                                                            |
 | `resolveRpcRequestId(ctx)`, `resolveContextRequestId(ctx)`                                        | id from Kafka headers / gRPC metadata (`x-request-id`, else `x-correlation-id`), stable per message; any transport                                                                                                                                                 |
 | `buildLoggerParams(obs, app, { sync? })`, `LOG_REDACT_PATHS`                                      | nestjs-pino `Params` (level label, redaction, quiet probes, rpc hooks); `traceContextMixin()`                                                                                                                                                                      |
-| `createBootstrapLogger(config)`                                                                   | `LoggerService \| undefined` — single-line JSON `ConsoleLogger` (+ `service`, `LOG_LEVEL`) for the Nest create phase (used by `@app/bootstrap`); `undefined` when `LOG_PRETTY`                                                                                     |
+| `createBootstrapLogger(config)`                                                                   | `LoggerService \| undefined` — single-line JSON `ConsoleLogger` (+ `service`, `LOG_LEVEL`) for the Nest create phase (used by `@platform/bootstrap`); `undefined` when `LOG_PRETTY`                                                                                |
 | `createStandaloneLogger(context, env?)`                                                           | `LoggerService` over pino (sync) for processes without Nest (cluster primary, scripts)                                                                                                                                                                             |
 | `TelemetryFlushService`, `flushLogs(timeoutMs?)`                                                  | `onApplicationShutdown` → `shutdownTracing()` + drain pino                                                                                                                                                                                                         |
 | `observeInstrument(env?)`                                                                         | `ObserveInstrumentation \| undefined` for `NestFactory.create(…, { instrument })`; `isObserveEnabled(env?)`, `buildObserveOptions(cfg)`, `observeTraceIdGenerator(req)`, `ObserveModule`, `ObserveInstrument`                                                      |
 | `Span`, `Traceable`, `CurrentSpan`, `TraceService`                                                | re-exported from nestjs-otel                                                                                                                                                                                                                                       |
 | `isTracingEnabled(env?)`, `isTracingActive()`, `shutdownTracing()`                                | from `./otel`                                                                                                                                                                                                                                                      |
-| `enableClusterMetricsAggregation()`, `enableClusterMetricsWorker()`, `requestClusterMetrics(ms?)` | node:cluster `/metrics` bridge (used by `@app/bootstrap`)                                                                                                                                                                                                          |
+| `enableClusterMetricsAggregation()`, `enableClusterMetricsWorker()`, `requestClusterMetrics(ms?)` | node:cluster `/metrics` bridge (used by `@platform/bootstrap`)                                                                                                                                                                                                     |
 
-**Subpath `@app/observability/otel`** (imports nothing from Nest): `startTracing({ serviceName?, env? })`,
+**Subpath `@platform/observability/otel`** (imports nothing from Nest): `startTracing({ serviceName?, env? })`,
 `shutdownTracing()`, `isTracingEnabled(env?)`, `isTracingActive()`, `type StartTracingOptions`, `type TracingEnv`.
 
 ## Usage
 
 ```ts
 // apps/<app>/src/instrument.ts — preloaded: node --import ./dist/instrument.js dist/main.js
-import { startTracing } from '@app/observability/otel';
+import { startTracing } from '@platform/observability/otel';
 await startTracing({ serviceName: 'identity-service' });
 
 // app.module.ts
@@ -73,7 +73,7 @@ export class OrdersService {
 }
 ```
 
-## Env vars (via `@app/config` `observability`/`app` namespaces)
+## Env vars (via `@platform/config` `observability`/`app` namespaces)
 
 `LOG_LEVEL` (info), `LOG_PRETTY` (dev only; needs the `pino-pretty` devDependency), `METRICS_ENABLED`
 (true), `METRICS_BEARER_TOKEN` (optional scrape token), `SERVICE_NAME`, `NODE_ENV`, `OBSERVE_APP_KEY` + `OBSERVE_APP_SECRET` (+ `OBSERVE_SERVICE_ID`,
@@ -98,7 +98,7 @@ directly: `OTEL_SDK_DISABLED`, `OTEL_EXPORTER_OTLP_ENDPOINT` / `OTEL_EXPORTER_OT
 - `/health/ready` hides failure messages in production (they leak hosts/IPs); failures are logged.
   Liveness never checks dependencies — a DB outage must not restart every pod.
 - Contributors don't need try/catch: throws, rejections and timeouts become `down`.
-- Shutdown flush needs `app.enableShutdownHooks()` (done by `@app/bootstrap`, with
+- Shutdown flush needs `app.enableShutdownHooks()` (done by `@platform/bootstrap`, with
   `useProcessExit` so pino's exit flush also runs).
 - `pino-http` augments `http.IncomingMessage` globally with a required `id: ReqId`. Any
   `interface X extends IncomingMessage { id?: … }` then fails to typecheck in every program that

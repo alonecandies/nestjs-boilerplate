@@ -1,4 +1,3 @@
-import { EXCEPTIONS_FILTER_OPTIONS, type ExceptionsFilterOptions } from '@app/common';
 import {
   type ArgumentsHost,
   Catch,
@@ -7,6 +6,7 @@ import {
   Optional,
   type RpcExceptionFilter,
 } from '@nestjs/common';
+import { EXCEPTIONS_FILTER_OPTIONS, type ExceptionsFilterOptions } from '@platform/common';
 import { type Observable, throwError } from 'rxjs';
 import {
   exceptionToGrpcError,

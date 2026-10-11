@@ -1,6 +1,3 @@
-import { CorrelationIdMiddleware, HTTP_HEADERS, isUuidV7 } from '@app/common';
-import { AppConfigModule, appConfig, observabilityConfig } from '@app/config';
-import { HealthContributor, ObservabilityModule, RequestContextService } from '@app/observability';
 import {
   Controller,
   Get,
@@ -13,6 +10,13 @@ import {
   RequestMethod,
 } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+import { CorrelationIdMiddleware, HTTP_HEADERS, isUuidV7 } from '@platform/common';
+import { AppConfigModule, appConfig, observabilityConfig } from '@platform/config';
+import {
+  HealthContributor,
+  ObservabilityModule,
+  RequestContextService,
+} from '@platform/observability';
 import Fastify from 'fastify';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { buildFastifyOptions, createHttpApp } from './create-http-app.js';

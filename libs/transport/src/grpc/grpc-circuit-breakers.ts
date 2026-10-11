@@ -1,4 +1,3 @@
-import { isDomainException } from '@app/common';
 import {
   HttpStatus,
   Inject,
@@ -8,6 +7,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { GrpcStatus } from '@nestjs/microservices';
+import { isDomainException } from '@platform/common';
 import CircuitBreaker from 'opossum';
 import { GRPC_CIRCUIT_BREAKER_OPTIONS } from './grpc.constants.js';
 import { isGrpcServiceError } from './grpc-status.mapping.js';

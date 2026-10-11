@@ -1,4 +1,4 @@
-# @app/auth
+# @platform/auth
 
 JWT authentication and RBAC for HTTP, GraphQL and WebSocket handlers:
 
@@ -22,7 +22,7 @@ JWT authentication and RBAC for HTTP, GraphQL and WebSocket handlers:
 | `PasswordHasher`                                                                                                                                                                    | service                 | `hash(plain)`, `verify(hash, plain)` (never throws), `verifyDummy(plain)` (equalises login timing for unknown users), `needsRehash(hash)`.                                                                                                                             |
 | `JwtStrategy`                                                                                                                                                                       | passport strategy `jwt` | Bearer extraction, HS256 + iss/aud/exp with 5 s tolerance, then the `typ` check, then the denylist. Returns `AuthUser`.                                                                                                                                                |
 | `JwtAuthGuard`                                                                                                                                                                      | guard                   | Passes `rpc` and `@Public()`. For `ws`, requires a non-expired `socket.data.user`. Runs passport for http/graphql.                                                                                                                                                     |
-| `RolesGuard`, `PermissionsGuard`, `LocalAuthGuard`                                                                                                                                  | guards                  | `LocalAuthGuard` runs the `local` strategy, which @app/identity implements.                                                                                                                                                                                            |
+| `RolesGuard`, `PermissionsGuard`, `LocalAuthGuard`                                                                                                                                  | guards                  | `LocalAuthGuard` runs the `local` strategy, which @domain/identity implements.                                                                                                                                                                                         |
 | `authenticateSocket(tokens, denylist, token)`, `extractSocketToken(handshake)`, `extractBearerToken(v)`                                                                             | WS helpers              | Authenticate once in `handleConnection`, then store the user in `socket.data.user`.                                                                                                                                                                                    |
 | `parseAccessTokenClaims`, `parseRefreshTokenClaims`, `toAuthUser`, `isAuthUser`, `requireAuthUser`, `toUnauthenticated`                                                             | helpers                 | Claim validation and error mapping.                                                                                                                                                                                                                                    |
 | `AuthUser`, `AccessTokenClaims`, `RefreshTokenClaims`, `AccessTokenSubject`, `IssuedAccessToken`, `IssuedRefreshToken`, `TokenType`, `PermissionRequirement`, `PermissionMatchMode` | types                   |                                                                                                                                                                                                                                                                        |
@@ -61,7 +61,7 @@ async handleConnection(client: Socket): Promise<void> {
 
 ## Environment
 
-These variables come from the `auth` namespace of `@app/config`:
+These variables come from the `auth` namespace of `@platform/config`:
 
 - `JWT_ACCESS_SECRET`: at least 32 characters. The dev default is rejected in production.
 - `JWT_ACCESS_TTL_SEC`: default 900.

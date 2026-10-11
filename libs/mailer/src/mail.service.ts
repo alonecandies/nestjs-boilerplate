@@ -1,7 +1,7 @@
-import { type MailConfig, mailConfig } from '@app/config';
 import { InjectQueue } from '@nestjs/bullmq';
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { MailerService } from '@nestjs-modules/mailer';
+import { type MailConfig, mailConfig } from '@platform/config';
 import { Queue } from 'bullmq';
 import type { MailJobData, MailMessage } from './mail.types.js';
 import { createThrottledErrorLog, defaultMailContext, toMailJobId } from './mail.util.js';

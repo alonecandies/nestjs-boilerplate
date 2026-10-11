@@ -1,12 +1,12 @@
 {
-  "name": "@app/payments",
+  "name": "@platform/payments",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "Stripe integration: global StripeModule, idempotent Checkout Sessions, webhook signature verification, SDK error mapping",
   "exports": {
     ".": {
-      "@app/source": "./src/index.ts",
+      "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
@@ -19,8 +19,8 @@
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
-    "@app/common": "workspace:*",
-    "@app/config": "workspace:*",
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
     "@nestjs/common": "catalog:",
     "@nestjs/config": "catalog:",
     "@nestjs/core": "catalog:",

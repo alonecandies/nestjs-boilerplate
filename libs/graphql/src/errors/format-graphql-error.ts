@@ -1,4 +1,4 @@
-import { toProblemDetails } from '@app/common';
+import { toProblemDetails } from '@platform/common';
 import {
   type ExecutionResult,
   type FormattedExecutionResult,

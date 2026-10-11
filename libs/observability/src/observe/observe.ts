@@ -1,7 +1,7 @@
-import { isSafeRequestId } from '@app/common';
-import { type EnvSource, type ObservabilityConfig, observabilityConfig } from '@app/config';
 import type { NestApplicationOptions } from '@nestjs/common';
 import { createObserveModule, defaultTraceIdGenerator, type ObserveOptions } from '@nestjs/observe';
+import { isSafeRequestId } from '@platform/common';
+import { type EnvSource, type ObservabilityConfig, observabilityConfig } from '@platform/config';
 import { get, isObjectLike, isString } from 'lodash-es';
 import { ClsService } from 'nestjs-cls';
 import { Logger, PinoLogger } from 'nestjs-pino';

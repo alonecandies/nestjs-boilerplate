@@ -1,7 +1,7 @@
-import { UnauthenticatedException } from '@app/common';
-import { type AuthConfig, authConfig } from '@app/config';
 import { Inject, Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
+import { UnauthenticatedException } from '@platform/common';
+import { type AuthConfig, authConfig } from '@platform/config';
 import { ExtractJwt, Strategy } from 'passport-jwt';
 import {
   AuthErrorCode,

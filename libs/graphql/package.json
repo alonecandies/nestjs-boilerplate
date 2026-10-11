@@ -1,12 +1,12 @@
 {
-  "name": "@app/graphql",
+  "name": "@platform/graphql",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "Code-first Apollo Server 5 on Fastify: complexity limit, per-operation DataLoaders, graphql-ws subscriptions with JWT auth, Redis PubSub, unified error format",
   "exports": {
     ".": {
-      "@app/source": "./src/index.ts",
+      "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
@@ -20,10 +20,10 @@
   },
   "dependencies": {
     "@apollo/server": "catalog:",
-    "@app/auth": "workspace:*",
-    "@app/common": "workspace:*",
-    "@app/config": "workspace:*",
-    "@app/redis": "workspace:*",
+    "@platform/auth": "workspace:*",
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
+    "@platform/redis": "workspace:*",
     "@as-integrations/fastify": "catalog:",
     "@nestjs/apollo": "catalog:",
     "@nestjs/common": "catalog:",

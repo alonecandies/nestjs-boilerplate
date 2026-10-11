@@ -1,8 +1,8 @@
-import { mailConfig } from '@app/config';
 import { BullModule } from '@nestjs/bullmq';
 import { type DynamicModule, Module, type Provider } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { MailerModule } from '@nestjs-modules/mailer';
+import { mailConfig } from '@platform/config';
 import { MailProcessor } from './mail.processor.js';
 import { MailService } from './mail.service.js';
 import { MAIL_QUEUE } from './mailer.constants.js';
@@ -20,7 +20,7 @@ export interface AppMailerModuleOptions {
  * Global outbound mail: `MailerModule` (pooled SMTP + Handlebars templates), the `mail` BullMQ
  * queue, `MailService`, and optionally the `MailProcessor` worker.
  *
- * Requires the app-level BullMQ connection (`AppQueueModule.forRootAsync()` from `@app/redis`),
+ * Requires the app-level BullMQ connection (`AppQueueModule.forRootAsync()` from `@platform/redis`),
  * which `BullModule.registerQueue` resolves globally.
  */
 @Module({})

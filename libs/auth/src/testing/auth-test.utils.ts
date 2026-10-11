@@ -1,4 +1,4 @@
-import { generateId } from '@app/common';
+import { generateId } from '@platform/common';
 import { Role } from '../rbac/role.enum.js';
 import { resolvePermissions } from '../rbac/role-permissions.js';
 import type { AuthUser } from '../types/auth-user.js';

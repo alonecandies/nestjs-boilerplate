@@ -1,7 +1,7 @@
-import { HTTP_HEADERS, isUuidV7 } from '@app/common';
 import { type CallHandler, type INestApplicationContext, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context-host.js';
+import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
 import { ClsModule } from 'nestjs-cls';
 import { defer, lastValueFrom, of } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';

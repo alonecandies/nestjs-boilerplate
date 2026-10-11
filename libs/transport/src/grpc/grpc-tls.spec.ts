@@ -3,8 +3,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { generateId } from '@app/common';
-import { type GrpcConfig, grpcConfig } from '@app/config';
+import { type ChannelCredentials, credentials } from '@grpc/grpc-js';
+import { type INestMicroservice, Module } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import { ClientGrpcProxy } from '@nestjs/microservices';
+import { generateId } from '@platform/common';
+import { type GrpcConfig, grpcConfig } from '@platform/config';
 import type {
   GetUserRequest,
   GetUsersByIdsRequest,
@@ -15,12 +19,8 @@ import type {
   UserPage,
   UsersServiceClient,
   UsersServiceController,
-} from '@app/contracts';
-import { UsersServiceControllerMethods } from '@app/contracts';
-import { type ChannelCredentials, credentials } from '@grpc/grpc-js';
-import { type INestMicroservice, Module } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
-import { ClientGrpcProxy } from '@nestjs/microservices';
+} from '@platform/contracts';
+import { UsersServiceControllerMethods } from '@platform/contracts';
 import { ClsModule } from 'nestjs-cls';
 import { lastValueFrom } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';

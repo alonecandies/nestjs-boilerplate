@@ -1,6 +1,6 @@
-import type { HealthContributor } from '@app/observability';
 import { Injectable } from '@nestjs/common';
 import { type HealthIndicatorResult, HealthIndicatorService } from '@nestjs/terminus';
+import type { HealthContributor } from '@platform/observability';
 import type { Redis } from 'ioredis';
 import { round } from 'lodash-es';
 import { InjectRedis } from '../redis.constants.js';

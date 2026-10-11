@@ -1,4 +1,4 @@
-// Fails when the root .env.example drifts from @app/config: every env var a config namespace
+// Fails when the root .env.example drifts from @platform/config: every env var a config namespace
 // schema reads must be documented there (as `KEY=` or `# KEY=`), and nothing unknown may be
 // listed above the compose-only section. Reads the schema SOURCES (no build needed):
 //   node scripts/check-env-example.mjs
@@ -61,6 +61,6 @@ const unknown = [...documented].filter((key) => !configVars.has(key) && !RUNTIME
 for (const [key, ns] of missing)
   console.error(`missing from .env.example: ${key} (${ns} namespace)`);
 for (const key of unknown)
-  console.error(`.env.example lists ${key}, which @app/config does not read`);
+  console.error(`.env.example lists ${key}, which @platform/config does not read`);
 if (missing.length > 0 || unknown.length > 0) process.exit(1);
-console.info(`.env.example documents all ${configVars.size} @app/config variables`);
+console.info(`.env.example documents all ${configVars.size} @platform/config variables`);

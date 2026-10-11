@@ -1,7 +1,7 @@
 import { ApolloServerPluginLandingPageLocalDefault } from '@apollo/server/plugin/landingPage/default';
-import type { AppConfig, GraphqlConfig } from '@app/config';
 import type { ApolloDriverConfig } from '@nestjs/apollo';
 import type { BuildSchemaOptions } from '@nestjs/graphql';
+import type { AppConfig, GraphqlConfig } from '@platform/config';
 import type { GraphqlWsAuthHandlers } from './auth/subscription-auth.js';
 import { isWsContext } from './context/gql-context.js';
 import { createGraphqlContext } from './context/graphql-context.factory.js';

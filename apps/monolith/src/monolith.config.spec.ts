@@ -1,4 +1,4 @@
-import { EnvValidationError } from '@app/config';
+import { EnvValidationError } from '@platform/config';
 import { describe, expect, it } from 'vitest';
 import { MONOLITH_KAFKA_GROUP_ID } from './app.constants.js';
 import { monolithConfig } from './monolith.config.js';

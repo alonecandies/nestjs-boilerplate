@@ -1,10 +1,10 @@
-import { redisConfig } from '@app/config';
-import { REDIS_CLIENT, RedisKeyService } from '@app/redis';
-import { InMemoryRedis } from '@app/redis/testing';
 import { Global, type INestApplicationContext, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
+import { redisConfig } from '@platform/config';
+import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
+import { InMemoryRedis } from '@platform/redis/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AuthModule } from './auth.module.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';

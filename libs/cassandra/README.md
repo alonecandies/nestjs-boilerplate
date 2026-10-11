@@ -1,4 +1,4 @@
-# @app/cassandra
+# @platform/cassandra
 
 Apache Cassandra through `cassandra-driver` 4.10. It provides a global `CassandraModule` with a tuned,
 keyspace-bound client (prepared statements and a configured consistency by default), **keyspace bootstrap** and

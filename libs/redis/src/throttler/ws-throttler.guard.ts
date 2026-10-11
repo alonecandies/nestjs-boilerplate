@@ -1,6 +1,6 @@
-import { getContextType } from '@app/common';
 import { type ExecutionContext, Injectable } from '@nestjs/common';
 import { ThrottlerGuard, type ThrottlerRequest } from '@nestjs/throttler';
+import { getContextType } from '@platform/common';
 import { DEFAULT_THROTTLER_NAME } from './throttle.constants.js';
 import { throttleTracker } from './throttle-tracker.util.js';
 

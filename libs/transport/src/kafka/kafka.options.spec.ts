@@ -1,5 +1,5 @@
-import { kafkaConfig } from '@app/config';
 import { Transport } from '@nestjs/microservices';
+import { kafkaConfig } from '@platform/config';
 import { CompressionTypes, logLevel, Partitioners } from 'kafkajs';
 import { describe, expect, it } from 'vitest';
 import {

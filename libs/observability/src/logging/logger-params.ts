@@ -1,9 +1,9 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createRequire } from 'node:module';
 import { hostname } from 'node:os';
-import { requestPath } from '@app/common';
-import type { AppConfig, ObservabilityConfig } from '@app/config';
 import { isSpanContextValid, trace } from '@opentelemetry/api';
+import { requestPath } from '@platform/common';
+import type { AppConfig, ObservabilityConfig } from '@platform/config';
 import { memoize } from 'lodash-es';
 import type { Params } from 'nestjs-pino';
 import pino from 'pino';

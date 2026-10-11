@@ -1,4 +1,4 @@
-import { redisConfig } from '@app/config';
+import { redisConfig } from '@platform/config';
 import type { Redis } from 'ioredis';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {

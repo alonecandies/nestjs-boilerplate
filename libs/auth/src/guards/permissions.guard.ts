@@ -1,6 +1,6 @@
-import { getContextType, PermissionDeniedException } from '@app/common';
 import { type CanActivate, type ExecutionContext, Injectable } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
+import { getContextType, PermissionDeniedException } from '@platform/common';
 import { PERMISSIONS_KEY } from '../auth.constants.js';
 import type { PermissionRequirement } from '../decorators/require-permissions.decorator.js';
 import { hasPermissions } from '../rbac/role-permissions.js';

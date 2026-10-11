@@ -1,4 +1,3 @@
-import { type AppConfig, appConfig, type CassandraConfig, cassandraConfig } from '@app/config';
 import {
   type DynamicModule,
   Injectable,
@@ -8,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TerminusModule } from '@nestjs/terminus';
+import { type AppConfig, appConfig, type CassandraConfig, cassandraConfig } from '@platform/config';
 import {
   CASSANDRA_CLIENT,
   CASSANDRA_MODULE_OPTIONS,

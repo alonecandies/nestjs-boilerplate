@@ -1,27 +1,27 @@
-import { CASSANDRA_CLIENT } from '@app/cassandra';
-import { DomainValidationException, EntityNotFoundException, generateId } from '@app/common';
-import { type GrpcConfig, grpcConfig } from '@app/config';
+import { type ServiceError, status } from '@grpc/grpc-js';
+import { getQueueToken } from '@nestjs/bullmq';
+import { ClientGrpcProxy } from '@nestjs/microservices';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+import { Test } from '@nestjs/testing';
+import { CASSANDRA_CLIENT } from '@platform/cassandra';
+import { DomainValidationException, EntityNotFoundException, generateId } from '@platform/common';
+import { type GrpcConfig, grpcConfig } from '@platform/config';
 import {
   createEventEnvelope,
   KAFKA_TOPICS,
   type NotificationPage,
   type NotificationsServiceClient,
-} from '@app/contracts';
-import { MAIL_QUEUE, MailProcessor } from '@app/mailer';
-import { REDIS_CLIENT } from '@app/redis';
-import { InMemoryRedis } from '@app/redis/testing';
+} from '@platform/contracts';
+import { MAIL_QUEUE, MailProcessor } from '@platform/mailer';
+import { REDIS_CLIENT } from '@platform/redis';
+import { InMemoryRedis } from '@platform/redis/testing';
 import {
   createGrpcClientOptions,
   FakeKafkaProducer,
   GrpcCircuitBreakers,
   grpcCall,
   KafkaProducer,
-} from '@app/transport';
-import { type ServiceError, status } from '@grpc/grpc-js';
-import { getQueueToken } from '@nestjs/bullmq';
-import { ClientGrpcProxy } from '@nestjs/microservices';
-import type { NestFastifyApplication } from '@nestjs/platform-fastify';
-import { Test } from '@nestjs/testing';
+} from '@platform/transport';
 import cassandra from 'cassandra-driver';
 import { lastValueFrom, type Observable } from 'rxjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';

@@ -1,4 +1,4 @@
-import { databaseConfig } from '@app/config';
+import { databaseConfig } from '@platform/config';
 import { describe, expect, it, vi } from 'vitest';
 import {
   buildPostgresOptions,

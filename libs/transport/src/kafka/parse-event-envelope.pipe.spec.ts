@@ -1,5 +1,5 @@
-import { generateId } from '@app/common';
-import { KAFKA_TOPICS, type KafkaTopic } from '@app/contracts';
+import { generateId } from '@platform/common';
+import { KAFKA_TOPICS, type KafkaTopic } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { InvalidEventException } from './kafka.errors.js';
 import { ParseEventEnvelopePipe } from './parse-event-envelope.pipe.js';

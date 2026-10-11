@@ -1,4 +1,4 @@
-# @app/bootstrap
+# @platform/bootstrap
 
 The `main.ts` toolkit shared by every app: a production-configured **Fastify** Nest application,
 `listen`, **OpenAPI + Scalar** docs, **node:cluster** supervision and process-level safety nets.
@@ -27,7 +27,7 @@ Requires the root module to import `AppConfigModule.forRoot()` and `Observabilit
 ```ts
 // apps/gateway/src/main.ts  (start: node --import ./dist/instrument.js dist/main.js)
 import 'reflect-metadata';
-import { createHttpApp, listen, runClustered, setupApiDocs } from '@app/bootstrap';
+import { createHttpApp, listen, runClustered, setupApiDocs } from '@platform/bootstrap';
 import { AppModule } from './app.module.js';
 
 await runClustered(async () => {
@@ -64,7 +64,7 @@ const app = await createFastifyTestApp(
 `RedisModule` (fake client), `AuthModule` (global guards), `AppThrottlerModule` and the common
 enhancers/middleware — it is the cross-library composition check of the infrastructure libs.
 
-## Env vars (via `@app/config` `app` namespace)
+## Env vars (via `@platform/config` `app` namespace)
 
 `HOST`, `PORT`, `TRUST_PROXY` (false; CSV of LB IPs/CIDRs — `true` is rejected in production), `BODY_LIMIT_BYTES`, `HTTP_KEEP_ALIVE_TIMEOUT_MS` (72000),
 `HTTP_REQUEST_TIMEOUT_MS` (30000), `CORS_ORIGINS`, `DOCS_ENABLED` (!prod), `CLUSTER_WORKERS` (1; 0 =
@@ -91,6 +91,6 @@ per core), `SHUTDOWN_TIMEOUT_MS` (10000), `NODE_ENV`; `OBSERVE_APP_KEY`/`OBSERVE
 - `rawBody: true` keeps a Buffer copy of every JSON body — only enable it where webhooks need it.
 - **Cluster mode** is for VMs/bare metal; under Kubernetes keep `CLUSTER_WORKERS=1` and scale pods.
   The primary never boots Nest; `/metrics` returns the aggregate of all workers (IPC bridge in
-  `@app/observability`). Workers inherit `execArgv`, so the tracing preload applies to each.
+  `@platform/observability`). Workers inherit `execArgv`, so the tracing preload applies to each.
 - `processHandlers` defaults off under `NODE_ENV=test`: an `uncaughtException` handler that exits
   would kill the test runner.

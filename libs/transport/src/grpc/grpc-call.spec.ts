@@ -1,12 +1,12 @@
+import { Metadata } from '@grpc/grpc-js';
+import { Logger } from '@nestjs/common';
+import { GrpcStatus } from '@nestjs/microservices';
 import {
   EntityNotFoundException,
   ExternalServiceException,
   OperationTimeoutException,
   ServiceUnavailableException,
-} from '@app/common';
-import { Metadata } from '@grpc/grpc-js';
-import { Logger } from '@nestjs/common';
-import { GrpcStatus } from '@nestjs/microservices';
+} from '@platform/common';
 import { defer, Observable, of, throwError } from 'rxjs';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { grpcCall } from './grpc-call.js';

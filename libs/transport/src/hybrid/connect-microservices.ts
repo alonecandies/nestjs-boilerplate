@@ -1,8 +1,8 @@
-import { type GrpcConfig, grpcConfig, type KafkaConfig, kafkaConfig } from '@app/config';
-import type { GrpcPackageName } from '@app/contracts';
 import type { INestApplication, INestApplicationContext, INestMicroservice } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import type { CustomStrategy, KafkaOptions } from '@nestjs/microservices';
+import { type GrpcConfig, grpcConfig, type KafkaConfig, kafkaConfig } from '@platform/config';
+import type { GrpcPackageName } from '@platform/contracts';
 import {
   createGrpcServerStrategy,
   type GrpcServerOptionsExtras,
@@ -24,7 +24,7 @@ interface ConfigNamespaceLike<T> {
  * exception zone, which logs a miss (`UnknownElementException: Nest could not find
  * CONFIGURATION(kafka)`) at ERROR before rethrowing, so a normal fallback looked like a boot
  * failure. `ConfigService.get(namespace)` returns the merged value, or `undefined`, without
- * throwing. `ConfigService` exists in every app that uses `@app/config`; the catch only covers a
+ * throwing. `ConfigService` exists in every app that uses `@platform/config`; the catch only covers a
  * bare context without it.
  */
 function resolveConfig<T extends object>(

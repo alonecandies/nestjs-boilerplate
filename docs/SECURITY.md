@@ -21,7 +21,7 @@ Related: [Architecture](ARCHITECTURE.md) · [Development](DEVELOPMENT.md) · [Do
 ## Authentication
 
 Implemented in [`libs/auth`](../libs/auth/README.md) (tokens, guards, hashing) and
-[`libs/identity`](../libs/identity/README.md) (sessions, rotation, logout).
+[`domains/identity`](../domains/identity/README.md) (sessions, rotation, logout).
 
 ### Tokens
 
@@ -42,7 +42,7 @@ Implemented in [`libs/auth`](../libs/auth/README.md) (tokens, guards, hashing) a
 
 ### Refresh rotation and reuse detection
 
-`RefreshSessionHandler` (`libs/identity/src/application/commands/refresh-session/`):
+`RefreshSessionHandler` (`domains/identity/src/application/commands/refresh-session/`):
 
 1. Verify the refresh JWT first (garbage never reaches the database).
 2. In one transaction, compare-and-set the session:
@@ -70,7 +70,7 @@ session of the given `refreshToken`, or **every** session when the body omits it
 - Presenting that refresh token again after logout counts as **reuse** (its session is revoked):
   401 `REFRESH_TOKEN_REUSED`, every session of the user is revoked and a "Refresh token reuse
   detected" warning is logged. This is deliberate (covered by
-  `libs/identity/src/domain/session.spec.ts`); clients must discard **both** tokens on logout. The old access token is refused with 401 `TOKEN_REVOKED` on
+  `domains/identity/src/domain/session.spec.ts`); clients must discard **both** tokens on logout. The old access token is refused with 401 `TOKEN_REVOKED` on
   REST and GraphQL (`extensions.code`).
 
 - The denylist **fails closed**: a Redis error or a check slower than 250 ms answers 503, never
@@ -88,7 +88,7 @@ session of the given `refreshToken`, or **every** session when the body omits it
   `ARGON2_MEMORY_COST` (19456 KiB), `ARGON2_TIME_COST` (2), `ARGON2_PARALLELISM` (1): the OWASP
   minimum profile. Hashes with outdated parameters are re-hashed transparently at login.
 - Password length 8–128 at registration (`IDENTITY_LIMITS`); `MAX_PASSWORD_LENGTH` (1024) in
-  `@app/auth` bounds the hashing cost of any input.
+  `@platform/auth` bounds the hashing cost of any input.
 - Login runs `verifyDummy` for unknown emails so response timing does not reveal which accounts
   exist; wrong password and unknown email share one 401 `INVALID_CREDENTIALS`.
 - Registration and login are throttled per IP by `@AuthThrottle()` (`THROTTLE_AUTH_LIMIT` = 10 per
@@ -114,7 +114,7 @@ services trust the edge (see [Internal gRPC](#internal-grpc-mtls-reflection)).
 
 | Decorator                                               | Meaning                                                    |
 | ------------------------------------------------------- | ---------------------------------------------------------- |
-| `@Public()` (`@app/common`)                             | skip authentication                                        |
+| `@Public()` (`@platform/common`)                        | skip authentication                                        |
 | `@RequirePermissions(...p)` / `@RequireAnyPermission()` | all / any of the permissions                               |
 | `@Roles(...roles)`                                      | any of the roles (prefer permissions)                      |
 | `@Auth(...p)`                                           | alias of `@RequirePermissions(...p)`                       |
@@ -266,7 +266,7 @@ are sanitised before they reach the client.
   REST client (no open redirect). Client `Idempotency-Key`s are mapped per user, never forwarded to
   Stripe verbatim.
 
-### File uploads ([`libs/files`](../libs/files/README.md))
+### File uploads ([`domains/files`](../domains/files/README.md))
 
 - Content-type allow-list (images without SVG, PDF, JSON, ZIP, plain text, CSV, MPEG audio, MP4
   video); `image/svg+xml` and `text/html` are excluded (stored XSS). Checked in the multipart

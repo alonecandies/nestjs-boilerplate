@@ -1,12 +1,12 @@
 /**
- * OpenTelemetry bootstrap (subpath `@app/observability/otel`). Each app's `src/instrument.ts` runs
+ * OpenTelemetry bootstrap (subpath `@platform/observability/otel`). Each app's `src/instrument.ts` runs
  *   `await startTracing({ serviceName: '<app>' })`
  * and is preloaded with `node --import ./dist/instrument.js dist/main.js`, so the ESM loader hook and
  * the instrumentations are in place BEFORE any instrumented module (http, grpc, kafkajs, ioredis…)
  * is imported.
  *
  * Rules for this file (research integrations §9):
- * - MUST NOT import Nest, `@app/config` or anything instrumented: whatever it imports is loaded
+ * - MUST NOT import Nest, `@platform/config` or anything instrumented: whatever it imports is loaded
  *   before the hook exists and would never be patched. It is also the one documented place outside
  *   `libs/config` that reads `process.env` (the standard `OTEL_*` variables).
  * - The SDK is imported lazily, so a process with tracing off pays nothing for
@@ -45,7 +45,7 @@ const FALSY = new Set(['false', '0']);
 let sdk: NodeSDK | undefined;
 let starting: Promise<void> | undefined;
 
-/** Parses an env flag the same way `@app/config`'s `zBool` does (blank = unset). */
+/** Parses an env flag the same way `@platform/config`'s `zBool` does (blank = unset). */
 function envFlag(value: string | undefined): boolean | undefined {
   const normalized = value?.trim().toLowerCase();
   if (normalized === undefined || normalized === '') return undefined;
@@ -60,7 +60,7 @@ const nonBlank = (value: string | undefined): string | undefined =>
 /**
  * Mirrors `observabilityConfig.tracingEnabled`: an explicit `OTEL_SDK_DISABLED` wins; otherwise
  * tracing is on only when an OTLP endpoint is configured (so a laptop without a collector never
- * spams connection errors). `@app/config` can't be imported here (it pulls in Nest).
+ * spams connection errors). `@platform/config` can't be imported here (it pulls in Nest).
  */
 export function isTracingEnabled(env: TracingEnv = process.env): boolean {
   const disabled = envFlag(env['OTEL_SDK_DISABLED']);

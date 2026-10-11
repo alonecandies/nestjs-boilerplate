@@ -11,7 +11,7 @@ GraphQL API and calls this service through `IdentityApiModule.forRemote()`.
 | HTTP    | `PORT` `3001`              | `GET /health/live`, `GET /health/ready`, `GET /metrics` only                |
 | Kafka   | produces                   | `identity.user-registered.v1` (key `userId`; envelope id = domain event id) |
 
-The domain logic lives in [`@app/identity`](../../libs/identity/README.md); this app is only the
+The domain logic lives in [`@domain/identity`](../../domains/identity/README.md); this app is only the
 composition root.
 
 ## Composition (`src/app.module.ts`)
@@ -50,7 +50,7 @@ Errors cross the wire as gRPC statuses plus an `x-error-code` trailer (`NOT_FOUN
 ## Configuration
 
 `.env.example` holds only what differs per service; `bun run setup:env` copies it to `.env`.
-Everything else comes from the root `.env` / the environment ([`@app/config`](../../libs/config)):
+Everything else comes from the root `.env` / the environment ([`@platform/config`](../../libs/config)):
 
 | Variable                                                    | Value here                 | Notes                                                                                                       |
 | ----------------------------------------------------------- | -------------------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -112,5 +112,5 @@ bunx vitest run --project identity-service --project identity-service:e2e
 - `test/env-example.spec.ts` validates `.env.example` against every config namespace and pins the
   ports.
 
-No Docker is needed. `libs/identity` has the unit tests and a Postgres integration test
+No Docker is needed. `domains/identity` has the unit tests and a Postgres integration test
 (`INTEGRATION=1`).

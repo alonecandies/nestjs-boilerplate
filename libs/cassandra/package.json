@@ -1,12 +1,12 @@
 {
-  "name": "@app/cassandra",
+  "name": "@platform/cassandra",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "Apache Cassandra via cassandra-driver: global CassandraModule, keyspace bootstrap, LWT-claimed CQL migrations, native paging",
   "exports": {
     ".": {
-      "@app/source": "./src/index.ts",
+      "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
@@ -19,9 +19,9 @@
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
-    "@app/common": "workspace:*",
-    "@app/config": "workspace:*",
-    "@app/observability": "workspace:*",
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
+    "@platform/observability": "workspace:*",
     "@nestjs/common": "catalog:",
     "@nestjs/config": "catalog:",
     "@nestjs/core": "catalog:",

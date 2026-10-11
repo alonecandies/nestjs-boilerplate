@@ -1,13 +1,13 @@
+import { type ExecutionContext, Injectable } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { AuthGuard } from '@nestjs/passport';
 import {
   getContextType,
   getRequest,
   IS_PUBLIC_KEY,
   type RequestLike,
   UnauthenticatedException,
-} from '@app/common';
-import { type ExecutionContext, Injectable } from '@nestjs/common';
-import { Reflector } from '@nestjs/core';
-import { AuthGuard } from '@nestjs/passport';
+} from '@platform/common';
 import { firstValueFrom, isObservable } from 'rxjs';
 import { AuthErrorCode, JWT_STRATEGY } from '../auth.constants.js';
 import { isAuthUser } from '../tokens/token-claims.js';

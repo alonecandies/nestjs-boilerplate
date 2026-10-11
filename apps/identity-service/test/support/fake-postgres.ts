@@ -1,4 +1,4 @@
-import type { DrizzleDB } from '@app/database';
+import type { DrizzleDB } from '@platform/database';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { vi } from 'vitest';
 

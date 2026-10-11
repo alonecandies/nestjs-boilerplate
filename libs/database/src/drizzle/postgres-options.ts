@@ -1,4 +1,4 @@
-import type { DatabaseConfig } from '@app/config';
+import type { DatabaseConfig } from '@platform/config';
 import { get, includes, isNil, merge, noop } from 'lodash-es';
 import type { Notice, Options, PostgresType } from 'postgres';
 

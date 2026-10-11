@@ -10,9 +10,9 @@
     "resolveJsonModule": true,
     // TS 6 defaults `types` to [] (no automatic @types/* inclusion).
     "types": ["node"],
-    // Workspace libs resolve to their TS sources (exports["@app/source"]) for typecheck, ESLint,
+    // Workspace libs resolve to their TS sources (exports["@repo/source"]) for typecheck, ESLint,
     // tests and the dev loop — no lib build needed. Node (prod) resolves exports.default → dist.
-    "customConditions": ["@app/source"],
+    "customConditions": ["@repo/source"],
 
     // NestJS legacy decorators + DI metadata.
     "experimentalDecorators": true,

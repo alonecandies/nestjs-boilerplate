@@ -1,12 +1,4 @@
 import { constants as zlib } from 'node:zlib';
-import { HTTP_HEADERS } from '@app/common';
-import {
-  type AppConfig,
-  appConfig,
-  type ObservabilityConfig,
-  observabilityConfig,
-} from '@app/config';
-import { createBootstrapLogger, observeInstrument, resolveRequestId } from '@app/observability';
 import fastifyCompress, { type FastifyCompressOptions } from '@fastify/compress';
 import fastifyCookie from '@fastify/cookie';
 import fastifyHelmet, { type FastifyHelmetOptions } from '@fastify/helmet';
@@ -15,6 +7,18 @@ import type { NestApplicationOptions, Type } from '@nestjs/common';
 import { VersioningType } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import { HTTP_HEADERS } from '@platform/common';
+import {
+  type AppConfig,
+  appConfig,
+  type ObservabilityConfig,
+  observabilityConfig,
+} from '@platform/config';
+import {
+  createBootstrapLogger,
+  observeInstrument,
+  resolveRequestId,
+} from '@platform/observability';
 import type { FastifyServerOptions, RawServerDefault } from 'fastify';
 import { Logger } from 'nestjs-pino';
 import { installProcessHandlers } from '../process/process-handlers.js';
@@ -64,7 +68,7 @@ export interface CreateHttpAppOptions extends HttpAppSetupOptions {
 /**
  * `new FastifyAdapter(options)` input for a plain HTTP/1.1 server. Spelled out (instead of the
  * adapter's constructor parameter) so the adapter infers `FastifyAdapter<RawServerDefault>` — the
- * type `NestFastifyApplication` and `@app/testing`'s `createFastifyTestApp({ adapter })` expect;
+ * type `NestFastifyApplication` and `@platform/testing`'s `createFastifyTestApp({ adapter })` expect;
  * the constructor-parameter type widens the server to `RawServerBase` (HTTP/2 included).
  */
 export type FastifyAdapterOptions = FastifyServerOptions<RawServerDefault> & {

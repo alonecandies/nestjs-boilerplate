@@ -1,5 +1,5 @@
-import { getHeaderValue, HTTP_HEADERS, isSafeRequestId } from '@app/common';
-import { CLS_CORRELATION_ID, CLS_USER_ID } from '@app/observability';
+import { getHeaderValue, HTTP_HEADERS, isSafeRequestId } from '@platform/common';
+import { CLS_CORRELATION_ID, CLS_USER_ID } from '@platform/observability';
 import { CLS_REQ, type ClsService } from 'nestjs-cls';
 
 /**
@@ -7,7 +7,7 @@ import { CLS_REQ, type ClsService } from 'nestjs-cls';
  * `KafkaContextInterceptor`). The request id itself lives in nestjs-cls' own `CLS_ID`, so
  * `cls.getId()` means the same thing for HTTP, gRPC and Kafka handlers.
  *
- * `USER_ID` / `CORRELATION_ID` ARE `@app/observability`'s keys (owner of `ClsModule.forRoot`), so
+ * `USER_ID` / `CORRELATION_ID` ARE `@platform/observability`'s keys (owner of `ClsModule.forRoot`), so
  * `RequestContextService.userId` / `.correlationId` see what a gRPC call or Kafka message carried,
  * and an HTTP request's validated `x-correlation-id` (stored by the cls middleware) flows into
  * outgoing gRPC metadata and Kafka envelopes — one store, one set of keys.

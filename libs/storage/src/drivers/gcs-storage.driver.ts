@@ -1,6 +1,5 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
-import type { StorageConfig } from '@app/config';
 import {
   ApiError,
   type Bucket,
@@ -9,6 +8,7 @@ import {
   Storage,
   type StorageOptions,
 } from '@google-cloud/storage';
+import type { StorageConfig } from '@platform/config';
 import { endsWith, isNil, mapValues, omitBy } from 'lodash-es';
 import { toStorageException } from '../storage.errors.js';
 import { StorageService } from '../storage.service.js';

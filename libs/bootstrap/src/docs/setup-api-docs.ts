@@ -1,7 +1,7 @@
-import { type AppConfig, appConfig } from '@app/config';
 import { Logger } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { DocumentBuilder, type OpenAPIObject, SwaggerModule } from '@nestjs/swagger';
+import { type AppConfig, appConfig } from '@platform/config';
 import { apiReference } from '@scalar/nestjs-api-reference';
 import { omitBy, once } from 'lodash-es';
 import { DOCS_CONTENT_SECURITY_POLICY } from '../http/security.js';

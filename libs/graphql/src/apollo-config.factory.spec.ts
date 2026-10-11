@@ -1,5 +1,5 @@
-import { appConfig, graphqlConfig } from '@app/config';
 import type { ApolloDriverConfig } from '@nestjs/apollo';
+import { appConfig, graphqlConfig } from '@platform/config';
 import { GraphQLError } from 'graphql';
 import { describe, expect, it, vi } from 'vitest';
 import { createApolloDriverConfig } from './apollo-config.factory.js';

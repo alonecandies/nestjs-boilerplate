@@ -12,11 +12,14 @@ import { MIGRATIONS_SCHEMA, MIGRATIONS_TABLE } from './src/migrator/migrations.c
  * - Paths are resolved relative to THIS file, then made cwd-relative (what drizzle-kit expects),
  *   so the config works from any working directory. drizzle-kit loads configs as CJS via tsx:
  *   `import.meta.url` is polyfilled but `import.meta.dirname` is not.
- * - Globs that match nothing are dropped (a domain lib may not have tables yet); drizzle-kit
+ * - Globs that match nothing are dropped (a domain may not have tables yet); drizzle-kit
  *   itself aborts when a pattern matches no file.
- * - Reading process.env here is a documented exception to the "config only via @app/config" rule.
+ * - Reading process.env here is a documented exception to the "config only via @platform/config" rule.
  */
-const SCHEMA_GLOBS = ['../identity/src/**/*.schema.ts', '../billing/src/**/*.schema.ts'];
+const SCHEMA_GLOBS = [
+  '../../domains/identity/src/**/*.schema.ts',
+  '../../domains/billing/src/**/*.schema.ts',
+];
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const fromCwd = (path: string): string =>

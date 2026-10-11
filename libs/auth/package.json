@@ -1,12 +1,12 @@
 {
-  "name": "@app/auth",
+  "name": "@platform/auth",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "JWT authentication (passport-jwt, HS256, local verification), refresh tokens, Redis access-token denylist, Argon2id password hashing and RBAC guards/decorators for HTTP, GraphQL and WebSocket.",
   "exports": {
     ".": {
-      "@app/source": "./src/index.ts",
+      "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
@@ -19,9 +19,9 @@
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
-    "@app/common": "workspace:*",
-    "@app/config": "workspace:*",
-    "@app/redis": "workspace:*",
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
+    "@platform/redis": "workspace:*",
     "@nestjs/common": "catalog:",
     "@nestjs/config": "catalog:",
     "@nestjs/core": "catalog:",

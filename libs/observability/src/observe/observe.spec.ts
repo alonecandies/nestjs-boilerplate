@@ -1,5 +1,5 @@
-import { isUuidV7 } from '@app/common';
-import { observabilityConfig } from '@app/config';
+import { isUuidV7 } from '@platform/common';
+import { observabilityConfig } from '@platform/config';
 import { Registry, Summary } from 'prom-client';
 import { describe, expect, it } from 'vitest';
 import {

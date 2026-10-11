@@ -1,5 +1,5 @@
 import type { Readable } from 'node:stream';
-import type { StorageDriver } from '@app/config';
+import type { StorageDriver } from '@platform/config';
 
 /** Concrete backend behind `StorageService` (`memory` = `InMemoryStorageService`, tests only). */
 export type StorageDriverName = StorageDriver | 'memory';

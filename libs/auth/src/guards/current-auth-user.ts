@@ -1,5 +1,5 @@
-import { getRequest, type RequestLike, UnauthenticatedException } from '@app/common';
 import type { ExecutionContext } from '@nestjs/common';
+import { getRequest, type RequestLike, UnauthenticatedException } from '@platform/common';
 import { isAuthUser } from '../tokens/token-claims.js';
 import type { AuthUser } from '../types/auth-user.js';
 

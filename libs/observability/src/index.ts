@@ -1,8 +1,8 @@
 /**
- * @app/observability — logs (pino), request context (nestjs-cls), Prometheus metrics, terminus
+ * @platform/observability — logs (pino), request context (nestjs-cls), Prometheus metrics, terminus
  * health, OpenTelemetry tracing helpers and `@nestjs/observe`, wired by `ObservabilityModule`.
  *
- * The OpenTelemetry SDK bootstrap is NOT exported here: it lives in the `@app/observability/otel`
+ * The OpenTelemetry SDK bootstrap is NOT exported here: it lives in the `@platform/observability/otel`
  * subpath, which must be preloaded (`node --import ./dist/instrument.js`) before Nest is imported.
  */
 

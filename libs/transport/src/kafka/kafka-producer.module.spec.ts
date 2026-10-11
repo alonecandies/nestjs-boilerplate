@@ -1,7 +1,7 @@
-import { AppConfigModule, appConfig } from '@app/config';
 import { type INestApplicationContext, Logger, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ClientKafka } from '@nestjs/microservices';
+import { AppConfigModule, appConfig } from '@platform/config';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { KAFKA_PRODUCER_CLIENT, KAFKA_PRODUCER_OPTIONS } from './kafka.constants.js';
 import { KafkaHealthIndicator } from './kafka.health.js';

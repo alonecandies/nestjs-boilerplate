@@ -1,5 +1,3 @@
-import { getHeaderValue, type RequestLike, timingSafeEqualStr } from '@app/common';
-import { type ObservabilityConfig, observabilityConfig } from '@app/config';
 import {
   type CanActivate,
   type ExecutionContext,
@@ -7,6 +5,8 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { getHeaderValue, type RequestLike, timingSafeEqualStr } from '@platform/common';
+import { type ObservabilityConfig, observabilityConfig } from '@platform/config';
 
 const BEARER_PREFIX = /^Bearer\s+/i;
 

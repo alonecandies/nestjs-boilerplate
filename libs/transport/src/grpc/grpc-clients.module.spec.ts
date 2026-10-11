@@ -1,8 +1,8 @@
-import { AppConfigModule, type GrpcConfig, grpcConfig } from '@app/config';
-import { GRPC_PACKAGES } from '@app/contracts';
 import { type INestApplicationContext, Logger, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ClientGrpcProxy } from '@nestjs/microservices';
+import { AppConfigModule, type GrpcConfig, grpcConfig } from '@platform/config';
+import { GRPC_PACKAGES } from '@platform/contracts';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { GrpcCircuitBreakers } from './grpc-circuit-breakers.js';
 import { GrpcClientsModule } from './grpc-clients.module.js';

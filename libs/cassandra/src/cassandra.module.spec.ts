@@ -1,9 +1,9 @@
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { AppConfigModule } from '@app/config';
 import { type INestApplicationContext, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { AppConfigModule } from '@platform/config';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CASSANDRA_CLIENT } from './cassandra.constants.js';
 import { CassandraModule } from './cassandra.module.js';
@@ -66,7 +66,7 @@ vi.mock('cassandra-driver', async (importOriginal) => {
   return { default: { ...actual.default, Client: driver.FakeClient } };
 });
 // Abstract marker class; mocked so the test does not load observability's module graph.
-vi.mock('@app/observability', () => ({ HealthContributor: class HealthContributor {} }));
+vi.mock('@platform/observability', () => ({ HealthContributor: class HealthContributor {} }));
 
 const { FakeClient } = driver;
 

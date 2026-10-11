@@ -1,5 +1,5 @@
 /**
- * @app/config — typed, zod-validated, namespaced environment configuration. The ONLY package
+ * @platform/config — typed, zod-validated, namespaced environment configuration. The ONLY package
  * allowed to read `process.env` (besides the documented otel/drizzle-kit exceptions).
  *
  * Usage: `ConfigModule.forFeature(redisConfig)` in the module, then

@@ -1,5 +1,5 @@
 import { Readable } from 'node:stream';
-import { DomainValidationException } from '@app/common';
+import { DomainValidationException } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { StorageService } from '../storage.service.js';
 import { InMemoryStorageService } from './in-memory-storage.service.js';

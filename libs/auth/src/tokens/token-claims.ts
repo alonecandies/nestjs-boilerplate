@@ -1,4 +1,4 @@
-import { UnauthenticatedException } from '@app/common';
+import { UnauthenticatedException } from '@platform/common';
 import { isArray, isInteger, isString } from 'lodash-es';
 import { AuthErrorCode } from '../auth.constants.js';
 import { isPermission } from '../rbac/permission.enum.js';

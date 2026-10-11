@@ -1,6 +1,6 @@
-import type { CassandraClient } from '@app/cassandra';
-import type { DrizzleDB, DrizzleSchema } from '@app/database';
-import { createL1Store } from '@app/redis';
+import type { CassandraClient } from '@platform/cassandra';
+import type { DrizzleDB, DrizzleSchema } from '@platform/database';
+import { createL1Store } from '@platform/redis';
 import { createCache } from 'cache-manager';
 import { drizzle } from 'drizzle-orm/postgres-js';
 

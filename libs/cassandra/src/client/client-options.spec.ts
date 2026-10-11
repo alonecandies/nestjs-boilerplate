@@ -1,4 +1,4 @@
-import { CASSANDRA_CONSISTENCIES, cassandraConfig } from '@app/config';
+import { CASSANDRA_CONSISTENCIES, cassandraConfig } from '@platform/config';
 import cassandra from 'cassandra-driver';
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_FETCH_SIZE } from '../cassandra.constants.js';

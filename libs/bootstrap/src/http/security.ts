@@ -1,5 +1,5 @@
-import type { AppConfig } from '@app/config';
 import type { FastifyHelmetOptions } from '@fastify/helmet';
+import type { AppConfig } from '@platform/config';
 
 /**
  * Global helmet settings. The API serves JSON, so production gets the strictest CSP (nothing may be

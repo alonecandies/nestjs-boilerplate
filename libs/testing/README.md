@@ -1,4 +1,4 @@
-# @app/testing
+# @platform/testing
 
 Test-only helpers shared by every package's unit and e2e tests. It depends on **no other workspace
 package** (so any package can use it without dependency cycles) and pulls in `vitest` — import it only
@@ -16,7 +16,7 @@ from `*.spec.ts`, `*.e2e-spec.ts` and `test/**`.
 ## Usage
 
 ```ts
-import { createFastifyTestApp, createMock } from '@app/testing';
+import { createFastifyTestApp, createMock } from '@platform/testing';
 
 const users = createMock<UsersPort>({ getUser: async (id: string) => ({ id, email: 'a@b.io' }) });
 

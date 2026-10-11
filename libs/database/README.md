@@ -1,11 +1,11 @@
-# @app/database
+# @platform/database
 
 PostgreSQL for the monorepo. It provides a tuned **postgres.js** pool, **Drizzle ORM** (a global
 `DatabaseModule`), transactions that propagate through CLS (`@Transactional()`), drizzle-kit
 migrations applied by an **advisory-locked** runner (at boot or from the `migrate.ts` CLI), a
 readiness contributor, and **uuidv7 keyset-pagination** helpers.
 
-Domain tables live in the domain libs as `*.schema.ts` files (identity, billing). This package
+Domain tables live in the domain packages as `*.schema.ts` files (`domains/identity`, `domains/billing`). This package
 owns the connection, the migration history and the tooling.
 
 ## Public API
@@ -25,7 +25,7 @@ owns the connection, the migration history and the tooling.
 | `RunMigrationsOptions`, `MigrationRunSummary`, `DEFAULT_MIGRATIONS_FOLDER`                                                                              | types, const    | `{ migrationsFolder?, logger?, applicationName?, lockTimeoutMs?, lockPollIntervalMs? }` → `{ folder, total, applied }`                  |
 | `MIGRATIONS_SCHEMA` (`public`), `MIGRATIONS_TABLE` (`__drizzle_migrations`), `MIGRATIONS_ADVISORY_LOCK_ID`                                              | consts          | Shared with `drizzle.config.ts`                                                                                                         |
 | `DatabaseHealthIndicator`                                                                                                                               | provider        | `HealthContributor` with key `postgres` (`select 1`, 2 s timeout, cancels the query)                                                    |
-| `keysetWhere(col, cursor, dir?)`, `keysetOrder(col, dir?)`, `keysetFetchLimit(limit)`, `keysetPage(rows, limit)`, `keysetPageBy(rows, limit, cursorOf)` | fns             | Seek pagination → `CursorPage<T>` from `@app/common`                                                                                    |
+| `keysetWhere(col, cursor, dir?)`, `keysetOrder(col, dir?)`, `keysetFetchLimit(limit)`, `keysetPage(rows, limit)`, `keysetPageBy(rows, limit, cursorOf)` | fns             | Seek pagination → `CursorPage<T>` from `@platform/common`                                                                               |
 | `encodeIdCursor(id)`, `decodeIdCursor(cursor)`, `normalizePageLimit(limit)`, `IdCursor`, `KeysetDirection`                                              | fns, types      | A bad cursor throws a 422 `INVALID_CURSOR`                                                                                              |
 | `buildPostgresOptions(cfg, ctx, overrides?)`, `PostgresOptions`, `IDLE_IN_TRANSACTION_TIMEOUT_MS`                                                       | fn, type        | Config → postgres.js options (seconds vs ms handled)                                                                                    |
 | `createDrizzleDatabase(cfg, app, options, logger?)`                                                                                                     | fn              | The factory behind `DRIZZLE`, usable outside Nest                                                                                       |
@@ -35,7 +35,7 @@ owns the connection, the migration history and the tooling.
 
 ```ts
 // app.module.ts
-import { identitySchema } from '@app/identity'; // the domain lib's tables + relations record
+import { identitySchema } from '@domain/identity'; // the domain's tables + relations record
 @Module({
   imports: [
     AppConfigModule.forRoot(),
@@ -46,7 +46,7 @@ import { identitySchema } from '@app/identity'; // the domain lib's tables + rel
 export class AppModule {}
 
 // users.repository.ts (infrastructure layer)
-import { type DrizzleTransactionalAdapter, keysetFetchLimit, keysetOrder, keysetPage, keysetWhere, TransactionHost } from '@app/database';
+import { type DrizzleTransactionalAdapter, keysetFetchLimit, keysetOrder, keysetPage, keysetWhere, TransactionHost } from '@platform/database';
 
 @Injectable()
 export class DrizzleUsersRepository {
@@ -115,7 +115,7 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
 ## Gotchas
 
 - **`@Transactional()` needs no `ClsModule.forRoot`**: this module registers its plugin with
-  `ClsModule.registerPlugins()`. `@app/observability` owns `ClsModule.forRoot` (request ids), and the two compose.
+  `ClsModule.registerPlugins()`. `@platform/observability` owns `ClsModule.forRoot` (request ids), and the two compose.
   Never pass `DatabaseModule` in a plugin's `imports`, because that creates a second copy with no options.
 - **Empty tx options break drizzle**: `TransactionHost` always passes the merged options object (`{}` by default),
   and drizzle renders `{}` as `set transaction ` (a 42601 syntax error on a real server). Our adapter drops empty

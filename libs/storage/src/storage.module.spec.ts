@@ -1,6 +1,6 @@
-import { AppConfigModule, storageConfig } from '@app/config';
 import { type INestApplicationContext, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { AppConfigModule, storageConfig } from '@platform/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GcsStorageDriver } from './drivers/gcs-storage.driver.js';
 import { S3StorageDriver } from './drivers/s3-storage.driver.js';

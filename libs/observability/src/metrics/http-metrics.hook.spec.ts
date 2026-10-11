@@ -1,5 +1,5 @@
-import type { ObservabilityConfig } from '@app/config';
 import type { HttpAdapterHost } from '@nestjs/core';
+import type { ObservabilityConfig } from '@platform/config';
 import fastify, { type FastifyInstance } from 'fastify';
 import { Histogram, Registry } from 'prom-client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';

@@ -1,5 +1,5 @@
 /**
- * @app/common — transport-agnostic, cross-cutting primitives shared by every package:
+ * @platform/common — transport-agnostic, cross-cutting primitives shared by every package:
  * constants, decorators, execution-context helpers, the DomainException family + RFC 9457
  * problem details, global enhancers (filter, timeout interceptor, validation pipes), middleware,
  * pagination DTOs and small lodash-backed utilities. Depends on no other workspace package.

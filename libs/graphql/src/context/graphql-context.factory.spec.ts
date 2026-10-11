@@ -1,6 +1,6 @@
 import type { IncomingMessage } from 'node:http';
-import type { AuthUser } from '@app/auth';
-import { isUuidV7 } from '@app/common';
+import type { AuthUser } from '@platform/auth';
+import { isUuidV7 } from '@platform/common';
 import DataLoader from 'dataloader';
 import { describe, expect, it } from 'vitest';
 import { DataLoaderRegistry } from '../loaders/data-loader.registry.js';

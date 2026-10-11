@@ -3,11 +3,11 @@
 //   node assemble-image.mjs --app <folder under apps/> --build <build-stage repo> --out <prod-deps repo>
 //
 // Input: `--out` is the output of `bun install --production --filter ./apps/<app>` (hoisted linker:
-// every package in the ROOT node_modules, workspace packages symlinked as node_modules/@app/<name>),
+// every package in the ROOT node_modules, workspace packages symlinked as node_modules/<scope>/<name>),
 // plus the package.json of every workspace package. `--build` is the build stage (src + dist).
 // It then:
 //  1. computes the app's workspace closure from the `dependencies` graph (devDependencies ignored);
-//  2. deletes every apps/* and libs/* folder outside that closure (they carry no runtime code);
+//  2. deletes every apps/*, domains/* and libs/* folder outside that closure (they carry no runtime code);
 //  3. copies each closure member's compiled dist/ from the build stage;
 //  4. fails the build when something the process needs at runtime is missing:
 //     - a non-TS asset under src/ (.proto, .hbs, .cql, .sql, migration meta …) that is not in dist/,
@@ -34,8 +34,8 @@ import { basename, join, relative } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
 
-const WORKSPACE_DIRS = ['apps', 'libs'];
-const WORKSPACE_SCOPE = '@app/';
+const WORKSPACE_DIRS = ['apps', 'domains', 'libs'];
+const WORKSPACE_SCOPES = ['@app/', '@domain/', '@platform/'];
 const INSTALL_ONLY = ['bun.lock', 'bunfig.toml', 'patches'];
 // Source files swc compiles (everything else under src/ is copied verbatim by `copyFiles`).
 const COMPILED = /\.(?:[cm]?ts|tsx)$/;
@@ -61,7 +61,7 @@ if (!app || !build || !out) {
 
 const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
 
-/** name ("@app/x") -> { dir: "libs/x", manifest } for every workspace package in --out. */
+/** name ("@platform/x") -> { dir: "libs/x", manifest } for every workspace package in --out. */
 const workspace = new Map();
 for (const parent of WORKSPACE_DIRS) {
   for (const entry of readdirSync(join(out, parent), { withFileTypes: true })) {
@@ -83,10 +83,11 @@ while (pending.length > 0) {
   const name = pending.pop();
   if (closure.has(name)) continue;
   const pkg = workspace.get(name);
-  if (!pkg) fail(`workspace dependency ${name} has no package.json under apps/ or libs/`);
+  if (!pkg)
+    fail(`workspace dependency ${name} has no package.json under ${WORKSPACE_DIRS.join('/, ')}/`);
   closure.set(name, pkg);
   for (const dep of Object.keys(pkg.manifest.dependencies ?? {})) {
-    if (dep.startsWith(WORKSPACE_SCOPE)) pending.push(dep);
+    if (WORKSPACE_SCOPES.some((scope) => dep.startsWith(scope))) pending.push(dep);
   }
 }
 
@@ -123,7 +124,7 @@ for (const [name, { dir, manifest }] of closure) {
     dependencyCount += 1;
     try {
       const found = findPackageJSON(dep, base);
-      // A dangling symlink (e.g. node_modules/@app/x -> a pruned folder) throws here.
+      // A dangling symlink (e.g. node_modules/@platform/x -> a pruned folder) throws here.
       if (!found || !existsSync(realpathSync(found))) throw new Error('not found');
     } catch {
       problems.push(`${name}: runtime dependency "${dep}" is not installed`);

@@ -1,6 +1,6 @@
-import { DomainValidationException } from '@app/common';
-import { type StripeConfig, stripeConfig } from '@app/config';
 import { Inject, Injectable } from '@nestjs/common';
+import { DomainValidationException } from '@platform/common';
+import { type StripeConfig, stripeConfig } from '@platform/config';
 import Stripe from 'stripe';
 import { InjectStripe, STRIPE_WEBHOOK_TOLERANCE_SEC } from './stripe.constants.js';
 import { PaymentErrorCode, toPaymentDomainException } from './stripe.errors.js';

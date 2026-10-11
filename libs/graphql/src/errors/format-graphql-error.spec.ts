@@ -1,9 +1,9 @@
+import { BadRequestException, UnauthorizedException } from '@nestjs/common';
 import {
   DomainValidationException,
   EntityNotFoundException,
   PermissionDeniedException,
-} from '@app/common';
-import { BadRequestException, UnauthorizedException } from '@nestjs/common';
+} from '@platform/common';
 import { GraphQLError, type GraphQLFormattedError } from 'graphql';
 import { describe, expect, it } from 'vitest';
 import { formatExecutionResult, formatGraphqlError } from './format-graphql-error.js';

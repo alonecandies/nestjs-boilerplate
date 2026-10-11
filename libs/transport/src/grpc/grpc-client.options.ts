@@ -1,13 +1,13 @@
-import type { GrpcConfig } from '@app/config';
+import type { ChannelOptions, ServiceConfig } from '@grpc/grpc-js';
+import { type GrpcOptions, Transport } from '@nestjs/microservices';
+import type { GrpcConfig } from '@platform/config';
 import {
   GRPC_LOADER_OPTIONS,
   GRPC_PACKAGES,
   type GrpcMethodName,
   type GrpcPackageName,
   resolveGrpcPackages,
-} from '@app/contracts';
-import type { ChannelOptions, ServiceConfig } from '@grpc/grpc-js';
-import { type GrpcOptions, Transport } from '@nestjs/microservices';
+} from '@platform/contracts';
 import { clamp } from 'lodash-es';
 import { GRPC_KEEPALIVE } from './grpc.constants.js';
 import { createGrpcChannelCredentials } from './grpc-tls.js';

@@ -1,4 +1,4 @@
-import { appConfig, redisConfig } from '@app/config';
+import { appConfig, redisConfig } from '@platform/config';
 import { describe, expect, it } from 'vitest';
 import { redisRetryStrategy } from '../redis.factory.js';
 import { AppQueueModule, createQueueOptions, DEFAULT_JOB_OPTIONS } from './app-queue.module.js';

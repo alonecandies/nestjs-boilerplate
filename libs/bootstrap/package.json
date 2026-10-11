@@ -1,12 +1,12 @@
 {
-  "name": "@app/bootstrap",
+  "name": "@platform/bootstrap",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "App factories: Fastify-based Nest app (helmet, compression, CORS, versioning, graceful shutdown), listen, OpenAPI + Scalar docs, node:cluster supervision and process safety nets.",
   "exports": {
     ".": {
-      "@app/source": "./src/index.ts",
+      "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
@@ -19,9 +19,9 @@
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
-    "@app/common": "workspace:*",
-    "@app/config": "workspace:*",
-    "@app/observability": "workspace:*",
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
+    "@platform/observability": "workspace:*",
     "@fastify/compress": "catalog:",
     "@fastify/cookie": "catalog:",
     "@fastify/helmet": "catalog:",
@@ -38,9 +38,9 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@app/auth": "workspace:*",
-    "@app/redis": "workspace:*",
-    "@app/testing": "workspace:*",
+    "@platform/auth": "workspace:*",
+    "@platform/redis": "workspace:*",
+    "@platform/testing": "workspace:*",
     "@nestjs/testing": "catalog:",
     "@types/lodash-es": "catalog:"
   }

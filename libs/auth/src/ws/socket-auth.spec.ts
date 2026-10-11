@@ -1,8 +1,8 @@
-import { UnauthenticatedException } from '@app/common';
-import { authConfig, redisConfig } from '@app/config';
-import { RedisKeyService } from '@app/redis';
-import { InMemoryRedis } from '@app/redis/testing';
 import { JwtService } from '@nestjs/jwt';
+import { UnauthenticatedException } from '@platform/common';
+import { authConfig, redisConfig } from '@platform/config';
+import { RedisKeyService } from '@platform/redis';
+import { InMemoryRedis } from '@platform/redis/testing';
 import { describe, expect, it } from 'vitest';
 import { createJwtModuleOptions } from '../auth.module.js';
 import { Role } from '../rbac/role.enum.js';

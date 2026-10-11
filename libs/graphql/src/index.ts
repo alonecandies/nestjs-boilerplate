@@ -1,5 +1,5 @@
 /**
- * @app/graphql — code-first Apollo Server 5 on Fastify: `AppGraphqlModule` (Sandbox in dev, CSRF
+ * @platform/graphql — code-first Apollo Server 5 on Fastify: `AppGraphqlModule` (Sandbox in dev, CSRF
  * prevention, complexity limit, graphql-ws subscriptions authenticated via connection params,
  * platform error format), per-operation DataLoaders (`DataLoaderRegistry`, `@Loader`), the
  * Redis-backed `GraphqlPubSubModule` and the UUID/JSONObject scalars.

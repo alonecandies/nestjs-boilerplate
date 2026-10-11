@@ -1,5 +1,5 @@
-import type { ObservabilityConfig } from '@app/config';
 import { type ExecutionContext, NotFoundException } from '@nestjs/common';
+import type { ObservabilityConfig } from '@platform/config';
 import { describe, expect, it } from 'vitest';
 import { MetricsTokenGuard } from './metrics-token.guard.js';
 

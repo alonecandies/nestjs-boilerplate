@@ -1,4 +1,4 @@
-import { DomainValidationException } from '@app/common';
+import { DomainValidationException } from '@platform/common';
 import type cassandra from 'cassandra-driver';
 import { clamp, get, isNil } from 'lodash-es';
 import type { CassandraClient, CqlParams } from '../cassandra.types.js';

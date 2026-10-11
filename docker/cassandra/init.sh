@@ -1,7 +1,7 @@
 #!/bin/sh
 # One-shot Cassandra bootstrapper: the `cassandra-init` compose service (cassandra image, for cqlsh).
 # Creates the application keyspace idempotently. Tables are NOT created here: every service that
-# uses Cassandra runs its own versioned CQL migrations at boot (@app/cassandra CqlMigrator, LWT-locked).
+# uses Cassandra runs its own versioned CQL migrations at boot (@platform/cassandra CqlMigrator, LWT-locked).
 #
 #   CASSANDRA_KEYSPACE            keyspace name (same variable the apps read; default "app")
 #   CASSANDRA_DC                  data-center name; MUST equal the apps' CASSANDRA_LOCAL_DC

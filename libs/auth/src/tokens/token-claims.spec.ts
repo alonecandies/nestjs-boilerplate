@@ -1,4 +1,4 @@
-import { UnauthenticatedException } from '@app/common';
+import { UnauthenticatedException } from '@platform/common';
 import { describe, expect, it } from 'vitest';
 import { Permission } from '../rbac/permission.enum.js';
 import { Role } from '../rbac/role.enum.js';

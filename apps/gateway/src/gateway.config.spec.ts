@@ -1,4 +1,4 @@
-import { EnvValidationError } from '@app/config';
+import { EnvValidationError } from '@platform/config';
 import { describe, expect, it } from 'vitest';
 import { GATEWAY_KAFKA_GROUP_ID } from './app.constants.js';
 import { gatewayConfig } from './gateway.config.js';

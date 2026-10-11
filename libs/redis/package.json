@@ -1,17 +1,17 @@
 {
-  "name": "@app/redis",
+  "name": "@platform/redis",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "ioredis 6 infrastructure: global Redis clients, key builder, distributed locks (@WithLock), two-tier cache (L1 LRU + Redis), Redis-backed throttling, BullMQ connection, socket.io Redis adapter, health indicator.",
   "exports": {
     ".": {
-      "@app/source": "./src/index.ts",
+      "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
     "./testing": {
-      "@app/source": "./src/testing/index.ts",
+      "@repo/source": "./src/testing/index.ts",
       "types": "./src/testing/index.ts",
       "default": "./dist/testing/index.js"
     },
@@ -24,9 +24,9 @@
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
-    "@app/common": "workspace:*",
-    "@app/config": "workspace:*",
-    "@app/observability": "workspace:*",
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
+    "@platform/observability": "workspace:*",
     "@keyv/redis": "catalog:",
     "@nestjs/bullmq": "catalog:",
     "@nestjs/cache-manager": "catalog:",

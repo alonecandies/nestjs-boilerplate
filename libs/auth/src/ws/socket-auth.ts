@@ -1,4 +1,4 @@
-import { UnauthenticatedException } from '@app/common';
+import { UnauthenticatedException } from '@platform/common';
 import { isString } from 'lodash-es';
 import { AuthErrorCode } from '../auth.constants.js';
 import type { AccessTokenDenylist } from '../tokens/access-token-denylist.service.js';

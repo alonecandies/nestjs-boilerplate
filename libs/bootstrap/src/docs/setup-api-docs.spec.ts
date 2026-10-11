@@ -1,8 +1,8 @@
-import { AppConfigModule } from '@app/config';
-import { ObservabilityModule } from '@app/observability';
 import { Controller, Get, Module } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { ApiOkResponse } from '@nestjs/swagger';
+import { AppConfigModule } from '@platform/config';
+import { ObservabilityModule } from '@platform/observability';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createHttpApp } from '../http/create-http-app.js';
 import { OPENAPI_JSON_PATH, setupApiDocs } from './setup-api-docs.js';

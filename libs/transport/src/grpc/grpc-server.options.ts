@@ -1,5 +1,3 @@
-import type { GrpcConfig } from '@app/config';
-import { GRPC_LOADER_OPTIONS, type GrpcPackageName, resolveGrpcPackages } from '@app/contracts';
 import type { ChannelOptions } from '@grpc/grpc-js';
 import type { PackageDefinition } from '@grpc/proto-loader';
 import { ReflectionService } from '@grpc/reflection';
@@ -9,6 +7,12 @@ import {
   ServerGrpc,
   Transport,
 } from '@nestjs/microservices';
+import type { GrpcConfig } from '@platform/config';
+import {
+  GRPC_LOADER_OPTIONS,
+  type GrpcPackageName,
+  resolveGrpcPackages,
+} from '@platform/contracts';
 import { GRPC_KEEPALIVE } from './grpc.constants.js';
 import { GrpcHealthService, type HealthServer } from './grpc-health.js';
 import { createGrpcServerCredentials } from './grpc-tls.js';

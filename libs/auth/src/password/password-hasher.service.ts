@@ -1,7 +1,7 @@
-import { DomainValidationException } from '@app/common';
-import { type AuthConfig, authConfig } from '@app/config';
 import { Inject, Injectable } from '@nestjs/common';
 import { hash, type Options, parseOptions, verify } from '@node-rs/argon2';
+import { DomainValidationException } from '@platform/common';
+import { type AuthConfig, authConfig } from '@platform/config';
 import { MAX_PASSWORD_LENGTH } from '../auth.constants.js';
 
 /**

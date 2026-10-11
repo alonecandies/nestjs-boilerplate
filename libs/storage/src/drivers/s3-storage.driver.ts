@@ -1,4 +1,3 @@
-import type { StorageConfig } from '@app/config';
 import {
   DeleteObjectCommand,
   GetObjectCommand,
@@ -10,6 +9,7 @@ import {
 import { Upload } from '@aws-sdk/lib-storage';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type { OnModuleDestroy } from '@nestjs/common';
+import type { StorageConfig } from '@platform/config';
 import { isObject } from 'lodash-es';
 import { toStorageException } from '../storage.errors.js';
 import { StorageService } from '../storage.service.js';
@@ -35,7 +35,7 @@ import {
  * upload pins up to ≈ (queueSize + 1) × partSize = 3 × 5 MiB = 15 MiB of off-heap memory (outside
  * `--max-old-space-size`). Kept at the S3 minimum part size and a queue of 2 because these uploads
  * run inside API processes; callers bound how many run at once (`STORAGE_MAX_CONCURRENT_UPLOADS`
- * in `@app/files`). Bodies of at most one part are sent as a single PutObject.
+ * in `@domain/files`). Bodies of at most one part are sent as a single PutObject.
  */
 export const S3_UPLOAD_PART_SIZE = 5 * 1024 * 1024;
 export const S3_UPLOAD_QUEUE_SIZE = 2;

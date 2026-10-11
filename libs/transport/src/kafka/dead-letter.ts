@@ -1,5 +1,5 @@
-import { isDomainException } from '@app/common';
 import type { KafkaContext } from '@nestjs/microservices';
+import { isDomainException } from '@platform/common';
 import { isNil, isString, truncate } from 'lodash-es';
 import { DEAD_LETTER_HEADERS, DEAD_LETTER_SUFFIX } from './kafka.constants.js';
 

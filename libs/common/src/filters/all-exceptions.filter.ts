@@ -42,7 +42,7 @@ interface SocketClient {
  * Global catch-all filter; renders every error with the same vocabulary per transport:
  * - http    → RFC 9457 `application/problem+json` through `HttpAdapterHost` (works for Fastify
  *             replies AND the raw Node response Fastify middleware errors carry).
- * - graphql → returns the exception untouched; Apollo's `formatError` (`@app/graphql`) maps it.
+ * - graphql → returns the exception untouched; Apollo's `formatError` (`@platform/graphql`) maps it.
  * - ws      → acks the client callback with `{ ok: false, error }` when the client used an ack,
  *             else emits `'exception'` with the problem document.
  * - rpc     → rethrows as an observable error; controller-scoped gRPC/Kafka filters own RPC

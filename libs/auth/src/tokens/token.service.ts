@@ -1,7 +1,7 @@
-import { generateId, UnauthenticatedException } from '@app/common';
-import { type AuthConfig, authConfig } from '@app/config';
 import { Inject, Injectable } from '@nestjs/common';
 import { JwtService, type JwtSignOptions, type JwtVerifyOptions } from '@nestjs/jwt';
+import { generateId, UnauthenticatedException } from '@platform/common';
+import { type AuthConfig, authConfig } from '@platform/config';
 import { AuthErrorCode, JWT_ALGORITHM, JWT_CLOCK_TOLERANCE_SEC } from '../auth.constants.js';
 import type {
   AccessTokenClaims,

@@ -7,7 +7,7 @@ resolve to their TypeScript sources, so nothing has to be built before testing. 
 (`bun run test`) needs **no Docker and no running infrastructure**.
 
 See also: [README.md](../README.md) · [DEVELOPMENT.md](DEVELOPMENT.md) · [ARCHITECTURE.md](ARCHITECTURE.md) ·
-[PERFORMANCE.md](PERFORMANCE.md) · [DOCKER.md](DOCKER.md) · [`@app/testing`](../libs/testing/README.md)
+[PERFORMANCE.md](PERFORMANCE.md) · [DOCKER.md](DOCKER.md) · [`@platform/testing`](../libs/testing/README.md)
 
 ## Test pyramid
 
@@ -50,7 +50,7 @@ Examples: `redis`, `identity`, `gateway`, `gateway:e2e`, `identity-service:e2e`,
 
 Shared settings: `globals: true`, `setupFiles: ['reflect-metadata']`, `pool: 'forks'` (Nest apps hold
 sockets and timers, and forks isolate them most reliably), `clearMocks` and `restoreMocks`. Coverage
-uses the `v8` provider over `apps/*/src/**` and `libs/*/src/**`. It skips generated code, specs,
+uses the `v8` provider over `apps/*/src/**`, `domains/*/src/**` and `libs/*/src/**`. It skips generated code, specs,
 `index.ts` and `main.ts`, and writes the `text-summary`, `html` and `lcov` reporters to `coverage/`.
 
 ## Commands
@@ -79,12 +79,12 @@ Docker for testcontainers and a `redis` service container with `REDIS_URL=redis:
 
 | Helper                                                                                                             | Import from                                                     | Use it for                                                                                                                                                                                |
 | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createFastifyTestApp(builder, configure?, options?)`                                                              | `@app/testing`                                                  | Compiles a `TestingModuleBuilder` into a **ready** Fastify app with URI versioning (default `v1`). It binds no port, so drive it with `app.inject()`                                      |
-| `createMock<T>(overrides?)` / `Mocked<T>`                                                                          | `@app/testing`                                                  | Proxy auto-mock. Every member you touch is a cached `vi.fn()`. Also works with `builder.useMocker(() => createMock())`                                                                    |
-| `InMemoryRedis` (`.asRedis()`)                                                                                     | `@app/redis/testing`                                            | ioredis stand-in: strings with PX/EX, counters, pub/sub across `duplicate()`, and the package's Lua throttle script emulated in JS                                                        |
-| `FakeKafkaProducer`                                                                                                | `@app/transport`                                                | Validates envelopes like the real `KafkaProducer`, then records them. Read them with `published(topic)`, `envelopes(topic)` or `records`; `failNextWith(err)` makes the next publish fail |
-| `InMemoryStorageService`                                                                                           | `@app/storage`                                                  | `StorageService` held in memory, with the real driver contract and fake `memory://` presigned URLs                                                                                        |
-| `makeAuthUser(overrides?)`                                                                                         | `@app/auth`                                                     | A valid `AuthUser` (a regular user by default). Overriding `roles` without `permissions` resolves the permissions from the roles, as production does                                      |
+| `createFastifyTestApp(builder, configure?, options?)`                                                              | `@platform/testing`                                             | Compiles a `TestingModuleBuilder` into a **ready** Fastify app with URI versioning (default `v1`). It binds no port, so drive it with `app.inject()`                                      |
+| `createMock<T>(overrides?)` / `Mocked<T>`                                                                          | `@platform/testing`                                             | Proxy auto-mock. Every member you touch is a cached `vi.fn()`. Also works with `builder.useMocker(() => createMock())`                                                                    |
+| `InMemoryRedis` (`.asRedis()`)                                                                                     | `@platform/redis/testing`                                       | ioredis stand-in: strings with PX/EX, counters, pub/sub across `duplicate()`, and the package's Lua throttle script emulated in JS                                                        |
+| `FakeKafkaProducer`                                                                                                | `@platform/transport`                                           | Validates envelopes like the real `KafkaProducer`, then records them. Read them with `published(topic)`, `envelopes(topic)` or `records`; `failNextWith(err)` makes the next publish fail |
+| `InMemoryStorageService`                                                                                           | `@platform/storage`                                             | `StorageService` held in memory, with the real driver contract and fake `memory://` presigned URLs                                                                                        |
+| `makeAuthUser(overrides?)`                                                                                         | `@platform/auth`                                                | A valid `AuthUser` (a regular user by default). Overriding `roles` without `permissions` resolves the permissions from the roles, as production does                                      |
 | `createFakePostgres(schema, handler)`                                                                              | `apps/{identity,billing}-service/test/support/fake-postgres.ts` | A **real** drizzle instance over a fake postgres.js client. `handler(sql, params)` returns rows **in SELECT column order**; `executed` logs every query                                   |
 | `createFakePostgres`, `createFakeCassandra`, `createFakeQueue`                                                     | `apps/monolith/test/support/fake-infrastructure.ts`             | The monolith's edge fakes                                                                                                                                                                 |
 | `createInMemoryIdentityPersistence`                                                                                | `apps/monolith/test/support/in-memory-identity.ts`              | In-memory users and sessions repositories                                                                                                                                                 |
@@ -95,18 +95,18 @@ Docker for testcontainers and a `redis` service container with `REDIS_URL=redis:
 | `startServiceTestApp(builder, { grpc, kafka? })`, `freePort()` | `apps/<service>/test/support/` | Boots a service like `main.ts` does (HTTP wiring, gRPC server on a real loopback port, optional in-process Kafka consumer) |
 | `createFakeSql` | `libs/database/test/fake-sql.ts` | postgres.js `Sql` stand-in for module wiring, `@Transactional()`, health and migration-lock unit tests |
 | `createFakeCassandraClient` | `libs/cassandra/test/fake-cassandra.ts` | cassandra-driver stand-in for the Cassandra lib's unit tests |
-| `InMemoryPaymentsRepository`, `InMemoryStripeEventsRepository` | `libs/billing/test/billing-test.utils.ts` | Billing repositories in memory |
+| `InMemoryPaymentsRepository`, `InMemoryStripeEventsRepository` | `domains/billing/test/billing-test.utils.ts` | Billing repositories in memory |
 
-`@app/testing` depends on no other workspace package and imports `vitest`. Import it only from spec
-files and `test/**`. `@app/redis/testing` is a separate subpath for the same reason: production code
+`@platform/testing` depends on no other workspace package and imports `vitest`. Import it only from spec
+files and `test/**`. `@platform/redis/testing` is a separate subpath for the same reason: production code
 never loads it.
 
 ### A unit test
 
 ```ts
-// libs/identity/src/application/queries/get-user-by-id/get-user-by-id.handler.spec.ts
-import { EntityNotFoundException, generateId } from '@app/common';
-import { createMock } from '@app/testing';
+// domains/identity/src/application/queries/get-user-by-id/get-user-by-id.handler.spec.ts
+import { EntityNotFoundException, generateId } from '@platform/common';
+import { createMock } from '@platform/testing';
 import { Test } from '@nestjs/testing';
 import { UsersRepository } from '../../persistence/users.repository.js';
 import { GetUserByIdHandler } from './get-user-by-id.handler.js';
@@ -215,7 +215,7 @@ loads twice:
 
 | Condition                                                  | Why                                                                                                                                                                                                                                                                                                                                          |
 | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@app/source`                                              | Workspace packages export `"@app/source": "./src/*.ts"` next to `"default": "./dist/*.js"`. Tests (like `tsc` and `bun run dev`) load TS sources, so **no lib build is needed** before testing                                                                                                                                               |
+| `@repo/source`                                             | Workspace packages export `"@repo/source": "./src/*.ts"` next to `"default": "./dist/*.js"`. Tests (like `tsc` and `bun run dev`) load TS sources, so **no lib build is needed** before testing                                                                                                                                              |
 | `module-sync`                                              | Node ≥ 22.10 honours it natively, and dual packages such as graphql 17 list it before `node`/`require`. Without it Vite would pick graphql's CJS build for inlined sources while Node-loaded externals (Apollo, graphql-scalars) get the ESM build. You then get two graphql realms: `Cannot use GraphQLSchema from another module or realm` |
 | Vite defaults minus `module` and `development\|production` | `module` is bundler-only. Node never sets `development\|production`                                                                                                                                                                                                                                                                          |
 
@@ -227,11 +227,11 @@ appears, a resolve condition is out of sync with Node.
 `*.int-spec.ts` files run against real infrastructure. Their `<name>:int` projects only exist when
 `INTEGRATION=1`, so a plain `bun run test` never runs them, even by accident.
 
-| Spec                                                                                                                                                        | Project        | Needs                                                                                                 | Covers                                                                                                                     |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| [`libs/database/test/database.int-spec.ts`](../libs/database/test/database.int-spec.ts)                                                                     | `database:int` | Docker (testcontainers `postgres:18.6-alpine3.24`)                                                    | migrations, PG18-native `uuidv7()`, `@Transactional()`                                                                     |
-| [`libs/identity/src/infrastructure/persistence/users.repository.int-spec.ts`](../libs/identity/src/infrastructure/persistence/users.repository.int-spec.ts) | `identity:int` | Docker (testcontainers), **or** `INTEGRATION_DATABASE_URL` pointing at an existing throwaway database | drizzle users/sessions repositories through the real `DatabaseModule`, which applies the real generated migrations at boot |
-| [`libs/redis/src/redis.int-spec.ts`](../libs/redis/src/redis.int-spec.ts)                                                                                   | `redis:int`    | a running Redis at `REDIS_URL` (for example `bun run docker:infra`). Not testcontainers               | the throttle Lua script against its `InMemoryRedis` JS model, cache, Redlock, the socket.io Redis adapter                  |
+| Spec                                                                                                                                                              | Project        | Needs                                                                                                 | Covers                                                                                                                     |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| [`libs/database/test/database.int-spec.ts`](../libs/database/test/database.int-spec.ts)                                                                           | `database:int` | Docker (testcontainers `postgres:18.6-alpine3.24`)                                                    | migrations, PG18-native `uuidv7()`, `@Transactional()`                                                                     |
+| [`domains/identity/src/infrastructure/persistence/users.repository.int-spec.ts`](../domains/identity/src/infrastructure/persistence/users.repository.int-spec.ts) | `identity:int` | Docker (testcontainers), **or** `INTEGRATION_DATABASE_URL` pointing at an existing throwaway database | drizzle users/sessions repositories through the real `DatabaseModule`, which applies the real generated migrations at boot |
+| [`libs/redis/src/redis.int-spec.ts`](../libs/redis/src/redis.int-spec.ts)                                                                                         | `redis:int`    | a running Redis at `REDIS_URL` (for example `bun run docker:infra`). Not testcontainers               | the throttle Lua script against its `InMemoryRedis` JS model, cache, Redlock, the socket.io Redis adapter                  |
 
 ```bash
 bun run docker:infra                                   # Redis (and the rest of the infra) for redis:int

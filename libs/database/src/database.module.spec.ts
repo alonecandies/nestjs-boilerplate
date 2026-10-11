@@ -1,4 +1,3 @@
-import { AppConfigModule } from '@app/config';
 import { type INestApplicationContext, Injectable, Module, type Provider } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
@@ -7,6 +6,7 @@ import {
   Transactional,
   TransactionHost,
 } from '@nestjs-cls/transactional';
+import { AppConfigModule } from '@platform/config';
 import { pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { ClsModule } from 'nestjs-cls';
 import postgres from 'postgres';
@@ -25,7 +25,7 @@ vi.mock('./migrator/run-migrations.js', () => ({
 }));
 // HealthContributor is an abstract marker class; mocking the barrel keeps this unit test free of
 // observability's module graph (pino, prom-client, OpenTelemetry).
-vi.mock('@app/observability', () => ({ HealthContributor: class HealthContributor {} }));
+vi.mock('@platform/observability', () => ({ HealthContributor: class HealthContributor {} }));
 
 const items = pgTable('items', { id: uuid().primaryKey(), name: text().notNull() });
 const schema = { items };

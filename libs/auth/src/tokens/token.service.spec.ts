@@ -1,6 +1,6 @@
-import { isUuidV7, UnauthenticatedException } from '@app/common';
-import { authConfig } from '@app/config';
 import { JwtService } from '@nestjs/jwt';
+import { isUuidV7, UnauthenticatedException } from '@platform/common';
+import { authConfig } from '@platform/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createJwtModuleOptions } from '../auth.module.js';
 import { Permission } from '../rbac/permission.enum.js';

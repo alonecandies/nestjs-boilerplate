@@ -1,5 +1,5 @@
-import { type ObservabilityConfig, observabilityConfig } from '@app/config';
 import { Injectable, Module, type OnModuleInit } from '@nestjs/common';
+import { type ObservabilityConfig, observabilityConfig } from '@platform/config';
 import { makeHistogramProvider, PrometheusModule } from '@willsoto/nestjs-prometheus';
 import { register } from 'prom-client';
 import { enableClusterMetricsWorker } from './cluster-metrics.js';

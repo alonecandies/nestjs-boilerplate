@@ -1,10 +1,10 @@
 import 'reflect-metadata';
-import { createServiceApp, listen } from '@app/bootstrap';
-import { withTimeout } from '@app/common';
-import { flushLogs } from '@app/observability';
-import { connectGrpcServer, connectKafkaConsumer } from '@app/transport';
 import { Logger } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+import { createServiceApp, listen } from '@platform/bootstrap';
+import { withTimeout } from '@platform/common';
+import { flushLogs } from '@platform/observability';
+import { connectGrpcServer, connectKafkaConsumer } from '@platform/transport';
 import { AppModule } from './app.module.js';
 import { NOTIFICATIONS_CONSUMER_GROUP } from './notifications-service.constants.js';
 

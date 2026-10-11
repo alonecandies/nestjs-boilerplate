@@ -4,7 +4,7 @@ import { createFakeCassandraClient, type FakeCqlHandler } from '../../test/fake-
 import { CassandraHealthIndicator } from './cassandra.health.js';
 
 // Abstract marker class; mocked so the test does not load observability's module graph.
-vi.mock('@app/observability', () => ({ HealthContributor: class HealthContributor {} }));
+vi.mock('@platform/observability', () => ({ HealthContributor: class HealthContributor {} }));
 
 const indicator = (handler?: FakeCqlHandler) => {
   const fake = createFakeCassandraClient(handler);

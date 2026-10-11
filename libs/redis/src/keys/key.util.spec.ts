@@ -1,4 +1,4 @@
-import { redisConfig } from '@app/config';
+import { redisConfig } from '@platform/config';
 import { describe, expect, it } from 'vitest';
 import { hashTag, isNonEmptyString, joinKey } from './key.util.js';
 import { RedisKeyService } from './redis-key.service.js';

@@ -1,4 +1,4 @@
-# @app/graphql
+# @platform/graphql
 
 Code-first GraphQL: Apollo Server 5 on Fastify through `@nestjs/apollo`. It covers queries,
 mutations and graphql-ws subscriptions on one path, adds a complexity limit, per-operation
@@ -34,8 +34,8 @@ vocabulary as the REST API.
 })
 export class AppModule {}
 
-// a domain lib: register a loader once, use it in field resolvers
-declare module '@app/graphql' {
+// a domain package: register a loader once, use it in field resolvers
+declare module '@platform/graphql' {
   interface GraphqlLoaders { users: DataLoader<string, User | null> }
 }
 

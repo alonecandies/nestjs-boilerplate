@@ -1,5 +1,5 @@
-import { generateId } from '@app/common';
 import { Metadata } from '@grpc/grpc-js';
+import { generateId } from '@platform/common';
 import { describe, expect, it } from 'vitest';
 import { GRPC_METADATA_KEYS } from './grpc.constants.js';
 import {

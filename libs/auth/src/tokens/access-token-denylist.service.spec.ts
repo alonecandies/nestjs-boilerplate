@@ -1,7 +1,7 @@
-import { ServiceUnavailableException } from '@app/common';
-import { authConfig, redisConfig } from '@app/config';
-import { RedisKeyService } from '@app/redis';
-import { InMemoryRedis } from '@app/redis/testing';
+import { ServiceUnavailableException } from '@platform/common';
+import { authConfig, redisConfig } from '@platform/config';
+import { RedisKeyService } from '@platform/redis';
+import { InMemoryRedis } from '@platform/redis/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { DENYLIST_CHECK_TIMEOUT_MS } from '../auth.constants.js';
 import { AccessTokenDenylist } from './access-token-denylist.service.js';

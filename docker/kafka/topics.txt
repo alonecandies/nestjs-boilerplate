@@ -1,5 +1,5 @@
 # Kafka topics provisioned by the one-shot `kafka-init` service (docker/kafka/create-topics.sh).
-# Source of truth: @app/contracts KAFKA_TOPIC_VALUES + DEAD_LETTER_TOPIC_VALUES
+# Source of truth: @platform/contracts KAFKA_TOPIC_VALUES + DEAD_LETTER_TOPIC_VALUES
 # (`node scripts/docker/check-kafka-topics.mjs` fails when this file drifts from the contracts).
 # Broker auto-creation is OFF (as in production): a topic missing here makes consumers fail at boot.
 #

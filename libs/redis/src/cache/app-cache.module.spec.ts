@@ -1,4 +1,4 @@
-import { cacheConfig, redisConfig } from '@app/config';
+import { cacheConfig, redisConfig } from '@platform/config';
 import type { Keyv } from 'keyv';
 import { describe, expect, it } from 'vitest';
 import { AppCacheModule, createCacheOptions } from './app-cache.module.js';

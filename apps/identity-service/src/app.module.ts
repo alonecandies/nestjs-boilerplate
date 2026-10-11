@@ -1,15 +1,15 @@
-import { AuthModule } from '@app/auth';
-import { CorrelationIdMiddleware, provideCommonEnhancersAsync } from '@app/common';
-import { type AppConfig, AppConfigModule, appConfig, grpcConfig } from '@app/config';
-import { DatabaseHealthIndicator, DatabaseModule } from '@app/database';
-import { IdentityGrpcModule, identitySchema } from '@app/identity';
-import { ObservabilityModule } from '@app/observability';
-import { RedisHealthIndicator, RedisModule } from '@app/redis';
-import { KafkaProducerModule } from '@app/transport';
+import { IdentityGrpcModule, identitySchema } from '@domain/identity';
 import { type MiddlewareConsumer, Module, type NestModule, RequestMethod } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { CqrsModule } from '@nestjs/cqrs';
 import { ScheduleModule } from '@nestjs/schedule';
+import { AuthModule } from '@platform/auth';
+import { CorrelationIdMiddleware, provideCommonEnhancersAsync } from '@platform/common';
+import { type AppConfig, AppConfigModule, appConfig, grpcConfig } from '@platform/config';
+import { DatabaseHealthIndicator, DatabaseModule } from '@platform/database';
+import { ObservabilityModule } from '@platform/observability';
+import { RedisHealthIndicator, RedisModule } from '@platform/redis';
+import { KafkaProducerModule } from '@platform/transport';
 
 /**
  * identity-service: `identity.v1.AuthService` + `identity.v1.UsersService` over gRPC (served by

@@ -8,8 +8,8 @@
 // bytes, so consumers deduplicate on the envelope id as for any redelivery.
 import 'reflect-metadata';
 import { parseArgs } from 'node:util';
-import { kafkaConfig } from '@app/config';
-import { isKafkaTopic, KAFKA_TOPIC_VALUES } from '@app/contracts';
+import { kafkaConfig } from '@platform/config';
+import { isKafkaTopic, KAFKA_TOPIC_VALUES } from '@platform/contracts';
 import { Kafka } from 'kafkajs';
 import { createKafkaClientConfig, replayDeadLetters } from '../dist/index.js';
 

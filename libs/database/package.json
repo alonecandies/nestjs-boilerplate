@@ -1,12 +1,12 @@
 {
-  "name": "@app/database",
+  "name": "@platform/database",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "PostgreSQL via postgres.js + Drizzle ORM: global DatabaseModule, CLS transactions, advisory-locked migrations, keyset pagination",
   "exports": {
     ".": {
-      "@app/source": "./src/index.ts",
+      "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
@@ -19,13 +19,13 @@
     "clean": "rimraf dist coverage",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file-if-exists=../../.env dist/migrate.js",
-    "db:migrate:dev": "node --env-file-if-exists=../../.env --conditions=@app/source --import @swc-node/register/esm-register src/migrate.ts",
+    "db:migrate:dev": "node --env-file-if-exists=../../.env --conditions=@repo/source --import @swc-node/register/esm-register src/migrate.ts",
     "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
-    "@app/common": "workspace:*",
-    "@app/config": "workspace:*",
-    "@app/observability": "workspace:*",
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
+    "@platform/observability": "workspace:*",
     "@nestjs-cls/transactional": "catalog:",
     "@nestjs-cls/transactional-adapter-drizzle-orm": "catalog:",
     "@nestjs/common": "catalog:",

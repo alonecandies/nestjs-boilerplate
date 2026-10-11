@@ -1,7 +1,7 @@
-import { ServiceUnavailableException, withTimeout } from '@app/common';
-import { type AuthConfig, authConfig } from '@app/config';
-import { InjectRedis, RedisKeyService } from '@app/redis';
 import { Inject, Injectable } from '@nestjs/common';
+import { ServiceUnavailableException, withTimeout } from '@platform/common';
+import { type AuthConfig, authConfig } from '@platform/config';
+import { InjectRedis, RedisKeyService } from '@platform/redis';
 import type { Redis } from 'ioredis';
 import { DENYLIST_CHECK_TIMEOUT_MS, JWT_CLOCK_TOLERANCE_SEC } from '../auth.constants.js';
 

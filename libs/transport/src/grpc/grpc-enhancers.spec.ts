@@ -1,4 +1,3 @@
-import { DomainValidationException, EntityNotFoundException } from '@app/common';
 import { type ArgumentsHost, Logger } from '@nestjs/common';
 import {
   EXCEPTION_FILTERS_METADATA,
@@ -6,6 +5,7 @@ import {
   PATH_METADATA,
 } from '@nestjs/common/constants.js';
 import { GrpcStatus } from '@nestjs/microservices';
+import { DomainValidationException, EntityNotFoundException } from '@platform/common';
 import { firstValueFrom } from 'rxjs';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';

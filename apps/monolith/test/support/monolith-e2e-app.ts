@@ -1,25 +1,25 @@
-import { billingSchema } from '@app/billing';
-import { buildFastifyOptions, configureHttpApp, setupApiDocs } from '@app/bootstrap';
-import { CASSANDRA_CLIENT } from '@app/cassandra';
-import { appConfig } from '@app/config';
-import { DRIZZLE } from '@app/database';
-import { GRAPHQL_PUB_SUB } from '@app/graphql';
+import { billingSchema } from '@domain/billing';
 import {
   identitySchema,
   SessionsRepository,
   TransactionRunner,
   UsersRepository,
-} from '@app/identity';
-import { MAIL_QUEUE, MailProcessor } from '@app/mailer';
-import { REDIS_CLIENT } from '@app/redis';
-import { InMemoryRedis } from '@app/redis/testing';
-import { InMemoryStorageService, StorageService } from '@app/storage';
-import { createFastifyTestApp } from '@app/testing';
-import { FakeKafkaProducer, KafkaProducer } from '@app/transport';
+} from '@domain/identity';
 import { getQueueToken } from '@nestjs/bullmq';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
+import { buildFastifyOptions, configureHttpApp, setupApiDocs } from '@platform/bootstrap';
+import { CASSANDRA_CLIENT } from '@platform/cassandra';
+import { appConfig } from '@platform/config';
+import { DRIZZLE } from '@platform/database';
+import { GRAPHQL_PUB_SUB } from '@platform/graphql';
+import { MAIL_QUEUE, MailProcessor } from '@platform/mailer';
+import { REDIS_CLIENT } from '@platform/redis';
+import { InMemoryRedis } from '@platform/redis/testing';
+import { InMemoryStorageService, StorageService } from '@platform/storage';
+import { createFastifyTestApp } from '@platform/testing';
+import { FakeKafkaProducer, KafkaProducer } from '@platform/transport';
 import { PubSub } from 'graphql-subscriptions';
 import { MONOLITH_API_DOCS } from '../../src/app.constants.js';
 import { AppModule } from '../../src/app.module.js';

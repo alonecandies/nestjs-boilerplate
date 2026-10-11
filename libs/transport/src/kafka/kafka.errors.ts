@@ -3,7 +3,7 @@ import {
   type DomainValidationExceptionOptions,
   type IssueLike,
   toValidationIssues,
-} from '@app/common';
+} from '@platform/common';
 import { KAFKA_ERROR_CODES } from './kafka.constants.js';
 
 /**

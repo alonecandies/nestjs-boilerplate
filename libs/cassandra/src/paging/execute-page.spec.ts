@@ -1,4 +1,4 @@
-import { DomainValidationException } from '@app/common';
+import { DomainValidationException } from '@platform/common';
 import cassandra from 'cassandra-driver';
 import { describe, expect, it } from 'vitest';
 import { createFakeCassandraClient } from '../../test/fake-cassandra.js';

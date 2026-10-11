@@ -1,11 +1,11 @@
 import { execFile } from 'node:child_process';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { generateId, isUuidV7 } from '@app/common';
-import { AppConfigModule } from '@app/config';
 import { type INestApplicationContext, Injectable, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { Transactional, TransactionHost } from '@nestjs-cls/transactional';
+import { generateId, isUuidV7 } from '@platform/common';
+import { AppConfigModule } from '@platform/config';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { and, eq, sql } from 'drizzle-orm';
 import { noop, sumBy } from 'lodash-es';
@@ -92,7 +92,7 @@ class WidgetsService {
   }
 }
 
-describe('@app/database against PostgreSQL 18', () => {
+describe('@platform/database against PostgreSQL 18', () => {
   let container: StartedPostgreSqlContainer;
   let admin: Sql;
   const urlFor = (database: string): string => {
@@ -162,7 +162,7 @@ describe('@app/database against PostgreSQL 18', () => {
       execFileAsync(
         process.execPath,
         [
-          '--conditions=@app/source',
+          '--conditions=@repo/source',
           '--import',
           '@swc-node/register/esm-register',
           'src/migrate.ts',

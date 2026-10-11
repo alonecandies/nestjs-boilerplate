@@ -1,8 +1,8 @@
 import { EventEmitter } from 'node:events';
-import { mailConfig } from '@app/config';
 import { Logger, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { MailerModule, MailerService } from '@nestjs-modules/mailer';
+import { mailConfig } from '@platform/config';
 import type { Queue } from 'bullmq';
 import { describe, expect, it, vi } from 'vitest';
 import { MailService } from './mail.service.js';

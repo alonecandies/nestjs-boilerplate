@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { appConfig, databaseConfig, observabilityConfig } from '@app/config';
+import { appConfig, databaseConfig, observabilityConfig } from '@platform/config';
 import { createMigrateCliLogger } from './migrator/cli-logger.js';
 import { runMigrations } from './migrator/run-migrations.js';
 
@@ -10,7 +10,7 @@ import { runMigrations } from './migrator/run-migrations.js';
  * initContainer):  node --env-file-if-exists=../../.env dist/migrate.js   (`bun run db:migrate`).
  * No Nest application: config is parsed with the same zod schemas the apps use, so a bad
  * DATABASE_URL fails with the same message. Exit code 0 = schema current, 1 = failure.
- * `reflect-metadata` first: @app/config pulls in @nestjs/config, whose decorators need it.
+ * `reflect-metadata` first: @platform/config pulls in @nestjs/config, whose decorators need it.
  *
  *   --migrations-folder <dir>   apply another drizzle-kit output folder (default: the bundled one)
  *

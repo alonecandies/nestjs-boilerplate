@@ -1,12 +1,12 @@
 {
-  "name": "@app/testing",
+  "name": "@platform/testing",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "Test helpers: Fastify e2e app factory and Proxy-based Vitest auto mocks.",
   "exports": {
     ".": {
-      "@app/source": "./src/index.ts",
+      "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },

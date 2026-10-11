@@ -1,16 +1,16 @@
 import 'reflect-metadata';
+import { Logger } from '@nestjs/common';
 import {
   createHttpApp,
   installProcessHandlers,
   listen,
   runClustered,
   setupApiDocs,
-} from '@app/bootstrap';
-import { appConfig } from '@app/config';
-import { flushLogs } from '@app/observability';
-import { createRedisIoAdapter } from '@app/redis';
-import { connectKafkaConsumer } from '@app/transport';
-import { Logger } from '@nestjs/common';
+} from '@platform/bootstrap';
+import { appConfig } from '@platform/config';
+import { flushLogs } from '@platform/observability';
+import { createRedisIoAdapter } from '@platform/redis';
+import { connectKafkaConsumer } from '@platform/transport';
 import { GATEWAY_API_DOCS } from './app.constants.js';
 import { AppModule } from './app.module.js';
 import { gatewayConfig } from './gateway.config.js';

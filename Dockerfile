@@ -10,7 +10,7 @@
 # including the build tools. Runtime deps are declared per app/lib package.json (never the root),
 # so a filtered production install yields exactly the app's closure. bunfig.toml uses the HOISTED
 # linker: one copy of every package in the ROOT node_modules, workspace packages symlinked under
-# node_modules/@app/* (no per-package node_modules). See docs/DOCKER.md.
+# node_modules/{@app,@domain,@platform}/* (no per-package node_modules). See docs/DOCKER.md.
 # ─────────────────────────────────────────────────────────────────────────────────────────────
 ARG NODE_VERSION=24.21.0
 ARG BUN_VERSION=1.4.2
@@ -34,7 +34,7 @@ WORKDIR /repo
 
 # ---- manifests only: the install layers stay cached until a package.json / bun.lock changes ---
 FROM toolchain AS manifests
-COPY --parents package.json bun.lock bunfig.toml apps/*/package.json libs/*/package.json ./
+COPY --parents package.json bun.lock bunfig.toml apps/*/package.json domains/*/package.json libs/*/package.json ./
 # `patchedDependencies` (kafkajs idle-timer fix) must be present before install, or bun aborts.
 COPY patches ./patches
 
@@ -45,7 +45,7 @@ FROM manifests AS deps
 RUN --mount=type=cache,id=bun-install-cache,target=/var/cache/bun,sharing=locked \
     bun install --frozen-lockfile --ignore-scripts --backend=copyfile
 
-# ---- dev: runs straight from TS sources (node --watch + @swc-node, `@app/source` condition) ----
+# ---- dev: runs straight from TS sources (node --watch + @swc-node, `@repo/source` condition) ----
 # No build step at all, so a compose `watch` rebuild of this target only re-copies sources.
 FROM deps AS dev
 ARG APP
@@ -59,13 +59,13 @@ WORKDIR /repo/apps/${APP}
 EXPOSE 3000 50051 9229
 CMD ["bun", "run", "dev"]
 
-# ---- build all libs + the selected app (swc, dependency order) ---------------------------------
+# ---- build every domain + lib and the selected app (swc, dependency order) ---------------------
 # swc `copyFiles` puts the non-TS assets (.proto, .hbs, .cql, .sql + drizzle meta) next to the JS.
 FROM deps AS build
 ARG APP
 RUN test -n "${APP}" || { echo "error: --build-arg APP=<folder under apps/> is required" >&2; exit 1; }
 COPY . .
-RUN bun run --filter "./libs/*" --filter "./apps/${APP}" build
+RUN bun run --filter "./libs/*" --filter "./domains/*" --filter "./apps/${APP}" build
 
 # ---- production node_modules for ONLY this app's dependency closure ----------------------------
 FROM manifests AS prod-deps
@@ -75,7 +75,7 @@ RUN --mount=type=cache,id=bun-install-cache,target=/var/cache/bun,sharing=locked
       --filter "./apps/${APP}"
 
 # ---- assemble /out = manifests + prod node_modules + compiled dist of the closure --------------
-# assemble-image.mjs prunes apps/libs outside the closure, copies their dist/ and FAILS the build
+# assemble-image.mjs prunes apps/domains/libs outside the closure, copies their dist/ and FAILS the build
 # on a missing asset (src/**/*.{proto,hbs,cql,sql,json} not in dist/), a missing runtime dependency,
 # a dangling workspace symlink or a missing dist/main.js / dist/instrument.js. PRUNE_NODE_MODULES
 # also drops *.d.ts, *.map, TS sources, docs and the `typescript` package from node_modules

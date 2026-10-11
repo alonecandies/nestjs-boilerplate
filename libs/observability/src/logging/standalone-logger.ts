@@ -1,5 +1,5 @@
-import { appConfig, type EnvSource, observabilityConfig } from '@app/config';
 import type { LoggerService } from '@nestjs/common';
+import { appConfig, type EnvSource, observabilityConfig } from '@platform/config';
 import { Logger, PinoLogger } from 'nestjs-pino';
 import { buildLoggerParams } from './logger-params.js';
 

@@ -1,12 +1,22 @@
 import { createServer } from 'node:net';
 import {
+  type ChannelCredentials,
+  credentials,
+  loadPackageDefinition,
+  Metadata,
+} from '@grpc/grpc-js';
+import { loadSync } from '@grpc/proto-loader';
+import { type INestMicroservice, Module } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import { ClientGrpcProxy, Ctx, Payload } from '@nestjs/microservices';
+import {
   DomainConflictException,
   DomainValidationException,
   EntityNotFoundException,
   ExternalServiceException,
   generateId,
-} from '@app/common';
-import { type GrpcConfig, grpcConfig } from '@app/config';
+} from '@platform/common';
+import { type GrpcConfig, grpcConfig } from '@platform/config';
 import type {
   GetUserRequest,
   GetUsersByIdsRequest,
@@ -17,18 +27,8 @@ import type {
   UserPage,
   UsersServiceClient,
   UsersServiceController,
-} from '@app/contracts';
-import { UsersServiceControllerMethods } from '@app/contracts';
-import {
-  type ChannelCredentials,
-  credentials,
-  loadPackageDefinition,
-  Metadata,
-} from '@grpc/grpc-js';
-import { loadSync } from '@grpc/proto-loader';
-import { type INestMicroservice, Module } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
-import { ClientGrpcProxy, Ctx, Payload } from '@nestjs/microservices';
+} from '@platform/contracts';
+import { UsersServiceControllerMethods } from '@platform/contracts';
 import { protoPath as healthProtoPath } from 'grpc-health-check';
 import { ClsModule, ClsService } from 'nestjs-cls';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';

@@ -1,4 +1,4 @@
-import { DomainValidationException, toSafeFilename } from '@app/common';
+import { DomainValidationException, toSafeFilename } from '@platform/common';
 import { clamp, compact, isEmpty, map, some, trim } from 'lodash-es';
 
 /** S3's hard limit on key length (UTF-8 bytes); GCS allows the same. */

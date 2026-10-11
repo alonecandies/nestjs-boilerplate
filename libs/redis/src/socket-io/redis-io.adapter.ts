@@ -1,6 +1,6 @@
-import { type RedisConfig, redisConfig } from '@app/config';
 import type { INestApplication, INestApplicationContext } from '@nestjs/common';
 import { IoAdapter } from '@nestjs/platform-socket.io';
+import { type RedisConfig, redisConfig } from '@platform/config';
 import { createAdapter } from '@socket.io/redis-adapter';
 import type { Redis } from 'ioredis';
 import { joinKey } from '../keys/key.util.js';

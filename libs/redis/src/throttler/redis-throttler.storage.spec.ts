@@ -1,5 +1,5 @@
-import { ServiceUnavailableException } from '@app/common';
-import { redisConfig } from '@app/config';
+import { ServiceUnavailableException } from '@platform/common';
+import { redisConfig } from '@platform/config';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RedisKeyService } from '../keys/redis-key.service.js';
 import { InMemoryRedis } from '../testing/in-memory-redis.js';

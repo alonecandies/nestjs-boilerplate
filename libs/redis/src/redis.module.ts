@@ -1,4 +1,3 @@
-import { type AppConfig, appConfig, type RedisConfig, redisConfig } from '@app/config';
 import {
   type DynamicModule,
   Injectable,
@@ -8,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TerminusModule } from '@nestjs/terminus';
+import { type AppConfig, appConfig, type RedisConfig, redisConfig } from '@platform/config';
 import { Redlock } from '@sesamecare-oss/redlock';
 import type { Redis } from 'ioredis';
 import { RedisHealthIndicator } from './health/redis.health.js';

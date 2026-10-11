@@ -1,5 +1,5 @@
 /**
- * @app/mailer — templated transactional mail. `MailService.enqueue()` puts a mail on the BullMQ
+ * @platform/mailer — templated transactional mail. `MailService.enqueue()` puts a mail on the BullMQ
  * `mail` queue (idempotent by key); `MailProcessor` renders the Handlebars template (strict mode,
  * shared partials) and sends it over pooled SMTP with retries and backoff.
  */

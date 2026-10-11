@@ -1,6 +1,6 @@
-import { type AppConfig, appConfig } from '@app/config';
 import { type DynamicModule, Module, type Type } from '@nestjs/common';
 import { TerminusModule } from '@nestjs/terminus';
+import { type AppConfig, appConfig } from '@platform/config';
 import { HEALTH_OPTIONS } from '../observability.constants.js';
 import { HealthController } from './health.controller.js';
 import type { ResolvedHealthOptions } from './health.types.js';

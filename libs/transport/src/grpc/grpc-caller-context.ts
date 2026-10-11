@@ -1,4 +1,4 @@
-import { pickDefined } from '@app/common';
+import { pickDefined } from '@platform/common';
 import { isArray, isPlainObject, isString } from 'lodash-es';
 import type { ClsService } from 'nestjs-cls';
 import {

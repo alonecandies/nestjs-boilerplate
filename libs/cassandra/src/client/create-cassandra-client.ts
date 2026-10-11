@@ -1,6 +1,6 @@
-import { retry } from '@app/common';
-import type { AppConfig, CassandraConfig } from '@app/config';
 import { Logger } from '@nestjs/common';
+import { retry } from '@platform/common';
+import type { AppConfig, CassandraConfig } from '@platform/config';
 import cassandra from 'cassandra-driver';
 import { get, includes, noop } from 'lodash-es';
 import type {

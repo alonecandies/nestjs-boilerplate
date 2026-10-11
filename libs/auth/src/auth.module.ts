@@ -1,9 +1,9 @@
-import { type AuthConfig, authConfig } from '@app/config';
 import { type DynamicModule, Module, type Provider } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtModule, type JwtModuleOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
+import { type AuthConfig, authConfig } from '@platform/config';
 import { JWT_ALGORITHM, JWT_CLOCK_TOLERANCE_SEC } from './auth.constants.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { PermissionsGuard } from './guards/permissions.guard.js';

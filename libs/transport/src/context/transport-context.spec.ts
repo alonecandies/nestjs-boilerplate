@@ -1,10 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { generateId } from '@app/common';
-import { KAFKA_HEADERS } from '@app/contracts';
-import { CLS_CORRELATION_ID, CLS_USER_ID, RequestContextService } from '@app/observability';
 import { Metadata } from '@grpc/grpc-js';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
 import { KafkaContext } from '@nestjs/microservices';
+import { generateId } from '@platform/common';
+import { KAFKA_HEADERS } from '@platform/contracts';
+import { CLS_CORRELATION_ID, CLS_USER_ID, RequestContextService } from '@platform/observability';
 import { CLS_ID, CLS_REQ, ClsService } from 'nestjs-cls';
 import { defer, lastValueFrom, of } from 'rxjs';
 import { describe, expect, it } from 'vitest';
@@ -75,7 +75,7 @@ describe('GrpcContextInterceptor', () => {
     });
   });
 
-  it("writes the keys @app/observability's RequestContextService reads", async () => {
+  it("writes the keys @platform/observability's RequestContextService reads", async () => {
     const cls = newCls();
     const context = new RequestContextService(cls);
     const metadata = createOutgoingMetadata({ correlationId: 'corr-7', userId: 'user-7' });

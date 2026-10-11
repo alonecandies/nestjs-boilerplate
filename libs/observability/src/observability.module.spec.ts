@@ -1,7 +1,7 @@
-import { AppConfigModule } from '@app/config';
 import { type INestApplicationContext, Injectable, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { type HealthIndicatorResult, HealthIndicatorService } from '@nestjs/terminus';
+import { AppConfigModule } from '@platform/config';
 import { TraceService } from 'nestjs-otel';
 import { Logger, PinoLogger } from 'nestjs-pino';
 import { register } from 'prom-client';

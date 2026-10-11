@@ -118,7 +118,7 @@ Day-to-day workflow, scripts and debugging are in [DEVELOPMENT.md](DEVELOPMENT.m
 
 1. **Apps on the host, infra in Docker (fastest).** `docker compose up -d --wait`, then `bun run dev` (monolith) or
    `bun run dev:microservices`. Every root `dev*` script first runs `bun run setup:env`, which copies each missing
-   `.env` from its `.env.example` (never overwrites). The shared `@app/config` defaults target the published ports
+   `.env` from its `.env.example` (never overwrites). The shared `@platform/config` defaults target the published ports
    (Kafka: `localhost:9094`, the EXTERNAL listener), but the per-app values that must differ live **only** in
    `apps/*/.env` (`SERVICE_NAME`, `PORT` 3000/3001/3002/3003, `GRPC_URL` 0.0.0.0:50051/50052/50053,
    `DATABASE_RUN_MIGRATIONS=true`). Without those files every app would bind HTTP 3000 and gRPC 50051, and the
@@ -141,7 +141,7 @@ the Postgres/RustFS credentials.
 
 ## Configuration of the app containers
 
-Env names are exactly those of `@app/config` (all documented, with defaults, in [`.env.example`](../.env.example) and
+Env names are exactly those of `@platform/config` (all documented, with defaults, in [`.env.example`](../.env.example) and
 [CONFIGURATION.md](CONFIGURATION.md); `node scripts/check-env-example.mjs` fails on drift). Extra app env for the
 containers only goes in an optional `.env.docker` at the repo root (gitignored by the `.env.*` rule). Notable compose
 choices:
@@ -195,14 +195,14 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
 
 ## Bootstrap jobs & migrations
 
-- **Kafka topics** ([`docker/kafka/topics.txt`](../docker/kafka/topics.txt)) = `@app/contracts` `KAFKA_TOPIC_VALUES` +
+- **Kafka topics** ([`docker/kafka/topics.txt`](../docker/kafka/topics.txt)) = `@platform/contracts` `KAFKA_TOPIC_VALUES` +
   `DEAD_LETTER_TOPIC_VALUES` (3 topics × 6 partitions + 3 `.dlq` × 1). Broker auto-creation is **off**, as in
   production: a missing topic fails loudly at consumer start instead of being created by a typo.
   `node scripts/docker/check-kafka-topics.mjs` (after `bun run build`) fails when the file drifts from the contracts.
 - **Cassandra**: `cassandra-init` creates `CREATE KEYSPACE IF NOT EXISTS <CASSANDRA_KEYSPACE>` with
   `NetworkTopologyStrategy {'<CASSANDRA_DC>': 1}` (default `datacenter1`) and asserts the node's DC equals the apps'
   `CASSANDRA_LOCAL_DC`. Tables
-  come from the services' own CQL migrations (`@app/cassandra`, LWT-locked) at boot.
+  come from the services' own CQL migrations (`@platform/cassandra`, LWT-locked) at boot.
 - **Buckets**: `uploads` in RustFS (SigV4-signed `PUT` via curl) and in fake-gcs, verified with a HEAD/GET. RustFS
   answers browser CORS for the origins in `RUSTFS_CORS_ALLOWED_ORIGINS` (`DOCKER_S3_CORS_ORIGINS`, default
   `http://localhost:3000,http://localhost:5173` like the apps' `CORS_ORIGINS`), so a frontend can `PUT` to a
@@ -231,7 +231,7 @@ oven/bun ─┐ (binary only)
 node:24-trixie-slim ── toolchain ── manifests (package.json × N, bun.lock, bunfig.toml, patches/)
                                       ├─ deps ──────── bun install --frozen-lockfile --ignore-scripts
                                       │   ├─ dev ───── COPY . . → `bun run dev` (node --watch + swc-node, TS sources)
-                                      │   └─ build ─── COPY . . → bun run --filter './libs/*' --filter ./apps/$APP build (swc)
+                                      │   └─ build ─── COPY . . → bun run --filter './libs/*' --filter './domains/*' --filter ./apps/$APP build (swc)
                                       └─ prod-deps ─── bun install --production --filter ./apps/$APP (the app's closure only)
                                            └─ assemble ── scripts/docker/assemble-image.mjs (prune, copy dist, verify)
                                                 ├─ runtime-alpine ── node:24-alpine + tini, user node
@@ -254,10 +254,10 @@ Compose builds the same targets (`APP_TARGET`, tag `boilerplate/<app>:${TAG:-loc
   with a BuildKit cache mount; `patches/` (the kafkajs patch) is copied before install, as bun requires.
 - **Hoisted linker.** `bunfig.toml` uses `linker = "hoisted"` (the isolated linker produced duplicate `@nestjs/core`
   copies through NestJS's cyclic optional peers): one copy of each package in the **root**
-  `node_modules`, workspace packages symlinked as `node_modules/@app/<name>` (relative links, preserved by `COPY`).
+  `node_modules`, workspace packages symlinked as `node_modules/<scope>/<name>` (`@app`, `@domain`, `@platform`) (relative links, preserved by `COPY`).
   The image copies that root tree; there are no per-package `node_modules`.
 - **Only the app's closure ships.** The filtered production install contains only the dependencies of the app and
-  of its workspace libs. `assemble-image.mjs` then deletes every other `apps/*` / `libs/*` folder, copies the compiled
+  of its workspace libs. `assemble-image.mjs` then deletes every other `apps/*` / `domains/*` / `libs/*` folder, copies the compiled
   `dist/` of the closure and **fails the build** when
   - a non-TS asset under a package's `src/` (`.proto`, `.hbs`, `.cql`, `.sql`, drizzle `meta/*.json`) is missing
     from its `dist/` (swc `copyFiles`),
@@ -303,10 +303,10 @@ closure libs, and `bun.lock`, `bunfig.toml`, `patches/` and `typescript` are gon
 dependency of `@nestjs/swagger`) although `/docs` uses Scalar.
 
 Build time: ~5–5.5 min cold (about 2 min of it is the distroless base pull on a fresh machine; the full and the
-filtered install share a locked cache, so they serialize; swc compiles all libs + the app in ~1.5 s), **~30 s** for
+filtered install share a locked cache, so they serialize; swc compiles all domains + libs + the app in ~1.5 s), **~30 s** for
 a source-only change (dependency layers cached), ~40 s for another app once the full install is cached.
 The gateway ships as much as the monolith because the domain-lib barrels import their infrastructure
-(`@app/notifications` → cassandra/mailer…). Per-domain `@app/<x>/api` subpath exports would slim it; that is a known
+(`@domain/notifications` → cassandra/mailer…). Per-domain `@domain/<x>/api` subpath exports would slim it; that is a known
 follow-up, not done yet (see [Known follow-ups](#known-follow-ups)).
 
 ### Running a prebuilt image, and what a healthy container looks like
@@ -491,9 +491,9 @@ A separate metrics listener (its own port) is not implemented yet, so this routi
 
 Stated honestly: none of these are done yet.
 
-| Follow-up                                                              | Docker impact                                                                                                |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
-| Per-domain `@app/<x>/api` subpath exports                              | the gateway image would stop shipping the domain libs' infrastructure (it is as large as the monolith today) |
-| Separate metrics listener                                              | `/metrics` could leave the API port; until then keep it off the public ingress + `METRICS_BEARER_TOKEN`      |
-| Transactional outbox                                                   | events are published after commit today; a crash between commit and publish can lose the event               |
-| Real-database integration specs for billing/notifications repositories | the CI `integration` job covers Postgres + Redis only through the existing `*:int` projects                  |
+| Follow-up                                                              | Docker impact                                                                                            |
+| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| Per-domain `@domain/<x>/api` subpath exports                           | the gateway image would stop shipping the domains' infrastructure (it is as large as the monolith today) |
+| Separate metrics listener                                              | `/metrics` could leave the API port; until then keep it off the public ingress + `METRICS_BEARER_TOKEN`  |
+| Transactional outbox                                                   | events are published after commit today; a crash between commit and publish can lose the event           |
+| Real-database integration specs for billing/notifications repositories | the CI `integration` job covers Postgres + Redis only through the existing `*:int` projects              |

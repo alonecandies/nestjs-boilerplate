@@ -1,4 +1,4 @@
-# @app/mailer
+# @platform/mailer
 
 Templated transactional mail. `MailService.enqueue()` puts a mail on the BullMQ `mail` queue, so
 the caller (an HTTP request or a Kafka consumer) doesn't wait on SMTP. `MailProcessor` renders the
@@ -62,7 +62,7 @@ await this.mail.enqueue(
 
 ## Gotchas
 
-- **`AppQueueModule.forRootAsync()` (from `@app/redis`) must be imported at the app level.**
+- **`AppQueueModule.forRootAsync()` (from `@platform/redis`) must be imported at the app level.**
   `BullModule.registerQueue` needs the global BullMQ connection.
 - **Idempotency lasts 24h.** A custom `jobId` deduplicates only while the job exists. Completed
   mail jobs are kept for 24h (`MAIL_JOB_OPTIONS.removeOnComplete`). Keys that BullMQ would reject

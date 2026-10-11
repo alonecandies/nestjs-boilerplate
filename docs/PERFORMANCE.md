@@ -19,7 +19,7 @@ Desktop at 4 CPU / 4 GB (see [DOCKER.md](DOCKER.md)). How to see these effects i
 | Postgres  | Keyset pagination on uuidv7 ids                    | page `limit`                                                                          | 20, max 100                 | `libs/database/src/pagination/keyset.ts`                               |
 | Redis     | ioredis auto-pipelining                            | —                                                                                     | on (off for subscribers)    | `libs/redis/src/redis.factory.ts`                                      |
 | Cache     | L1 in-process + L2 Redis, miss coalescing          | `CACHE_TTL_MS`, `CACHE_L1_TTL_MS`, `CACHE_L1_MAX_ITEMS`                               | 30000, 5000, 5000           | `libs/redis/src/cache/`                                                |
-| GraphQL   | Per-operation DataLoader                           | `maxBatchSize` (code)                                                                 | 500 (users)                 | `libs/identity/src/presentation/graphql/users-loader.registrar.ts`     |
+| GraphQL   | Per-operation DataLoader                           | `maxBatchSize` (code)                                                                 | 500 (users)                 | `domains/identity/src/presentation/graphql/users-loader.registrar.ts`  |
 | GraphQL   | Guard once per operation, no field enhancers       | —                                                                                     | on                          | `libs/auth/src/guards/jwt-auth.guard.ts`                               |
 | GraphQL   | Complexity limit                                   | `GRAPHQL_MAX_COMPLEXITY`                                                              | 250                         | `libs/graphql/src/plugins/complexity.plugin.ts`                        |
 | gRPC      | Deadline on every call                             | `GRPC_DEADLINE_MS`                                                                    | 5000                        | `libs/transport/src/grpc/grpc-client.options.ts`                       |
@@ -29,10 +29,10 @@ Desktop at 4 CPU / 4 GB (see [DOCKER.md](DOCKER.md)). How to see these effects i
 | Kafka     | Partitions consumed concurrently                   | `KAFKA_CONSUMER_CONCURRENCY`                                                          | 3                           | same                                                                   |
 | Kafka     | In-process retry, then dead-letter                 | `DEFAULT_KAFKA_RETRY_OPTIONS` (code)                                                  | 4 attempts, 0.25 → 2 s      | `libs/transport/src/kafka/kafka-retry.interceptor.ts`                  |
 | Mail      | BullMQ worker concurrency, pooled SMTP             | `MAIL_QUEUE_CONCURRENCY`, `SMTP_POOL`, `SMTP_MAX_CONNECTIONS`                         | 5, true, 5                  | `libs/mailer/src/`                                                     |
-| Files     | Bounded streaming uploads                          | `STORAGE_MAX_CONCURRENT_UPLOADS`, `STORAGE_MAX_UPLOAD_BYTES`                          | 4, 25 MiB                   | `libs/files/`, `libs/storage/`                                         |
+| Files     | Bounded streaming uploads                          | `STORAGE_MAX_CONCURRENT_UPLOADS`, `STORAGE_MAX_UPLOAD_BYTES`                          | 4, 25 MiB                   | `domains/files/`, `libs/storage/`                                      |
 | Files     | Presigned URLs (bytes bypass the API)              | `STORAGE_SIGNED_URL_TTL_SEC`                                                          | 900                         | `libs/storage/`                                                        |
 | CPU       | Argon2id cost and libuv threadpool                 | `ARGON2_MEMORY_COST`, `ARGON2_TIME_COST`, `ARGON2_PARALLELISM`, `UV_THREADPOOL_SIZE`  | 19456 KiB, 2, 1, 4          | `libs/auth/src/password/`, `Dockerfile`                                |
-| Cassandra | Partition per user, TTL instead of deletes         | `CASSANDRA_CONSISTENCY`, `CASSANDRA_CORE_CONNECTIONS`, `CASSANDRA_REQUEST_TIMEOUT_MS` | `localOne`, 2, 12000        | `libs/notifications/src/infrastructure/persistence/`                   |
+| Cassandra | Partition per user, TTL instead of deletes         | `CASSANDRA_CONSISTENCY`, `CASSANDRA_CORE_CONNECTIONS`, `CASSANDRA_REQUEST_TIMEOUT_MS` | `localOne`, 2, 12000        | `domains/notifications/src/infrastructure/persistence/`                |
 | Memory    | V8 heap per container                              | `NODE_OPTIONS=--max-old-space-size=…`                                                 | 512/384/320 MiB in compose  | `docker-compose.yml`                                                   |
 
 ## HTTP layer
@@ -40,7 +40,7 @@ Desktop at 4 CPU / 4 GB (see [DOCKER.md](DOCKER.md)). How to see these effects i
 ### Fastify
 
 Every app runs on `@nestjs/platform-fastify` (`createHttpApp()` / `createServiceApp()` in
-[`@app/bootstrap`](../libs/bootstrap/README.md)). Fastify's router and schema-less JSON path are
+[`@platform/bootstrap`](../libs/bootstrap/README.md)). Fastify's router and schema-less JSON path are
 markedly cheaper per request than Express, and its hooks let metrics see every response. The
 server options (`buildFastifyOptions()`):
 
@@ -94,7 +94,7 @@ cluster; scale them with replicas.
 
 ## Database (Postgres / Drizzle)
 
-Postgres 18 through postgres.js + Drizzle ORM ([`@app/database`](../libs/database/README.md)).
+Postgres 18 through postgres.js + Drizzle ORM ([`@platform/database`](../libs/database/README.md)).
 
 ### Keyset pagination
 
@@ -120,7 +120,7 @@ serves `DESC` by scanning backwards; avoid Drizzle's `.desc()` in index definiti
 
 ### uuidv7 ids
 
-All ids come from `generateId()` (`@app/common`): UUIDv7, whose first 48 bits are a millisecond
+All ids come from `generateId()` (`@platform/common`): UUIDv7, whose first 48 bits are a millisecond
 timestamp. New rows therefore land at the right-hand edge of the primary-key btree, like a
 sequence, instead of on random leaf pages as UUIDv4 would. That keeps inserts appending to hot,
 cached pages, keeps the index compact (fewer page splits), and makes `ORDER BY id` mean "creation
@@ -199,7 +199,7 @@ connections.
 
 ### Two-tier cache (L1 in-process + L2 Redis)
 
-`AppCacheService` ([`@app/redis`](../libs/redis/README.md)) wraps cache-manager 7 with two stores:
+`AppCacheService` ([`@platform/redis`](../libs/redis/README.md)) wraps cache-manager 7 with two stores:
 
 ```mermaid
 flowchart LR
@@ -237,7 +237,7 @@ you can tolerate them being stale for `CACHE_L1_TTL_MS`.
 
 ## GraphQL
 
-Apollo Server 5 on Fastify, code-first ([`@app/graphql`](../libs/graphql/README.md)).
+Apollo Server 5 on Fastify, code-first ([`@platform/graphql`](../libs/graphql/README.md)).
 
 ### DataLoader per operation, without REQUEST scope
 
@@ -287,7 +287,7 @@ resolves the property. Give every list field a cost proportional to its fan-out.
 ## gRPC
 
 In the microservice topology the gateway calls the services over gRPC
-([`@app/transport`](../libs/transport/README.md)). Every setting below exists to keep a slow or
+([`@platform/transport`](../libs/transport/README.md)). Every setting below exists to keep a slow or
 dead upstream from tying up the gateway.
 
 ```mermaid
@@ -329,7 +329,7 @@ CommandBus/QueryBus calls. See [ARCHITECTURE.md](ARCHITECTURE.md).
 ## Kafka
 
 Integration events (`identity.user-registered.v1`, `billing.payment-succeeded.v1`,
-`notifications.notification-created.v1`) go through kafkajs ([`@app/transport`](../libs/transport/README.md)).
+`notifications.notification-created.v1`) go through kafkajs ([`@platform/transport`](../libs/transport/README.md)).
 Locally each topic has 6 partitions and its `.dlq` has 1 (`docker/kafka/topics.txt`).
 
 ### Producer
@@ -389,7 +389,7 @@ from 5 s.
 ## Files and storage
 
 File bytes are the easiest way to blow a Node heap, so the API avoids holding them
-([`@app/files`](../libs/files/README.md), [`@app/storage`](../libs/storage/README.md)).
+([`@domain/files`](../domains/files/README.md), [`@platform/storage`](../libs/storage/README.md)).
 
 | Path                                                                                  | How bytes move                                                                                                                                                        | Bounds                                                                                                                                                                                 |
 | ------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -454,7 +454,7 @@ Sizing rules:
 
 ## Cassandra
 
-Notifications are stored in Cassandra 5 (`libs/notifications/src/infrastructure/persistence/`),
+Notifications are stored in Cassandra 5 (`domains/notifications/src/infrastructure/persistence/`),
 modelled around the one query that matters, "a user's inbox, newest first":
 
 ```sql
@@ -593,8 +593,8 @@ Stated honestly, as of this writing:
 
 - **Transactional outbox.** Events are published after the database commit. A crash between the
   two loses the event; an outbox table plus a relay would make it exactly-once-produced.
-- **Slimmer gateway image.** The gateway imports whole domain libraries; per-domain
-  `@app/<x>/api` subpath exports would let it ship only the presentation layer and gRPC adapters
+- **Slimmer gateway image.** The gateway imports whole domain packages; per-domain
+  `@domain/<x>/api` subpath exports would let it ship only the presentation layer and gRPC adapters
   (today the gateway image is as large as the monolith's, 294 MB).
 - **Separate metrics listener**, so `/metrics` (and its serialization cost) is off the API port.
 - **Real-database integration specs** for the billing and notifications repositories (identity

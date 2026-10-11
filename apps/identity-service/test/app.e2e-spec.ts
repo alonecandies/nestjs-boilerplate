@@ -1,26 +1,26 @@
+import { identitySchema, users } from '@domain/identity';
+import { type ServiceError, status } from '@grpc/grpc-js';
+import { ClientGrpcProxy } from '@nestjs/microservices';
+import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+import { Test } from '@nestjs/testing';
 import {
   DomainValidationException,
   EntityNotFoundException,
   generateId,
   UnauthenticatedException,
-} from '@app/common';
-import { type GrpcConfig, grpcConfig } from '@app/config';
-import type { AuthServiceClient, UsersServiceClient } from '@app/contracts';
-import { DRIZZLE } from '@app/database';
-import { identitySchema, users } from '@app/identity';
-import { REDIS_CLIENT } from '@app/redis';
-import { InMemoryRedis } from '@app/redis/testing';
+} from '@platform/common';
+import { type GrpcConfig, grpcConfig } from '@platform/config';
+import type { AuthServiceClient, UsersServiceClient } from '@platform/contracts';
+import { DRIZZLE } from '@platform/database';
+import { REDIS_CLIENT } from '@platform/redis';
+import { InMemoryRedis } from '@platform/redis/testing';
 import {
   createGrpcClientOptions,
   FakeKafkaProducer,
   GrpcCircuitBreakers,
   grpcCall,
   KafkaProducer,
-} from '@app/transport';
-import { type ServiceError, status } from '@grpc/grpc-js';
-import { ClientGrpcProxy } from '@nestjs/microservices';
-import type { NestFastifyApplication } from '@nestjs/platform-fastify';
-import { Test } from '@nestjs/testing';
+} from '@platform/transport';
 import { getTableColumns } from 'drizzle-orm';
 import { lastValueFrom, type Observable } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';

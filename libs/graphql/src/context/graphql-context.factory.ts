@@ -1,4 +1,4 @@
-import { generateId, getHeaderValue, HTTP_HEADERS, isSafeRequestId } from '@app/common';
+import { generateId, getHeaderValue, HTTP_HEADERS, isSafeRequestId } from '@platform/common';
 import { omit } from 'lodash-es';
 import { extractConnectionToken } from '../auth/subscription-auth.js';
 import type { DataLoaderRegistry } from '../loaders/data-loader.registry.js';

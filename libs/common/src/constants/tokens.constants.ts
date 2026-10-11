@@ -1,5 +1,5 @@
 /**
- * DI tokens for the cross-cutting enhancers. `@app/common` must not depend on `@app/config`, so the
+ * DI tokens for the cross-cutting enhancers. `@platform/common` must not depend on `@platform/config`, so the
  * values are provided by the app (see `provideCommonEnhancers` / `provideCommonEnhancersAsync`).
  * Every consumer injects them with `@Optional()` and falls back to a safe default.
  */

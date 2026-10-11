@@ -5,7 +5,7 @@ import type { DrizzleDB } from '../drizzle/drizzle.types.js';
 import { DatabaseHealthIndicator } from './database.health.js';
 
 // Abstract marker class; mocked so the test does not load observability's module graph.
-vi.mock('@app/observability', () => ({ HealthContributor: class HealthContributor {} }));
+vi.mock('@platform/observability', () => ({ HealthContributor: class HealthContributor {} }));
 
 const indicator = (
   handler?: FakeSqlHandler,

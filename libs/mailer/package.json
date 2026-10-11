@@ -1,12 +1,12 @@
 {
-  "name": "@app/mailer",
+  "name": "@platform/mailer",
   "version": "0.0.0",
   "private": true,
   "type": "module",
   "description": "Transactional mail: Handlebars templates, BullMQ mail queue with idempotent enqueue, pooled SMTP worker",
   "exports": {
     ".": {
-      "@app/source": "./src/index.ts",
+      "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
     },
@@ -19,8 +19,8 @@
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
-    "@app/common": "workspace:*",
-    "@app/config": "workspace:*",
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
     "@nestjs-modules/mailer": "catalog:",
     "@nestjs/bullmq": "catalog:",
     "@nestjs/common": "catalog:",

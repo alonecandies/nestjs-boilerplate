@@ -61,7 +61,7 @@ export interface AllConfig {
 
 /**
  * Validates EVERY namespace against `env` and reports all problems at once (instead of one
- * namespace per boot attempt). Script/CI-friendly: `node -e "import('@app/config').then(m => m.validateAllEnv())"`.
+ * namespace per boot attempt). Script/CI-friendly: `node -e "import('@platform/config').then(m => m.validateAllEnv())"`.
  * Throws an `EnvValidationError` (namespace `'*'`) listing every invalid variable.
  */
 export function validateAllEnv(env: EnvSource = process.env): AllConfig {

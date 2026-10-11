@@ -1,8 +1,8 @@
-import { withTimeout } from '@app/common';
-import { type KafkaConfig, kafkaConfig } from '@app/config';
-import type { HealthContributor } from '@app/observability';
 import { Inject, Injectable, Logger, type OnApplicationShutdown } from '@nestjs/common';
 import { type HealthIndicatorResult, HealthIndicatorService } from '@nestjs/terminus';
+import { withTimeout } from '@platform/common';
+import { type KafkaConfig, kafkaConfig } from '@platform/config';
+import type { HealthContributor } from '@platform/observability';
 import { type Admin, Kafka } from 'kafkajs';
 import { createKafkaClientConfig } from './kafka.options.js';
 

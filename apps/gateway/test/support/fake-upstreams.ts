@@ -1,5 +1,13 @@
-import { type AccessTokenDenylist, isRole, type TokenService } from '@app/auth';
-import { EntityNotFoundException, generateId, normalizeEmail } from '@app/common';
+import {
+  AuthPort,
+  EmailAlreadyTakenException,
+  InvalidCredentialsException,
+  InvalidRefreshTokenException,
+  UsersPort,
+} from '@domain/identity';
+import { NotificationNotFoundException, NotificationsPort } from '@domain/notifications';
+import { type AccessTokenDenylist, isRole, type TokenService } from '@platform/auth';
+import { EntityNotFoundException, generateId, normalizeEmail } from '@platform/common';
 import type {
   AuthTokens,
   ListNotificationsRequest,
@@ -14,19 +22,11 @@ import type {
   UpdateUserRolesRequest,
   User,
   UserPage,
-} from '@app/contracts';
-import {
-  AuthPort,
-  EmailAlreadyTakenException,
-  InvalidCredentialsException,
-  InvalidRefreshTokenException,
-  UsersPort,
-} from '@app/identity';
-import { NotificationNotFoundException, NotificationsPort } from '@app/notifications';
+} from '@platform/contracts';
 
 /*
  * In-memory stand-ins for identity- and notifications-service, bound IN PLACE OF the gRPC
- * adapters (the ports are the seam). They return the same `@app/contracts` shapes and throw the
+ * adapters (the ports are the seam). They return the same `@platform/contracts` shapes and throw the
  * same DomainExceptions the gRPC adapters map from status codes + error trailers, so the
  * gateway's presentation, guards, filters and caches run exactly as against the real services.
  * Tokens are signed with the gateway's own TokenService: in production identity-service signs them

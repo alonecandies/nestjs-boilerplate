@@ -1,7 +1,7 @@
-import { type AppConfig, appConfig, type RedisConfig, redisConfig } from '@app/config';
 import { BullModule } from '@nestjs/bullmq';
 import { type DynamicModule, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { type AppConfig, appConfig, type RedisConfig, redisConfig } from '@platform/config';
 import type { DefaultJobOptions, QueueOptions } from 'bullmq';
 import { merge } from 'lodash-es';
 import { reconnectOnReadonly, redisRetryStrategy } from '../redis.factory.js';

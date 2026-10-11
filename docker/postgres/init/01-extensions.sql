@@ -1,6 +1,6 @@
 -- Runs ONCE, on an empty data directory only (docker-entrypoint-initdb.d semantics).
 -- Schema objects are NOT created here: the apps own them through Drizzle migrations
--- (@app/database, advisory-locked; DATABASE_RUN_MIGRATIONS=true in compose).
+-- (@platform/database, advisory-locked; DATABASE_RUN_MIGRATIONS=true in compose).
 
 -- Query statistics (needs shared_preload_libraries=pg_stat_statements, set in docker-compose.yml).
 CREATE EXTENSION IF NOT EXISTS pg_stat_statements;

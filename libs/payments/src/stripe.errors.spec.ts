@@ -3,7 +3,7 @@ import {
   DomainConflictException,
   ExternalServiceException,
   ServiceUnavailableException,
-} from '@app/common';
+} from '@platform/common';
 import Stripe from 'stripe';
 import { describe, expect, it } from 'vitest';
 import { toPaymentDomainException } from './stripe.errors.js';

@@ -50,7 +50,7 @@ You can still type messages by hand with `git commit -m`. The hook validates the
 
 `scope-enum` is computed at lint time:
 
-1. **Every workspace package**, via `@commitlint/config-workspace-scopes`, with the `@app/` prefix removed:
+1. **Every workspace package**, via `@commitlint/config-workspace-scopes`, with the scope prefix (`@app/`, `@domain/`, `@platform/`) removed:
    - apps: `gateway`, `monolith`, `identity-service`, `notifications-service`, `billing-service`
    - libs: `auth`, `billing`, `bootstrap`, `cassandra`, `common`, `config`, `contracts`, `database`, `files`, `graphql`, `identity`, `mailer`, `notifications`, `observability`, `payments`, `redis`, `storage`, `testing`, `transport`
 2. **Extra scopes** (`EXTRA_SCOPES`): `deps`, `deps-dev`, `release`, `docker`, `ci`, `config`, `repo`, `tooling`, `docs`.
@@ -102,7 +102,7 @@ The ESLint cache lives in `node_modules/.cache/eslint/`. The config file is load
 
 | Setting (`command.version`)               | Value                         | Meaning                                                                                                                                |
 | ----------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `version`                                 | `independent`                 | One version and one tag per package (`@app/billing@0.2.0`).                                                                            |
+| `version`                                 | `independent`                 | One version and one tag per package (`@domain/billing@0.2.0`).                                                                         |
 | `conventionalCommits` + `changelogPreset` | `true`, `conventionalcommits` | Bump levels and changelog entries come from the commit messages. The preset is pinned to **9.3.1** because Lerna 10 crashes with 10.x. |
 | `allowBranch`                             | `master`, `main`, `release/*` | Releases are refused on feature branches.                                                                                              |
 | `private`                                 | `true`                        | Private packages are versioned too (every package here is `"private": true`).                                                          |
@@ -164,4 +164,4 @@ What CI does **not** do (yet):
 - No `lerna version` run. Releases are cut by hand with `bun run release` (above).
 - No `buf breaking` gate.
 
-Integration specs that run the billing (Postgres) and notifications (Cassandra) repositories against real databases are a known follow-up. Today only `@app/database`, `@app/redis` and the identity users repository have `*.int-spec.ts`. The billing and notifications repositories are covered by unit specs. See [TESTING.md](TESTING.md).
+Integration specs that run the billing (Postgres) and notifications (Cassandra) repositories against real databases are a known follow-up. Today only `@platform/database`, `@platform/redis` and the identity users repository have `*.int-spec.ts`. The billing and notifications repositories are covered by unit specs. See [TESTING.md](TESTING.md).

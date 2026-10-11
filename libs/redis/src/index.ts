@@ -1,8 +1,8 @@
 /**
- * @app/redis — ioredis 6 infrastructure shared by every service: global clients
+ * @platform/redis — ioredis 6 infrastructure shared by every service: global clients
  * (`RedisModule`), namespaced keys, distributed locks (`@WithLock` for crons), the two-tier cache
  * (in-process L1 + Redis L2), Redis-backed throttling, the BullMQ connection, the socket.io Redis
- * adapter and the readiness contributor. Test doubles live in `@app/redis/testing`.
+ * adapter and the readiness contributor. Test doubles live in `@platform/redis/testing`.
  */
 
 // Re-exported so feature libs can opt routes out/in without depending on @nestjs/throttler.

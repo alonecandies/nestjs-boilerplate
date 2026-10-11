@@ -1,7 +1,7 @@
 import { normalizeIp } from '@nestjs/throttler';
 import { isNonEmptyString } from '../keys/key.util.js';
 
-/** Reads `user.id` from an authenticated principal without depending on @app/auth (no cycle). */
+/** Reads `user.id` from an authenticated principal without depending on @platform/auth (no cycle). */
 export function authenticatedUserId(user: unknown): string | undefined {
   if (typeof user !== 'object' || user === null) return undefined;
   const id: unknown = Reflect.get(user, 'id');

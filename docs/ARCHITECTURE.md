@@ -1,10 +1,10 @@
 # Architecture
 
-How the boilerplate is put together: one codebase, two deployment topologies, hexagonal + CQRS domain libraries.
+How the boilerplate is put together: one codebase, two deployment topologies, hexagonal + CQRS domain packages.
 
 ## 1. Topologies
 
-The same domain libraries and the same presentation classes (REST controllers, GraphQL resolvers, the Socket.IO gateway, Kafka consumers) run in two shapes. Only the module bindings change.
+The same domain packages and the same presentation classes (REST controllers, GraphQL resolvers, the Socket.IO gateway, Kafka consumers) run in two shapes. Only the module bindings change.
 
 | Topology          | Processes                                                                         | Port binding                                                                                  | Async integration                           | Compose profile |
 | ----------------- | --------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------- | --------------- |
@@ -34,6 +34,8 @@ Host ports (from [`docker-compose.yml`](../docker-compose.yml)): the API (monoli
 
 ## 2. Repository layout
 
+Three top-level folders, one dependency direction: `apps/*` (`@app/*`, the deployables: composition roots only) → `domains/*` (`@domain/*`, business code, one package per bounded context) → `libs/*` (`@platform/*`, platform adapters and the shared kernel, no business rules). `scripts/check-boundaries.mjs` (part of `bun run check`) fails when a platform package declares or imports a domain or an app, or a domain imports an app.
+
 | Path                                                                                                                              | Role                                                                                                                    |
 | --------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | `apps/monolith`                                                                                                                   | All contexts in one process: HTTP (REST + GraphQL + Socket.IO) plus a hybrid Kafka consumer                             |
@@ -41,8 +43,8 @@ Host ports (from [`docker-compose.yml`](../docker-compose.yml)): the API (monoli
 | `apps/identity-service`                                                                                                           | gRPC `identity.v1.AuthService` + `identity.v1.UsersService`; Postgres, Redis; produces `identity.user-registered.v1`    |
 | `apps/notifications-service`                                                                                                      | gRPC `notifications.v1.NotificationsService`; Cassandra inbox; Kafka consumers; BullMQ `mail` worker; daily digest cron |
 | `apps/billing-service`                                                                                                            | gRPC `billing.v1.BillingService`; Stripe Checkout + webhooks; Postgres ledger; produces `billing.payment-succeeded.v1`  |
-| `libs/identity`, `libs/notifications`, `libs/billing`                                                                             | Bounded contexts: hexagonal + CQRS (sections 3–6)                                                                       |
-| `libs/files`                                                                                                                      | Edge-only context (object storage, presigned URLs). A plain application service, no CQRS, no service of its own         |
+| `domains/identity`, `domains/notifications`, `domains/billing`                                                                    | Bounded contexts: hexagonal + CQRS (sections 3–6)                                                                       |
+| `domains/files`                                                                                                                   | Edge-only context (object storage, presigned URLs). A plain application service, no CQRS, no service of its own         |
 | `libs/contracts`                                                                                                                  | `.proto` files + ts-proto output, gRPC package specs, Kafka topics, envelope and payload zod schemas                    |
 | `libs/transport`                                                                                                                  | gRPC clients/servers, status mapping, circuit breakers, Kafka producer/consumer plumbing, dead-lettering                |
 | `libs/common`                                                                                                                     | `DomainException` hierarchy, problem+json, global pipes/filter/timeout interceptor, middlewares, utilities              |
@@ -54,7 +56,7 @@ Host ports (from [`docker-compose.yml`](../docker-compose.yml)): the API (monoli
 
 ## 3. Layers
 
-Each domain library (`libs/identity`, `libs/notifications`, `libs/billing`) has four folders under `src/`. Dependencies point inward.
+Each domain package (`domains/identity`, `domains/notifications`, `domains/billing`) has four folders under `src/`. Dependencies point inward.
 
 ```mermaid
 flowchart TB
@@ -73,9 +75,9 @@ flowchart TB
 What the layering does and does not promise:
 
 - Domain code is plain TypeScript and throws `DomainException` subclasses, never `HttpException`.
-- Application handlers depend on abstract repository ports (bound in the `XCoreModule`) **and directly on platform libraries** where an abstraction would add nothing: `RegisterUserHandler` injects `PasswordHasher` (`@app/auth`), `HandleStripeWebhookHandler` injects `StripeService` (`@app/payments`), relays inject `KafkaProducer` (`@app/transport`), `WelcomeUserHandler` injects `MailService` (`@app/mailer`).
+- Application handlers depend on abstract repository ports (bound in the `XCoreModule`) **and directly on platform libraries** where an abstraction would add nothing: `RegisterUserHandler` injects `PasswordHasher` (`@platform/auth`), `HandleStripeWebhookHandler` injects `StripeService` (`@platform/payments`), relays inject `KafkaProducer` (`@platform/transport`), `WelcomeUserHandler` injects `MailService` (`@platform/mailer`).
 - Folder names for repository ports differ per library: `application/persistence/` (identity), `application/ports/` (notifications), `application/repositories/` (billing).
-- `libs/files` is smaller: `domain/`, `application/` (`FilesService`, access policy) and `presentation/`, with storage provided by `@app/storage`.
+- `domains/files` is smaller: `domain/`, `application/` (`FilesService`, access policy) and `presentation/`, with storage provided by `@platform/storage`.
 
 ## 4. Ports and adapters (`forLocal()` / `forRemote()`)
 
@@ -86,10 +88,10 @@ There are two kinds of ports. Both are **abstract classes** (usable as DI tokens
 | Presentation-facing  | `AuthPort`, `UsersPort` (identity), `NotificationsPort`, `BillingPort`                                                                                                      | `XApiModule.forLocal()` / `.forRemote()` | `*LocalAdapter` (CQRS buses) or `*GrpcAdapter` (gRPC client) |
 | Application-internal | `UsersRepository`, `SessionsRepository`, `TransactionRunner`, `NotificationsRepository`, `NotificationRecipientsRepository`, `PaymentsRepository`, `StripeEventsRepository` | `XCoreModule`                            | Drizzle (Postgres) or Cassandra repositories                 |
 
-Presentation-facing ports speak `@app/contracts` types (generated by ts-proto from `libs/contracts/src/proto/**`), so a local adapter and a gRPC adapter return identical shapes, and both throw the same `DomainException`s: error codes survive the gRPC hop through trailers (section 9).
+Presentation-facing ports speak `@platform/contracts` types (generated by ts-proto from `libs/contracts/src/proto/**`), so a local adapter and a gRPC adapter return identical shapes, and both throw the same `DomainException`s: error codes survive the gRPC hop through trailers (section 9).
 
 ```ts
-// libs/identity/src/identity-api.module.ts (abridged)
+// domains/identity/src/identity-api.module.ts (abridged)
 static forLocal(): DynamicModule {
   return {
     module: IdentityApiModule,
@@ -112,7 +114,7 @@ static forRemote(options: GrpcClientsModuleOptions = {}): DynamicModule {
 }
 ```
 
-What a `*GrpcAdapter` adds on every call (via `grpcCall()` in `@app/transport`):
+What a `*GrpcAdapter` adds on every call (via `grpcCall()` in `@platform/transport`):
 
 | Concern         | Behaviour                                                                                                                                                                                                                                                                                                                                                                                                           |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -126,7 +128,7 @@ The gateway verifies access tokens itself (JWT + the Redis denylist), so authent
 
 ## 5. Module composition per app
 
-Each domain library exports a fixed set of modules:
+Each domain package exports a fixed set of modules:
 
 | Module                                                               | Contents                                                                                 | Imported by                                                                 |
 | -------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
@@ -186,7 +188,7 @@ export class GetUserByIdQuery extends Query<User> { … }
 | Building block  | Role                                                                                                                                                                                   | Examples                                                                                                               |
 | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | Command handler | One write use case. Loads/creates an aggregate, persists it, then `commit()`s its domain events                                                                                        | `RegisterUserHandler`, `LoginHandler`, `HandleStripeWebhookHandler`, `CreateNotificationHandler`, `WelcomeUserHandler` |
-| Query handler   | Read use case, returns a `@app/contracts` shape                                                                                                                                        | `GetUserByIdHandler`, `GetUsersByIdsHandler` (feeds the GraphQL `users` DataLoader), `ListPaymentsHandler`             |
+| Query handler   | Read use case, returns a `@platform/contracts` shape                                                                                                                                   | `GetUserByIdHandler`, `GetUsersByIdsHandler` (feeds the GraphQL `users` DataLoader), `ListPaymentsHandler`             |
 | Domain event    | Fact raised by an aggregate (`AggregateRoot.apply`), published on `commit()`                                                                                                           | `UserRegisteredEvent`, `UserRolesChangedEvent`, `PaymentSucceededEvent`, `NotificationCreatedEvent`                    |
 | Event handler   | In-process reaction to a domain event                                                                                                                                                  | `UserRolesChangedAuditHandler`                                                                                         |
 | **Relay**       | Event handler that turns a domain event into a Kafka integration event                                                                                                                 | `UserRegisteredRelay` → `identity.user-registered.v1`, `PaymentSucceededRelay` → `billing.payment-succeeded.v1`        |
@@ -262,7 +264,7 @@ Record headers: `x-event-type` and `x-correlation-id` (tools can route and trace
 2. `KafkaRetryInterceptor`: transient failures (driver, connection, timeout, 5xx-class `DomainException`) retried in-process, 4 attempts with 0.25 s / 0.5 s / 1 s backoff.
 3. `KafkaDeadLetterFilter`: anything still failing (including an invalid envelope rejected by the pipe) is written to `<topic>.dlq` with headers `x-original-topic`, `x-error-message`, `x-error-type`, `x-failed-at`, then the offset commits so a poison message never blocks its partition. If the DLQ publish itself fails, the original error is rethrown and kafkajs redelivers. Throwing `KafkaRetriableException` explicitly asks kafkajs to retry.
 
-Replay a dead-letter topic once the cause is fixed: `node --env-file=.env libs/transport/scripts/kafka-dlq-replay.mjs <topic> [--dry-run] [--group <id>]` (uses `replayDeadLetters` from `@app/transport`).
+Replay a dead-letter topic once the cause is fixed: `node --env-file=.env libs/transport/scripts/kafka-dlq-replay.mjs <topic> [--dry-run] [--group <id>]` (uses `replayDeadLetters` from `@platform/transport`).
 
 Consumers subscribe with `fromBeginning: false` and `autoCommit: true` (Nest awaits the handler before the offset is resolved). Consumer group names are pinned or defaulted per app (section 5): a renamed group has no committed offsets and would skip everything published in between.
 
@@ -311,7 +313,7 @@ sequenceDiagram
 
 ## 9. Error model
 
-Domain and application code throw `DomainException` subclasses from `@app/common`, never `HttpException`. Each carries a stable machine `code`, an `httpStatus` and optional client-safe `details`. Contexts subclass them with their own codes, for example:
+Domain and application code throw `DomainException` subclasses from `@platform/common`, never `HttpException`. Each carries a stable machine `code`, an `httpStatus` and optional client-safe `details`. Contexts subclass them with their own codes, for example:
 
 ```ts
 class EmailAlreadyTakenException extends DomainConflictException {
@@ -335,12 +337,12 @@ class EmailAlreadyTakenException extends DomainConflictException {
 
 One exception, four renderings:
 
-| Transport | Rendered by                                                  | Shape                                                                                                                                                   |
-| --------- | ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| HTTP      | `AllExceptionsFilter`                                        | RFC 9457 `application/problem+json`: `type`, `title`, `status`, `detail`, `instance`, `code`, `requestId`, `errors` (validation issues)                 |
-| GraphQL   | Apollo `formatError` = `formatGraphqlError` (`@app/graphql`) | `errors[].extensions`: `code`, `status`, `type`, `errors?`. GraphQL-level errors (syntax, validation, `QUERY_TOO_COMPLEX`) keep Apollo's code           |
-| WebSocket | `AllExceptionsFilter`                                        | The problem document, as the ack `{ ok: false, error }` or as an `exception` event. A refused handshake gets `connect_error` with the problem as `data` |
-| gRPC      | `DomainToGrpcExceptionFilter`                                | Status code from the table above, plus trailers `x-error-code` (the domain code) and `x-error-details-bin` (client-safe details)                        |
+| Transport | Rendered by                                                       | Shape                                                                                                                                                   |
+| --------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| HTTP      | `AllExceptionsFilter`                                             | RFC 9457 `application/problem+json`: `type`, `title`, `status`, `detail`, `instance`, `code`, `requestId`, `errors` (validation issues)                 |
+| GraphQL   | Apollo `formatError` = `formatGraphqlError` (`@platform/graphql`) | `errors[].extensions`: `code`, `status`, `type`, `errors?`. GraphQL-level errors (syntax, validation, `QUERY_TOO_COMPLEX`) keep Apollo's code           |
+| WebSocket | `AllExceptionsFilter`                                             | The problem document, as the ack `{ ok: false, error }` or as an `exception` event. A refused handshake gets `connect_error` with the problem as `data` |
+| gRPC      | `DomainToGrpcExceptionFilter`                                     | Status code from the table above, plus trailers `x-error-code` (the domain code) and `x-error-details-bin` (client-safe details)                        |
 
 Unexpected (non-domain) errors become `500 INTERNAL` with a generic message unless `exposeInternalErrors` is on; the apps set it to `!app.isProduction`.
 
@@ -534,9 +536,9 @@ Dependencies are the latest stable releases as of 2026-09, except these delibera
 Other structural decisions:
 
 - **ESM only, Node 24 runtime.** Bun 1.4.2 is the package manager only (never the runtime), with `linker = "hoisted"` in `bunfig.toml`: NestJS packages declare each other as cyclic optional peers, and the isolated linker produced duplicate `@nestjs/core` copies. Biome's `noUndeclaredDependencies` keeps every package honest about what it imports.
-- **Workspace libs need no build in dev.** `exports["@app/source"]` points at `src/*.ts` (typecheck, tests, dev), `default` at `dist/*.js` (production). Builds are SWC per package, orchestrated by Lerna/Nx. See [DEVELOPMENT.md](DEVELOPMENT.md) and [RELEASING.md](RELEASING.md).
+- **Workspace libs need no build in dev.** `exports["@repo/source"]` points at `src/*.ts` (typecheck, tests, dev), `default` at `dist/*.js` (production). Builds are SWC per package, orchestrated by Lerna/Nx. See [DEVELOPMENT.md](DEVELOPMENT.md) and [RELEASING.md](RELEASING.md).
 - **One codebase, two topologies** (section 1) instead of separate repos: the monolith is the default deployment; a context becomes a service by switching its `XApiModule` binding.
-- **Abstract classes as ports** so DI needs no string tokens, and `@app/contracts` types on every port so both adapters are interchangeable.
+- **Abstract classes as ports** so DI needs no string tokens, and `@platform/contracts` types on every port so both adapters are interchangeable.
 - **Publish after commit** for integration events, with idempotent consumers and DLQs (sections 6–7). Simple, but at-most-once on a crash between commit and publish.
 - **Edge authentication.** The gateway verifies JWTs and the denylist locally and forwards the caller in gRPC metadata.
 - **`UV_THREADPOOL_SIZE` must stay ≤ the container CPU quota.** Argon2 hashing runs on the libuv threadpool. Measured: 16 threads on a 2-CPU cap took p95 from 36 ms to 304 ms. See [PERFORMANCE.md](PERFORMANCE.md) and [CONFIGURATION.md](CONFIGURATION.md).
@@ -548,7 +550,7 @@ Stated honestly, none of these are done:
 | Follow-up                                                                      | Today                                                                                                                                                                                                                               |
 | ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Transactional outbox**                                                       | Integration events are published after commit. A crash or broker outage between commit and publish loses the event (the record stays). An outbox row written in the same transaction plus a relay would make delivery at-least-once |
-| **Per-domain `@app/<x>/api` subpath exports**                                  | The gateway imports `@app/identity`, `@app/notifications`, `@app/billing` whole, so its image carries core code it never runs. Subpath exports for the API surface would slim it                                                    |
+| **Per-domain `@domain/<x>/api` subpath exports**                               | The gateway imports `@domain/identity`, `@domain/notifications`, `@domain/billing` whole, so its image carries core code it never runs. Subpath exports for the API surface would slim it                                           |
 | **Separate metrics listener**                                                  | `/metrics` is served on the application HTTP port                                                                                                                                                                                   |
 | **Real-database integration specs for billing and notifications repositories** | Identity has a Postgres `*.int-spec.ts` (`users.repository.int-spec.ts`); the billing (Drizzle) and notifications (Cassandra) repositories are covered by unit specs only                                                           |
 
@@ -564,4 +566,4 @@ Stated honestly, none of these are done:
 - [SECURITY.md](SECURITY.md): auth, RBAC, gRPC TLS, webhooks
 - [DOCKER.md](DOCKER.md): images and compose profiles
 - [RELEASING.md](RELEASING.md): versioning and changelogs
-- Package docs: [libs/transport](../libs/transport/README.md), [libs/contracts](../libs/contracts/README.md), [libs/common](../libs/common/README.md), [libs/identity](../libs/identity/README.md), [libs/notifications](../libs/notifications/README.md), [libs/billing](../libs/billing/README.md)
+- Package docs: [libs/transport](../libs/transport/README.md), [libs/contracts](../libs/contracts/README.md), [libs/common](../libs/common/README.md), [domains/identity](../domains/identity/README.md), [domains/notifications](../domains/notifications/README.md), [domains/billing](../domains/billing/README.md)

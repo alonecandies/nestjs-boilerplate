@@ -1,6 +1,6 @@
-import type { AccessTokenDenylist, AuthUser, TokenService } from '@app/auth';
-import { UnauthenticatedException } from '@app/common';
 import { Logger } from '@nestjs/common';
+import type { AccessTokenDenylist, AuthUser, TokenService } from '@platform/auth';
+import { UnauthenticatedException } from '@platform/common';
 import { find, isString, trim } from 'lodash-es';
 import type { GqlWsConnectionContext, GqlWsExtra } from '../context/gql-context.js';
 

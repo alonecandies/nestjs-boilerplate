@@ -1,10 +1,10 @@
 import 'reflect-metadata';
-import { createServiceApp, listen } from '@app/bootstrap';
-import { withTimeout } from '@app/common';
-import { flushLogs } from '@app/observability';
-import { connectGrpcServer } from '@app/transport';
 import { Logger } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+import { createServiceApp, listen } from '@platform/bootstrap';
+import { withTimeout } from '@platform/common';
+import { flushLogs } from '@platform/observability';
+import { connectGrpcServer } from '@platform/transport';
 import { AppModule } from './app.module.js';
 
 /** Upper bound for releasing what a failed boot already opened (pools, sockets). */

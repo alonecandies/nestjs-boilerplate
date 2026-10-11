@@ -1,6 +1,6 @@
-import { computeBackoffDelay, withTimeout } from '@app/common';
-import type { RedisConfig } from '@app/config';
 import { Logger } from '@nestjs/common';
+import { computeBackoffDelay, withTimeout } from '@platform/common';
+import type { RedisConfig } from '@platform/config';
 import { Redis, type RedisOptions } from 'ioredis';
 import { throttle } from 'lodash-es';
 

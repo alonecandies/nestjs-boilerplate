@@ -1,8 +1,8 @@
-import { type ThrottleConfig, throttleConfig } from '@app/config';
 import { type DynamicModule, Module, type Provider } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD } from '@nestjs/core';
 import { ThrottlerModule, type ThrottlerModuleOptions } from '@nestjs/throttler';
+import { type ThrottleConfig, throttleConfig } from '@platform/config';
 import type { Redis } from 'ioredis';
 import { RedisKeyService } from '../keys/redis-key.service.js';
 import { REDIS_CLIENT } from '../redis.constants.js';

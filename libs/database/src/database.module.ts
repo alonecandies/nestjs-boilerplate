@@ -1,4 +1,3 @@
-import { type AppConfig, appConfig, type DatabaseConfig, databaseConfig } from '@app/config';
 import {
   type DynamicModule,
   Injectable,
@@ -9,6 +8,7 @@ import {
 import { ConfigModule } from '@nestjs/config';
 import { TerminusModule } from '@nestjs/terminus';
 import { ClsPluginTransactional } from '@nestjs-cls/transactional';
+import { type AppConfig, appConfig, type DatabaseConfig, databaseConfig } from '@platform/config';
 import { isObject } from 'lodash-es';
 import { ClsModule } from 'nestjs-cls';
 import type { DatabaseModuleOptions, DatabaseTransactionalOptions } from './database.types.js';
@@ -44,7 +44,7 @@ const resolveTransactionalOptions = (
 
 /**
  * The transactional plugin is registered HERE (via `ClsModule.registerPlugins`) rather than in
- * `ClsModule.forRoot({ plugins })`, because `@app/observability` owns `ClsModule.forRoot` and must
+ * `ClsModule.forRoot({ plugins })`, because `@platform/observability` owns `ClsModule.forRoot` and must
  * not know about Drizzle. The plugin module is global and resolves `DRIZZLE` through this global
  * module — never pass `DatabaseModule` in the plugin's `imports` (a second, option-less copy
  * would be instantiated; research data-libs GOTCHA 13). `TransactionHost` opens a CLS context by

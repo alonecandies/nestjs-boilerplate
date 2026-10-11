@@ -10,7 +10,7 @@ import type { HealthIndicatorResult } from '@nestjs/terminus';
  * An abstract class so it can also serve as a DI token. The registry resolves contributors by the
  * listed class and never `instanceof`-checks them, so both `extends HealthContributor` and
  * `implements HealthContributor` (with `import type` — keeps this package off a lib's runtime
- * import graph, as `@app/redis` and `@app/transport` do) are valid.
+ * import graph, as `@platform/redis` and `@platform/transport` do) are valid.
  */
 export abstract class HealthContributor {
   /** Result key in the health payload (`postgres`, `redis`, …); unique per app. */

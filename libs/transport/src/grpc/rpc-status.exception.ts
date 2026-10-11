@@ -1,9 +1,9 @@
-import { DomainException, type DomainExceptionOptions } from '@app/common';
 import type { HttpStatus } from '@nestjs/common';
 import type { GrpcStatus } from '@nestjs/microservices';
+import { DomainException, type DomainExceptionOptions } from '@platform/common';
 
 /**
- * An upstream gRPC status that has no dedicated `DomainException` subclass in `@app/common`,
+ * An upstream gRPC status that has no dedicated `DomainException` subclass in `@platform/common`,
  * for example `RESOURCE_EXHAUSTED` (429) or `UNIMPLEMENTED` (501). It keeps the original gRPC
  * status, so a service that relays it answers with the same code.
  */

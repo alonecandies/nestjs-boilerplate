@@ -1,9 +1,9 @@
-import { AccessTokenDenylist, TokenService } from '@app/auth';
-import { type AppConfig, appConfig, type GraphqlConfig, graphqlConfig } from '@app/config';
 import { ApolloDriver, type ApolloDriverConfig } from '@nestjs/apollo';
 import { type DynamicModule, Module, type ModuleMetadata } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { type BuildSchemaOptions, GraphQLModule } from '@nestjs/graphql';
+import { AccessTokenDenylist, TokenService } from '@platform/auth';
+import { type AppConfig, appConfig, type GraphqlConfig, graphqlConfig } from '@platform/config';
 import { createApolloDriverConfig } from './apollo-config.factory.js';
 import {
   createGraphqlWsAuthHandlers,

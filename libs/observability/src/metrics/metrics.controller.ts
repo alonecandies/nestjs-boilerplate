@@ -1,5 +1,3 @@
-import { Public } from '@app/common';
-import { type ObservabilityConfig, observabilityConfig } from '@app/config';
 import {
   Controller,
   Get,
@@ -9,6 +7,8 @@ import {
   UseGuards,
   VERSION_NEUTRAL,
 } from '@nestjs/common';
+import { Public } from '@platform/common';
+import { type ObservabilityConfig, observabilityConfig } from '@platform/config';
 import { PrometheusController } from '@willsoto/nestjs-prometheus';
 import type { FastifyReply } from 'fastify';
 import { register } from 'prom-client';

@@ -1,6 +1,6 @@
-import { retry } from '@app/common';
-import type { AppConfig, DatabaseConfig } from '@app/config';
 import { Logger } from '@nestjs/common';
+import { retry } from '@platform/common';
+import type { AppConfig, DatabaseConfig } from '@platform/config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import type { DatabaseModuleOptions } from '../database.types.js';

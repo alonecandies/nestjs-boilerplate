@@ -4,7 +4,7 @@ import { OpenTelemetryModule } from 'nestjs-otel';
 /**
  * nestjs-otel helpers (internal to `ObservabilityModule`): `TraceService`, `@Span()`,
  * `@Traceable()`. Tracing only — prom-client owns metrics, so no OTel host metrics. The SDK itself
- * is started by `startTracing()` (`@app/observability/otel`) before Nest loads; without it these
+ * is started by `startTracing()` (`@platform/observability/otel`) before Nest loads; without it these
  * helpers use the no-op tracer.
  *
  * Manual spans matter here: the OTel instrumentations for @nestjs/core and graphql don't support

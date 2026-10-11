@@ -1,6 +1,6 @@
-import { kafkaConfig } from '@app/config';
 import { Logger } from '@nestjs/common';
 import { HealthIndicatorService } from '@nestjs/terminus';
+import { kafkaConfig } from '@platform/config';
 import type { Admin } from 'kafkajs';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { KafkaHealthIndicator } from './kafka.health.js';

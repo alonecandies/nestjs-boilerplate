@@ -1,4 +1,4 @@
-import { KAFKA_HEADERS } from '@app/contracts';
+import { KAFKA_HEADERS } from '@platform/contracts';
 
 /** DI token of the producer-only `ClientKafka` registered by `KafkaProducerModule`. */
 export const KAFKA_PRODUCER_CLIENT = Symbol('KAFKA_PRODUCER_CLIENT');
@@ -7,7 +7,7 @@ export const KAFKA_PRODUCER_CLIENT = Symbol('KAFKA_PRODUCER_CLIENT');
 export const KAFKA_PRODUCER_OPTIONS = Symbol('KAFKA_PRODUCER_OPTIONS');
 
 /**
- * Headers on dead-lettered records: the contract headers from `@app/contracts` plus where the
+ * Headers on dead-lettered records: the contract headers from `@platform/contracts` plus where the
  * record came from, so an operator can replay it or find it in the source partition.
  */
 export const DEAD_LETTER_HEADERS = {
@@ -27,5 +27,5 @@ export const KAFKA_ERROR_CODES = {
   PUBLISH_FAILED: 'EVENT_PUBLISH_FAILED',
 } as const;
 
-/** Suffix of dead-letter topics (`<topic>.dlq`), matching `deadLetterTopic()` in `@app/contracts`. */
+/** Suffix of dead-letter topics (`<topic>.dlq`), matching `deadLetterTopic()` in `@platform/contracts`. */
 export const DEAD_LETTER_SUFFIX = '.dlq';

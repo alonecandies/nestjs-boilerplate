@@ -1,4 +1,4 @@
-# @app/storage
+# @platform/storage
 
 Driver-agnostic object storage. Consumers inject the abstract `StorageService`, and `StorageModule`
 binds it to the **S3** driver (AWS, RustFS, MinIO, R2, …) or the **GCS** driver according to
@@ -57,7 +57,7 @@ StorageModule.forRootAsync({ driver: 'memory' });
 ## Environment (`storage` namespace)
 
 `STORAGE_DRIVER` (`s3`|`gcs`, default `s3`), `STORAGE_SIGNED_URL_TTL_SEC` (900),
-`STORAGE_MAX_UPLOAD_BYTES` (read by `@app/files`), `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT` (defaults to
+`STORAGE_MAX_UPLOAD_BYTES` (read by `@domain/files`), `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT` (defaults to
 `S3_ENDPOINT`), `S3_REGION`, `S3_FORCE_PATH_STYLE`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`,
 `S3_BUCKET`, `GCS_PROJECT_ID`, `GCS_BUCKET`, `GCS_API_ENDPOINT`, `GCS_KEY_FILE`.
 
@@ -73,7 +73,7 @@ StorageModule.forRootAsync({ driver: 'memory' });
 - `PutObject` of a stream with no known length fails, which is why uploads go through lib-storage `Upload`.
   It buffers the stream into `partSize` chunks: one per in-flight part plus the one being filled, so
   each upload holds up to `(queueSize + 1) × partSize` = 3 × 5 MiB ≈ **15 MiB** of off-heap memory
-  (outside `--max-old-space-size`). This port does not limit concurrency; callers must (`@app/files`
+  (outside `--max-old-space-size`). This port does not limit concurrency; callers must (`@domain/files`
   caps streamed uploads with `STORAGE_MAX_CONCURRENT_UPLOADS` and answers 503 beyond it). Prefer
   presigned URLs for large or frequent uploads: those bytes never touch the API.
 - **GCS:** the real service needs `GCS_API_ENDPOINT=https://storage.googleapis.com`. Any other

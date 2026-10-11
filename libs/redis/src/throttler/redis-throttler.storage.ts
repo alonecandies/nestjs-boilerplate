@@ -1,6 +1,6 @@
-import { ServiceUnavailableException } from '@app/common';
 import { Logger } from '@nestjs/common';
 import type { ThrottlerStorage } from '@nestjs/throttler';
+import { ServiceUnavailableException } from '@platform/common';
 import type { Redis } from 'ioredis';
 import { throttle } from 'lodash-es';
 import { hashTag } from '../keys/key.util.js';

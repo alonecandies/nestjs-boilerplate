@@ -1,4 +1,3 @@
-import { isDomainException } from '@app/common';
 import {
   type ArgumentsHost,
   Catch,
@@ -7,6 +6,7 @@ import {
   type RpcExceptionFilter,
 } from '@nestjs/common';
 import { KafkaContext, KafkaRetriableException } from '@nestjs/microservices';
+import { isDomainException } from '@platform/common';
 import { defer, map, type Observable, throwError } from 'rxjs';
 import { errorTypeOf, sendToDeadLetter } from './dead-letter.js';
 

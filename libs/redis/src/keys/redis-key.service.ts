@@ -1,5 +1,5 @@
-import { type RedisConfig, redisConfig } from '@app/config';
 import { Inject, Injectable } from '@nestjs/common';
+import { type RedisConfig, redisConfig } from '@platform/config';
 import { joinKey, type RedisKeyPart } from './key.util.js';
 
 /**

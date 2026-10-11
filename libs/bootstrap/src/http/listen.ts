@@ -1,5 +1,5 @@
-import { type AppConfig, appConfig } from '@app/config';
 import { type INestApplication, Logger } from '@nestjs/common';
+import { type AppConfig, appConfig } from '@platform/config';
 
 export interface ListenOptions {
   /** Default `appConfig.host` (`HOST`, 0.0.0.0). */

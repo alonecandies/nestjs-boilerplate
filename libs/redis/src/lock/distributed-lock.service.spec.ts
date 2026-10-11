@@ -1,4 +1,4 @@
-import { redisConfig } from '@app/config';
+import { redisConfig } from '@platform/config';
 import {
   ExecutionError,
   type ExecutionStats,

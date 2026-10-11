@@ -1,4 +1,3 @@
-import { generateId, getContextType } from '@app/common';
 import {
   type CallHandler,
   type ExecutionContext,
@@ -6,6 +5,7 @@ import {
   type NestInterceptor,
   Optional,
 } from '@nestjs/common';
+import { generateId, getContextType } from '@platform/common';
 import { CLS_ID, ClsService } from 'nestjs-cls';
 import { Observable } from 'rxjs';
 import { RPC_CLS_KEYS } from '../context/transport-context.js';

@@ -1,5 +1,5 @@
 /**
- * @app/bootstrap — process/app factories shared by every app's `main.ts`: the Fastify-based Nest
+ * @platform/bootstrap — process/app factories shared by every app's `main.ts`: the Fastify-based Nest
  * application (`createHttpApp` / `createServiceApp`), `listen`, OpenAPI + Scalar docs, node:cluster
  * supervision and process-level safety nets.
  */

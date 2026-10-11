@@ -1,5 +1,5 @@
-import type { AccessTokenDenylist, AuthUser, TokenService } from '@app/auth';
-import { UnauthenticatedException } from '@app/common';
+import type { AccessTokenDenylist, AuthUser, TokenService } from '@platform/auth';
+import { UnauthenticatedException } from '@platform/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GqlWsConnectionContext } from '../context/gql-context.js';
 import {

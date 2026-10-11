@@ -1,4 +1,4 @@
-import { isUuidV7 } from '@app/common';
+import { isUuidV7 } from '@platform/common';
 import { describe, expect, it } from 'vitest';
 import { Permission } from '../rbac/permission.enum.js';
 import { Role } from '../rbac/role.enum.js';

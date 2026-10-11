@@ -1,4 +1,4 @@
-# @app/common
+# @platform/common
 
 Transport-agnostic, cross-cutting primitives used by every package: error model (DomainException +
 RFC 9457 problem details), global enhancers (catch-all filter, timeout interceptor, validation pipes),
@@ -39,8 +39,8 @@ import {
   CorrelationIdMiddleware,
   MaintenanceModeMiddleware,
   provideCommonEnhancersAsync,
-} from '@app/common';
-import { type AppConfig, AppConfigModule, appConfig } from '@app/config';
+} from '@platform/common';
+import { type AppConfig, AppConfigModule, appConfig } from '@platform/config';
 
 @Module({
   imports: [AppConfigModule.forRoot()],
@@ -78,7 +78,7 @@ throw new EmailAlreadyTakenException('Email is already registered');
 
 ## Environment variables
 
-None — this package never reads `process.env`. Values come from `@app/config` through the option tokens.
+None — this package never reads `process.env`. Values come from `@platform/config` through the option tokens.
 
 ## Gotchas
 

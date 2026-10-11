@@ -1,4 +1,3 @@
-import { generateId } from '@app/common';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import {
   Inject,
@@ -7,6 +6,7 @@ import {
   type OnModuleDestroy,
   type OnModuleInit,
 } from '@nestjs/common';
+import { generateId } from '@platform/common';
 import type { Cache } from 'cache-manager';
 import type { Redis } from 'ioredis';
 import { compact, isArray, isString, uniq } from 'lodash-es';

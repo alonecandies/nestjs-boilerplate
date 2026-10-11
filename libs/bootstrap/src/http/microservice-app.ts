@@ -5,7 +5,7 @@ import { type CreateHttpAppOptions, createHttpApp } from './create-http-app.js';
 /**
  * HTTP side of a gRPC/Kafka service: the port only serves `/health/*` and `/metrics` (infra
  * contract: every process exposes them), so no raw body, multipart, CORS or cookies. Connect the
- * transports afterwards (`connectGrpcServer` / `connectKafkaConsumer` from `@app/transport`), then
+ * transports afterwards (`connectGrpcServer` / `connectKafkaConsumer` from `@platform/transport`), then
  * `app.startAllMicroservices()` and `listen(app)`.
  */
 export function createServiceApp(

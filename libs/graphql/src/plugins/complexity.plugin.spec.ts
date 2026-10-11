@@ -1,7 +1,7 @@
 import { ApolloServer } from '@apollo/server';
-import { EntityNotFoundException } from '@app/common';
-import { graphqlConfig } from '@app/config';
 import { GraphQLSchemaHost } from '@nestjs/graphql';
+import { EntityNotFoundException } from '@platform/common';
+import { graphqlConfig } from '@platform/config';
 import {
   GraphQLInt,
   GraphQLList,
@@ -101,7 +101,7 @@ describe('measureComplexity / isIntrospectionOnly', () => {
 
 describe('ComplexityPlugin (via ApolloServer.executeOperation)', () => {
   let server: ApolloServer<GqlContext>;
-  // `createLoaders()` rather than a `{}` literal: domain libs augment `GraphqlLoaders` with
+  // `createLoaders()` rather than a `{}` literal: domain packages augment `GraphqlLoaders` with
   // required keys (identity's `users`), which a literal fails once they share the program.
   const loaders = new DataLoaderRegistry();
   const contextValue = (): GqlContext => ({

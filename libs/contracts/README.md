@@ -1,11 +1,11 @@
-# @app/contracts
+# @platform/contracts
 
 The wire contracts between services, and nothing else:
 
 - **gRPC**: `.proto` definitions (`src/proto/**`), the ts-proto NestJS output generated from them (`src/generated/**`, committed), and the package registry and proto-loader options that servers and clients share.
 - **Kafka**: topic names, the event envelope, zod payload schemas, and parse/build helpers for integration events.
 
-It is a leaf package: no Nest modules, no config, no `@app/*` dependencies. Transport wiring (servers, clients, producers, DLQ filters) lives in `@app/transport`.
+It is a leaf package: no Nest modules, no config, no workspace dependencies. Transport wiring (servers, clients, producers, DLQ filters) lives in `@platform/transport`.
 
 ## Public API
 
@@ -54,8 +54,8 @@ The same modules are also exported as the namespaces `identityV1`, `notification
 ## Usage
 
 ```ts
-// gRPC server options (@app/transport)
-import { GRPC_LOADER_OPTIONS, resolveGrpcPackages } from '@app/contracts';
+// gRPC server options (@platform/transport)
+import { GRPC_LOADER_OPTIONS, resolveGrpcPackages } from '@platform/contracts';
 const { packages, protoPath, services } = resolveGrpcPackages(['identity']);
 app.connectMicroservice(
   {
@@ -65,13 +65,13 @@ app.connectMicroservice(
   { inheritAppConfig: true },
 );
 
-// gRPC controller (@app/identity)
+// gRPC controller (@domain/identity)
 import {
   type GetUserRequest,
   type User,
   type UsersServiceController,
   UsersServiceControllerMethods,
-} from '@app/contracts';
+} from '@platform/contracts';
 @GrpcController()
 @UsersServiceControllerMethods()
 export class UsersGrpcController implements UsersServiceController {
@@ -81,7 +81,7 @@ export class UsersGrpcController implements UsersServiceController {
 }
 
 // Kafka
-import { KAFKA_TOPICS, createEventEnvelope, parseEventEnvelope } from '@app/contracts';
+import { KAFKA_TOPICS, createEventEnvelope, parseEventEnvelope } from '@platform/contracts';
 const envelope = createEventEnvelope(KAFKA_TOPICS.USER_REGISTERED, payload, {
   id: generateId(),
   source: 'identity-service',
@@ -101,11 +101,11 @@ After changing a `.proto`, regenerate and commit `src/generated/**`. Biome, ESLi
 
 ## Env vars
 
-None. URLs, deadlines and message sizes live in `grpcConfig` (`@app/config`), and Kafka settings in `kafkaConfig`.
+None. URLs, deadlines and message sizes live in `grpcConfig` (`@platform/config`), and Kafka settings in `kafkaConfig`.
 
 ## Gotchas
 
-- **Timestamp ↔ Date only works if the generated modules are evaluated** before the first (de)serialisation, because ts-proto patches the shared `protobufjs` instance. Importing any value from `@app/contracts` does this (`grpc-packages.ts` imports the generated modules for this side effect). A process that imports only types gets `{ seconds, nanos }`.
+- **Timestamp ↔ Date only works if the generated modules are evaluated** before the first (de)serialisation, because ts-proto patches the shared `protobufjs` instance. Importing any value from `@platform/contracts` does this (`grpc-packages.ts` imports the generated modules for this side effect). A process that imports only types gets `{ seconds, nanos }`.
 - Keep a single `protobufjs@7.x`, the one `@grpc/proto-loader` uses. A second copy (for example v8) silently disables the Date mapping.
 - Server handlers must return a `Date` for Timestamp fields. An ISO string throws `object expected`.
 - `defaults: true` decodes absent **message** fields as `null`, even though the TS type says `undefined`. Test with `== null`. A present proto3 `optional` also carries a synthetic `_field` key. Map decoded objects to DTOs instead of returning them verbatim to REST.

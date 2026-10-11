@@ -1,7 +1,7 @@
-import { getContextType } from '@app/common';
-import { type ThrottleConfig, throttleConfig } from '@app/config';
 import { type ExecutionContext, Inject, Injectable } from '@nestjs/common';
 import { ThrottlerGuard, type ThrottlerRequest } from '@nestjs/throttler';
+import { getContextType } from '@platform/common';
+import { type ThrottleConfig, throttleConfig } from '@platform/config';
 import { AUTH_THROTTLE_KEY, DEFAULT_THROTTLER_NAME } from './throttle.constants.js';
 import { throttleTracker } from './throttle-tracker.util.js';
 
@@ -11,7 +11,7 @@ type HeaderSink = Record<string, unknown>;
 const NOOP_RESPONSE: HeaderSink = Object.freeze({ header: (): undefined => undefined });
 const EMPTY_REQUEST: HeaderSink = Object.freeze({ headers: {} });
 
-/** GraphQL context shape built by @app/graphql (`{ req, reply }`); typed structurally. */
+/** GraphQL context shape built by @platform/graphql (`{ req, reply }`); typed structurally. */
 interface GqlContextLike {
   req?: HeaderSink;
   reply?: HeaderSink;

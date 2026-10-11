@@ -9,8 +9,8 @@ await vi.hoisted(async () => {
   Object.assign(process.env, GATEWAY_E2E_ENV);
 });
 
-import { BillingGrpcAdapter, BillingPort } from '@app/billing';
-import { HTTP_HEADERS, isUuidV7 } from '@app/common';
+import { BillingGrpcAdapter, BillingPort } from '@domain/billing';
+import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createGatewayE2eApp, type GatewayE2e } from './support/gateway-e2e-app.js';
 import { bearer, expectProblem, graphql, multipartFile } from './support/http.js';

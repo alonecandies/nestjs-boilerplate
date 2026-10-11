@@ -1,4 +1,3 @@
-import { throttleConfig } from '@app/config';
 import type { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import {
@@ -6,6 +5,7 @@ import {
   type ThrottlerModuleOptions,
   type ThrottlerStorage,
 } from '@nestjs/throttler';
+import { throttleConfig } from '@platform/config';
 import { describe, expect, it, vi } from 'vitest';
 import { AppThrottlerGuard } from './app-throttler.guard.js';
 import { AuthThrottle } from './auth-throttle.decorator.js';

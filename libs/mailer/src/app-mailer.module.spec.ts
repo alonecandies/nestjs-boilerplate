@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { mailConfig } from '@app/config';
+import { mailConfig } from '@platform/config';
 import Handlebars from 'handlebars';
 import { describe, expect, it, vi } from 'vitest';
 import { AppMailerModule } from './app-mailer.module.js';

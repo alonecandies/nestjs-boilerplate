@@ -1,5 +1,5 @@
-import { getContextType, requestPath } from '@app/common';
 import type { ExecutionContext } from '@nestjs/common';
+import { getContextType, requestPath } from '@platform/common';
 
 /**
  * `true` when `path` equals an exempt prefix or lives below it on a `/` boundary

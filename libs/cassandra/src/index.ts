@@ -1,5 +1,5 @@
 /**
- * @app/cassandra — Apache Cassandra via cassandra-driver: global `CassandraModule` (tuned,
+ * @platform/cassandra — Apache Cassandra via cassandra-driver: global `CassandraModule` (tuned,
  * keyspace-bound client with prepared statements by default), keyspace bootstrap + LWT-claimed
  * CQL migrations at boot, driver-native paging (`executePage`) and a readiness contributor.
  */

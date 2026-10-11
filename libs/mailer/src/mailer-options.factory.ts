@@ -1,8 +1,8 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { extname, join, sep } from 'node:path';
-import type { MailConfig } from '@app/config';
 import type { MailerOptions } from '@nestjs-modules/mailer';
 import { HandlebarsAdapter } from '@nestjs-modules/mailer/adapters/handlebars.adapter';
+import type { MailConfig } from '@platform/config';
 import Handlebars from 'handlebars';
 import { pickBy } from 'lodash-es';
 import type { SendMailOptions } from 'nodemailer';

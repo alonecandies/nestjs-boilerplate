@@ -1,8 +1,8 @@
 /**
- * @app/database — PostgreSQL for the whole monorepo: postgres.js pool + Drizzle ORM (global
+ * @platform/database — PostgreSQL for the whole monorepo: postgres.js pool + Drizzle ORM (global
  * `DatabaseModule`), CLS-propagated transactions (`@Transactional()`), drizzle-kit migrations
  * with an advisory-locked runner (boot or `migrate.ts` CLI), a readiness contributor and
- * uuidv7 keyset-pagination helpers. Domain `*.schema.ts` files live in the domain libs.
+ * uuidv7 keyset-pagination helpers. Domain `*.schema.ts` files live in the domain packages.
  */
 
 /*

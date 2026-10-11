@@ -1,4 +1,4 @@
-import { DomainException, UnauthenticatedException } from '@app/common';
+import { DomainException, UnauthenticatedException } from '@platform/common';
 import { AuthErrorCode } from '../auth.constants.js';
 import { toUnauthenticated } from '../tokens/token.service.js';
 

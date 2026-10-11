@@ -7,15 +7,17 @@ import { defineConfig, type TestProjectInlineConfiguration } from 'vitest/config
 const ROOT = import.meta.dirname;
 const INTEGRATION = process.env.INTEGRATION === '1';
 
-/** Every folder under apps/ and libs/ that has a package.json is a Vitest project named after it. */
-const packagesIn = (dir: 'apps' | 'libs'): string[] =>
+type WorkspaceDir = 'apps' | 'domains' | 'libs';
+
+/** Every folder under apps/, domains/ and libs/ that has a package.json is a Vitest project named after it. */
+const packagesIn = (dir: WorkspaceDir): string[] =>
   readdirSync(join(ROOT, dir), { withFileTypes: true })
     .filter(
       (entry) => entry.isDirectory() && existsSync(join(ROOT, dir, entry.name, 'package.json')),
     )
     .map((entry) => entry.name);
 
-const unitProject = (dir: 'apps' | 'libs', name: string): TestProjectInlineConfiguration => ({
+const unitProject = (dir: WorkspaceDir, name: string): TestProjectInlineConfiguration => ({
   extends: true,
   test: {
     name,
@@ -36,7 +38,7 @@ const e2eProject = (name: string): TestProjectInlineConfiguration => ({
 });
 
 /** Integration tests need Docker (testcontainers) — opt in with INTEGRATION=1. */
-const intProject = (dir: 'apps' | 'libs', name: string): TestProjectInlineConfiguration => ({
+const intProject = (dir: WorkspaceDir, name: string): TestProjectInlineConfiguration => ({
   extends: true,
   test: {
     name: `${name}:int`,
@@ -47,6 +49,7 @@ const intProject = (dir: 'apps' | 'libs', name: string): TestProjectInlineConfig
   },
 });
 
+const domains = packagesIn('domains');
 const libs = packagesIn('libs');
 const apps = packagesIn('apps');
 
@@ -73,7 +76,7 @@ export default defineConfig({
   ],
   // Vitest (Vite >= 6) reads ssr.resolve.conditions for Node tests and forwards them as --conditions.
   // Goal: tests resolve EXACTLY what Node 24 resolves in production, so no package loads twice.
-  //  - '@app/source': workspace libs resolve to their TS sources (no lib build needed).
+  //  - '@repo/source': workspace libs resolve to their TS sources (no lib build needed).
   //  - 'module-sync': Node >= 22.10 honours it natively; dual packages such as graphql 17 list it
   //    before 'node'/'require'. Without it Vite picks graphql's CJS build for inlined sources while
   //    Node-loaded externals (Apollo, graphql-scalars, ...) get the ESM build → two graphql realms
@@ -82,7 +85,7 @@ export default defineConfig({
   ssr: {
     resolve: {
       conditions: [
-        '@app/source',
+        '@repo/source',
         'module-sync',
         ...defaultServerConditions.filter((c) => c !== 'module' && c !== 'development|production'),
       ],
@@ -97,16 +100,18 @@ export default defineConfig({
     restoreMocks: true,
     coverage: {
       provider: 'v8',
-      include: ['apps/*/src/**/*.ts', 'libs/*/src/**/*.ts'],
+      include: ['apps/*/src/**/*.ts', 'domains/*/src/**/*.ts', 'libs/*/src/**/*.ts'],
       exclude: ['**/generated/**', '**/*.spec.ts', '**/*.int-spec.ts', '**/index.ts', '**/main.ts'],
       reporter: ['text-summary', 'html', 'lcov'],
     },
     projects: [
+      ...domains.map((name) => unitProject('domains', name)),
       ...libs.map((name) => unitProject('libs', name)),
       ...apps.map((name) => unitProject('apps', name)),
       ...apps.map((name) => e2eProject(name)),
       ...(INTEGRATION
         ? [
+            ...domains.map((name) => intProject('domains', name)),
             ...libs.map((name) => intProject('libs', name)),
             ...apps.map((name) => intProject('apps', name)),
           ]

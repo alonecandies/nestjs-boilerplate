@@ -1,5 +1,5 @@
-import { DomainValidationException } from '@app/common';
 import type { PipeTransform } from '@nestjs/common';
+import { DomainValidationException } from '@platform/common';
 import type { z } from 'zod';
 
 /**

@@ -1,5 +1,5 @@
-import { isSafeRequestId, type ValidationIssue } from '@app/common';
 import { Metadata, type MetadataValue } from '@grpc/grpc-js';
+import { isSafeRequestId, type ValidationIssue } from '@platform/common';
 import { compact, isArray, isPlainObject, isString, map, take, trim, uniq } from 'lodash-es';
 import { GRPC_METADATA_KEYS } from './grpc.constants.js';
 

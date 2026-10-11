@@ -1,36 +1,36 @@
-import { AuthModule } from '@app/auth';
-import { BillingApiModule, billingSchema } from '@app/billing';
-import { CassandraHealthIndicator, CassandraModule } from '@app/cassandra';
-import {
-  CorrelationIdMiddleware,
-  MaintenanceModeMiddleware,
-  provideCommonEnhancersAsync,
-} from '@app/common';
-import { type AppConfig, AppConfigModule, appConfig } from '@app/config';
-import { DatabaseHealthIndicator, DatabaseModule } from '@app/database';
-import { FilesModule } from '@app/files';
-import { AppGraphqlModule, GraphqlPubSubModule } from '@app/graphql';
-import { IdentityApiModule, identitySchema } from '@app/identity';
-import { AppMailerModule } from '@app/mailer';
+import { BillingApiModule, billingSchema } from '@domain/billing';
+import { FilesModule } from '@domain/files';
+import { IdentityApiModule, identitySchema } from '@domain/identity';
 import {
   NotificationsApiModule,
   NotificationsMessagingModule,
   notificationsCassandraMigrations,
-} from '@app/notifications';
-import { ObservabilityModule } from '@app/observability';
-import { StripeModule } from '@app/payments';
+} from '@domain/notifications';
+import { type MiddlewareConsumer, Module, type NestModule, RequestMethod } from '@nestjs/common';
+import { CqrsModule } from '@nestjs/cqrs';
+import { ScheduleModule } from '@nestjs/schedule';
+import { AuthModule } from '@platform/auth';
+import { CassandraHealthIndicator, CassandraModule } from '@platform/cassandra';
+import {
+  CorrelationIdMiddleware,
+  MaintenanceModeMiddleware,
+  provideCommonEnhancersAsync,
+} from '@platform/common';
+import { type AppConfig, AppConfigModule, appConfig } from '@platform/config';
+import { DatabaseHealthIndicator, DatabaseModule } from '@platform/database';
+import { AppGraphqlModule, GraphqlPubSubModule } from '@platform/graphql';
+import { AppMailerModule } from '@platform/mailer';
+import { ObservabilityModule } from '@platform/observability';
+import { StripeModule } from '@platform/payments';
 import {
   AppCacheModule,
   AppQueueModule,
   AppThrottlerModule,
   RedisHealthIndicator,
   RedisModule,
-} from '@app/redis';
-import { StorageModule } from '@app/storage';
-import { KafkaProducerModule } from '@app/transport';
-import { type MiddlewareConsumer, Module, type NestModule, RequestMethod } from '@nestjs/common';
-import { CqrsModule } from '@nestjs/cqrs';
-import { ScheduleModule } from '@nestjs/schedule';
+} from '@platform/redis';
+import { StorageModule } from '@platform/storage';
+import { KafkaProducerModule } from '@platform/transport';
 
 /** Both Postgres contexts live in the monolith's database (one drizzle instance, one pool). */
 const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };

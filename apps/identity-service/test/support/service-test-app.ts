@@ -1,11 +1,11 @@
-import { buildFastifyOptions, configureHttpApp } from '@app/bootstrap';
-import { appConfig } from '@app/config';
-import type { GrpcPackageName } from '@app/contracts';
-import { createFastifyTestApp } from '@app/testing';
-import { connectGrpcServer } from '@app/transport';
 import type { CustomTransportStrategy } from '@nestjs/microservices';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import type { TestingModuleBuilder } from '@nestjs/testing';
+import { buildFastifyOptions, configureHttpApp } from '@platform/bootstrap';
+import { appConfig } from '@platform/config';
+import type { GrpcPackageName } from '@platform/contracts';
+import { createFastifyTestApp } from '@platform/testing';
+import { connectGrpcServer } from '@platform/transport';
 
 export interface ServiceTestAppOptions {
   /** gRPC packages served on `GRPC_URL` (like `connectGrpcServer` in main.ts). */

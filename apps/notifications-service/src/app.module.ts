@@ -1,19 +1,19 @@
-import { CassandraHealthIndicator, CassandraModule } from '@app/cassandra';
-import { CorrelationIdMiddleware, provideCommonEnhancersAsync } from '@app/common';
-import { type AppConfig, AppConfigModule, appConfig, grpcConfig } from '@app/config';
-import { AppMailerModule } from '@app/mailer';
 import {
   NotificationsGrpcModule,
   NotificationsMessagingModule,
   notificationsCassandraMigrations,
-} from '@app/notifications';
-import { ObservabilityModule } from '@app/observability';
-import { AppQueueModule, RedisHealthIndicator, RedisModule } from '@app/redis';
-import { KafkaHealthIndicator, KafkaProducerModule } from '@app/transport';
+} from '@domain/notifications';
 import { type MiddlewareConsumer, Module, type NestModule, RequestMethod } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { CqrsModule } from '@nestjs/cqrs';
 import { ScheduleModule } from '@nestjs/schedule';
+import { CassandraHealthIndicator, CassandraModule } from '@platform/cassandra';
+import { CorrelationIdMiddleware, provideCommonEnhancersAsync } from '@platform/common';
+import { type AppConfig, AppConfigModule, appConfig, grpcConfig } from '@platform/config';
+import { AppMailerModule } from '@platform/mailer';
+import { ObservabilityModule } from '@platform/observability';
+import { AppQueueModule, RedisHealthIndicator, RedisModule } from '@platform/redis';
+import { KafkaHealthIndicator, KafkaProducerModule } from '@platform/transport';
 
 /**
  * notifications-service: owns the Cassandra inbox.

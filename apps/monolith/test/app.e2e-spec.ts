@@ -8,10 +8,10 @@ await vi.hoisted(async () => {
   Object.assign(process.env, MONOLITH_E2E_ENV);
 });
 
-import { BillingLocalAdapter, BillingPort } from '@app/billing';
-import { HTTP_HEADERS, isUuidV7 } from '@app/common';
-import { KAFKA_TOPICS } from '@app/contracts';
-import { NotificationsLocalAdapter, NotificationsPort } from '@app/notifications';
+import { BillingLocalAdapter, BillingPort } from '@domain/billing';
+import { NotificationsLocalAdapter, NotificationsPort } from '@domain/notifications';
+import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
+import { KAFKA_TOPICS } from '@platform/contracts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { bearer, expectProblem, graphql, multipartFile } from './support/http.js';
 import { createMonolithE2eApp, type MonolithE2e } from './support/monolith-e2e-app.js';

@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ExternalServiceException, generateId, isUuidV7 } from '@app/common';
-import { type EventPayload, KAFKA_TOPICS } from '@app/contracts';
 import { Logger } from '@nestjs/common';
+import { ExternalServiceException, generateId, isUuidV7 } from '@platform/common';
+import { type EventPayload, KAFKA_TOPICS } from '@platform/contracts';
 import { CLS_ID, CLS_REQ, ClsService } from 'nestjs-cls';
 import { type Observable, of, Subject, throwError } from 'rxjs';
 import { beforeAll, describe, expect, it, vi } from 'vitest';

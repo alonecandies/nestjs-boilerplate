@@ -1,4 +1,4 @@
-# @app/redis
+# @platform/redis
 
 The ioredis 6 infrastructure every service shares:
 
@@ -35,7 +35,7 @@ The ioredis 6 infrastructure every service shares:
 | `AppQueueModule.forRootAsync({ prefix?, defaultJobOptions? })`, `createQueueOptions`, `DEFAULT_JOB_OPTIONS`                      | module              | BullMQ 6 root config: `maxRetriesPerRequest: null`, prefix `bull`, 5 attempts with exponential backoff, bounded retention.                                                                                                                                                                                             |
 | `RedisIoAdapter`, `createRedisIoAdapter(app, opts?)`, `DEFAULT_IO_SERVER_OPTIONS`                                                | socket.io           | Fans broadcasts out through Redis pub/sub. Websocket-only transport by default.                                                                                                                                                                                                                                        |
 | `RedisHealthIndicator`                                                                                                           | `HealthContributor` | Key `redis`. PING with a 1 s timeout, result cached 1 s; `down` without PING while reconnecting.                                                                                                                                                                                                                       |
-| `@app/redis/testing` → `InMemoryRedis`                                                                                           | test double         | Strings with TTL, counters, pub/sub between `duplicate()`s, and the throttle script emulated in JS.                                                                                                                                                                                                                    |
+| `@platform/redis/testing` → `InMemoryRedis`                                                                                      | test double         | Strings with TTL, counters, pub/sub between `duplicate()`s, and the throttle script emulated in JS.                                                                                                                                                                                                                    |
 
 ## Usage
 
@@ -67,7 +67,7 @@ return this.cache.getOrSet(`user:${id}`, () => this.users.getUser(id), 30_000);
 
 ## Environment
 
-These variables come from the `redis`, `cache` and `throttle` namespaces of `@app/config`:
+These variables come from the `redis`, `cache` and `throttle` namespaces of `@platform/config`:
 
 - `REDIS_URL`: default `redis://localhost:6379`; use `rediss://` for TLS.
 - `REDIS_KEY_PREFIX`: default `app`.
@@ -96,7 +96,7 @@ These variables come from the `redis`, `cache` and `throttle` namespaces of `@ap
 - **Redlock command names.** `@sesamecare-oss/redlock` defines `acquireLock`, `extendLock` and `releaseLock` on the shared client. Our script is named `appThrottleHit`; never reuse the redlock names. Never call `redlock.quit()`, because it QUITs the shared client.
 - **Guard order.** Global guards run in module-registration order. Import `AuthModule` before `AppThrottlerModule`, otherwise every request is tracked per IP. Alternatively, pass `globalGuard: false` and register the throttler guard yourself.
 - **WebSockets are not throttled** by the global guard. Put `@UseGuards(WsThrottlerGuard)` on gateways (never as `APP_GUARD`).
-- **Throttler fails open by default.** When Redis is not `ready`, requests pass and a warning is logged every 10 s. Set `failOpen: false` to reject with 503 instead. The auth denylist (in `@app/auth`) fails closed.
+- **Throttler fails open by default.** When Redis is not `ready`, requests pass and a warning is logged every 10 s. Set `failOpen: false` to reject with 503 instead. The auth denylist (in `@platform/auth`) fails closed.
 - **Cache.** `nonBlocking` is deliberately off: in cache-manager 7 it lets an L1 miss win over an L2 hit. L1 TTLs are capped at `CACHE_L1_TTL_MS`, because cache-manager passes the L2 TTL to every tier. `get()` does not back-fill L1; `getOrSet()` does. `set()` and `del()` broadcast invalidations so other replicas drop their L1 copy.
 - **L2 connection pool.** `@keyv/redis` uses node-redis, not ioredis, so it opens a second connection pool.
 - **L2 outage = cache miss, not a stall.** Left to itself, `@keyv/redis` connects lazily on the first cache call, races that against `connectionTimeout` (`REDIS_CONNECT_TIMEOUT_MS`, 10 s) and destroys the client on failure — so with Redis down _every_ `getOrSet` waited ~10 s on get and again on set (and leaked listeners). The L2 client is therefore built with `disableOfflineQueue` + a never-giving-up reconnect strategy and opened eagerly by `AppCacheService` (`openRedisStores`): while Redis is down, L2 commands fail at once, reads fall through to L1 + loader, and the tier recovers by itself (`redis-store.util.spec.ts`).

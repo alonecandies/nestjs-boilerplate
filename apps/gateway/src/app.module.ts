@@ -1,19 +1,24 @@
-import { AuthModule } from '@app/auth';
-import { BillingApiModule } from '@app/billing';
+import { BillingApiModule } from '@domain/billing';
+import { FilesModule } from '@domain/files';
+import { IdentityApiModule } from '@domain/identity';
+import { NotificationsApiModule } from '@domain/notifications';
+import { type MiddlewareConsumer, Module, type NestModule, RequestMethod } from '@nestjs/common';
+import { AuthModule } from '@platform/auth';
 import {
   CorrelationIdMiddleware,
   MaintenanceModeMiddleware,
   provideCommonEnhancersAsync,
-} from '@app/common';
-import { type AppConfig, AppConfigModule, appConfig } from '@app/config';
-import { FilesModule } from '@app/files';
-import { AppGraphqlModule, GraphqlPubSubModule } from '@app/graphql';
-import { IdentityApiModule } from '@app/identity';
-import { NotificationsApiModule } from '@app/notifications';
-import { ObservabilityModule } from '@app/observability';
-import { AppCacheModule, AppThrottlerModule, RedisHealthIndicator, RedisModule } from '@app/redis';
-import { StorageModule } from '@app/storage';
-import { type MiddlewareConsumer, Module, type NestModule, RequestMethod } from '@nestjs/common';
+} from '@platform/common';
+import { type AppConfig, AppConfigModule, appConfig } from '@platform/config';
+import { AppGraphqlModule, GraphqlPubSubModule } from '@platform/graphql';
+import { ObservabilityModule } from '@platform/observability';
+import {
+  AppCacheModule,
+  AppThrottlerModule,
+  RedisHealthIndicator,
+  RedisModule,
+} from '@platform/redis';
+import { StorageModule } from '@platform/storage';
 
 /**
  * The API gateway of the microservices topology. It serves the SAME presentation as the monolith

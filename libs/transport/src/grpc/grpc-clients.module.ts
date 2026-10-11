@@ -1,8 +1,8 @@
-import { type GrpcConfig, grpcConfig } from '@app/config';
-import { GRPC_PACKAGES, type GrpcPackageName } from '@app/contracts';
 import { type DynamicModule, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ClientsModule, type GrpcOptions } from '@nestjs/microservices';
+import { type GrpcConfig, grpcConfig } from '@platform/config';
+import { GRPC_PACKAGES, type GrpcPackageName } from '@platform/contracts';
 import { uniq } from 'lodash-es';
 import { GRPC_CIRCUIT_BREAKER_OPTIONS } from './grpc.constants.js';
 import { type GrpcCircuitBreakerOptions, GrpcCircuitBreakers } from './grpc-circuit-breakers.js';

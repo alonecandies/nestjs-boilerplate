@@ -7,7 +7,7 @@ export const MAX_PAGE_LIMIT = 100;
 
 /**
  * Keyset (cursor) pagination query: `?limit=20&cursor=<opaque>`. Keyset instead of OFFSET keeps
- * page N as cheap as page 1 on large tables. Swagger-free on purpose (`@app/common` has no
+ * page N as cheap as page 1 on large tables. Swagger-free on purpose (`@platform/common` has no
  * `@nestjs/swagger` dep): presentation DTOs extend it and add `@ApiPropertyOptional()`.
  * Every field carries a class-validator decorator — the global pipe (`whitelist` +
  * `forbidNonWhitelisted`) rejects undecorated fields.

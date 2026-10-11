@@ -1,10 +1,10 @@
 /**
- * @app/contracts — the wire contracts between services: gRPC (protobuf, ts-proto generated) and
+ * @platform/contracts — the wire contracts between services: gRPC (protobuf, ts-proto generated) and
  * Kafka integration events (zod-validated envelopes).
  *
  * Barrel layout:
  * - Generated gRPC types are re-exported FLAT (`import type { User, AuthServiceController } from
- *   '@app/contracts'`). This is collision-free because buf.gen.yaml sets `exportCommonSymbols=false`
+ *   '@platform/contracts'`). This is collision-free because buf.gen.yaml sets `exportCommonSymbols=false`
  *   (drops each file's `protobufPackage` / `<PKG>_PACKAGE_NAME` constants) and message/service names
  *   are unique across packages — tsc rejects any future clash between these star exports.
  * - The same modules are ALSO exported as version-qualified namespaces (`identityV1.User`), the

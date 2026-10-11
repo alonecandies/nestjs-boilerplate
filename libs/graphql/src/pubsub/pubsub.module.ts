@@ -1,6 +1,3 @@
-import { withTimeout } from '@app/common';
-import { type AppConfig, appConfig, type RedisConfig, redisConfig } from '@app/config';
-import { createRedisClient } from '@app/redis';
 import {
   type DynamicModule,
   Global,
@@ -11,6 +8,9 @@ import {
   type OnApplicationShutdown,
 } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { withTimeout } from '@platform/common';
+import { type AppConfig, appConfig, type RedisConfig, redisConfig } from '@platform/config';
+import { createRedisClient } from '@platform/redis';
 import { RedisPubSub } from 'graphql-redis-subscriptions';
 import { PubSub } from 'graphql-subscriptions';
 import type { Redis } from 'ioredis';

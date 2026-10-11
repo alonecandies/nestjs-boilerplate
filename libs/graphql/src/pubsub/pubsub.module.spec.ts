@@ -1,6 +1,6 @@
-import { AppConfigModule } from '@app/config';
 import { Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { AppConfigModule } from '@platform/config';
 import { RedisPubSub } from 'graphql-redis-subscriptions';
 import { PubSub } from 'graphql-subscriptions';
 import type { Redis } from 'ioredis';
