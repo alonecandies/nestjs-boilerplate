@@ -236,6 +236,21 @@ describe('GcsStorageDriver presigned URLs', () => {
     );
   });
 
+  it('signs for GCS_PUBLIC_ENDPOINT, keeping the path-style bucket (emulator behind compose)', async () => {
+    const internal = storageConfig.parse({
+      STORAGE_DRIVER: 'gcs',
+      GCS_BUCKET: 'uploads',
+      GCS_PROJECT_ID: 'local-project',
+      GCS_API_ENDPOINT: 'http://gcs:4443',
+      GCS_PUBLIC_ENDPOINT: 'http://localhost:4443',
+    });
+    const driver = new GcsStorageDriver(internal, createGcsClient(internal.gcs));
+    const { url } = await driver.createPresignedDownload('a.txt');
+    expect(url.startsWith('http://localhost:4443/uploads/a.txt?')).toBe(true);
+    const upload = await driver.createPresignedUpload('b.txt', { contentType: 'text/plain' });
+    expect(upload.url.startsWith('http://localhost:4443/uploads/b.txt?')).toBe(true);
+  });
+
   it('signs locally with the ephemeral emulator key (no network)', async () => {
     const driver = new GcsStorageDriver(cfg, createGcsClient(cfg.gcs));
 

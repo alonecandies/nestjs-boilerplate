@@ -2,6 +2,7 @@ import type { ConfigType } from '@nestjs/config';
 import { z } from 'zod';
 import { defineConfigNamespace } from '../define-config-namespace.js';
 import { zBool, zInt, zNodeEnv, zStr } from '../env/env.helpers.js';
+import { isKnownLocalSecret } from '../env/production-guards.js';
 
 /** Development-only defaults so `bun run dev` works with zero `.env`. Rejected in production. */
 export const DEV_JWT_ACCESS_SECRET = 'dev-access-secret-change-me-please-32chars';
@@ -23,6 +24,8 @@ export const authEnvSchema = z
     ARGON2_TIME_COST: zInt(2, { min: 1 }),
     ARGON2_PARALLELISM: zInt(1, { min: 1, max: 255 }),
     AUTH_DENYLIST_ENABLED: zBool(true),
+    // LOCAL compose stack only: accept the publicly known compose fallbacks in production mode.
+    ALLOW_KNOWN_LOCAL_SECRETS: zBool(false),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return;
@@ -39,6 +42,12 @@ export const authEnvSchema = z
           code: 'custom',
           path: [key],
           message: `${key} must be set to a strong, unique secret in production (the development default is not allowed)`,
+        });
+      } else if (!env.ALLOW_KNOWN_LOCAL_SECRETS && isKnownLocalSecret(env[key])) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `${key} is a publicly known local value (a docker-compose fallback or a placeholder): set a strong, unique secret in production, or ALLOW_KNOWN_LOCAL_SECRETS=true for the local compose stack only`,
         });
       }
     }

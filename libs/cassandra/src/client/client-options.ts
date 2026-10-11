@@ -1,6 +1,8 @@
+import { readFileSync } from 'node:fs';
+import type { ConnectionOptions } from 'node:tls';
 import type { CassandraConfig, CassandraConsistency } from '@platform/config';
 import cassandra from 'cassandra-driver';
-import { isInteger, map, toPairs } from 'lodash-es';
+import { isInteger, isUndefined, map, omitBy, toPairs } from 'lodash-es';
 import { DEFAULT_FETCH_SIZE } from '../cassandra.constants.js';
 import type { CassandraReplication } from '../cassandra.types.js';
 
@@ -17,6 +19,23 @@ export interface ClientOptionsContext {
 const CQL_IDENTIFIER = /^[a-zA-Z][a-zA-Z0-9_]{0,47}$/;
 /** DC names may contain dashes/dots (e.g. `us-east-1`); they are quoted as string literals. */
 const DATA_CENTER_NAME = /^[\w.-]{1,64}$/;
+
+/**
+ * Client-to-node TLS from the PEM paths (read once, when the client is built). The CA bundle
+ * verifies the nodes (system roots when unset); cert + key present a client certificate when the
+ * cluster requires one. Certificate verification is never switched off.
+ */
+export function buildSslOptions(tls: NonNullable<CassandraConfig['tls']>): ConnectionOptions {
+  return omitBy(
+    {
+      ca: tls.caPath === undefined ? undefined : [readFileSync(tls.caPath)],
+      cert: tls.certPath === undefined ? undefined : readFileSync(tls.certPath),
+      key: tls.keyPath === undefined ? undefined : readFileSync(tls.keyPath),
+      rejectUnauthorized: true,
+    },
+    isUndefined,
+  );
+}
 
 /** Maps the config enum (`localQuorum`…) onto the driver's numeric consistency. */
 export function toConsistency(name: CassandraConsistency): cassandra.types.consistencies {
@@ -45,6 +64,7 @@ export function buildClientOptions(
             cfg.credentials.password,
           ),
         }),
+    ...(cfg.tls === undefined ? {} : { sslOptions: buildSslOptions(cfg.tls) }),
     protocolOptions: { port: cfg.port, maxSchemaAgreementWaitSeconds: 30 },
     pooling: {
       // Protocol v4 multiplexes up to 2048 in-flight requests per connection: a couple of

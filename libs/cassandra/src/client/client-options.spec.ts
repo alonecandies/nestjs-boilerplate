@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { CASSANDRA_CONSISTENCIES, cassandraConfig } from '@platform/config';
 import cassandra from 'cassandra-driver';
 import { describe, expect, it } from 'vitest';
@@ -72,6 +75,38 @@ describe('buildClientOptions', () => {
     });
     const options = buildClientOptions(withAuth, { applicationName: 'x' });
     expect(options.authProvider).toBeInstanceOf(auth.PlainTextAuthProvider);
+  });
+
+  it('builds client-to-node TLS from the PEM files, never skipping verification', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cassandra-tls-'));
+    const pem = (name: string): string => {
+      const path = join(dir, name);
+      writeFileSync(path, `-----BEGIN ${name}-----\n`);
+      return path;
+    };
+    const withTls = cassandraConfig.parse({
+      CASSANDRA_SSL: 'true',
+      CASSANDRA_TLS_CA_PATH: pem('ca.pem'),
+      CASSANDRA_TLS_CERT_PATH: pem('client.crt'),
+      CASSANDRA_TLS_KEY_PATH: pem('client.key'),
+    });
+    const { sslOptions } = buildClientOptions(withTls, { applicationName: 'x' });
+    expect(sslOptions).toEqual({
+      ca: [Buffer.from('-----BEGIN ca.pem-----\n')],
+      cert: Buffer.from('-----BEGIN client.crt-----\n'),
+      key: Buffer.from('-----BEGIN client.key-----\n'),
+      rejectUnauthorized: true,
+    });
+    // CA only: the client verifies the nodes and presents no certificate.
+    const caOnly = cassandraConfig.parse({
+      CASSANDRA_SSL: 'true',
+      CASSANDRA_TLS_CA_PATH: pem('ca2'),
+    });
+    expect(buildClientOptions(caOnly, { applicationName: 'x' }).sslOptions).toEqual({
+      ca: [Buffer.from('-----BEGIN ca2-----\n')],
+      rejectUnauthorized: true,
+    });
+    expect(buildClientOptions(cfg, { applicationName: 'x' })).not.toHaveProperty('sslOptions');
   });
 });
 

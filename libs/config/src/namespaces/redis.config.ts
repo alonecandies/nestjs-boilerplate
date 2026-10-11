@@ -1,10 +1,12 @@
 import type { ConfigType } from '@nestjs/config';
 import { z } from 'zod';
 import { defineConfigNamespace } from '../define-config-namespace.js';
-import { zInt, zStr, zUrl } from '../env/env.helpers.js';
+import { zBool, zInt, zNodeEnv, zStr, zUrl } from '../env/env.helpers.js';
+import { parseUrl } from '../env/production-guards.js';
 
 export const redisEnvSchema = z
   .object({
+    NODE_ENV: zNodeEnv(),
     REDIS_URL: zUrl('redis://localhost:6379', /^rediss?$/),
     REDIS_KEY_PREFIX: zStr('app', {
       pattern: /^[A-Za-z0-9._-]{1,64}$/,
@@ -12,6 +14,21 @@ export const redisEnvSchema = z
     }),
     REDIS_MAX_RETRIES_PER_REQUEST: zInt(3, { min: 0 }),
     REDIS_CONNECT_TIMEOUT_MS: zInt(10_000, { min: 1 }),
+    // Production refuses plaintext or password-less Redis unless this explicit opt-out is set.
+    REDIS_ALLOW_INSECURE: zBool(false),
+  })
+  .superRefine((env, ctx) => {
+    if (env.NODE_ENV !== 'production' || env.REDIS_ALLOW_INSECURE) return;
+    const url = parseUrl(env.REDIS_URL);
+    // The message never echoes the URL: it carries the password.
+    if (url?.protocol !== 'rediss:' || url.password === '') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['REDIS_URL'],
+        message:
+          'REDIS_URL must use rediss:// (TLS) with a password or ACL user in production (rediss://user:password@host:6380), or set REDIS_ALLOW_INSECURE=true when the network layer secures it',
+      });
+    }
   })
   .transform((env) => ({
     url: env.REDIS_URL,

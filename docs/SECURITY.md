@@ -196,7 +196,7 @@ Controls Fastify's `trustProxy`, i.e. whether `req.ip` (throttling, logs, sessio
 `createHttpApp` enables CORS for `CORS_ORIGINS` (default `http://localhost:3000,http://localhost:5173`)
 with credentials, exposed `x-request-id`/`x-correlation-id`/`retry-after` headers and a 24 h
 preflight cache. List
-your real frontend origins; never use `*` with credentials.
+your real frontend origins: production refuses `*` at boot, because credentials are enabled.
 
 ### helmet and CSP (`libs/bootstrap/src/http/security.ts`)
 
@@ -293,16 +293,20 @@ are sanitised before they reach the client.
 
 ### Boot-time production guards (`NODE_ENV=production`)
 
-| Guard                                                                                              | Source                                         |
-| -------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
-| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` must not be the dev defaults and must differ            | `libs/config/src/namespaces/auth.config.ts`    |
-| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` must not be the dev placeholders (forged webhooks)   | `stripe.config.ts`                             |
-| JWT secrets ≥ 32 characters (all environments)                                                     | `auth.config.ts`                               |
-| `TRUST_PROXY=true` rejected                                                                        | `app.config.ts`                                |
-| plaintext gRPC refused unless `GRPC_ALLOW_INSECURE=true`; TLS cert/key/CA must be consistent       | `grpc.config.ts`                               |
-| `DOCS_ENABLED`, `GRAPHQL_SANDBOX`, `GRAPHQL_INTROSPECTION`, `GRPC_REFLECTION` default to off       | `app`, `graphql`, `grpc` namespaces            |
-| internal error messages and stack traces hidden (problem+json, GraphQL, gRPC, `/health/ready`)     | `exposeInternalErrors: !isProduction`          |
-| paired credentials (SMTP, Cassandra, Kafka SASL) must be set together; Stripe key prefixes checked | `mail`, `cassandra`, `kafka`, `stripe` schemas |
+| Guard                                                                                                                                                                                                                                                                                     | Source                                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` must not be the dev defaults and must differ                                                                                                                                                                                                   | `libs/config/src/namespaces/auth.config.ts`                  |
+| publicly known values (compose fallbacks, placeholders, RustFS keys) rejected for the JWT secrets, Stripe key and webhook secret, and S3 keys, unless `ALLOW_KNOWN_LOCAL_SECRETS=true`                                                                                                    | `auth`, `stripe`, `storage` namespaces                       |
+| TLS to every dependency unless its explicit opt-out is set: Postgres `sslmode` (`DATABASE_ALLOW_INSECURE`), `rediss://` + password (`REDIS_ALLOW_INSECURE`), `KAFKA_SSL` (`KAFKA_ALLOW_INSECURE`), Cassandra TLS (`CASSANDRA_ALLOW_INSECURE`), mandatory STARTTLS (`SMTP_ALLOW_INSECURE`) | `database`, `redis`, `kafka`, `cassandra`, `mail` namespaces |
+| no local endpoints or senders: S3/GCS emulators (`STORAGE_ALLOW_INSECURE`), Mailpit host and example.com sender (`SMTP_ALLOW_INSECURE`), localhost Checkout redirects (`STRIPE_ALLOW_LOCAL_REDIRECTS`), Cassandra SimpleStrategy (`CASSANDRA_ALLOW_INSECURE`)                             | `storage`, `mail`, `stripe`, `cassandra` namespaces          |
+| `CORS_ORIGINS` must not contain `*`                                                                                                                                                                                                                                                       | `app.config.ts`                                              |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` must not be the dev placeholders (forged webhooks)                                                                                                                                                                                          | `stripe.config.ts`                                           |
+| JWT secrets ≥ 32 characters (all environments)                                                                                                                                                                                                                                            | `auth.config.ts`                                             |
+| `TRUST_PROXY=true` rejected                                                                                                                                                                                                                                                               | `app.config.ts`                                              |
+| plaintext gRPC refused unless `GRPC_ALLOW_INSECURE=true`; TLS cert/key/CA must be consistent                                                                                                                                                                                              | `grpc.config.ts`                                             |
+| `DOCS_ENABLED`, `GRAPHQL_SANDBOX`, `GRAPHQL_INTROSPECTION`, `GRPC_REFLECTION` default to off                                                                                                                                                                                              | `app`, `graphql`, `grpc` namespaces                          |
+| internal error messages and stack traces hidden (problem+json, GraphQL, gRPC, `/health/ready`)                                                                                                                                                                                            | `exposeInternalErrors: !isProduction`                        |
+| paired credentials (SMTP, Cassandra, Kafka SASL) must be set together; Stripe key prefixes checked                                                                                                                                                                                        | `mail`, `cassandra`, `kafka`, `stripe` schemas               |
 
 ### Log redaction
 
@@ -337,13 +341,17 @@ Prometheus scrape the pods directly. A separate metrics listener is a [known gap
       rejected at boot when `NODE_ENV=production`); webhook endpoint API version pinned in the
       Stripe dashboard.
 - [ ] `TRUST_PROXY` = the load balancer's IPs/CIDRs; LB idle timeout < `HTTP_KEEP_ALIVE_TIMEOUT_MS`.
-- [ ] `CORS_ORIGINS` = your frontend origins only.
+- [ ] `CORS_ORIGINS` = your frontend origins only (`*` is refused at boot).
+- [ ] No `*_ALLOW_INSECURE`, `ALLOW_KNOWN_LOCAL_SECRETS` or `STRIPE_ALLOW_LOCAL_REDIRECTS` unless you
+      can name what secures that hop instead (a mesh, a TLS sidecar); the compose stack sets all of them.
 - [ ] gRPC: `GRPC_TLS_CERT_PATH`/`_KEY_PATH`/`_CA_PATH` (mTLS), or a mesh + `GRPC_ALLOW_INSECURE=true`;
       NetworkPolicy so only the gateway reaches 50051; `GRPC_REFLECTION` off.
 - [ ] `METRICS_BEARER_TOKEN` set; `/metrics`, `/docs`, `/openapi.*` not routed publicly;
       `DOCS_ENABLED`, `GRAPHQL_SANDBOX`, `GRAPHQL_INTROSPECTION` left off.
-- [ ] Redis with auth + TLS (`rediss://`), Kafka with `KAFKA_SSL` + SASL, Cassandra and SMTP
-      credentials, S3/GCS credentials scoped to the bucket (`GCS_KEY_FILE` or workload identity).
+- [ ] TLS everywhere, enforced at boot: Postgres `?sslmode=verify-full`, Redis `rediss://` with a
+      password or ACL user, `KAFKA_SSL` + SASL, `CASSANDRA_SSL` with `CASSANDRA_TLS_CA_PATH` and
+      `CASSANDRA_REPLICATION_DATACENTERS`, SMTP with STARTTLS (`SMTP_REQUIRE_TLS`); S3/GCS credentials
+      scoped to the bucket (`GCS_KEY_FILE` must be a `service_account` key, or use workload identity).
 - [ ] `DATABASE_RUN_MIGRATIONS=false` and migrations run as a release job (see [DOCKER.md](DOCKER.md#bootstrap-jobs--migrations)).
 - [ ] `UV_THREADPOOL_SIZE` ≤ container CPU limit; `CLUSTER_WORKERS=1` under Kubernetes.
 - [ ] Proxy-level limit on WebSocket frame size (graphql-ws, Socket.IO).

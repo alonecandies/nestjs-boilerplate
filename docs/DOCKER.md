@@ -466,6 +466,12 @@ Runs on pushes to `master` and on pull requests. Test layout and the integration
 
 ## What is local-only (don't ship this compose file)
 
+The stack runs `NODE_ENV=production` on purpose, so it has to opt out of every production guard it
+would fail: `ALLOW_KNOWN_LOCAL_SECRETS`, `DATABASE_ALLOW_INSECURE`, `REDIS_ALLOW_INSECURE`,
+`KAFKA_ALLOW_INSECURE`, `CASSANDRA_ALLOW_INSECURE`, `SMTP_ALLOW_INSECURE`, `STORAGE_ALLOW_INSECURE`,
+`STRIPE_ALLOW_LOCAL_REDIRECTS` and `GRPC_ALLOW_INSECURE` are all `true` in `x-env-base`. Each one is a
+guard you turn back on in a real deployment ([CONFIGURATION.md](CONFIGURATION.md#production-guards)).
+
 The production hardening checklist lives in [SECURITY.md](SECURITY.md); the compose-specific shortcuts are:
 
 No Redis password or TLS, default RustFS/Grafana/Postgres credentials, known JWT secrets, Kafka PLAINTEXT with RF=1,

@@ -42,6 +42,15 @@ export const appEnvSchema = z
           'TRUST_PROXY=true trusts a client-supplied X-Forwarded-For: in production list the load balancer IPs/CIDRs instead',
       });
     }
+    // createHttpApp enables credentials: a wildcard would let any site make authenticated calls.
+    if (env.NODE_ENV === 'production' && env.CORS_ORIGINS.includes('*')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['CORS_ORIGINS'],
+        message:
+          'CORS_ORIGINS must list your frontend origins in production (credentials are enabled, so "*" would let any site call the API as the user)',
+      });
+    }
   })
   .transform((env) => ({
     nodeEnv: env.NODE_ENV,

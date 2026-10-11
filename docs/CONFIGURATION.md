@@ -163,36 +163,43 @@ details in [OBSERVABILITY.md](OBSERVABILITY.md)
 [`database.config.ts`](../libs/config/src/namespaces/database.config.ts) · monolith,
 identity-service, billing-service, `bun run db:migrate`
 
-| Variable                        | Default                                 | Description                                                                                              |
-| ------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                  | `postgres://app:app@localhost:5432/app` | `postgres://` or `postgresql://` URL.                                                                    |
-| `DATABASE_POOL_MAX`             | `20`                                    | Pool size per process, `1`–`1000`.                                                                       |
-| `DATABASE_IDLE_TIMEOUT_SEC`     | `30`                                    | **Seconds** (postgres.js); `0` = disabled.                                                               |
-| `DATABASE_MAX_LIFETIME_SEC`     | `1800`                                  | Seconds; `0` = disabled.                                                                                 |
-| `DATABASE_CONNECT_TIMEOUT_SEC`  | `10`                                    | Seconds (≥ 1).                                                                                           |
-| `DATABASE_STATEMENT_TIMEOUT_MS` | `15000`                                 | **Milliseconds** (Postgres `statement_timeout` GUC); `0` = disabled.                                     |
-| `DATABASE_PREPARE`              | `true`                                  | Server-side prepared statements; set `false` behind PgBouncer (transaction mode) / RDS Proxy.            |
-| `DATABASE_LOG_QUERIES`          | `false`                                 | Log every SQL statement.                                                                                 |
-| `DATABASE_RUN_MIGRATIONS`       | `false`                                 | Apply the Drizzle migrations at boot under a Postgres advisory lock; otherwise run `bun run db:migrate`. |
+| Variable                        | Default                                 | Description                                                                                                                                                                                         |
+| ------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DATABASE_URL`                  | `postgres://app:app@localhost:5432/app` | `postgres://` or `postgresql://` URL. Production requires TLS: add `?sslmode=verify-full` (or `require` / `verify-ca`, or `sslrootcert=system`).                                                    |
+| `DATABASE_POOL_MAX`             | `20`                                    | Pool size per process, `1`–`1000`.                                                                                                                                                                  |
+| `DATABASE_IDLE_TIMEOUT_SEC`     | `30`                                    | **Seconds** (postgres.js); `0` = disabled.                                                                                                                                                          |
+| `DATABASE_MAX_LIFETIME_SEC`     | `1800`                                  | Seconds; `0` = disabled.                                                                                                                                                                            |
+| `DATABASE_CONNECT_TIMEOUT_SEC`  | `10`                                    | Seconds (≥ 1).                                                                                                                                                                                      |
+| `DATABASE_STATEMENT_TIMEOUT_MS` | `15000`                                 | **Milliseconds** (Postgres `statement_timeout` GUC); `0` = disabled.                                                                                                                                |
+| `DATABASE_PREPARE`              | `true`                                  | Server-side prepared statements; set `false` behind PgBouncer (transaction mode) / RDS Proxy.                                                                                                       |
+| `DATABASE_LOG_QUERIES`          | `false`                                 | Log every SQL statement.                                                                                                                                                                            |
+| `DATABASE_RUN_MIGRATIONS`       | `false`                                 | Apply the Drizzle migrations at boot under a Postgres advisory lock; otherwise run `bun run db:migrate`.                                                                                            |
+| `DATABASE_ALLOW_INSECURE`       | `false`                                 | Production refuses a `DATABASE_URL` without TLS unless this is `true`: only when a sidecar (Cloud SQL Auth Proxy, …) or the network layer encrypts the connection. The local compose stack sets it. |
 
 ### `cassandra` — notifications inbox
 
 [`cassandra.config.ts`](../libs/config/src/namespaces/cassandra.config.ts) · monolith,
 notifications-service
 
-| Variable                       | Default       | Description                                                                             |
-| ------------------------------ | ------------- | --------------------------------------------------------------------------------------- |
-| `CASSANDRA_CONTACT_POINTS`     | `localhost`   | CSV, at least one host.                                                                 |
-| `CASSANDRA_PORT`               | `9042`        |                                                                                         |
-| `CASSANDRA_LOCAL_DC`           | `datacenter1` | Must equal the node's data center (`nodetool status`) or the driver ignores every node. |
-| `CASSANDRA_KEYSPACE`           | `app`         | CQL identifier `[a-zA-Z][a-zA-Z0-9_]*`, max 48 chars (it is interpolated into CQL).     |
-| `CASSANDRA_USERNAME`           | —             | Set together with the password, or neither.                                             |
-| `CASSANDRA_PASSWORD`           | —             | See above.                                                                              |
-| `CASSANDRA_REPLICATION_FACTOR` | `1`           | Replication of the keyspace created at boot (SimpleStrategy).                           |
-| `CASSANDRA_CONSISTENCY`        | `localOne`    | `localOne` \| `localQuorum` \| `quorum` \| `one`.                                       |
-| `CASSANDRA_CORE_CONNECTIONS`   | `2`           | Core connections per host.                                                              |
-| `CASSANDRA_REQUEST_TIMEOUT_MS` | `12000`       | Driver request timeout.                                                                 |
-| `CASSANDRA_RUN_MIGRATIONS`     | `true`        | Create the keyspace and apply the versioned CQL migrations at boot (LWT-locked).        |
+| Variable                            | Default       | Description                                                                                                                                |
+| ----------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CASSANDRA_CONTACT_POINTS`          | `localhost`   | CSV, at least one host.                                                                                                                    |
+| `CASSANDRA_PORT`                    | `9042`        |                                                                                                                                            |
+| `CASSANDRA_LOCAL_DC`                | `datacenter1` | Must equal the node's data center (`nodetool status`) or the driver ignores every node.                                                    |
+| `CASSANDRA_KEYSPACE`                | `app`         | CQL identifier `[a-zA-Z][a-zA-Z0-9_]*`, max 48 chars (it is interpolated into CQL).                                                        |
+| `CASSANDRA_USERNAME`                | —             | Set together with the password, or neither.                                                                                                |
+| `CASSANDRA_PASSWORD`                | —             | See above.                                                                                                                                 |
+| `CASSANDRA_SSL`                     | `false`       | Client-to-node TLS. Required in production. Certificate verification is never switched off.                                                |
+| `CASSANDRA_TLS_CA_PATH`             | —             | PEM bundle that signed the nodes' certificates (system roots when unset).                                                                  |
+| `CASSANDRA_TLS_CERT_PATH`           | —             | Client certificate (PEM), when the cluster requires one. Set together with the key.                                                        |
+| `CASSANDRA_TLS_KEY_PATH`            | —             | Client private key (PEM). Set together with the certificate.                                                                               |
+| `CASSANDRA_REPLICATION_FACTOR`      | `1`           | SimpleStrategy factor of the keyspace created at boot, used only when `CASSANDRA_REPLICATION_DATACENTERS` is unset.                        |
+| `CASSANDRA_REPLICATION_DATACENTERS` | —             | NetworkTopologyStrategy for the keyspace created at boot, as `dc1:3,dc2:3` (names `[A-Za-z0-9_.-]`, factor 1–999). Required in production. |
+| `CASSANDRA_CONSISTENCY`             | `localOne`    | `localOne` \| `localQuorum` \| `quorum` \| `one`.                                                                                          |
+| `CASSANDRA_CORE_CONNECTIONS`        | `2`           | Core connections per host.                                                                                                                 |
+| `CASSANDRA_REQUEST_TIMEOUT_MS`      | `12000`       | Driver request timeout.                                                                                                                    |
+| `CASSANDRA_RUN_MIGRATIONS`          | `true`        | Create the keyspace and apply the versioned CQL migrations at boot (LWT-locked).                                                           |
+| `CASSANDRA_ALLOW_INSECURE`          | `false`       | Local single node only: production refuses plaintext and SimpleStrategy unless this is `true`. The local compose stack sets it.            |
 
 ### `redis` — cache, locks, throttling, BullMQ, socket.io adapter, GraphQL pub/sub
 
@@ -204,24 +211,26 @@ notifications-service
 | `REDIS_KEY_PREFIX`              | `app`                    | `[A-Za-z0-9._-]`, max 64 chars. Applied by the key builder (not ioredis `keyPrefix`, which breaks BullMQ/redlock); also prefixes the socket.io channel. |
 | `REDIS_MAX_RETRIES_PER_REQUEST` | `3`                      | ioredis retries per command.                                                                                                                            |
 | `REDIS_CONNECT_TIMEOUT_MS`      | `10000`                  |                                                                                                                                                         |
+| `REDIS_ALLOW_INSECURE`          | `false`                  | Production requires `rediss://` with a password or ACL user unless this is `true` (the network layer secures Redis). The local compose stack sets it.   |
 
 ### `kafka` — integration events (kafkajs)
 
 [`kafka.config.ts`](../libs/config/src/namespaces/kafka.config.ts) · every app (the gateway only
 consumes)
 
-| Variable                      | Default          | Description                                                                                           |
-| ----------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------- |
-| `KAFKA_BROKERS`               | `localhost:9094` | CSV, at least one. Host apps use the EXTERNAL listener `localhost:9094`; containers use `kafka:9092`. |
-| `KAFKA_CLIENT_ID`             | `SERVICE_NAME`   |                                                                                                       |
-| `KAFKA_GROUP_ID`              | `SERVICE_NAME`   | Consumer group. See the note below: the apps pin their own group.                                     |
-| `KAFKA_CONSUMER_CONCURRENCY`  | `3`              | Partitions consumed in parallel per instance, `1`–`1000`.                                             |
-| `KAFKA_SSL`                   | `false`          | TLS to the brokers.                                                                                   |
-| `KAFKA_SASL_MECHANISM`        | —                | `plain` \| `scram-sha-256` \| `scram-sha-512`. When set, username and password are required.          |
-| `KAFKA_SASL_USERNAME`         | —                |                                                                                                       |
-| `KAFKA_SASL_PASSWORD`         | —                |                                                                                                       |
-| `KAFKA_CONNECTION_TIMEOUT_MS` | `3000`           |                                                                                                       |
-| `KAFKA_REQUEST_TIMEOUT_MS`    | `30000`          |                                                                                                       |
+| Variable                      | Default          | Description                                                                                                                                                                             |
+| ----------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `KAFKA_BROKERS`               | `localhost:9094` | CSV, at least one. Host apps use the EXTERNAL listener `localhost:9094`; containers use `kafka:9092`.                                                                                   |
+| `KAFKA_CLIENT_ID`             | `SERVICE_NAME`   |                                                                                                                                                                                         |
+| `KAFKA_GROUP_ID`              | `SERVICE_NAME`   | Consumer group. See the note below: the apps pin their own group.                                                                                                                       |
+| `KAFKA_CONSUMER_CONCURRENCY`  | `3`              | Partitions consumed in parallel per instance, `1`–`1000`.                                                                                                                               |
+| `KAFKA_SSL`                   | `false`          | TLS to the brokers.                                                                                                                                                                     |
+| `KAFKA_SASL_MECHANISM`        | —                | `plain` \| `scram-sha-256` \| `scram-sha-512`. When set, username and password are required.                                                                                            |
+| `KAFKA_SASL_USERNAME`         | —                |                                                                                                                                                                                         |
+| `KAFKA_SASL_PASSWORD`         | —                |                                                                                                                                                                                         |
+| `KAFKA_CONNECTION_TIMEOUT_MS` | `3000`           |                                                                                                                                                                                         |
+| `KAFKA_REQUEST_TIMEOUT_MS`    | `30000`          |                                                                                                                                                                                         |
+| `KAFKA_ALLOW_INSECURE`        | `false`          | Production requires `KAFKA_SSL=true` (so SASL credentials never travel in plaintext) unless this is `true` (the network layer secures broker traffic). The local compose stack sets it. |
 
 > **`KAFKA_GROUP_ID` per app.** The shared default (`SERVICE_NAME`) is never what a consumer
 > actually joins with: the gateway and the monolith read it through their app-local namespace
@@ -256,18 +265,19 @@ identity/notifications/billing services (servers)
 [`auth.config.ts`](../libs/config/src/namespaces/auth.config.ts) · gateway, monolith,
 identity-service · details in [SECURITY.md](SECURITY.md)
 
-| Variable                | Default                                       | Description                                                                                                                            |
-| ----------------------- | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `JWT_ACCESS_SECRET`     | `dev-access-secret-change-me-please-32chars`  | HS256 secret, ≥ 32 chars in every environment. **Dev default rejected in production.** The gateway and identity-service must share it. |
-| `JWT_ACCESS_TTL_SEC`    | `900`                                         | Access token lifetime (15 min).                                                                                                        |
-| `JWT_REFRESH_SECRET`    | `dev-refresh-secret-change-me-please-32chars` | ≥ 32 chars. **Dev default rejected in production**, and it must differ from the access secret there.                                   |
-| `JWT_REFRESH_TTL_SEC`   | `604800`                                      | Refresh token lifetime (7 days).                                                                                                       |
-| `JWT_ISSUER`            | `nestjs-boilerplate`                          | `iss` claim.                                                                                                                           |
-| `JWT_AUDIENCE`          | `nestjs-boilerplate`                          | `aud` claim.                                                                                                                           |
-| `ARGON2_MEMORY_COST`    | `19456`                                       | KiB (OWASP baseline m = 19 MiB). Hashing runs on the libuv pool (see `UV_THREADPOOL_SIZE`).                                            |
-| `ARGON2_TIME_COST`      | `2`                                           | Iterations.                                                                                                                            |
-| `ARGON2_PARALLELISM`    | `1`                                           | Lanes, `1`–`255`.                                                                                                                      |
-| `AUTH_DENYLIST_ENABLED` | `true`                                        | Redis denylist of logged-out access tokens (`jti`).                                                                                    |
+| Variable                    | Default                                       | Description                                                                                                                                                                                                                                                                                                                       |
+| --------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `JWT_ACCESS_SECRET`         | `dev-access-secret-change-me-please-32chars`  | HS256 secret, ≥ 32 chars in every environment. **Dev default rejected in production.** The gateway and identity-service must share it.                                                                                                                                                                                            |
+| `JWT_ACCESS_TTL_SEC`        | `900`                                         | Access token lifetime (15 min).                                                                                                                                                                                                                                                                                                   |
+| `JWT_REFRESH_SECRET`        | `dev-refresh-secret-change-me-please-32chars` | ≥ 32 chars. **Dev default rejected in production**, and it must differ from the access secret there.                                                                                                                                                                                                                              |
+| `JWT_REFRESH_TTL_SEC`       | `604800`                                      | Refresh token lifetime (7 days).                                                                                                                                                                                                                                                                                                  |
+| `JWT_ISSUER`                | `nestjs-boilerplate`                          | `iss` claim.                                                                                                                                                                                                                                                                                                                      |
+| `JWT_AUDIENCE`              | `nestjs-boilerplate`                          | `aud` claim.                                                                                                                                                                                                                                                                                                                      |
+| `ARGON2_MEMORY_COST`        | `19456`                                       | KiB (OWASP baseline m = 19 MiB). Hashing runs on the libuv pool (see `UV_THREADPOOL_SIZE`).                                                                                                                                                                                                                                       |
+| `ARGON2_TIME_COST`          | `2`                                           | Iterations.                                                                                                                                                                                                                                                                                                                       |
+| `ARGON2_PARALLELISM`        | `1`                                           | Lanes, `1`–`255`.                                                                                                                                                                                                                                                                                                                 |
+| `AUTH_DENYLIST_ENABLED`     | `true`                                        | Redis denylist of logged-out access tokens (`jti`).                                                                                                                                                                                                                                                                               |
+| `ALLOW_KNOWN_LOCAL_SECRETS` | `false`                                       | Local compose stack only. Production rejects publicly known values (the compose fallbacks, placeholders, the RustFS keys) for the JWT secrets, the Stripe key and webhook secret, and the S3 keys unless this is `true`. The development defaults are rejected regardless. Read by the `auth`, `stripe` and `storage` namespaces. |
 
 Generate secrets with:
 
@@ -313,17 +323,19 @@ usage in [API.md](API.md)
 
 [`mail.config.ts`](../libs/config/src/namespaces/mail.config.ts) · monolith, notifications-service
 
-| Variable                 | Default                                     | Description                                                   |
-| ------------------------ | ------------------------------------------- | ------------------------------------------------------------- |
-| `SMTP_HOST`              | `localhost`                                 | Local Mailpit (UI on <http://localhost:8025>).                |
-| `SMTP_PORT`              | `1025`                                      |                                                               |
-| `SMTP_SECURE`            | `false`                                     | `true` = implicit TLS (465); `false` = STARTTLS when offered. |
-| `SMTP_USER`              | —                                           | Set together with the password, or neither.                   |
-| `SMTP_PASSWORD`          | —                                           | See above.                                                    |
-| `MAIL_FROM`              | `NestJS Boilerplate <no-reply@example.com>` | Sender (quote it in `.env`: it contains spaces).              |
-| `SMTP_POOL`              | `true`                                      | Reuse SMTP connections instead of a handshake per mail.       |
-| `SMTP_MAX_CONNECTIONS`   | `5`                                         | Pooled connections.                                           |
-| `MAIL_QUEUE_CONCURRENCY` | `5`                                         | BullMQ mail worker concurrency.                               |
+| Variable                 | Default                                                        | Description                                                                                                                                                                  |
+| ------------------------ | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SMTP_HOST`              | `localhost`                                                    | Local Mailpit (UI on <http://localhost:8025>).                                                                                                                               |
+| `SMTP_PORT`              | `1025`                                                         |                                                                                                                                                                              |
+| `SMTP_SECURE`            | `false`                                                        | `true` = implicit TLS (465); `false` = STARTTLS, mandatory when `SMTP_REQUIRE_TLS`.                                                                                          |
+| `SMTP_REQUIRE_TLS`       | on in production unless `SMTP_SECURE` or `SMTP_ALLOW_INSECURE` | Refuse to send unless STARTTLS succeeds (nodemailer `requireTLS`). Production rejects `false` while `SMTP_SECURE=false`.                                                     |
+| `SMTP_USER`              | —                                                              | Set together with the password, or neither.                                                                                                                                  |
+| `SMTP_PASSWORD`          | —                                                              | See above.                                                                                                                                                                   |
+| `MAIL_FROM`              | `NestJS Boilerplate <no-reply@example.com>`                    | Sender (quote it in `.env`: it contains spaces).                                                                                                                             |
+| `SMTP_POOL`              | `true`                                                         | Reuse SMTP connections instead of a handshake per mail.                                                                                                                      |
+| `SMTP_MAX_CONNECTIONS`   | `5`                                                            | Pooled connections.                                                                                                                                                          |
+| `MAIL_QUEUE_CONCURRENCY` | `5`                                                            | BullMQ mail worker concurrency.                                                                                                                                              |
+| `SMTP_ALLOW_INSECURE`    | `false`                                                        | Local compose stack only (Mailpit). Production rejects a localhost `SMTP_HOST`, a reserved sender domain (example.com, `.test`, …) and plaintext SMTP unless this is `true`. |
 
 ### `storage` — uploads to S3-compatible storage or GCS
 
@@ -345,20 +357,23 @@ usage in [API.md](API.md)
 | `GCS_PROJECT_ID`                 | `local-project`         |                                                                                                                                                                                      |
 | `GCS_BUCKET`                     | `uploads`               |                                                                                                                                                                                      |
 | `GCS_API_ENDPOINT`               | `http://localhost:4443` | A non-`googleapis.com` host = emulator mode; real GCS: `https://storage.googleapis.com`.                                                                                             |
+| `GCS_PUBLIC_ENDPOINT`            | —                       | Host baked into GCS signed URLs (the SDK `host` option, path-style `/<bucket>/<object>`), for an emulator browsers reach under another name. Must be https in production.            |
 | `GCS_KEY_FILE`                   | —                       | Service-account key file. Only `type: "service_account"` keys are accepted (checked at boot); unset = Application Default Credentials (use ADC for Workload Identity or federation). |
+| `STORAGE_ALLOW_INSECURE`         | `false`                 | Local compose stack only. Production requires https, non-loopback S3 endpoints and a Google GCS endpoint unless this is `true`.                                                      |
 
 ### `stripe` — Checkout + webhooks
 
 [`stripe.config.ts`](../libs/config/src/namespaces/stripe.config.ts) · monolith, billing-service
 
-| Variable                     | Default                                 | Description                                                                                                                                                            |
-| ---------------------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `STRIPE_SECRET_KEY`          | `sk_test_placeholder`                   | Must start with `sk_test_`, `sk_live_`, `rk_test_` or `rk_live_`. The placeholder is rejected when `NODE_ENV=production`.                                              |
-| `STRIPE_WEBHOOK_SECRET`      | `whsec_placeholder`                     | Must start with `whsec_`. Get one from `stripe listen --forward-to localhost:3000/v1/billing/webhooks/stripe`. The placeholder is rejected when `NODE_ENV=production`. |
-| `STRIPE_SUCCESS_URL`         | `http://localhost:3000/billing/success` | Checkout redirect (`http`/`https`).                                                                                                                                    |
-| `STRIPE_CANCEL_URL`          | `http://localhost:3000/billing/cancel`  | Checkout redirect (`http`/`https`).                                                                                                                                    |
-| `STRIPE_MAX_NETWORK_RETRIES` | `2`                                     | `0`–`10`; Stripe retries idempotently.                                                                                                                                 |
-| `STRIPE_TIMEOUT_MS`          | `20000`                                 | Stripe API timeout.                                                                                                                                                    |
+| Variable                       | Default                                 | Description                                                                                                                                                            |
+| ------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `STRIPE_SECRET_KEY`            | `sk_test_placeholder`                   | Must start with `sk_test_`, `sk_live_`, `rk_test_` or `rk_live_`. The placeholder is rejected when `NODE_ENV=production`.                                              |
+| `STRIPE_WEBHOOK_SECRET`        | `whsec_placeholder`                     | Must start with `whsec_`. Get one from `stripe listen --forward-to localhost:3000/v1/billing/webhooks/stripe`. The placeholder is rejected when `NODE_ENV=production`. |
+| `STRIPE_SUCCESS_URL`           | `http://localhost:3000/billing/success` | Checkout redirect (`http`/`https`).                                                                                                                                    |
+| `STRIPE_CANCEL_URL`            | `http://localhost:3000/billing/cancel`  | Checkout redirect (`http`/`https`).                                                                                                                                    |
+| `STRIPE_MAX_NETWORK_RETRIES`   | `2`                                     | `0`–`10`; Stripe retries idempotently.                                                                                                                                 |
+| `STRIPE_TIMEOUT_MS`            | `20000`                                 | Stripe API timeout.                                                                                                                                                    |
+| `STRIPE_ALLOW_LOCAL_REDIRECTS` | `false`                                 | Local compose stack only. Production requires https, non-loopback `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` unless this is `true`.                                    |
 
 ## App-local variables
 
@@ -401,14 +416,23 @@ Cross-field rules live in each schema's `superRefine`; a violation stops the pro
 
 **Only when `NODE_ENV=production`:**
 
-| Rule                                                                                                                                  | Variable(s)                                                                                                             | Source             |
-| ------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| JWT secrets must not be the development defaults                                                                                      | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`                                                                               | `auth.config.ts`   |
-| Access and refresh secrets must differ (else a refresh token verifies as an access token)                                             | `JWT_REFRESH_SECRET`                                                                                                    | `auth.config.ts`   |
-| Stripe key and webhook secret must not be the development placeholders (a known webhook secret would let anyone forge payment events) | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`                                                                            | `stripe.config.ts` |
-| `TRUST_PROXY=true` is rejected: list the load balancer IPs/CIDRs instead                                                              | `TRUST_PROXY`                                                                                                           | `app.config.ts`    |
-| Plaintext gRPC is refused unless TLS is configured **or** the explicit opt-out is set                                                 | `GRPC_TLS_CERT_PATH` / `GRPC_TLS_KEY_PATH`, or `GRPC_ALLOW_INSECURE=true`                                               | `grpc.config.ts`   |
-| Defaults flip off: API docs, GraphQL sandbox and introspection, gRPC reflection, pretty logs                                          | `DOCS_ENABLED`, `GRAPHQL_SANDBOX`, `GRAPHQL_INTROSPECTION`, `GRPC_REFLECTION`, `LOG_PRETTY` (explicit values still win) | several            |
+| Rule                                                                                                                                   | Variable(s)                                                                                                                         | Source                      |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| JWT secrets must not be the development defaults                                                                                       | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`                                                                                           | `auth.config.ts`            |
+| Access and refresh secrets must differ (else a refresh token verifies as an access token)                                              | `JWT_REFRESH_SECRET`                                                                                                                | `auth.config.ts`            |
+| Stripe key and webhook secret must not be the development placeholders (a known webhook secret would let anyone forge payment events)  | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`                                                                                        | `stripe.config.ts`          |
+| `TRUST_PROXY=true` is rejected: list the load balancer IPs/CIDRs instead                                                               | `TRUST_PROXY`                                                                                                                       | `app.config.ts`             |
+| Plaintext gRPC is refused unless TLS is configured **or** the explicit opt-out is set                                                  | `GRPC_TLS_CERT_PATH` / `GRPC_TLS_KEY_PATH`, or `GRPC_ALLOW_INSECURE=true`                                                           | `grpc.config.ts`            |
+| Publicly known values (compose fallbacks, placeholders, the RustFS keys) are rejected unless `ALLOW_KNOWN_LOCAL_SECRETS=true`          | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` | `auth`, `stripe`, `storage` |
+| Postgres must use TLS (`sslmode=require` / `verify-ca` / `verify-full`, or `sslrootcert=system`) unless `DATABASE_ALLOW_INSECURE=true` | `DATABASE_URL`                                                                                                                      | `database.config.ts`        |
+| Redis must be `rediss://` with a password or ACL user unless `REDIS_ALLOW_INSECURE=true`                                               | `REDIS_URL`                                                                                                                         | `redis.config.ts`           |
+| Kafka must use TLS (SASL never in plaintext) unless `KAFKA_ALLOW_INSECURE=true`                                                        | `KAFKA_SSL`                                                                                                                         | `kafka.config.ts`           |
+| Cassandra must use TLS and NetworkTopologyStrategy unless `CASSANDRA_ALLOW_INSECURE=true`                                              | `CASSANDRA_SSL`, `CASSANDRA_REPLICATION_DATACENTERS`                                                                                | `cassandra.config.ts`       |
+| SMTP: no localhost host, no reserved sender domain, STARTTLS mandatory, unless `SMTP_ALLOW_INSECURE=true`                              | `SMTP_HOST`, `MAIL_FROM`, `SMTP_REQUIRE_TLS`                                                                                        | `mail.config.ts`            |
+| Storage endpoints must be https and non-loopback (S3), or Google (GCS), unless `STORAGE_ALLOW_INSECURE=true`                           | `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `GCS_API_ENDPOINT`, `GCS_PUBLIC_ENDPOINT`                                                      | `storage.config.ts`         |
+| Stripe Checkout redirect URLs must be https and non-loopback unless `STRIPE_ALLOW_LOCAL_REDIRECTS=true`                                | `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`                                                                                           | `stripe.config.ts`          |
+| `CORS_ORIGINS` must not contain `*` (credentials are enabled)                                                                          | `CORS_ORIGINS`                                                                                                                      | `app.config.ts`             |
+| Defaults flip off: API docs, GraphQL sandbox and introspection, gRPC reflection, pretty logs                                           | `DOCS_ENABLED`, `GRAPHQL_SANDBOX`, `GRAPHQL_INTROSPECTION`, `GRPC_REFLECTION`, `LOG_PRETTY` (explicit values still win)             | several                     |
 
 **In every environment:**
 
@@ -420,17 +444,18 @@ Cross-field rules live in each schema's `superRefine`; a violation stops the pro
 | TLS certificate and key set together                                                                                             | `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`                     |
 | With TLS on and client certificates required, a CA bundle is mandatory                                                           | `GRPC_TLS_CA_PATH` (or `GRPC_TLS_REQUIRE_CLIENT_CERT=false`)  |
 | Username and password set together                                                                                               | `CASSANDRA_USERNAME`/`_PASSWORD`, `SMTP_USER`/`SMTP_PASSWORD` |
+| Cassandra client certificate and key set together                                                                                | `CASSANDRA_TLS_CERT_PATH`, `CASSANDRA_TLS_KEY_PATH`           |
+| Data center list is `name:factor` pairs (names are interpolated into CQL)                                                        | `CASSANDRA_REPLICATION_DATACENTERS`                           |
 | SASL mechanism requires username and password                                                                                    | `KAFKA_SASL_*`                                                |
 | L1 cache TTL ≤ L2 cache TTL                                                                                                      | `CACHE_L1_TTL_MS`, `CACHE_TTL_MS`                             |
 | Stripe key / webhook secret prefixes (`sk_`/`rk_` + `test`/`live`, `whsec_`)                                                     | `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`                  |
 
 **Not guarded — check these yourself before going live:**
 
-- `CORS_ORIGINS` is only CSV-parsed. It is applied by `createHttpApp` (gateway, monolith) with
-  credentials enabled; the three services' HTTP listeners (health + metrics only) run with CORS off.
-  List your real frontend origins and never `*`. The Socket.IO server is websocket-transport-only and
-  does not use `CORS_ORIGINS`.
-- Storage credentials default to the local RustFS `rustfsadmin` pair.
+- Every `*_ALLOW_INSECURE`, `ALLOW_KNOWN_LOCAL_SECRETS` and `STRIPE_ALLOW_LOCAL_REDIRECTS` opt-out
+  disables a guard above: they exist for the local compose stack (which runs `NODE_ENV=production` on
+  purpose) and for networks that secure a hop themselves (a mesh, a TLS sidecar). Keep each one off
+  unless you can say what encrypts that hop instead.
 - `/metrics` is served on the same `PORT` as the API (a separate metrics listener is a known
   follow-up) and is open unless `METRICS_BEARER_TOKEN` is set: set the token, or block the path at
   the load balancer.
@@ -446,6 +471,20 @@ JWT_REFRESH_SECRET=<another random>
 # your load balancer's addresses, never true
 TRUST_PROXY=10.0.0.0/8
 CORS_ORIGINS=https://app.example.com
+# TLS to every dependency (each guard above has an explicit opt-out for meshes and sidecars)
+DATABASE_URL=postgres://app:<password>@db.internal:5432/app?sslmode=verify-full
+REDIS_URL=rediss://app:<password>@cache.internal:6380
+KAFKA_SSL=true
+CASSANDRA_SSL=true
+CASSANDRA_TLS_CA_PATH=/etc/cassandra/ca.pem
+CASSANDRA_REPLICATION_DATACENTERS=dc1:3
+SMTP_HOST=smtp.your-provider.com
+MAIL_FROM=Your App <no-reply@your-domain.com>
+S3_ENDPOINT=https://s3.eu-west-1.amazonaws.com
+S3_ACCESS_KEY_ID=<from the secret store>
+S3_SECRET_ACCESS_KEY=<from the secret store>
+STRIPE_SUCCESS_URL=https://app.example.com/billing/success
+STRIPE_CANCEL_URL=https://app.example.com/billing/cancel
 # mTLS between gateway and services (or GRPC_ALLOW_INSECURE=true behind a mesh doing mTLS)
 GRPC_TLS_CA_PATH=/etc/grpc/ca.pem
 GRPC_TLS_CERT_PATH=/etc/grpc/tls.crt

@@ -347,6 +347,8 @@ describe('stripe production placeholder guard', () => {
         NODE_ENV: 'production',
         STRIPE_SECRET_KEY: 'sk_live_51Hx',
         STRIPE_WEBHOOK_SECRET: 'whsec_1a2b3c',
+        STRIPE_SUCCESS_URL: 'https://app.example.com/billing/success',
+        STRIPE_CANCEL_URL: 'https://app.example.com/billing/cancel',
       }).webhookSecret,
     ).toBe('whsec_1a2b3c');
     expect(stripeConfig.parse({ NODE_ENV: 'test' }).secretKey).toBe(PLACEHOLDER_STRIPE_SECRET_KEY);

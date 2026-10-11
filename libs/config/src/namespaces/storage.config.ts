@@ -1,7 +1,8 @@
 import type { ConfigType } from '@nestjs/config';
 import { z } from 'zod';
 import { defineConfigNamespace } from '../define-config-namespace.js';
-import { zBool, zEnum, zInt, zStr, zUrl } from '../env/env.helpers.js';
+import { zBool, zEnum, zInt, zNodeEnv, zStr, zUrl } from '../env/env.helpers.js';
+import { isKnownLocalSecret, isLoopbackHost, parseUrl } from '../env/production-guards.js';
 
 export const STORAGE_DRIVERS = ['s3', 'gcs'] as const;
 export type StorageDriver = (typeof STORAGE_DRIVERS)[number];
@@ -9,8 +10,22 @@ export type StorageDriver = (typeof STORAGE_DRIVERS)[number];
 /** S3 caps presigned URL lifetime at 7 days. */
 const MAX_SIGNED_URL_TTL_SEC = 604_800;
 
+/** Unset, or https on a non-loopback host. */
+function isPublicHttpsEndpoint(value: string | undefined): boolean {
+  if (value === undefined) return true;
+  const url = parseUrl(value);
+  return url?.protocol === 'https:' && !isLoopbackHost(url.hostname);
+}
+
+/** A Google Cloud Storage API endpoint (not an emulator such as fake-gcs-server). */
+function isGoogleEndpoint(value: string): boolean {
+  const url = parseUrl(value);
+  return url?.protocol === 'https:' && url.hostname.endsWith('googleapis.com');
+}
+
 export const storageEnvSchema = z
   .object({
+    NODE_ENV: zNodeEnv(),
     STORAGE_DRIVER: zEnum(STORAGE_DRIVERS, 's3'),
     STORAGE_MAX_UPLOAD_BYTES: zInt(26_214_400, { min: 1 }),
     STORAGE_MAX_CONCURRENT_UPLOADS: zInt(4, { min: 1 }),
@@ -25,7 +40,57 @@ export const storageEnvSchema = z
     GCS_PROJECT_ID: zStr('local-project'),
     GCS_BUCKET: zStr('uploads'),
     GCS_API_ENDPOINT: zUrl('http://localhost:4443'),
+    // Host baked into GCS signed URLs, for an emulator browsers reach under another name.
+    GCS_PUBLIC_ENDPOINT: zUrl(),
     GCS_KEY_FILE: zStr(),
+    // LOCAL compose stack only: production refuses the emulator endpoints without it.
+    STORAGE_ALLOW_INSECURE: zBool(false),
+    // LOCAL compose stack only: accept the publicly known RustFS keys in production mode.
+    ALLOW_KNOWN_LOCAL_SECRETS: zBool(false),
+  })
+  .superRefine((env, ctx) => {
+    if (env.NODE_ENV !== 'production') return;
+    if (env.STORAGE_DRIVER === 's3') {
+      if (!env.STORAGE_ALLOW_INSECURE) {
+        for (const key of ['S3_ENDPOINT', 'S3_PUBLIC_ENDPOINT'] as const) {
+          if (!isPublicHttpsEndpoint(env[key])) {
+            ctx.addIssue({
+              code: 'custom',
+              path: [key],
+              message: `${key} must be an https endpoint in production (the default is the local RustFS), or set STORAGE_ALLOW_INSECURE=true for the local compose stack only`,
+            });
+          }
+        }
+      }
+      if (!env.ALLOW_KNOWN_LOCAL_SECRETS) {
+        for (const key of ['S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'] as const) {
+          if (isKnownLocalSecret(env[key])) {
+            ctx.addIssue({
+              code: 'custom',
+              path: [key],
+              message: `${key} is the publicly known local RustFS key: set real credentials in production, or ALLOW_KNOWN_LOCAL_SECRETS=true for the local compose stack only`,
+            });
+          }
+        }
+      }
+    } else if (!env.STORAGE_ALLOW_INSECURE) {
+      if (!isGoogleEndpoint(env.GCS_API_ENDPOINT)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['GCS_API_ENDPOINT'],
+          message:
+            'GCS_API_ENDPOINT must be a Google endpoint (https://storage.googleapis.com) in production (the default is the local fake-gcs emulator), or set STORAGE_ALLOW_INSECURE=true for the local compose stack only',
+        });
+      }
+      if (!isPublicHttpsEndpoint(env.GCS_PUBLIC_ENDPOINT)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['GCS_PUBLIC_ENDPOINT'],
+          message:
+            'GCS_PUBLIC_ENDPOINT must be an https endpoint in production, or set STORAGE_ALLOW_INSECURE=true for the local compose stack only',
+        });
+      }
+    }
   })
   .transform((env) => ({
     driver: env.STORAGE_DRIVER,
@@ -48,6 +113,8 @@ export const storageEnvSchema = z
       projectId: env.GCS_PROJECT_ID,
       bucket: env.GCS_BUCKET,
       apiEndpoint: env.GCS_API_ENDPOINT,
+      /** Host baked into signed URLs (`cname`); unset = the API endpoint. */
+      publicEndpoint: env.GCS_PUBLIC_ENDPOINT,
       /** Service-account key file; unset → Application Default Credentials. */
       keyFilename: env.GCS_KEY_FILE,
     },

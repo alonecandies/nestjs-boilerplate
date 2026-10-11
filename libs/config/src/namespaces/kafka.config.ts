@@ -1,13 +1,14 @@
 import type { ConfigType } from '@nestjs/config';
 import { z } from 'zod';
 import { defineConfigNamespace } from '../define-config-namespace.js';
-import { zBool, zCsv, zEnum, zInt, zServiceName, zStr } from '../env/env.helpers.js';
+import { zBool, zCsv, zEnum, zInt, zNodeEnv, zServiceName, zStr } from '../env/env.helpers.js';
 
 export const KAFKA_SASL_MECHANISMS = ['plain', 'scram-sha-256', 'scram-sha-512'] as const;
 export type KafkaSaslMechanism = (typeof KAFKA_SASL_MECHANISMS)[number];
 
 export const kafkaEnvSchema = z
   .object({
+    NODE_ENV: zNodeEnv(),
     SERVICE_NAME: zServiceName(),
     KAFKA_BROKERS: zCsv('localhost:9094', { nonEmpty: true }),
     KAFKA_CLIENT_ID: zStr(),
@@ -19,17 +20,29 @@ export const kafkaEnvSchema = z
     KAFKA_SASL_PASSWORD: zStr(),
     KAFKA_CONNECTION_TIMEOUT_MS: zInt(3000, { min: 1 }),
     KAFKA_REQUEST_TIMEOUT_MS: zInt(30_000, { min: 1 }),
+    // Production refuses plaintext brokers (SASL credentials included) unless this explicit
+    // opt-out is set (the network layer, e.g. a mesh, already secures broker traffic).
+    KAFKA_ALLOW_INSECURE: zBool(false),
   })
   .superRefine((env, ctx) => {
-    if (env.KAFKA_SASL_MECHANISM === undefined) return;
-    for (const key of ['KAFKA_SASL_USERNAME', 'KAFKA_SASL_PASSWORD'] as const) {
-      if (env[key] === undefined) {
-        ctx.addIssue({
-          code: 'custom',
-          path: [key],
-          message: `${key} is required when KAFKA_SASL_MECHANISM is set`,
-        });
+    if (env.KAFKA_SASL_MECHANISM !== undefined) {
+      for (const key of ['KAFKA_SASL_USERNAME', 'KAFKA_SASL_PASSWORD'] as const) {
+        if (env[key] === undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [key],
+            message: `${key} is required when KAFKA_SASL_MECHANISM is set`,
+          });
+        }
       }
+    }
+    if (env.NODE_ENV === 'production' && !env.KAFKA_SSL && !env.KAFKA_ALLOW_INSECURE) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['KAFKA_SSL'],
+        message:
+          'Kafka traffic (and any SASL credentials) would be plaintext: set KAFKA_SSL=true in production, or KAFKA_ALLOW_INSECURE=true when the network layer secures broker traffic',
+      });
     }
   })
   .transform((env) => ({

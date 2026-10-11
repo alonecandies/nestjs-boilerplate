@@ -42,6 +42,18 @@ x-env-base: &env-base
   # grpcurl/Postman work on the 127.0.0.1:5005x ports (production: GRPC_TLS_*, no reflection).
   GRPC_ALLOW_INSECURE: "true"
   GRPC_REFLECTION: "true"
+  # LOCAL ONLY: NODE_ENV=production also refuses plaintext infra and publicly known credentials.
+  # This stack runs exactly those (plaintext Postgres/Redis/Kafka/Cassandra, Mailpit, RustFS and
+  # fake-gcs keys, the fallback secrets below), so it opts out of each guard explicitly. Never copy
+  # these to a real deployment: docs/CONFIGURATION.md lists the guard each one disables.
+  ALLOW_KNOWN_LOCAL_SECRETS: "true"
+  DATABASE_ALLOW_INSECURE: "true"
+  REDIS_ALLOW_INSECURE: "true"
+  KAFKA_ALLOW_INSECURE: "true"
+  CASSANDRA_ALLOW_INSECURE: "true"
+  SMTP_ALLOW_INSECURE: "true"
+  STORAGE_ALLOW_INSECURE: "true"
+  STRIPE_ALLOW_LOCAL_REDIRECTS: "true"
   # Tracing: off unless DOCKER_OTEL_SDK_DISABLED=false (start the `observability` profile too).
   OTEL_SDK_DISABLED: ${DOCKER_OTEL_SDK_DISABLED:-true}
   OTEL_EXPORTER_OTLP_ENDPOINT: http://jaeger:4318
@@ -81,6 +93,8 @@ x-env-storage: &env-storage
   S3_SECRET_ACCESS_KEY: ${RUSTFS_SECRET_KEY:-rustfsadmin}
   S3_BUCKET: uploads
   GCS_API_ENDPOINT: http://gcs:4443
+  # Signed GCS URLs embed this host, like S3_PUBLIC_ENDPOINT above.
+  GCS_PUBLIC_ENDPOINT: http://localhost:${GCS_HOST_PORT:-4443}
   GCS_PROJECT_ID: local-project
   GCS_BUCKET: uploads
 

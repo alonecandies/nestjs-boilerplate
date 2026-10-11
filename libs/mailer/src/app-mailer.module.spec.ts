@@ -44,6 +44,7 @@ describe('createMailerOptions', () => {
       host: 'smtp.acme.test',
       port: 587,
       secure: false,
+      requireTLS: false,
       auth: { user: 'u', pass: 'p' },
       pool: true,
       maxConnections: 8,
@@ -74,6 +75,18 @@ describe('createMailerOptions', () => {
     );
     expect(registerMailPartials()).toEqual(['button', 'footer', 'header']);
     expect(typeof Handlebars.partials.header).toBe('function');
+  });
+
+  it('makes STARTTLS mandatory (nodemailer requireTLS) when the mail namespace requires TLS', () => {
+    const production = mailConfig.parse({
+      NODE_ENV: 'production',
+      SMTP_HOST: 'smtp.sendgrid.net',
+      MAIL_FROM: 'Acme <no-reply@acme.io>',
+    });
+    expect(createMailerOptions(production).transport).toMatchObject({
+      secure: false,
+      requireTLS: true,
+    });
   });
 
   it('omits auth when no SMTP credentials are configured (local Mailpit)', () => {

@@ -1,7 +1,8 @@
 import type { ConfigType } from '@nestjs/config';
 import { z } from 'zod';
 import { defineConfigNamespace } from '../define-config-namespace.js';
-import { zInt, zNodeEnv, zStr, zUrl } from '../env/env.helpers.js';
+import { zBool, zInt, zNodeEnv, zStr, zUrl } from '../env/env.helpers.js';
+import { isKnownLocalSecret, isLoopbackHost, parseUrl } from '../env/production-guards.js';
 
 /** Development-only defaults so `bun run dev` works with zero `.env`. Rejected in production. */
 export const PLACEHOLDER_STRIPE_SECRET_KEY = 'sk_test_placeholder';
@@ -22,6 +23,10 @@ export const stripeEnvSchema = z
     STRIPE_CANCEL_URL: zUrl('http://localhost:3000/billing/cancel', /^https?$/),
     STRIPE_MAX_NETWORK_RETRIES: zInt(2, { min: 0, max: 10 }),
     STRIPE_TIMEOUT_MS: zInt(20_000, { min: 1 }),
+    // LOCAL compose stack only: accept the publicly known compose fallbacks in production mode.
+    ALLOW_KNOWN_LOCAL_SECRETS: zBool(false),
+    // LOCAL compose stack only: accept http://localhost Checkout redirects in production mode.
+    STRIPE_ALLOW_LOCAL_REDIRECTS: zBool(false),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production') return;
@@ -40,6 +45,24 @@ export const stripeEnvSchema = z
           code: 'custom',
           path: [key],
           message: `${key} must be set to a real Stripe value in production (the development placeholder is not allowed)`,
+        });
+      } else if (!env.ALLOW_KNOWN_LOCAL_SECRETS && isKnownLocalSecret(env[key])) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `${key} is a publicly known local value (a docker-compose fallback): set the real Stripe value in production, or ALLOW_KNOWN_LOCAL_SECRETS=true for the local compose stack only`,
+        });
+      }
+    }
+    if (env.STRIPE_ALLOW_LOCAL_REDIRECTS) return;
+    // Checkout sends the paying customer's browser to these URLs.
+    for (const key of ['STRIPE_SUCCESS_URL', 'STRIPE_CANCEL_URL'] as const) {
+      const url = parseUrl(env[key]);
+      if (url?.protocol !== 'https:' || isLoopbackHost(url.hostname)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: [key],
+          message: `${key} must be an https URL of your public app in production (Stripe Checkout redirects the customer there), or set STRIPE_ALLOW_LOCAL_REDIRECTS=true for the local compose stack only`,
         });
       }
     }

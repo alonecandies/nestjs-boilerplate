@@ -91,10 +91,8 @@ export async function createCassandraClient(
   const context = { applicationName: app.serviceName };
 
   if (runMigrations) {
-    const replication: CassandraReplication = options.replication ?? {
-      class: 'SimpleStrategy',
-      replicationFactor: cfg.replicationFactor,
-    };
+    // CASSANDRA_REPLICATION_DATACENTERS (NetworkTopologyStrategy) or CASSANDRA_REPLICATION_FACTOR.
+    const replication: CassandraReplication = options.replication ?? cfg.replication;
     const bootstrap = await connectWithRetry(
       () => new Client(buildClientOptions(cfg, context)),
       'bootstrap',

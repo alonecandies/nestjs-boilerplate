@@ -128,11 +128,15 @@ export class GcsStorageDriver extends StorageService {
   override readonly driver = 'gcs';
   private readonly bucket: Bucket;
   private readonly defaultTtlSec: number;
+  /** `host` of signed URLs: browsers reach an emulator under another name than the API does. */
+  private readonly signing: { host?: string };
 
   constructor(cfg: StorageConfig, storage: Storage = createGcsClient(cfg.gcs)) {
     super();
     this.bucket = storage.bucket(cfg.gcs.bucket);
     this.defaultTtlSec = cfg.signedUrlTtlSec;
+    // `host` (unlike `cname`) keeps the path-style `/<bucket>/<object>` the emulator serves.
+    this.signing = cfg.gcs.publicEndpoint === undefined ? {} : { host: cfg.gcs.publicEndpoint };
   }
 
   override async upload(input: UploadInput): Promise<StoredObject> {
@@ -185,6 +189,7 @@ export class GcsStorageDriver extends StorageService {
         : { 'x-goog-content-length-range': `0,${opts.contentLength}` };
     try {
       const [url] = await file.getSignedUrl({
+        ...this.signing,
         version: 'v4',
         action: 'write',
         expires: expiresAt,
@@ -212,6 +217,7 @@ export class GcsStorageDriver extends StorageService {
     const expiresAt = new Date(Date.now() + ttl * 1000);
     try {
       const [url] = await file.getSignedUrl({
+        ...this.signing,
         version: 'v4',
         action: 'read',
         expires: expiresAt,

@@ -57,6 +57,8 @@ export function createMailerOptions(cfg: MailConfig): MailerOptions {
       host: cfg.host,
       port: cfg.port,
       secure: cfg.secure,
+      // Refuse to send unless STARTTLS succeeds (SMTP_REQUIRE_TLS; on by default in production).
+      requireTLS: cfg.requireTls,
       auth: cfg.auth,
       pool: cfg.pool,
       maxConnections: cfg.maxConnections,
