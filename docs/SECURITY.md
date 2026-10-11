@@ -200,27 +200,28 @@ your real frontend origins: production refuses `*` at boot, because credentials 
 
 ### helmet and CSP (`libs/bootstrap/src/http/security.ts`)
 
-| Mode           | Global CSP                                                                                   |
-| -------------- | -------------------------------------------------------------------------------------------- |
-| production     | `default-src 'none'; frame-ancestors 'none'` (a JSON API loads nothing and is never framed)  |
-| non-production | `'self'` plus the Apollo Sandbox CDN hosts, `crossOriginEmbedderPolicy` off for its iframe   |
-| `/docs` route  | its own route-level CSP (`DOCS_CONTENT_SECURITY_POLICY`: jsDelivr + Google Fonts for Scalar) |
+| Mode                  | Global CSP                                                                                                                |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| production            | `default-src 'none'; frame-ancestors 'none'` (a JSON API loads nothing and is never framed)                               |
+| non-production        | `default-src 'self'; frame-ancestors 'none'`                                                                              |
+| `GET /graphql` (HTML) | while `GRAPHQL_SANDBOX` is on, its own route-level CSP (`SANDBOX_CONTENT_SECURITY_POLICY`: Apollo's CDN and iframe hosts) |
+| `/docs` route         | its own route-level CSP (`DOCS_CONTENT_SECURITY_POLICY`: jsDelivr + Google Fonts for Scalar)                              |
 
 Apollo's CSRF prevention is on: GraphQL `GET`s and simple requests need
 `content-type: application/json` or an `apollo-require-preflight` header.
 
 ### Request limits
 
-| Limit                       | Default                      | Env / source                                |
-| --------------------------- | ---------------------------- | ------------------------------------------- |
-| JSON body                   | 1 MiB                        | `BODY_LIMIT_BYTES`                          |
-| Request timeout (slowloris) | 30 s                         | `HTTP_REQUEST_TIMEOUT_MS`                   |
-| Handler timeout             | ~request timeout − 1 s → 504 | `TimeoutInterceptor`, `@Timeout(ms)`        |
-| Keep-alive                  | 72 s (must exceed LB idle)   | `HTTP_KEEP_ALIVE_TIMEOUT_MS`                |
-| Upload size                 | 25 MiB                       | `STORAGE_MAX_UPLOAD_BYTES`                  |
-| Concurrent streamed uploads | 4 per process (503 beyond)   | `STORAGE_MAX_CONCURRENT_UPLOADS`            |
-| gRPC message                | 4 MiB                        | `GRPC_MAX_MESSAGE_BYTES`                    |
-| graphql-ws payload          | `ws` default (100 MiB)       | not limited in-process: cap it at the proxy |
+| Limit                       | Default                                | Env / source                                   |
+| --------------------------- | -------------------------------------- | ---------------------------------------------- |
+| JSON body                   | 1 MiB                                  | `BODY_LIMIT_BYTES`                             |
+| Request timeout (slowloris) | 30 s                                   | `HTTP_REQUEST_TIMEOUT_MS`                      |
+| Handler timeout             | `HTTP_HANDLER_TIMEOUT_MS` (30 s) → 504 | `TimeoutInterceptor`, `@Timeout(ms)` per route |
+| Keep-alive                  | 72 s (must exceed LB idle)             | `HTTP_KEEP_ALIVE_TIMEOUT_MS`                   |
+| Upload size                 | 25 MiB                                 | `STORAGE_MAX_UPLOAD_BYTES`                     |
+| Concurrent streamed uploads | 4 per process (503 beyond)             | `STORAGE_MAX_CONCURRENT_UPLOADS`               |
+| gRPC message                | 4 MiB                                  | `GRPC_MAX_MESSAGE_BYTES`                       |
+| graphql-ws payload          | `ws` default (100 MiB)                 | not limited in-process: cap it at the proxy    |
 
 Validation: the global class-validator pipe runs with `whitelist` + `forbidNonWhitelisted`, zod
 bodies are strict, and response serialisers are allow-lists (`@Expose()` classes or zod response

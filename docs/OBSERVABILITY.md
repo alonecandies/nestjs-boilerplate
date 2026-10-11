@@ -33,7 +33,9 @@ flowchart LR
 One id ties the signals together: the **request id** is in every log line (`requestId`), in the
 `x-request-id` response header, in GraphQL error `extensions.requestId`, in problem+json error
 bodies, and it is the Observe trace id. When tracing is on, every log line also carries
-`trace_id`/`span_id`, and Grafana links a Loki line to its Jaeger trace.
+`trace_id`/`span_id`, and Grafana links a Loki line to its Jaeger trace. The other direction works
+too: HTTP, gRPC and Kafka spans carry `app.request_id` (and `app.correlation_id` for gRPC and Kafka),
+so a Jaeger search by request id finds the trace behind a support ticket.
 
 ## Logs (pino)
 

@@ -8,6 +8,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { isNil } from 'lodash-es';
 import { Histogram } from 'prom-client';
 import { isTracingActive } from '../otel.js';
+import { SPAN_ATTR_REQUEST_ID } from '../tracing/span-context.js';
 import {
   type HTTP_METRIC_LABEL_NAMES,
   HTTP_REQUEST_DURATION_SECONDS,
@@ -96,11 +97,15 @@ export class HttpMetricsHook implements OnModuleInit {
       fastify.addHook(
         'onRequest',
         (request: FastifyRequest, _reply: FastifyReply, done: () => void): void => {
-          const route = request.routeOptions.url;
-          const span = route === undefined ? undefined : trace.getActiveSpan();
-          if (span !== undefined && route !== undefined) {
-            span.updateName(`${request.method} ${route}`);
-            span.setAttribute(ATTR_HTTP_ROUTE, route);
+          const span = trace.getActiveSpan();
+          if (span !== undefined) {
+            const route = request.routeOptions.url;
+            if (route !== undefined) {
+              span.updateName(`${request.method} ${route}`);
+              span.setAttribute(ATTR_HTTP_ROUTE, route);
+            }
+            // Every request (404s included): the id clients get in `x-request-id` and problem docs.
+            span.setAttribute(SPAN_ATTR_REQUEST_ID, request.id);
           }
           done();
         },

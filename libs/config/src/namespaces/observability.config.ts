@@ -23,7 +23,6 @@ export const observabilityEnvSchema = z
     OBSERVE_SERVICE_ID: zStr(),
   })
   .transform((env) => {
-    const otlpEndpoint = env.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT ?? env.OTEL_EXPORTER_OTLP_ENDPOINT;
     const observeEnabled = Boolean(env.OBSERVE_APP_KEY && env.OBSERVE_APP_SECRET);
     return {
       serviceName: env.SERVICE_NAME,
@@ -33,10 +32,6 @@ export const observabilityEnvSchema = z
       metricsEnabled: env.METRICS_ENABLED,
       /** When set, `/metrics` answers 404 unless the scrape sends `Authorization: Bearer <token>`. */
       metricsBearerToken: env.METRICS_BEARER_TOKEN,
-      /** Explicit `OTEL_SDK_DISABLED` wins; otherwise tracing is on only when an OTLP endpoint is set. */
-      tracingEnabled:
-        env.OTEL_SDK_DISABLED === undefined ? otlpEndpoint !== undefined : !env.OTEL_SDK_DISABLED,
-      otlpEndpoint,
       observe: {
         /** `@nestjs/observe` is only wired when both credentials are present. */
         enabled: observeEnabled,

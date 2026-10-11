@@ -79,9 +79,10 @@ SDL there; unset = in memory). `app`: `NODE_ENV` (production hides internals and
   header synthesized from the connection params.
 - `fieldResolverEnhancers` is left empty on purpose. Otherwise global guards would run for every
   resolved field of every list item.
-- **Sandbox needs CSP relaxation.** It loads Apollo's CDN assets, so relax helmet's CSP for `/graphql`
-  outside production. In production there is no landing page (a deliberate choice over Apollo's
-  CDN-backed production page).
+- **The Sandbox has its own CSP.** It loads Apollo's CDN assets, so while `GRAPHQL_SANDBOX` is on,
+  `SandboxCspHook` sets a route-level CSP on the `GET /graphql` HTML page only
+  (`SANDBOX_CONTENT_SECURITY_POLICY`); the API keeps the strict global CSP. That makes
+  `GRAPHQL_SANDBOX=true` work in production too (it is off there by default).
 - **CSRF prevention** is on. GET and simple requests need `content-type: application/json` or an
   `apollo-require-preflight` header.
 - **graphql 17 has dev/prod builds behind export conditions.** Vitest resolves sources with the

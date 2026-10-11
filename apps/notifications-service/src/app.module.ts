@@ -54,7 +54,10 @@ import { KafkaHealthIndicator, KafkaProducerModule } from '@platform/transport';
     // controller-scoped and take precedence).
     ...provideCommonEnhancersAsync({
       inject: [appConfig.KEY],
-      useFactory: (app: AppConfig) => ({ exposeInternalErrors: !app.isProduction }),
+      useFactory: (app: AppConfig) => ({
+        exposeInternalErrors: !app.isProduction,
+        defaultTimeoutMs: app.handlerTimeoutMs,
+      }),
     }),
   ],
 })

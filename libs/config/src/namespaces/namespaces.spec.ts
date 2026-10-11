@@ -44,7 +44,6 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
     expect(appConfig.parse({})).toEqual({
       nodeEnv: 'development',
       isProduction: false,
-      isDevelopment: true,
       isTest: false,
       serviceName: 'app',
       host: '0.0.0.0',
@@ -54,6 +53,7 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       bodyLimitBytes: 1_048_576,
       keepAliveTimeoutMs: 72_000,
       requestTimeoutMs: 30_000,
+      handlerTimeoutMs: 30_000,
       clusterWorkers: 1,
       shutdownTimeoutMs: 10_000,
       maintenanceMode: false,
@@ -68,8 +68,6 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       logPretty: true,
       metricsEnabled: true,
       metricsBearerToken: undefined,
-      tracingEnabled: false,
-      otlpEndpoint: undefined,
       observe: { enabled: false, appKey: undefined, appSecret: undefined, serviceId: 'app' },
     });
   });
@@ -171,6 +169,15 @@ describe('config namespaces — derived values and coercion', () => {
     expect(appConfig.parse({ ...env, DOCS_ENABLED: 'true' }).docsEnabled).toBe(true);
   });
 
+  it('handler timeout is its own setting, independent of the request-receive timeout', () => {
+    expect(appConfig.parse({})).toMatchObject({
+      handlerTimeoutMs: 30_000,
+      requestTimeoutMs: 30_000,
+    });
+    expect(appConfig.parse({ HTTP_HANDLER_TIMEOUT_MS: '5000' }).handlerTimeoutMs).toBe(5000);
+    expect(() => appConfig.parse({ HTTP_HANDLER_TIMEOUT_MS: '0' })).toThrow(EnvValidationError);
+  });
+
   it('coerces csv / bool / int values', () => {
     const app = appConfig.parse({
       PORT: '8080',
@@ -208,12 +215,14 @@ describe('config namespaces — derived values and coercion', () => {
     );
   });
 
-  it('observability: tracing follows the OTLP endpoint unless explicitly disabled', () => {
+  it('observability: validates the OTel variables (the preload in otel.ts decides) and wires observe', () => {
     const endpoint = { OTEL_EXPORTER_OTLP_ENDPOINT: 'http://alloy:4318' };
-    expect(observabilityConfig.parse(endpoint).tracingEnabled).toBe(true);
-    expect(
-      observabilityConfig.parse({ ...endpoint, OTEL_SDK_DISABLED: 'true' }).tracingEnabled,
-    ).toBe(false);
+    expect(() =>
+      observabilityConfig.parse({ ...endpoint, OTEL_SDK_DISABLED: 'true' }),
+    ).not.toThrow();
+    expect(() => observabilityConfig.parse({ ...endpoint, OTEL_SDK_DISABLED: 'maybe' })).toThrow(
+      EnvValidationError,
+    );
     expect(
       observabilityConfig.parse({
         OBSERVE_APP_KEY: 'k',

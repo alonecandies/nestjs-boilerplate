@@ -66,6 +66,7 @@ import { StorageModule } from '@platform/storage';
       useFactory: (app: AppConfig) => ({
         exposeInternalErrors: !app.isProduction,
         maintenanceMode: app.maintenanceMode,
+        defaultTimeoutMs: app.handlerTimeoutMs,
       }),
     }),
   ],

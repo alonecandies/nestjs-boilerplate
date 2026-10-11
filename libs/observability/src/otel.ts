@@ -58,13 +58,16 @@ const nonBlank = (value: string | undefined): string | undefined =>
   value === undefined || value.trim() === '' ? undefined : value.trim();
 
 /**
- * Mirrors `observabilityConfig.tracingEnabled`: an explicit `OTEL_SDK_DISABLED` wins; otherwise
- * tracing is on only when an OTLP endpoint is configured (so a laptop without a collector never
- * spams connection errors). `@platform/config` can't be imported here (it pulls in Nest).
+ * THE tracing rule (the `observability` namespace only validates these variables; `@platform/config`
+ * can't be imported here, it pulls in Nest): an explicit `OTEL_SDK_DISABLED` wins; otherwise tracing
+ * is on only when an OTLP endpoint is configured, so a laptop without a collector never spams
+ * connection errors. An unrecognised `OTEL_SDK_DISABLED` fails config validation at boot, so the SDK
+ * is not started for it here.
  */
 export function isTracingEnabled(env: TracingEnv = process.env): boolean {
-  const disabled = envFlag(env['OTEL_SDK_DISABLED']);
-  if (disabled !== undefined) return !disabled;
+  if (nonBlank(env['OTEL_SDK_DISABLED']) !== undefined) {
+    return envFlag(env['OTEL_SDK_DISABLED']) === false;
+  }
   return (
     nonBlank(env['OTEL_EXPORTER_OTLP_TRACES_ENDPOINT']) !== undefined ||
     nonBlank(env['OTEL_EXPORTER_OTLP_ENDPOINT']) !== undefined

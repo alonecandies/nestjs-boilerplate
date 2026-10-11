@@ -76,4 +76,9 @@ export {
 } from './observe/observe.js';
 export { isTracingActive, isTracingEnabled, shutdownTracing } from './otel.js';
 export { flushLogs, TelemetryFlushService } from './shutdown/telemetry-flush.service.js';
+export {
+  SPAN_ATTR_CORRELATION_ID,
+  SPAN_ATTR_REQUEST_ID,
+  tagActiveSpan,
+} from './tracing/span-context.js';
 export { CurrentSpan, Span, Traceable, TraceService } from './tracing/tracing.module.js';

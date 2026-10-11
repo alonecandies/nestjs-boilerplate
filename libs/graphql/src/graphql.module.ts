@@ -13,6 +13,7 @@ import { DataLoaderRegistry } from './loaders/data-loader.registry.js';
 import { GraphqlLoadersModule } from './loaders/graphql-loaders.module.js';
 import { ComplexityPlugin } from './plugins/complexity.plugin.js';
 import { ErrorRequestIdPlugin } from './plugins/error-request-id.plugin.js';
+import { SandboxCspHook } from './sandbox/sandbox-csp.hook.js';
 
 export interface AppGraphqlModuleOptions {
   /** Extra modules the Apollo factory needs (rare: auth/config/loaders are already wired). */
@@ -80,7 +81,7 @@ export class AppGraphqlModule {
             }),
         }),
       ],
-      providers: [ComplexityPlugin, ErrorRequestIdPlugin],
+      providers: [ComplexityPlugin, ErrorRequestIdPlugin, SandboxCspHook],
       exports: [GraphqlLoadersModule],
     };
   }

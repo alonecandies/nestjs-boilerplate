@@ -8,6 +8,7 @@ import {
 import { KafkaContext } from '@nestjs/microservices';
 import { generateId, getContextType, isSafeRequestId } from '@platform/common';
 import { KAFKA_HEADERS } from '@platform/contracts';
+import { tagActiveSpan } from '@platform/observability';
 import { CLS_ID, ClsService } from 'nestjs-cls';
 import { Observable } from 'rxjs';
 import { RPC_CLS_KEYS } from '../context/transport-context.js';
@@ -54,6 +55,7 @@ export class KafkaContextInterceptor implements NestInterceptor {
       cls.run({ ifNested: 'inherit' }, () => {
         cls.set(CLS_ID, requestId);
         cls.set(RPC_CLS_KEYS.CORRELATION_ID, correlationId);
+        tagActiveSpan({ requestId, correlationId });
         return next.handle().subscribe(subscriber);
       }),
     );

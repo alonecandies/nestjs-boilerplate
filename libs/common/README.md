@@ -50,7 +50,7 @@ import { type AppConfig, AppConfigModule, appConfig } from '@platform/config';
       useFactory: (app: AppConfig) => ({
         exposeInternalErrors: !app.isProduction,
         // a bit below Fastify's requestTimeout so the client gets a 504 problem, not a reset socket
-        defaultTimeoutMs: Math.max(app.requestTimeoutMs - 1_000, 1_000),
+        defaultTimeoutMs: app.handlerTimeoutMs, // HTTP_HANDLER_TIMEOUT_MS (30 s)
         maintenanceMode: app.maintenanceMode,
       }),
     }),

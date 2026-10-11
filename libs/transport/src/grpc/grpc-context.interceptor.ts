@@ -6,6 +6,7 @@ import {
   Optional,
 } from '@nestjs/common';
 import { generateId, getContextType } from '@platform/common';
+import { tagActiveSpan } from '@platform/observability';
 import { CLS_ID, ClsService } from 'nestjs-cls';
 import { Observable } from 'rxjs';
 import { RPC_CLS_KEYS } from '../context/transport-context.js';
@@ -43,6 +44,7 @@ export class GrpcContextInterceptor implements NestInterceptor {
         cls.set(RPC_CLS_KEYS.CORRELATION_ID, caller.correlationId ?? requestId);
         cls.set(RPC_CLS_KEYS.CALLER, caller);
         if (caller.userId !== undefined) cls.set(RPC_CLS_KEYS.USER_ID, caller.userId);
+        tagActiveSpan({ requestId, correlationId: caller.correlationId ?? requestId });
         return next.handle().subscribe(subscriber);
       }),
     );

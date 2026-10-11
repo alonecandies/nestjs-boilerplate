@@ -10,8 +10,9 @@ describe('isTracingEnabled', () => {
     [{ OTEL_SDK_DISABLED: 'true', OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector:4318' }, false],
     [{ OTEL_SDK_DISABLED: 'false' }, true],
     [{ OTEL_SDK_DISABLED: '1' }, false],
-    [{ OTEL_SDK_DISABLED: 'maybe', OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector:4318' }, true],
-  ])('%j → %s (mirrors observabilityConfig.tracingEnabled)', (env, expected) => {
+    // Config validation rejects an unrecognised value at boot: the preload must not start first.
+    [{ OTEL_SDK_DISABLED: 'maybe', OTEL_EXPORTER_OTLP_ENDPOINT: 'http://collector:4318' }, false],
+  ])('%j → %s (the one tracing rule; config only validates the variables)', (env, expected) => {
     expect(isTracingEnabled(env)).toBe(expected);
   });
 });

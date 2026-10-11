@@ -1,8 +1,9 @@
 import type { HttpAdapterHost } from '@nestjs/core';
+import { type Span, trace } from '@opentelemetry/api';
 import type { ObservabilityConfig } from '@platform/config';
 import fastify, { type FastifyInstance } from 'fastify';
 import { Histogram, Registry } from 'prom-client';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HttpMetricsHook, httpMetricLabels } from './http-metrics.hook.js';
 import {
   HTTP_DURATION_BUCKETS,
@@ -68,6 +69,29 @@ describe('HttpMetricsHook', () => {
 
   afterEach(async () => {
     await app.close();
+  });
+
+  it('with a running tracer, names the span by route and tags the request id (404s too)', async () => {
+    const span = { updateName: vi.fn(), setAttribute: vi.fn() };
+    vi.spyOn(trace, 'getActiveSpan').mockReturnValue(span as unknown as Span);
+    const traced = fastify();
+    hookFor().install(traced, { nameSpans: true });
+    traced.get('/v1/users/:id', async () => ({ ok: true }));
+    await traced.ready();
+    try {
+      await traced.inject({ method: 'GET', url: '/v1/users/7' });
+      expect(span.updateName).toHaveBeenCalledWith('GET /v1/users/:id');
+      expect(span.setAttribute).toHaveBeenCalledWith('http.route', '/v1/users/:id');
+      expect(span.setAttribute).toHaveBeenCalledWith('app.request_id', expect.any(String));
+
+      span.setAttribute.mockClear();
+      await traced.inject({ method: 'GET', url: '/nowhere' });
+      expect(span.setAttribute).toHaveBeenCalledWith('app.request_id', expect.any(String));
+      expect(span.setAttribute).not.toHaveBeenCalledWith('http.route', expect.anything());
+    } finally {
+      vi.restoreAllMocks();
+      await traced.close();
+    }
   });
 
   it('records the route TEMPLATE, not the raw URL (low cardinality)', async () => {

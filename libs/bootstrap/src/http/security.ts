@@ -3,9 +3,9 @@ import type { AppConfig } from '@platform/config';
 
 /**
  * Global helmet settings. The API serves JSON, so production gets the strictest CSP (nothing may be
- * loaded, nothing may frame it). Development additionally allows the Apollo Sandbox that the
- * GraphQL module serves at `GET /graphql` (research nest-http §12). The docs page (`/docs`) sets its
- * own route-level CSP either way.
+ * loaded, nothing may frame it); development allows same-origin resources. The pages that need more
+ * set their own route-level CSP in every environment: `/docs` (Scalar) and, while
+ * `GRAPHQL_SANDBOX` is on, the Apollo Sandbox at `GET /graphql` (`SandboxCspHook`).
  */
 export function defaultHelmetOptions(
   config: Pick<AppConfig, 'isProduction'>,
@@ -19,23 +19,8 @@ export function defaultHelmetOptions(
   }
   return {
     contentSecurityPolicy: {
-      directives: {
-        defaultSrc: ["'self'"],
-        scriptSrc: [
-          "'self'",
-          "'unsafe-inline'",
-          'https://embeddable-sandbox.cdn.apollographql.com',
-        ],
-        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
-        imgSrc: ["'self'", 'data:', 'https:'],
-        fontSrc: ["'self'", 'data:', 'https://fonts.gstatic.com'],
-        frameSrc: ["'self'", 'https://sandbox.embed.apollographql.com'],
-        manifestSrc: ["'self'", 'https://apollo-server-landing-page.cdn.apollographql.com'],
-        connectSrc: ["'self'", 'https:', 'wss:'],
-      },
+      directives: { defaultSrc: ["'self'"], frameAncestors: ["'none'"] },
     },
-    // The embedded sandbox iframe is cross-origin.
-    crossOriginEmbedderPolicy: false,
   };
 }
 

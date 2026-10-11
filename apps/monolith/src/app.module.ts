@@ -97,6 +97,7 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
       useFactory: (app: AppConfig) => ({
         exposeInternalErrors: !app.isProduction,
         maintenanceMode: app.maintenanceMode,
+        defaultTimeoutMs: app.handlerTimeoutMs,
       }),
     }),
   ],

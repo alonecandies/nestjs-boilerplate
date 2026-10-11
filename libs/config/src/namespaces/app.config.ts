@@ -28,6 +28,9 @@ export const appEnvSchema = z
     // server already closed → sporadic 502s.
     HTTP_KEEP_ALIVE_TIMEOUT_MS: zInt(72_000, { min: 0 }),
     HTTP_REQUEST_TIMEOUT_MS: zInt(30_000, { min: 0 }),
+    // Per-handler budget (TimeoutInterceptor → 504/DEADLINE_EXCEEDED); `@Timeout(ms)` overrides it per
+    // route. Unrelated to HTTP_REQUEST_TIMEOUT_MS, which only bounds RECEIVING the request.
+    HTTP_HANDLER_TIMEOUT_MS: zInt(30_000, { min: 1 }),
     CLUSTER_WORKERS: zInt(1, { min: 0, max: 1024 }),
     SHUTDOWN_TIMEOUT_MS: zInt(10_000, { min: 0 }),
     MAINTENANCE_MODE: zBool(false),
@@ -55,7 +58,6 @@ export const appEnvSchema = z
   .transform((env) => ({
     nodeEnv: env.NODE_ENV,
     isProduction: env.NODE_ENV === 'production',
-    isDevelopment: env.NODE_ENV === 'development',
     isTest: env.NODE_ENV === 'test',
     serviceName: env.SERVICE_NAME,
     host: env.HOST,
@@ -65,6 +67,7 @@ export const appEnvSchema = z
     bodyLimitBytes: env.BODY_LIMIT_BYTES,
     keepAliveTimeoutMs: env.HTTP_KEEP_ALIVE_TIMEOUT_MS,
     requestTimeoutMs: env.HTTP_REQUEST_TIMEOUT_MS,
+    handlerTimeoutMs: env.HTTP_HANDLER_TIMEOUT_MS,
     /** `0` = one worker per core (`os.availableParallelism()`); `1` = no cluster. */
     clusterWorkers: env.CLUSTER_WORKERS,
     shutdownTimeoutMs: env.SHUTDOWN_TIMEOUT_MS,

@@ -134,7 +134,8 @@ with the same rules; they are listed once, under `app`.
 | `TRUST_PROXY`                | `false`                                       | Whose `X-Forwarded-*` Fastify trusts: `false` (nobody; `req.ip` = socket address), a CSV of IPs/CIDRs/presets (`loopback`, `linklocal`, `uniquelocal`), or `true` (every hop — rejected in production). Hop counts are invalid.                       |
 | `BODY_LIMIT_BYTES`           | `1048576`                                     | Max request body (≥ 1).                                                                                                                                                                                                                               |
 | `HTTP_KEEP_ALIVE_TIMEOUT_MS` | `72000`                                       | Must exceed the load balancer idle timeout (60 s typical), or the LB reuses closed sockets (502s).                                                                                                                                                    |
-| `HTTP_REQUEST_TIMEOUT_MS`    | `30000`                                       | Per-request timeout; also bounds streamed uploads.                                                                                                                                                                                                    |
+| `HTTP_REQUEST_TIMEOUT_MS`    | `30000`                                       | Time allowed to RECEIVE the whole request (Fastify `requestTimeout`); also bounds streamed uploads. Not a handler timeout.                                                                                                                            |
+| `HTTP_HANDLER_TIMEOUT_MS`    | `30000`                                       | Budget for each handler (`TimeoutInterceptor`): 504 problem+json over HTTP, `DEADLINE_EXCEEDED` over gRPC. `@Timeout(ms)` overrides it per route.                                                                                                     |
 | `CLUSTER_WORKERS`            | `1`                                           | `node:cluster` workers, `0`–`1024`: `1` = no cluster, `0` = one per core (`os.availableParallelism()`). Containers keep `1` and scale replicas.                                                                                                       |
 | `SHUTDOWN_TIMEOUT_MS`        | `10000`                                       | Hard deadline of the graceful shutdown; keep it below the orchestrator grace period.                                                                                                                                                                  |
 | `MAINTENANCE_MODE`           | `false`                                       | `503` problem+json with `Retry-After` on every route except `/health*` and `/metrics`.                                                                                                                                                                |
@@ -404,8 +405,10 @@ Read by Node or the OpenTelemetry SDK themselves, not by `@platform/config` (the
 | `OTEL_TRACES_SAMPLER_ARG`     | SDK default                             | Sampling ratio, e.g. `1.0`.                                                                                                                                                                                                                                                                                  |
 
 Tracing starts in the `--import ./src/instrument.ts` (dev) / `--import ./dist/instrument.js` (start)
-preload, before Nest loads, with the same rule as the `observability` namespace: an explicit
-`OTEL_SDK_DISABLED` wins, otherwise tracing is on only when an OTLP endpoint is set. Other standard
+preload, before Nest loads. That preload (`isTracingEnabled` in `libs/observability/src/otel.ts`) is the
+only place the rule lives: an explicit `OTEL_SDK_DISABLED` wins, otherwise tracing is on only when an
+OTLP endpoint is set. The `observability` namespace only validates these variables, so an unrecognised
+`OTEL_SDK_DISABLED` value fails the boot (and the preload does not start the SDK for it). Other standard
 `OTEL_*` variables (for example `OTEL_RESOURCE_ATTRIBUTES`) are honoured by the SDK. See
 [OBSERVABILITY.md](OBSERVABILITY.md).
 

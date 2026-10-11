@@ -2,12 +2,13 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { Metadata } from '@grpc/grpc-js';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
 import { KafkaContext } from '@nestjs/microservices';
+import { type Span, trace } from '@opentelemetry/api';
 import { generateId } from '@platform/common';
 import { KAFKA_HEADERS } from '@platform/contracts';
 import { CLS_CORRELATION_ID, CLS_USER_ID, RequestContextService } from '@platform/observability';
 import { CLS_ID, CLS_REQ, ClsService } from 'nestjs-cls';
 import { defer, lastValueFrom, of } from 'rxjs';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { callerContextFromCls } from '../grpc/grpc-caller-context.js';
 import { GrpcContextInterceptor } from '../grpc/grpc-context.interceptor.js';
 import { createOutgoingMetadata } from '../grpc/grpc-metadata.js';
@@ -54,6 +55,13 @@ async function seenBy(
   return lastValueFrom(interceptor.intercept(context, next)) as Promise<{ active: boolean }>;
 }
 
+/** A running tracer's active span (the gRPC / kafkajs instrumentation span), as a spy. */
+function activeSpanSpy(): { setAttribute: ReturnType<typeof vi.fn> } {
+  const span = { setAttribute: vi.fn() };
+  vi.spyOn(trace, 'getActiveSpan').mockReturnValue(span as unknown as Span);
+  return span;
+}
+
 describe('GrpcContextInterceptor', () => {
   it('adopts request id, correlation id and caller from metadata', async () => {
     const cls = newCls();
@@ -88,6 +96,16 @@ describe('GrpcContextInterceptor', () => {
     ).resolves.toEqual({ userId: 'user-7', correlationId: 'corr-7' });
     expect(RPC_CLS_KEYS.USER_ID).toBe(CLS_USER_ID);
     expect(RPC_CLS_KEYS.CORRELATION_ID).toBe(CLS_CORRELATION_ID);
+  });
+
+  it('tags the active span with the request and correlation ids (logs ↔ traces)', async () => {
+    const span = activeSpanSpy();
+    const cls = newCls();
+    const requestId = generateId();
+    const metadata = createOutgoingMetadata({ requestId, correlationId: 'corr-5' });
+    await seenBy(new GrpcContextInterceptor(cls), cls, rpcContext(metadata));
+    expect(span.setAttribute).toHaveBeenCalledWith('app.request_id', requestId);
+    expect(span.setAttribute).toHaveBeenCalledWith('app.correlation_id', 'corr-5');
   });
 
   it('generates a request id and uses it as correlation id when the caller sent none', async () => {
@@ -137,6 +155,19 @@ describe('KafkaContextInterceptor', () => {
       }),
     );
     expect(seen).toMatchObject({ active: true, id: eventId, correlationId: 'corr-h' });
+  });
+
+  it('tags the consumer span with the envelope id and the correlation id', async () => {
+    const span = activeSpanSpy();
+    const cls = newCls();
+    const eventId = generateId();
+    await seenBy(
+      new KafkaContextInterceptor(cls),
+      cls,
+      rpcContext(kafka({ [KAFKA_HEADERS.CORRELATION_ID]: 'corr-k' }), { id: eventId }),
+    );
+    expect(span.setAttribute).toHaveBeenCalledWith('app.request_id', eventId);
+    expect(span.setAttribute).toHaveBeenCalledWith('app.correlation_id', 'corr-k');
   });
 
   it('falls back to the envelope correlation id, then to the request id', async () => {
