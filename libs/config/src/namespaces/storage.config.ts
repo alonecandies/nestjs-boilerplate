@@ -2,7 +2,13 @@ import type { ConfigType } from '@nestjs/config';
 import { z } from 'zod';
 import { defineConfigNamespace } from '../define-config-namespace.js';
 import { zBool, zEnum, zInt, zNodeEnv, zStr, zUrl } from '../env/env.helpers.js';
-import { isKnownLocalSecret, isLoopbackHost, parseUrl } from '../env/production-guards.js';
+import {
+  addKnownLocalSecretIssue,
+  isGoogleApisHost,
+  isKnownLocalSecret,
+  isPublicHttpsUrl,
+  parseUrl,
+} from '../env/production-guards.js';
 
 export const STORAGE_DRIVERS = ['s3', 'gcs'] as const;
 export type StorageDriver = (typeof STORAGE_DRIVERS)[number];
@@ -10,17 +16,10 @@ export type StorageDriver = (typeof STORAGE_DRIVERS)[number];
 /** S3 caps presigned URL lifetime at 7 days. */
 const MAX_SIGNED_URL_TTL_SEC = 604_800;
 
-/** Unset, or https on a non-loopback host. */
-function isPublicHttpsEndpoint(value: string | undefined): boolean {
-  if (value === undefined) return true;
+/** An https Google Cloud Storage endpoint (not an emulator such as fake-gcs-server). */
+function isGoogleHttpsEndpoint(value: string): boolean {
   const url = parseUrl(value);
-  return url?.protocol === 'https:' && !isLoopbackHost(url.hostname);
-}
-
-/** A Google Cloud Storage API endpoint (not an emulator such as fake-gcs-server). */
-function isGoogleEndpoint(value: string): boolean {
-  const url = parseUrl(value);
-  return url?.protocol === 'https:' && url.hostname.endsWith('googleapis.com');
+  return url?.protocol === 'https:' && isGoogleApisHost(url.hostname);
 }
 
 export const storageEnvSchema = z
@@ -53,28 +52,23 @@ export const storageEnvSchema = z
     if (env.STORAGE_DRIVER === 's3') {
       if (!env.STORAGE_ALLOW_INSECURE) {
         for (const key of ['S3_ENDPOINT', 'S3_PUBLIC_ENDPOINT'] as const) {
-          if (!isPublicHttpsEndpoint(env[key])) {
+          const value = env[key];
+          if (value !== undefined && !isPublicHttpsUrl(value)) {
             ctx.addIssue({
               code: 'custom',
               path: [key],
-              message: `${key} must be an https endpoint in production (the default is the local RustFS), or set STORAGE_ALLOW_INSECURE=true for the local compose stack only`,
+              message: `${key} must be an https, non-loopback endpoint in production (the default is the local RustFS), or set STORAGE_ALLOW_INSECURE=true for the local compose stack only`,
             });
           }
         }
       }
       if (!env.ALLOW_KNOWN_LOCAL_SECRETS) {
         for (const key of ['S3_ACCESS_KEY_ID', 'S3_SECRET_ACCESS_KEY'] as const) {
-          if (isKnownLocalSecret(env[key])) {
-            ctx.addIssue({
-              code: 'custom',
-              path: [key],
-              message: `${key} is the publicly known local RustFS key: set real credentials in production, or ALLOW_KNOWN_LOCAL_SECRETS=true for the local compose stack only`,
-            });
-          }
+          if (isKnownLocalSecret(env[key])) addKnownLocalSecretIssue(ctx, key);
         }
       }
     } else if (!env.STORAGE_ALLOW_INSECURE) {
-      if (!isGoogleEndpoint(env.GCS_API_ENDPOINT)) {
+      if (!isGoogleHttpsEndpoint(env.GCS_API_ENDPOINT)) {
         ctx.addIssue({
           code: 'custom',
           path: ['GCS_API_ENDPOINT'],
@@ -82,12 +76,16 @@ export const storageEnvSchema = z
             'GCS_API_ENDPOINT must be a Google endpoint (https://storage.googleapis.com) in production (the default is the local fake-gcs emulator), or set STORAGE_ALLOW_INSECURE=true for the local compose stack only',
         });
       }
-      if (!isPublicHttpsEndpoint(env.GCS_PUBLIC_ENDPOINT)) {
+      // Only Google serves a URL signed for GCS: a CDN or any other host would break every link.
+      if (
+        env.GCS_PUBLIC_ENDPOINT !== undefined &&
+        !isGoogleHttpsEndpoint(env.GCS_PUBLIC_ENDPOINT)
+      ) {
         ctx.addIssue({
           code: 'custom',
           path: ['GCS_PUBLIC_ENDPOINT'],
           message:
-            'GCS_PUBLIC_ENDPOINT must be an https endpoint in production, or set STORAGE_ALLOW_INSECURE=true for the local compose stack only',
+            'GCS_PUBLIC_ENDPOINT must be an https Google endpoint in production (only Google serves URLs signed for GCS; the setting exists for emulators), or set STORAGE_ALLOW_INSECURE=true for the local compose stack only',
         });
       }
     }
@@ -113,7 +111,7 @@ export const storageEnvSchema = z
       projectId: env.GCS_PROJECT_ID,
       bucket: env.GCS_BUCKET,
       apiEndpoint: env.GCS_API_ENDPOINT,
-      /** Host baked into signed URLs (`cname`); unset = the API endpoint. */
+      /** Host of signed URLs (the SDK `host` option, path-style); unset = the API endpoint. */
       publicEndpoint: env.GCS_PUBLIC_ENDPOINT,
       /** Service-account key file; unset → Application Default Credentials. */
       keyFilename: env.GCS_KEY_FILE,

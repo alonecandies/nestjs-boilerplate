@@ -8,6 +8,11 @@ readiness contributor, and **uuidv7 keyset-pagination** helpers.
 Domain tables live in the domain packages as `*.schema.ts` files (`domains/identity`, `domains/billing`). This package
 owns the connection, the migration history and the tooling.
 
+Production refuses a `DATABASE_URL` without TLS (`?sslmode=verify-full`, `require` or `verify-ca`, `ssl=true`, or
+`sslrootcert=system`; as in postgres.js, the last value of a repeated parameter wins). An `ssl` option passed in
+code (`DatabaseModule` `postgres.ssl`) wins at runtime, but the boot check only reads the URL: keep
+`?sslmode=require` there too, or set `DATABASE_ALLOW_INSECURE=true` when a sidecar encrypts the hop.
+
 ## Public API
 
 | Export                                                                                                                                                  | Kind            | Purpose                                                                                                                                 |

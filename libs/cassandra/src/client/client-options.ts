@@ -1,6 +1,10 @@
 import { readFileSync } from 'node:fs';
 import type { ConnectionOptions } from 'node:tls';
-import type { CassandraConfig, CassandraConsistency } from '@platform/config';
+import {
+  CASSANDRA_DATA_CENTER_NAME,
+  type CassandraConfig,
+  type CassandraConsistency,
+} from '@platform/config';
 import cassandra from 'cassandra-driver';
 import { isInteger, isUndefined, map, omitBy, toPairs } from 'lodash-es';
 import { DEFAULT_FETCH_SIZE } from '../cassandra.constants.js';
@@ -17,8 +21,6 @@ export interface ClientOptionsContext {
 
 /** CQL identifiers we interpolate into DDL (keyspace, DC names are validated separately). */
 const CQL_IDENTIFIER = /^[a-zA-Z][a-zA-Z0-9_]{0,47}$/;
-/** DC names may contain dashes/dots (e.g. `us-east-1`); they are quoted as string literals. */
-const DATA_CENTER_NAME = /^[\w.-]{1,64}$/;
 
 /**
  * Client-to-node TLS from the PEM paths (read once, when the client is built). The CA bundle
@@ -135,7 +137,7 @@ export function replicationToCql(replication: CassandraReplication): string {
     throw new Error('NetworkTopologyStrategy needs at least one data center');
   }
   const entries = map(dataCenters, ([dc, factor]) => {
-    if (!DATA_CENTER_NAME.test(dc)) throw new Error(`Invalid data center name "${dc}"`);
+    if (!CASSANDRA_DATA_CENTER_NAME.test(dc)) throw new Error(`Invalid data center name "${dc}"`);
     assertReplicationFactor(factor, `data center "${dc}"`);
     return `'${dc}': ${factor}`;
   });

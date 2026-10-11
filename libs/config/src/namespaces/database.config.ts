@@ -4,14 +4,21 @@ import { defineConfigNamespace } from '../define-config-namespace.js';
 import { zBool, zInt, zNodeEnv, zUrl } from '../env/env.helpers.js';
 import { parseUrl } from '../env/production-guards.js';
 
-/** postgres.js only encrypts for these `sslmode` values (or `sslrootcert=system`). */
-const ENCRYPTING_SSLMODES = new Set(['require', 'verify-ca', 'verify-full']);
+/** Modes that always encrypt: `prefer` and `allow` may fall back to plaintext without a word. */
+const ENCRYPTING_SSL_MODES = new Set(['require', 'verify-ca', 'verify-full', 'true']);
 
-function encryptsConnection(databaseUrl: string): boolean {
+/**
+ * The TLS mode postgres.js will actually use for this URL (its `parseOptions`): the LAST value of a
+ * repeated parameter wins, a non-empty `sslmode` overrides `ssl`, and `sslrootcert=system`
+ * overrides both with `verify-full`. A code-level `postgres.ssl` option (DatabaseModule) wins at
+ * runtime, but this check only sees the URL: keep `?sslmode=require` there too.
+ */
+function effectiveSslMode(databaseUrl: string): string | undefined {
   const params = parseUrl(databaseUrl)?.searchParams;
-  return (
-    ENCRYPTING_SSLMODES.has(params?.get('sslmode') ?? '') || params?.get('sslrootcert') === 'system'
-  );
+  const last = (key: string): string | undefined => params?.getAll(key).at(-1);
+  if (last('sslrootcert') === 'system') return 'verify-full';
+  const sslmode = last('sslmode');
+  return sslmode !== undefined && sslmode !== '' ? sslmode : last('ssl');
 }
 
 export const databaseEnvSchema = z
@@ -32,12 +39,12 @@ export const databaseEnvSchema = z
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production' || env.DATABASE_ALLOW_INSECURE) return;
-    if (!encryptsConnection(env.DATABASE_URL)) {
+    if (!ENCRYPTING_SSL_MODES.has(effectiveSslMode(env.DATABASE_URL) ?? '')) {
       ctx.addIssue({
         code: 'custom',
         path: ['DATABASE_URL'],
         message:
-          'DATABASE_URL must enable TLS in production: add ?sslmode=verify-full (or require / verify-ca, or sslrootcert=system), or set DATABASE_ALLOW_INSECURE=true when a sidecar proxy or the network layer encrypts the connection',
+          'DATABASE_URL must enable TLS in production: add ?sslmode=verify-full (or require / verify-ca, ssl=true, or sslrootcert=system; prefer and allow can fall back to plaintext), or set DATABASE_ALLOW_INSECURE=true when a sidecar proxy or the network layer encrypts the connection',
       });
     }
   })

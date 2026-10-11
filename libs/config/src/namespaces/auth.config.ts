@@ -2,7 +2,7 @@ import type { ConfigType } from '@nestjs/config';
 import { z } from 'zod';
 import { defineConfigNamespace } from '../define-config-namespace.js';
 import { zBool, zInt, zNodeEnv, zStr } from '../env/env.helpers.js';
-import { isKnownLocalSecret } from '../env/production-guards.js';
+import { addKnownLocalSecretIssue, isKnownLocalSecret } from '../env/production-guards.js';
 
 /** Development-only defaults so `bun run dev` works with zero `.env`. Rejected in production. */
 export const DEV_JWT_ACCESS_SECRET = 'dev-access-secret-change-me-please-32chars';
@@ -44,11 +44,7 @@ export const authEnvSchema = z
           message: `${key} must be set to a strong, unique secret in production (the development default is not allowed)`,
         });
       } else if (!env.ALLOW_KNOWN_LOCAL_SECRETS && isKnownLocalSecret(env[key])) {
-        ctx.addIssue({
-          code: 'custom',
-          path: [key],
-          message: `${key} is a publicly known local value (a docker-compose fallback or a placeholder): set a strong, unique secret in production, or ALLOW_KNOWN_LOCAL_SECRETS=true for the local compose stack only`,
-        });
+        addKnownLocalSecretIssue(ctx, key);
       }
     }
     // A shared secret would let a refresh token verify as an access token (and vice versa).

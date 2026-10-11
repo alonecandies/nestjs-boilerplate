@@ -60,9 +60,11 @@ CREATE TABLE IF NOT EXISTS notifications_by_user (...) WITH CLUSTERING ORDER BY 
 
 ## Boot sequence (when `CASSANDRA_RUN_MIGRATIONS=true`, the default)
 
-1. A short-lived client **without a keyspace** runs `CREATE KEYSPACE IF NOT EXISTS` (SimpleStrategy with
-   `CASSANDRA_REPLICATION_FACTOR`, or the `replication` option) and shuts down. It never alters an existing
-   keyspace.
+1. A short-lived client **without a keyspace** runs `CREATE KEYSPACE IF NOT EXISTS` and shuts down. Replication
+   comes from the `replication` option, else `CASSANDRA_REPLICATION_DATACENTERS` (NetworkTopologyStrategy), else
+   `CASSANDRA_REPLICATION_FACTOR` (SimpleStrategy). Production refuses SimpleStrategy unless
+   `CASSANDRA_ALLOW_SIMPLE_STRATEGY=true`, and that check reads only the environment: set
+   `CASSANDRA_REPLICATION_DATACENTERS` even when the option is set. It never alters an existing keyspace.
 2. The main client binds to the keyspace and connects eagerly, retrying transient `NoHostAvailableError` and
    timeouts with a fresh client each time.
 3. `CqlMigrator` reads `schema_migrations` (applied versions cost no LWT) and claims each pending version with
@@ -73,7 +75,10 @@ CREATE TABLE IF NOT EXISTS notifications_by_user (...) WITH CLUSTERING ORDER BY 
 ## Environment (`cassandra` namespace, plus `SERVICE_NAME`)
 
 `CASSANDRA_CONTACT_POINTS` (localhost), `CASSANDRA_PORT` (9042), `CASSANDRA_LOCAL_DC` (datacenter1),
-`CASSANDRA_KEYSPACE` (app), `CASSANDRA_USERNAME`/`CASSANDRA_PASSWORD`, `CASSANDRA_REPLICATION_FACTOR` (1),
+`CASSANDRA_KEYSPACE` (app), `CASSANDRA_USERNAME`/`CASSANDRA_PASSWORD`, `CASSANDRA_SSL` (false) with
+`CASSANDRA_TLS_CA_PATH`/`_CERT_PATH`/`_KEY_PATH` (driver `sslOptions`, verification always on),
+`CASSANDRA_REPLICATION_DATACENTERS` (`dc1:3,dc2:3`), `CASSANDRA_REPLICATION_FACTOR` (1),
+`CASSANDRA_ALLOW_INSECURE` / `CASSANDRA_ALLOW_SIMPLE_STRATEGY` (production opt-outs, false),
 `CASSANDRA_CONSISTENCY` (localOne: localOne|localQuorum|quorum|one), `CASSANDRA_CORE_CONNECTIONS` (2 per local host),
 `CASSANDRA_REQUEST_TIMEOUT_MS` (12000 → `socketOptions.readTimeout`), `CASSANDRA_RUN_MIGRATIONS` (true).
 
@@ -90,7 +95,8 @@ CREATE TABLE IF NOT EXISTS notifications_by_user (...) WITH CLUSTERING ORDER BY 
 - A page state is only valid for the same query and params. Hitting a partition end exactly on a page boundary
   yields one extra empty page with a `null` state.
 - Batch only rows of the **same partition**. For bulk writes across partitions, use `concurrent.executeConcurrent`.
-- Use `NetworkTopologyStrategy` (`replication` option) for multi-DC production. Changing replication later
+- Set `CASSANDRA_REPLICATION_DATACENTERS` in production (NetworkTopologyStrategy; production refuses
+  SimpleStrategy). Changing replication later
   needs a manual `ALTER KEYSPACE` plus a repair.
 - A crashed instance can leave a claim stuck in `applying`. Boot then times out after `migrationLockTimeoutMs`
   (2 min) and prints the `DELETE` that releases it.

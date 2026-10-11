@@ -9,8 +9,8 @@ import {
   Storage,
   type StorageOptions,
 } from '@google-cloud/storage';
-import type { StorageConfig } from '@platform/config';
-import { endsWith, isNil, isPlainObject, isString, mapValues, omitBy } from 'lodash-es';
+import { isGoogleApisHost, type StorageConfig } from '@platform/config';
+import { isNil, isPlainObject, isString, mapValues, omitBy } from 'lodash-es';
 import { toStorageException } from '../storage.errors.js';
 import { StorageService } from '../storage.service.js';
 import type {
@@ -35,7 +35,7 @@ type ServiceAccountKey = { client_email: string; private_key: string };
 /** Real Google endpoints (vs. an emulator such as fake-gcs-server). */
 export function isGoogleStorageEndpoint(apiEndpoint: string): boolean {
   try {
-    return endsWith(new URL(apiEndpoint).hostname, 'googleapis.com');
+    return isGoogleApisHost(new URL(apiEndpoint).hostname);
   } catch {
     return false;
   }

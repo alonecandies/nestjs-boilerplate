@@ -2,7 +2,11 @@ import type { ConfigType } from '@nestjs/config';
 import { z } from 'zod';
 import { defineConfigNamespace } from '../define-config-namespace.js';
 import { zBool, zInt, zNodeEnv, zStr, zUrl } from '../env/env.helpers.js';
-import { isKnownLocalSecret, isLoopbackHost, parseUrl } from '../env/production-guards.js';
+import {
+  addKnownLocalSecretIssue,
+  isKnownLocalSecret,
+  isPublicHttpsUrl,
+} from '../env/production-guards.js';
 
 /** Development-only defaults so `bun run dev` works with zero `.env`. Rejected in production. */
 export const PLACEHOLDER_STRIPE_SECRET_KEY = 'sk_test_placeholder';
@@ -47,18 +51,13 @@ export const stripeEnvSchema = z
           message: `${key} must be set to a real Stripe value in production (the development placeholder is not allowed)`,
         });
       } else if (!env.ALLOW_KNOWN_LOCAL_SECRETS && isKnownLocalSecret(env[key])) {
-        ctx.addIssue({
-          code: 'custom',
-          path: [key],
-          message: `${key} is a publicly known local value (a docker-compose fallback): set the real Stripe value in production, or ALLOW_KNOWN_LOCAL_SECRETS=true for the local compose stack only`,
-        });
+        addKnownLocalSecretIssue(ctx, key);
       }
     }
     if (env.STRIPE_ALLOW_LOCAL_REDIRECTS) return;
     // Checkout sends the paying customer's browser to these URLs.
     for (const key of ['STRIPE_SUCCESS_URL', 'STRIPE_CANCEL_URL'] as const) {
-      const url = parseUrl(env[key]);
-      if (url?.protocol !== 'https:' || isLoopbackHost(url.hostname)) {
+      if (!isPublicHttpsUrl(env[key])) {
         ctx.addIssue({
           code: 'custom',
           path: [key],

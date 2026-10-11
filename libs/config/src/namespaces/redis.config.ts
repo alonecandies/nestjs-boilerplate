@@ -20,13 +20,19 @@ export const redisEnvSchema = z
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production' || env.REDIS_ALLOW_INSECURE) return;
     const url = parseUrl(env.REDIS_URL);
-    // The message never echoes the URL: it carries the password.
-    if (url?.protocol !== 'rediss:' || url.password === '') {
+    // Checked the way ioredis reads it: TLS only for a lowercase `rediss://` prefix, and a `tls` query
+    // parameter overrides that. The message never echoes the URL: it carries the password.
+    if (
+      !env.REDIS_URL.startsWith('rediss://') ||
+      url === undefined ||
+      url.password === '' ||
+      url.searchParams.has('tls')
+    ) {
       ctx.addIssue({
         code: 'custom',
         path: ['REDIS_URL'],
         message:
-          'REDIS_URL must use rediss:// (TLS) with a password or ACL user in production (rediss://user:password@host:6380), or set REDIS_ALLOW_INSECURE=true when the network layer secures it',
+          'REDIS_URL must start with a lowercase rediss:// (TLS) and carry a password or ACL user in production (rediss://user:password@host:6380, no tls= parameter), or set REDIS_ALLOW_INSECURE=true when the network layer secures it',
       });
     }
   })

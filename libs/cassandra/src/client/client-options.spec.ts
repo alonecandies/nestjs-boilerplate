@@ -1,9 +1,9 @@
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { CASSANDRA_CONSISTENCIES, cassandraConfig } from '@platform/config';
 import cassandra from 'cassandra-driver';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, onTestFinished } from 'vitest';
 import { DEFAULT_FETCH_SIZE } from '../cassandra.constants.js';
 import {
   assertCqlIdentifier,
@@ -79,6 +79,7 @@ describe('buildClientOptions', () => {
 
   it('builds client-to-node TLS from the PEM files, never skipping verification', () => {
     const dir = mkdtempSync(join(tmpdir(), 'cassandra-tls-'));
+    onTestFinished(() => rmSync(dir, { recursive: true, force: true }));
     const pem = (name: string): string => {
       const path = join(dir, name);
       writeFileSync(path, `-----BEGIN ${name}-----\n`);

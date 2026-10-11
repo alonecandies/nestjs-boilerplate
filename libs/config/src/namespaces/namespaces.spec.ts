@@ -1,4 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest';
+import { errorOf } from '../../test/error-of.js';
 import { ALL_CONFIG_NAMESPACES, CONFIG_NAMESPACES, validateAllEnv } from '../all-config.js';
 import { EnvValidationError } from '../env/parse-env.js';
 import { type AppConfig, appConfig } from './app.config.js';
@@ -18,21 +19,7 @@ import { mailConfig } from './mail.config.js';
 import { observabilityConfig } from './observability.config.js';
 import { redisConfig } from './redis.config.js';
 import { storageConfig } from './storage.config.js';
-import {
-  PLACEHOLDER_STRIPE_SECRET_KEY,
-  PLACEHOLDER_STRIPE_WEBHOOK_SECRET,
-  stripeConfig,
-} from './stripe.config.js';
-
-const errorOf = (fn: () => unknown): EnvValidationError => {
-  try {
-    fn();
-  } catch (error) {
-    if (error instanceof EnvValidationError) return error;
-    throw error;
-  }
-  throw new Error('expected an EnvValidationError');
-};
+import { stripeConfig } from './stripe.config.js';
 
 describe('config namespaces — defaults work with an EMPTY environment (local docker infra)', () => {
   it('every namespace parses {}', () => {
@@ -308,111 +295,6 @@ describe('app TRUST_PROXY', () => {
     for (const TRUST_PROXY of ['2', '10.0.0.0/33', '10.0.0.0/8, lb.internal']) {
       expect(errorOf(() => appConfig.parse({ TRUST_PROXY })).message).toContain('→ at TRUST_PROXY');
     }
-  });
-});
-
-describe('auth production secret guard', () => {
-  it('rejects the development default secrets in production', () => {
-    const error = errorOf(() => authConfig.parse({ NODE_ENV: 'production' }));
-    expect(error.message).toContain('→ at JWT_ACCESS_SECRET');
-    expect(error.message).toContain('→ at JWT_REFRESH_SECRET');
-    expect(error.message).not.toContain(DEV_JWT_ACCESS_SECRET);
-  });
-
-  it('rejects identical access and refresh secrets in production', () => {
-    const same = 's'.repeat(48);
-    const error = errorOf(() =>
-      authConfig.parse({
-        NODE_ENV: 'production',
-        JWT_ACCESS_SECRET: same,
-        JWT_REFRESH_SECRET: same,
-      }),
-    );
-    expect(error.message).toContain('must differ');
-  });
-
-  it('accepts strong distinct secrets in production and dev defaults elsewhere', () => {
-    expect(
-      authConfig.parse({
-        NODE_ENV: 'production',
-        JWT_ACCESS_SECRET: 'a'.repeat(48),
-        JWT_REFRESH_SECRET: 'b'.repeat(48),
-      }).accessSecret,
-    ).toBe('a'.repeat(48));
-    expect(authConfig.parse({ NODE_ENV: 'test' }).accessSecret).toBe(DEV_JWT_ACCESS_SECRET);
-  });
-});
-
-describe('stripe production placeholder guard', () => {
-  it('rejects the development placeholders in production (forged webhooks would verify)', () => {
-    const error = errorOf(() => stripeConfig.parse({ NODE_ENV: 'production' }));
-    expect(error.message).toContain('→ at STRIPE_SECRET_KEY');
-    expect(error.message).toContain('→ at STRIPE_WEBHOOK_SECRET');
-  });
-
-  it('accepts real values in production and the placeholders elsewhere', () => {
-    expect(
-      stripeConfig.parse({
-        NODE_ENV: 'production',
-        STRIPE_SECRET_KEY: 'sk_live_51Hx',
-        STRIPE_WEBHOOK_SECRET: 'whsec_1a2b3c',
-        STRIPE_SUCCESS_URL: 'https://app.example.com/billing/success',
-        STRIPE_CANCEL_URL: 'https://app.example.com/billing/cancel',
-      }).webhookSecret,
-    ).toBe('whsec_1a2b3c');
-    expect(stripeConfig.parse({ NODE_ENV: 'test' }).secretKey).toBe(PLACEHOLDER_STRIPE_SECRET_KEY);
-    expect(stripeConfig.parse({}).webhookSecret).toBe(PLACEHOLDER_STRIPE_WEBHOOK_SECRET);
-  });
-});
-
-describe('grpc TLS and production guard', () => {
-  const TLS = {
-    GRPC_TLS_CA_PATH: '/etc/grpc/ca.pem',
-    GRPC_TLS_CERT_PATH: '/etc/grpc/tls.crt',
-    GRPC_TLS_KEY_PATH: '/etc/grpc/tls.key',
-  };
-
-  it('refuses plaintext gRPC in production unless explicitly allowed', () => {
-    const error = errorOf(() => grpcConfig.parse({ NODE_ENV: 'production' }));
-    expect(error.message).toContain('→ at GRPC_TLS_CERT_PATH');
-    expect(error.message).toContain('GRPC_ALLOW_INSECURE');
-    expect(grpcConfig.parse({ NODE_ENV: 'production', GRPC_ALLOW_INSECURE: 'true' })).toMatchObject(
-      { tls: undefined, reflection: false },
-    );
-  });
-
-  it('builds mutual TLS from the PEM paths (client certs required by default)', () => {
-    expect(grpcConfig.parse({ NODE_ENV: 'production', ...TLS })).toMatchObject({
-      tls: {
-        caPath: '/etc/grpc/ca.pem',
-        certPath: '/etc/grpc/tls.crt',
-        keyPath: '/etc/grpc/tls.key',
-        requireClientCert: true,
-      },
-      reflection: false,
-    });
-  });
-
-  it('rejects a cert without a key, and required client certs without a CA', () => {
-    expect(errorOf(() => grpcConfig.parse({ GRPC_TLS_CERT_PATH: '/c' })).message).toContain(
-      '→ at GRPC_TLS_KEY_PATH',
-    );
-    expect(
-      errorOf(() => grpcConfig.parse({ GRPC_TLS_CERT_PATH: '/c', GRPC_TLS_KEY_PATH: '/k' }))
-        .message,
-    ).toContain('→ at GRPC_TLS_CA_PATH');
-    expect(
-      grpcConfig.parse({
-        GRPC_TLS_CERT_PATH: '/c',
-        GRPC_TLS_KEY_PATH: '/k',
-        GRPC_TLS_REQUIRE_CLIENT_CERT: 'false',
-      }).tls,
-    ).toEqual({ caPath: undefined, certPath: '/c', keyPath: '/k', requireClientCert: false });
-  });
-
-  it('keeps reflection on outside production unless disabled', () => {
-    expect(grpcConfig.parse({ NODE_ENV: 'test' }).reflection).toBe(true);
-    expect(grpcConfig.parse({ GRPC_REFLECTION: 'false' }).reflection).toBe(false);
   });
 });
 
