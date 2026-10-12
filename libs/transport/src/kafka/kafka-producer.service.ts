@@ -8,10 +8,9 @@ import {
 } from '@platform/common';
 import {
   createEventEnvelope,
-  type EventEnvelopeFor,
-  type EventPayload,
+  type EventContract,
+  type EventEnvelope,
   KAFKA_HEADERS,
-  type KafkaTopic,
 } from '@platform/contracts';
 import { ClsService } from 'nestjs-cls';
 import { lastValueFrom, type Observable } from 'rxjs';
@@ -40,9 +39,9 @@ export interface KafkaPublishOptions {
 }
 
 /** The record handed to `ClientKafka.emit()`. Nest's serializer JSON-encodes `value`. */
-export interface KafkaOutgoingRecord<T extends KafkaTopic = KafkaTopic> {
+export interface KafkaOutgoingRecord<TPayload = unknown> {
   key: string | null;
-  value: EventEnvelopeFor<T>;
+  value: EventEnvelope<TPayload>;
   headers: Record<string, string>;
 }
 
@@ -74,11 +73,12 @@ export interface KafkaProducerOptions {
 const DEFAULT_CONNECT_RETRY = { retries: 2, minDelayMs: 1_000, maxDelayMs: 5_000 } as const;
 
 /**
- * Publishes integration events as validated `EventEnvelope`s:
+ * Publishes integration events as validated `EventEnvelope`s. Every method takes the event's
+ * contract (exported by the producing domain's contracts package), never a topic name:
  * - `id` uuidv7 (time-ordered; consumers dedupe on it), `type` = topic, `version` = the topic's
  *   major, `occurredAt`, `source` = this service, `correlationId` from the options or nestjs-cls.
- * - The envelope is validated against the topic's zod schema BEFORE it leaves the process, so an
- *   invalid payload fails in the producer instead of filling every consumer's dead-letter topic.
+ * - The envelope is validated against the contract's zod schema BEFORE it leaves the process, so
+ *   an invalid payload fails in the producer instead of filling every consumer's dead-letter topic.
  * - Headers `x-event-type` and `x-correlation-id` let tools route and trace without parsing JSON.
  * - `acks: -1` + idempotent producer (see `createKafkaClientOptions`).
  *
@@ -127,14 +127,14 @@ export class KafkaProducer implements OnApplicationBootstrap {
     }
   }
 
-  /** Builds and validates the envelope for `topic`. Throws `InvalidEventException`. */
-  createEnvelope<T extends KafkaTopic>(
-    topic: T,
-    payload: EventPayload<T>,
+  /** Builds and validates the envelope for `contract`. Throws `InvalidEventException`. */
+  createEnvelope<TPayload>(
+    contract: EventContract<TPayload>,
+    payload: NoInfer<TPayload>,
     options: KafkaPublishOptions = {},
-  ): EventEnvelopeFor<T> {
+  ): EventEnvelope<TPayload> {
     try {
-      return createEventEnvelope(topic, payload, {
+      return createEventEnvelope(contract, payload, {
         id: options.eventId ?? generateId(),
         source: this.options.source,
         correlationId: options.correlationId ?? correlationIdFromCls(this.cls),
@@ -142,19 +142,19 @@ export class KafkaProducer implements OnApplicationBootstrap {
       });
     } catch (error) {
       if (error instanceof z.core.$ZodError) {
-        throw InvalidEventException.forTopic(topic, error.issues, { cause: error });
+        throw InvalidEventException.forTopic(contract.topic, error.issues, { cause: error });
       }
       throw error;
     }
   }
 
   /** The record `publish()` would send: key, validated envelope and headers. */
-  createRecord<T extends KafkaTopic>(
-    topic: T,
-    payload: EventPayload<T>,
+  createRecord<TPayload>(
+    contract: EventContract<TPayload>,
+    payload: NoInfer<TPayload>,
     options: KafkaPublishOptions = {},
-  ): KafkaOutgoingRecord<T> {
-    const envelope = this.createEnvelope(topic, payload, options);
+  ): KafkaOutgoingRecord<TPayload> {
+    const envelope = this.createEnvelope(contract, payload, options);
     const headers: Record<string, string> = { [KAFKA_HEADERS.EVENT_TYPE]: envelope.type };
     if (envelope.correlationId !== undefined) {
       headers[KAFKA_HEADERS.CORRELATION_ID] = envelope.correlationId;
@@ -163,12 +163,13 @@ export class KafkaProducer implements OnApplicationBootstrap {
   }
 
   /** Validates and publishes one event. Resolves with the envelope that was sent. */
-  async publish<T extends KafkaTopic>(
-    topic: T,
-    payload: EventPayload<T>,
+  async publish<TPayload>(
+    contract: EventContract<TPayload>,
+    payload: NoInfer<TPayload>,
     options: KafkaPublishOptions = {},
-  ): Promise<EventEnvelopeFor<T>> {
-    const record = this.createRecord(topic, payload, options);
+  ): Promise<EventEnvelope<TPayload>> {
+    const { topic } = contract;
+    const record = this.createRecord(contract, payload, options);
     try {
       await this.dispatch(topic, record);
     } catch (error) {
@@ -183,9 +184,9 @@ export class KafkaProducer implements OnApplicationBootstrap {
   }
 
   /** Sends a validated record. `FakeKafkaProducer` overrides this to record instead. */
-  protected async dispatch<T extends KafkaTopic>(
-    topic: T,
-    record: KafkaOutgoingRecord<T>,
+  protected async dispatch<TPayload>(
+    topic: string,
+    record: KafkaOutgoingRecord<TPayload>,
   ): Promise<void> {
     // emit() is hot (already dispatched); awaiting it surfaces broker errors and the ack.
     await lastValueFrom(this.client.emit(topic, record), { defaultValue: undefined });

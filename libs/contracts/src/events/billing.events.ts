@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { defineEventContract, type EventContract } from './event-contract.js';
 
 /** Payload of `billing.payment-succeeded.v1`: a Stripe Checkout Session was paid. */
 export const paymentSucceededPayload = z.object({
@@ -13,3 +14,9 @@ export const paymentSucceededPayload = z.object({
 });
 
 export type PaymentSucceededPayload = z.infer<typeof paymentSucceededPayload>;
+
+/** A Checkout Session was paid. Produced by billing; notifications sends the receipt. */
+export const PAYMENT_SUCCEEDED_EVENT: EventContract<PaymentSucceededPayload> = defineEventContract(
+  'billing.payment-succeeded.v1',
+  paymentSucceededPayload,
+);

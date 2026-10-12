@@ -3,6 +3,7 @@ import { NestFactory } from '@nestjs/core';
 import { ClientKafka } from '@nestjs/microservices';
 import { AppConfigModule, appConfig } from '@platform/config';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { FIXTURE_USER_REGISTERED_EVENT } from '../../test/fixtures/fixture.events.js';
 import { KAFKA_PRODUCER_CLIENT, KAFKA_PRODUCER_OPTIONS } from './kafka.constants.js';
 import { KafkaHealthIndicator } from './kafka.health.js';
 import { KafkaProducerModule } from './kafka-producer.module.js';
@@ -43,7 +44,7 @@ describe('KafkaProducerModule (DI wiring, no broker)', () => {
   });
 
   it('builds valid records without a broker', () => {
-    const record = app.get(KafkaProducer).createRecord('identity.user-registered.v1', {
+    const record = app.get(KafkaProducer).createRecord(FIXTURE_USER_REGISTERED_EVENT, {
       userId: '0199d1c6-5d7e-7a4e-8c3b-2f1e0d9c8b7a',
       email: 'ada@example.com',
       displayName: 'Ada',

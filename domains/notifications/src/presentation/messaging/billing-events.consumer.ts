@@ -1,6 +1,6 @@
 import { CommandBus } from '@nestjs/cqrs';
 import { Payload } from '@nestjs/microservices';
-import { type EventEnvelopeFor, KAFKA_TOPICS } from '@platform/contracts';
+import { type EventEnvelopeOf, PAYMENT_SUCCEEDED_EVENT } from '@platform/contracts';
 import {
   KafkaConsumerController,
   KafkaEventPattern,
@@ -8,7 +8,7 @@ import {
 } from '@platform/transport';
 import { SendPaymentReceiptCommand } from '../../application/commands/send-payment-receipt/send-payment-receipt.command.js';
 
-type PaymentSucceededEnvelope = EventEnvelopeFor<typeof KAFKA_TOPICS.PAYMENT_SUCCEEDED>;
+type PaymentSucceededEnvelope = EventEnvelopeOf<typeof PAYMENT_SUCCEEDED_EVENT>;
 
 /**
  * billing → notifications: a receipt notification + receipt mail per succeeded payment.
@@ -18,9 +18,9 @@ type PaymentSucceededEnvelope = EventEnvelopeFor<typeof KAFKA_TOPICS.PAYMENT_SUC
 export class BillingEventsConsumer {
   constructor(private readonly commandBus: CommandBus) {}
 
-  @KafkaEventPattern(KAFKA_TOPICS.PAYMENT_SUCCEEDED)
+  @KafkaEventPattern(PAYMENT_SUCCEEDED_EVENT)
   async onPaymentSucceeded(
-    @Payload(new ParseEventEnvelopePipe(KAFKA_TOPICS.PAYMENT_SUCCEEDED))
+    @Payload(new ParseEventEnvelopePipe(PAYMENT_SUCCEEDED_EVENT))
     event: PaymentSucceededEnvelope,
   ): Promise<void> {
     const { paymentId, userId, amountTotal, currency, paidAt } = event.payload;

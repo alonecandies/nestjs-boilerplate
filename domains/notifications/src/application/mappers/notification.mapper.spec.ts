@@ -1,4 +1,8 @@
-import { KAFKA_TOPICS, NOTIFICATION_TYPES, parseEventEnvelope } from '@platform/contracts';
+import {
+  NOTIFICATION_CREATED_EVENT,
+  NOTIFICATION_TYPES,
+  parseEventEnvelope,
+} from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { makeNotificationProps } from '../../../test/support/fixtures.js';
 import { NOTIFICATION_KINDS } from '../../domain/notification.types.js';
@@ -49,15 +53,13 @@ describe('notification mapper', () => {
     expect(payload.createdAt).toBe(props.createdAt.toISOString());
     const envelope = {
       id: props.id,
-      type: KAFKA_TOPICS.NOTIFICATION_CREATED,
+      type: NOTIFICATION_CREATED_EVENT.topic,
       version: 1,
       occurredAt: props.createdAt.toISOString(),
       source: 'test',
       payload,
     };
-    expect(parseEventEnvelope(KAFKA_TOPICS.NOTIFICATION_CREATED, envelope).payload).toEqual(
-      payload,
-    );
+    expect(parseEventEnvelope(NOTIFICATION_CREATED_EVENT, envelope).payload).toEqual(payload);
   });
 
   it('round-trips a Kafka payload back into an unread contract notification', () => {

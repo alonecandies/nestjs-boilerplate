@@ -3,7 +3,7 @@ import { CqrsModule } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
 import { PasswordHasher, Role } from '@platform/auth';
 import { provideCommonEnhancers } from '@platform/common';
-import { KAFKA_TOPICS } from '@platform/contracts';
+import { USER_REGISTERED_EVENT } from '@platform/contracts';
 import { DRIZZLE, TransactionHost } from '@platform/database';
 import { AppCacheService } from '@platform/redis';
 import { createFastifyTestApp } from '@platform/testing';
@@ -120,8 +120,8 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
     const sessionInsert = database.executed[2];
     expect(sessionInsert?.params).not.toContain(res.json<{ refreshToken: string }>().refreshToken);
 
-    await vi.waitFor(() => expect(kafka.published(KAFKA_TOPICS.USER_REGISTERED)).toHaveLength(1));
-    expect(kafka.envelopes(KAFKA_TOPICS.USER_REGISTERED)[0]?.payload).toMatchObject({
+    await vi.waitFor(() => expect(kafka.published(USER_REGISTERED_EVENT)).toHaveLength(1));
+    expect(kafka.envelopes(USER_REGISTERED_EVENT)[0]?.payload).toMatchObject({
       userId: body.user.id,
       email: 'grace@example.com',
       displayName: 'Grace',

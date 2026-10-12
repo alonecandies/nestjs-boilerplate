@@ -1,5 +1,5 @@
 import { Inject, Injectable, Optional } from '@nestjs/common';
-import type { EventEnvelopeFor, KafkaTopic } from '@platform/contracts';
+import type { EventContract, EventEnvelope } from '@platform/contracts';
 import { ClsService } from 'nestjs-cls';
 import { EMPTY } from 'rxjs';
 import { KAFKA_PRODUCER_OPTIONS } from '../kafka.constants.js';
@@ -11,9 +11,8 @@ import {
 } from '../kafka-producer.service.js';
 
 /** One record captured by `FakeKafkaProducer`. */
-export interface PublishedKafkaRecord<T extends KafkaTopic = KafkaTopic>
-  extends KafkaOutgoingRecord<T> {
-  topic: T;
+export interface PublishedKafkaRecord<TPayload = unknown> extends KafkaOutgoingRecord<TPayload> {
+  topic: string;
 }
 
 /** Never used: `FakeKafkaProducer` overrides `dispatch()`, the only caller of the emitter. */
@@ -30,7 +29,7 @@ const DETACHED_EMITTER: KafkaEventEmitter = {
  * ```ts
  * const producer = new FakeKafkaProducer();
  * moduleBuilder.overrideProvider(KafkaProducer).useValue(producer);
- * expect(producer.published(KAFKA_TOPICS.USER_REGISTERED)[0]?.value.payload.userId).toBe(id);
+ * expect(producer.published(ORDER_PLACED_EVENT)[0]?.value.payload.orderId).toBe(id);
  * ```
  *
  * `failNextWith(error)` makes the next publish fail like a broker error would.
@@ -55,17 +54,17 @@ export class FakeKafkaProducer extends KafkaProducer {
     return Promise.resolve(true);
   }
 
-  /** Records published so far, optionally only those of `topic`. */
-  published<T extends KafkaTopic>(topic?: T): PublishedKafkaRecord<T>[] {
-    if (topic === undefined) return [...this.records] as PublishedKafkaRecord<T>[];
+  /** Records published so far, optionally only those of `contract`'s topic. */
+  published<TPayload>(contract?: EventContract<TPayload>): PublishedKafkaRecord<TPayload>[] {
+    if (contract === undefined) return [...this.records] as PublishedKafkaRecord<TPayload>[];
     return this.records.filter(
-      (record): record is PublishedKafkaRecord<T> => record.topic === topic,
+      (record): record is PublishedKafkaRecord<TPayload> => record.topic === contract.topic,
     );
   }
 
-  /** Envelopes published to `topic`, in order. */
-  envelopes<T extends KafkaTopic>(topic: T): EventEnvelopeFor<T>[] {
-    return this.published(topic).map((record) => record.value);
+  /** Envelopes published to `contract`'s topic, in order. */
+  envelopes<TPayload>(contract: EventContract<TPayload>): EventEnvelope<TPayload>[] {
+    return this.published(contract).map((record) => record.value);
   }
 
   /** Makes the next `publish()` reject as if the broker had failed with `error`. */
@@ -78,9 +77,9 @@ export class FakeKafkaProducer extends KafkaProducer {
     this.pendingFailure = undefined;
   }
 
-  protected override dispatch<T extends KafkaTopic>(
-    topic: T,
-    record: KafkaOutgoingRecord<T>,
+  protected override dispatch<TPayload>(
+    topic: string,
+    record: KafkaOutgoingRecord<TPayload>,
   ): Promise<void> {
     if (this.pendingFailure !== undefined) {
       const failure = this.pendingFailure;

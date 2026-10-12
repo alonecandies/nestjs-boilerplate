@@ -1,6 +1,6 @@
 import { CommandBus } from '@nestjs/cqrs';
 import { Payload } from '@nestjs/microservices';
-import { type EventEnvelopeFor, KAFKA_TOPICS } from '@platform/contracts';
+import { type EventEnvelopeOf, USER_REGISTERED_EVENT } from '@platform/contracts';
 import {
   KafkaConsumerController,
   KafkaEventPattern,
@@ -8,7 +8,7 @@ import {
 } from '@platform/transport';
 import { WelcomeUserCommand } from '../../application/commands/welcome-user/welcome-user.command.js';
 
-type UserRegisteredEnvelope = EventEnvelopeFor<typeof KAFKA_TOPICS.USER_REGISTERED>;
+type UserRegisteredEnvelope = EventEnvelopeOf<typeof USER_REGISTERED_EVENT>;
 
 /**
  * identity → notifications. `@KafkaConsumerController()` = controller-scoped
@@ -22,9 +22,9 @@ type UserRegisteredEnvelope = EventEnvelopeFor<typeof KAFKA_TOPICS.USER_REGISTER
 export class IdentityEventsConsumer {
   constructor(private readonly commandBus: CommandBus) {}
 
-  @KafkaEventPattern(KAFKA_TOPICS.USER_REGISTERED)
+  @KafkaEventPattern(USER_REGISTERED_EVENT)
   async onUserRegistered(
-    @Payload(new ParseEventEnvelopePipe(KAFKA_TOPICS.USER_REGISTERED))
+    @Payload(new ParseEventEnvelopePipe(USER_REGISTERED_EVENT))
     event: UserRegisteredEnvelope,
   ): Promise<void> {
     const { userId, email, displayName, registeredAt } = event.payload;

@@ -2,7 +2,7 @@ import { z } from 'zod';
 
 /**
  * Envelope fields shared by every integration event. Kept as a plain shape (not a schema) so each
- * topic's envelope schema is built ONCE at module load (see event-registry.ts) — never per message.
+ * contract's envelope schema is built ONCE (see `eventEnvelopeSchemaFor`) — never per message.
  */
 const envelopeShape = {
   id: z.uuid(),

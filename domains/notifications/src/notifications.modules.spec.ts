@@ -4,7 +4,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { AuthModule } from '@platform/auth';
 import { CASSANDRA_CLIENT, type CassandraClient } from '@platform/cassandra';
 import { AppConfigModule } from '@platform/config';
-import { KAFKA_TOPICS } from '@platform/contracts';
+import { NOTIFICATION_CREATED_EVENT } from '@platform/contracts';
 import { GraphqlPubSubModule } from '@platform/graphql';
 import { MailService } from '@platform/mailer';
 import { AppThrottlerModule } from '@platform/redis';
@@ -102,9 +102,9 @@ describe('notifications modules (composition, no infrastructure)', () => {
     );
     // The saga publishes asynchronously on the event stream.
     await vi.waitFor(() =>
-      expect(infra.kafka.envelopes(KAFKA_TOPICS.NOTIFICATION_CREATED)).toHaveLength(1),
+      expect(infra.kafka.envelopes(NOTIFICATION_CREATED_EVENT)).toHaveLength(1),
     );
-    expect(infra.kafka.envelopes(KAFKA_TOPICS.NOTIFICATION_CREATED)[0]).toMatchObject({
+    expect(infra.kafka.envelopes(NOTIFICATION_CREATED_EVENT)[0]).toMatchObject({
       id: notification.id,
       payload: { notificationId: notification.id, userId: USER_ID, type: 'welcome' },
     });

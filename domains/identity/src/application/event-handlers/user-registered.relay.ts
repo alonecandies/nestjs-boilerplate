@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { EventsHandler, type IEventHandler } from '@nestjs/cqrs';
-import { KAFKA_TOPICS } from '@platform/contracts';
+import { USER_REGISTERED_EVENT } from '@platform/contracts';
 import { KafkaProducer } from '@platform/transport';
 import { UserRegisteredEvent } from '../../domain/events/user-registered.event.js';
 
@@ -22,7 +22,7 @@ export class UserRegisteredRelay implements IEventHandler<UserRegisteredEvent> {
   async handle(event: UserRegisteredEvent): Promise<void> {
     try {
       await this.kafka.publish(
-        KAFKA_TOPICS.USER_REGISTERED,
+        USER_REGISTERED_EVENT,
         {
           userId: event.userId,
           email: event.email,
@@ -34,7 +34,7 @@ export class UserRegisteredRelay implements IEventHandler<UserRegisteredEvent> {
     } catch (error) {
       this.logger.error(
         { err: error, userId: event.userId, eventId: event.eventId },
-        `Failed to publish ${KAFKA_TOPICS.USER_REGISTERED}`,
+        `Failed to publish ${USER_REGISTERED_EVENT.topic}`,
       );
     }
   }

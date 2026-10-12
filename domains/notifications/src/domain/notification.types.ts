@@ -1,7 +1,7 @@
 /**
- * Notification kinds. The same list as `NOTIFICATION_TYPES` in `@platform/contracts` (the Kafka
- * `notification-created` payload); the mapper asserts both stay equal at compile time. The domain
- * keeps its own copy because it must not depend on wire contracts.
+ * Notification kinds. The same list as `NOTIFICATION_TYPES` in the notifications contracts (the
+ * Kafka `notification-created` payload); the mapper asserts both stay equal at compile time. The
+ * domain keeps its own copy because it must not depend on wire contracts.
  */
 export const NOTIFICATION_KINDS = ['welcome', 'payment_receipt', 'digest', 'system'] as const;
 

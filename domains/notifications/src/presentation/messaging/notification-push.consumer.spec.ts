@@ -3,7 +3,7 @@ import { generateId } from '@platform/common';
 import { redisConfig } from '@platform/config';
 import {
   createEventEnvelope,
-  KAFKA_TOPICS,
+  NOTIFICATION_CREATED_EVENT,
   type NotificationCreatedPayload,
 } from '@platform/contracts';
 import { GRAPHQL_PUB_SUB } from '@platform/graphql';
@@ -72,12 +72,12 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
   });
 
   it('pushes to the user room (REST shape) and publishes the GraphQL trigger', async () => {
-    const envelope = createEventEnvelope(KAFKA_TOPICS.NOTIFICATION_CREATED, payload, {
+    const envelope = createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, {
       id: NOTIFICATION_ID,
       source: 'notifications-service',
     });
 
-    await server.dispatch(KAFKA_TOPICS.NOTIFICATION_CREATED, envelope, USER_ID);
+    await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, envelope, USER_ID);
 
     expect(gateway.pushToUser).toHaveBeenCalledWith(USER_ID, {
       id: NOTIFICATION_ID,
@@ -94,20 +94,20 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
   });
 
   it('dead-letters a malformed event and pushes nothing', async () => {
-    await server.dispatch(KAFKA_TOPICS.NOTIFICATION_CREATED, { hello: 'world' });
+    await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, { hello: 'world' });
     expect(gateway.pushToUser).not.toHaveBeenCalled();
     expect(publish).not.toHaveBeenCalled();
-    expect(server.deadLetters()[0]?.topic).toBe(`${KAFKA_TOPICS.NOTIFICATION_CREATED}.dlq`);
+    expect(server.deadLetters()[0]?.topic).toBe(`${NOTIFICATION_CREATED_EVENT.topic}.dlq`);
   });
 
   it('pushes a redelivered event (same envelope id) only once', async () => {
-    const envelope = createEventEnvelope(KAFKA_TOPICS.NOTIFICATION_CREATED, payload, {
+    const envelope = createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, {
       id: generateId(),
       source: 'notifications-service',
     });
 
-    await server.dispatch(KAFKA_TOPICS.NOTIFICATION_CREATED, envelope, USER_ID);
-    await server.dispatch(KAFKA_TOPICS.NOTIFICATION_CREATED, envelope, USER_ID);
+    await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, envelope, USER_ID);
+    await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, envelope, USER_ID);
 
     expect(gateway.pushToUser).toHaveBeenCalledOnce();
     expect(publish).toHaveBeenCalledOnce();
@@ -116,12 +116,12 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
 
   it('fails open: pushes anyway when the dedupe store is unavailable', async () => {
     vi.spyOn(redis, 'set').mockRejectedValueOnce(new Error('Connection is closed.'));
-    const envelope = createEventEnvelope(KAFKA_TOPICS.NOTIFICATION_CREATED, payload, {
+    const envelope = createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, {
       id: generateId(),
       source: 'notifications-service',
     });
 
-    await server.dispatch(KAFKA_TOPICS.NOTIFICATION_CREATED, envelope, USER_ID);
+    await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, envelope, USER_ID);
 
     expect(gateway.pushToUser).toHaveBeenCalledOnce();
     expect(publish).toHaveBeenCalledOnce();

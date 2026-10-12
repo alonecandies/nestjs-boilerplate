@@ -1,20 +1,20 @@
 import type { PipeTransform } from '@nestjs/common';
 import {
-  type EventEnvelopeFor,
-  isKafkaTopic,
-  type KafkaTopic,
+  type EventContract,
+  type EventEnvelope,
+  eventEnvelopeSchemaFor,
   safeParseEventEnvelope,
   topicVersion,
 } from '@platform/contracts';
 import { InvalidEventException } from './kafka.errors.js';
 
 /**
- * Validates a Kafka payload against the envelope + payload schema of `topic` and returns the
+ * Validates a Kafka payload against the envelope + payload schema of `contract` and returns the
  * typed envelope:
  *
  * ```ts
- * @KafkaEventPattern(KAFKA_TOPICS.USER_REGISTERED)
- * onUserRegistered(@Payload(new ParseEventEnvelopePipe(KAFKA_TOPICS.USER_REGISTERED)) event: EventEnvelopeFor<'identity.user-registered.v1'>)
+ * @KafkaEventPattern(ORDER_PLACED_EVENT)
+ * onOrderPlaced(@Payload(new ParseEventEnvelopePipe(ORDER_PLACED_EVENT)) event: EventEnvelopeOf<typeof ORDER_PLACED_EVENT>)
  * ```
  *
  * Besides the schema, it checks that `type` and `version` match the topic: a record produced for
@@ -22,19 +22,22 @@ import { InvalidEventException } from './kafka.errors.js';
  * `InvalidEventException`, which `KafkaDeadLetterFilter` moves to `<topic>.dlq` (a schema error
  * never succeeds on retry). Payload schemas stay tolerant readers: unknown keys are stripped.
  */
-export class ParseEventEnvelopePipe<T extends KafkaTopic>
-  implements PipeTransform<unknown, EventEnvelopeFor<T>>
+export class ParseEventEnvelopePipe<TPayload>
+  implements PipeTransform<unknown, EventEnvelope<TPayload>>
 {
+  private readonly topic: string;
   private readonly version: number;
 
-  constructor(private readonly topic: T) {
-    // Fail at bootstrap (decorator evaluation), not on the first message.
-    if (!isKafkaTopic(topic)) throw new Error(`Unknown Kafka topic "${String(topic)}"`);
-    this.version = topicVersion(topic);
+  constructor(private readonly contract: EventContract<TPayload>) {
+    // Fail at bootstrap (decorator evaluation), not on the first message: a topic without a
+    // `.v<major>` suffix throws here, and the envelope schema is built once, now.
+    this.topic = contract.topic;
+    this.version = topicVersion(contract.topic);
+    eventEnvelopeSchemaFor(contract);
   }
 
-  transform(value: unknown): EventEnvelopeFor<T> {
-    const result = safeParseEventEnvelope(this.topic, value);
+  transform(value: unknown): EventEnvelope<TPayload> {
+    const result = safeParseEventEnvelope(this.contract, value);
     if (!result.success) {
       throw InvalidEventException.forTopic(this.topic, result.error.issues, {
         cause: result.error,

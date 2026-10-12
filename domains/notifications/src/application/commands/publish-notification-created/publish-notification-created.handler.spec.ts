@@ -1,4 +1,4 @@
-import { KAFKA_TOPICS } from '@platform/contracts';
+import { NOTIFICATION_CREATED_EVENT } from '@platform/contracts';
 import { FakeKafkaProducer } from '@platform/transport';
 import { describe, expect, it } from 'vitest';
 import { makeNotificationProps } from '../../../../test/support/fixtures.js';
@@ -15,11 +15,11 @@ describe('PublishNotificationCreatedHandler', () => {
     );
 
     expect(published).toBe(true);
-    const [record] = kafka.published(KAFKA_TOPICS.NOTIFICATION_CREATED);
+    const [record] = kafka.published(NOTIFICATION_CREATED_EVENT);
     expect(record?.key).toBe(notification.userId);
     expect(record?.value).toMatchObject({
       id: notification.id,
-      type: KAFKA_TOPICS.NOTIFICATION_CREATED,
+      type: NOTIFICATION_CREATED_EVENT.topic,
       source: 'notifications-test',
       occurredAt: notification.createdAt.toISOString(),
       payload: {

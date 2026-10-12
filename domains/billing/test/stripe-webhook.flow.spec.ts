@@ -9,7 +9,7 @@ import { Test } from '@nestjs/testing';
 import { AuthModule } from '@platform/auth';
 import { provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
-import { KAFKA_TOPICS } from '@platform/contracts';
+import { PAYMENT_SUCCEEDED_EVENT } from '@platform/contracts';
 import { makeCounterProvider } from '@platform/observability';
 import { StripeService } from '@platform/payments';
 import { createFastifyTestApp } from '@platform/testing';
@@ -133,8 +133,8 @@ describe('Stripe webhook flow (raw body → signature → exactly-once → Kafka
       duplicate: false,
     });
     expect(store.payment(payment.id)?.status).toBe(PaymentStatus.Succeeded);
-    await vi.waitFor(() => expect(kafka.published(KAFKA_TOPICS.PAYMENT_SUCCEEDED)).toHaveLength(1));
-    expect(kafka.envelopes(KAFKA_TOPICS.PAYMENT_SUCCEEDED)[0]?.payload).toMatchObject({
+    await vi.waitFor(() => expect(kafka.published(PAYMENT_SUCCEEDED_EVENT)).toHaveLength(1));
+    expect(kafka.envelopes(PAYMENT_SUCCEEDED_EVENT)[0]?.payload).toMatchObject({
       paymentId: payment.id,
       amountTotal: 4_900,
       currency: 'eur',
@@ -148,6 +148,6 @@ describe('Stripe webhook flow (raw body → signature → exactly-once → Kafka
     expect(res.statusCode).toBe(200);
     expect(res.json()).toMatchObject({ duplicate: true });
     await new Promise((resolve) => setImmediate(resolve));
-    expect(kafka.published(KAFKA_TOPICS.PAYMENT_SUCCEEDED)).toHaveLength(1);
+    expect(kafka.published(PAYMENT_SUCCEEDED_EVENT)).toHaveLength(1);
   });
 });

@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { Payload } from '@nestjs/microservices';
-import { type EventEnvelopeFor, KAFKA_TOPICS } from '@platform/contracts';
+import { type EventEnvelopeOf, NOTIFICATION_CREATED_EVENT } from '@platform/contracts';
 import { type GraphqlPubSub, InjectPubSub } from '@platform/graphql';
 import { InjectRedis, RedisKeyService } from '@platform/redis';
 import {
@@ -15,7 +15,7 @@ import { toNotificationResponse } from '../http/notifications.dto.js';
 import { toNotificationView } from '../notification-view.js';
 import { NotificationsGateway } from '../ws/notifications.gateway.js';
 
-type NotificationCreatedEnvelope = EventEnvelopeFor<typeof KAFKA_TOPICS.NOTIFICATION_CREATED>;
+type NotificationCreatedEnvelope = EventEnvelopeOf<typeof NOTIFICATION_CREATED_EVENT>;
 
 /**
  * How long an envelope id is remembered for push deduplication. It covers Kafka redeliveries and
@@ -45,9 +45,9 @@ export class NotificationPushConsumer {
     private readonly keys: RedisKeyService,
   ) {}
 
-  @KafkaEventPattern(KAFKA_TOPICS.NOTIFICATION_CREATED)
+  @KafkaEventPattern(NOTIFICATION_CREATED_EVENT)
   async onNotificationCreated(
-    @Payload(new ParseEventEnvelopePipe(KAFKA_TOPICS.NOTIFICATION_CREATED))
+    @Payload(new ParseEventEnvelopePipe(NOTIFICATION_CREATED_EVENT))
     event: NotificationCreatedEnvelope,
   ): Promise<void> {
     if (!(await this.claimFirstDelivery(event.id))) {

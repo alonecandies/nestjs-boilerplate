@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { generateId } from '@platform/common';
-import { KAFKA_TOPICS } from '@platform/contracts';
+import { PAYMENT_SUCCEEDED_EVENT } from '@platform/contracts';
 import { FakeKafkaProducer } from '@platform/transport';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PaymentSucceededEvent } from '../../domain/events/payment-succeeded.event.js';
@@ -27,11 +27,11 @@ describe('PaymentSucceededRelay', () => {
   it('publishes billing.payment-succeeded.v1 keyed by user, envelope id = domain event id', async () => {
     await relay.handle(event);
 
-    const [record] = kafka.published(KAFKA_TOPICS.PAYMENT_SUCCEEDED);
+    const [record] = kafka.published(PAYMENT_SUCCEEDED_EVENT);
     expect(record?.key).toBe(event.userId);
     expect(record?.value).toMatchObject({
       id: event.eventId,
-      type: KAFKA_TOPICS.PAYMENT_SUCCEEDED,
+      type: PAYMENT_SUCCEEDED_EVENT.topic,
       source: 'billing-test',
       occurredAt: '2026-09-04T08:30:00.000Z',
       payload: {
@@ -51,7 +51,7 @@ describe('PaymentSucceededRelay', () => {
 
     await expect(relay.handle(event)).resolves.toBeUndefined();
 
-    expect(kafka.published(KAFKA_TOPICS.PAYMENT_SUCCEEDED)).toEqual([]);
+    expect(kafka.published(PAYMENT_SUCCEEDED_EVENT)).toEqual([]);
     expect(logError).toHaveBeenCalledWith(
       expect.stringContaining(`payment ${event.paymentId}`),
       expect.any(String),

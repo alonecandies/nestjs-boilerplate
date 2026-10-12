@@ -15,7 +15,7 @@
 
 export * from './events/billing.events.js';
 export * from './events/envelope.js';
-export * from './events/event-registry.js';
+export * from './events/event-contract.js';
 export * from './events/identity.events.js';
 export * from './events/kafka-headers.constants.js';
 export * from './events/notifications.events.js';

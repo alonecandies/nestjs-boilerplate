@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { defineEventContract, type EventContract } from './event-contract.js';
 
 /** Notification kinds. The gRPC `Notification.type` field carries the same values as a string. */
 export const NOTIFICATION_TYPES = ['welcome', 'payment_receipt', 'digest', 'system'] as const;
@@ -17,3 +18,7 @@ export const notificationCreatedPayload = z.object({
 });
 
 export type NotificationCreatedPayload = z.infer<typeof notificationCreatedPayload>;
+
+/** An inbox entry was stored. Produced by notifications; the edges push it to sockets. */
+export const NOTIFICATION_CREATED_EVENT: EventContract<NotificationCreatedPayload> =
+  defineEventContract('notifications.notification-created.v1', notificationCreatedPayload);

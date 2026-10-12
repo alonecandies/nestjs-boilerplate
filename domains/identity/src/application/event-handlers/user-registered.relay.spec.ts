@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { generateId } from '@platform/common';
-import { KAFKA_TOPICS } from '@platform/contracts';
+import { USER_REGISTERED_EVENT } from '@platform/contracts';
 import { FakeKafkaProducer } from '@platform/transport';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UserRegisteredEvent } from '../../domain/events/user-registered.event.js';
@@ -26,11 +26,11 @@ describe('UserRegisteredRelay', () => {
   it('publishes identity.user-registered.v1 keyed by user id, envelope id = domain event id', async () => {
     await relay.handle(event);
 
-    const [record] = kafka.published(KAFKA_TOPICS.USER_REGISTERED);
+    const [record] = kafka.published(USER_REGISTERED_EVENT);
     expect(record?.key).toBe(event.userId);
     expect(record?.value).toMatchObject({
       id: event.eventId,
-      type: KAFKA_TOPICS.USER_REGISTERED,
+      type: USER_REGISTERED_EVENT.topic,
       version: 1,
       source: 'identity-service',
       occurredAt: occurredAt.toISOString(),
@@ -51,7 +51,7 @@ describe('UserRegisteredRelay', () => {
 
     expect(error).toHaveBeenCalledWith(
       expect.objectContaining({ userId: event.userId, eventId: event.eventId }),
-      expect.stringContaining(KAFKA_TOPICS.USER_REGISTERED),
+      expect.stringContaining(USER_REGISTERED_EVENT.topic),
     );
     expect(kafka.records).toEqual([]);
   });

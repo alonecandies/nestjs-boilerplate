@@ -8,10 +8,11 @@ import { DomainValidationException, EntityNotFoundException, generateId } from '
 import { type GrpcConfig, grpcConfig } from '@platform/config';
 import {
   createEventEnvelope,
-  KAFKA_TOPICS,
+  NOTIFICATION_CREATED_EVENT,
   NOTIFICATIONS_GRPC_PACKAGE,
   type NotificationPage,
   type NotificationsServiceClient,
+  USER_REGISTERED_EVENT,
 } from '@platform/contracts';
 import { MAIL_QUEUE, MailProcessor } from '@platform/mailer';
 import { REDIS_CLIENT } from '@platform/redis';
@@ -273,7 +274,7 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
     it('identity.user-registered.v1 → recipient + inbox rows, welcome mail queued, event published', async () => {
       const userId = generateId();
       const envelope = createEventEnvelope(
-        KAFKA_TOPICS.USER_REGISTERED,
+        USER_REGISTERED_EVENT,
         {
           userId,
           email: 'grace@example.com',
@@ -283,7 +284,7 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
         { id: generateId(), source: 'identity-service' },
       );
 
-      await kafka.deliver(KAFKA_TOPICS.USER_REGISTERED, envelope, userId);
+      await kafka.deliver(USER_REGISTERED_EVENT.topic, envelope, userId);
 
       const writes = store.executed.filter(({ params }) => params[0] === userId).map((q) => q.cql);
       expect(writes).toEqual([
@@ -297,9 +298,9 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
       );
       // The saga publishes asynchronously on the event stream.
       await vi.waitFor(() =>
-        expect(kafkaProducer.envelopes(KAFKA_TOPICS.NOTIFICATION_CREATED)).toHaveLength(1),
+        expect(kafkaProducer.envelopes(NOTIFICATION_CREATED_EVENT)).toHaveLength(1),
       );
-      expect(kafkaProducer.envelopes(KAFKA_TOPICS.NOTIFICATION_CREATED)[0]).toMatchObject({
+      expect(kafkaProducer.envelopes(NOTIFICATION_CREATED_EVENT)[0]).toMatchObject({
         source: 'notifications-service',
         payload: { userId, type: 'welcome' },
       });
@@ -308,11 +309,11 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
 
     it('a malformed envelope is dead-lettered (offset commits; the consumer never throws)', async () => {
       await expect(
-        kafka.deliver(KAFKA_TOPICS.USER_REGISTERED, { id: 'nope', payload: {} }),
+        kafka.deliver(USER_REGISTERED_EVENT.topic, { id: 'nope', payload: {} }),
       ).resolves.toBeUndefined();
 
       expect(kafka.deadLetters()).toEqual([
-        expect.objectContaining({ topic: `${KAFKA_TOPICS.USER_REGISTERED}.dlq` }),
+        expect.objectContaining({ topic: `${USER_REGISTERED_EVENT.topic}.dlq` }),
       ]);
       expect(kafkaProducer.records).toEqual([]);
     });

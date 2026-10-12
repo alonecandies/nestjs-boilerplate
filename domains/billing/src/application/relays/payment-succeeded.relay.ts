@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { EventsHandler, type IEventHandler } from '@nestjs/cqrs';
-import { KAFKA_TOPICS, type PaymentSucceededPayload } from '@platform/contracts';
+import { PAYMENT_SUCCEEDED_EVENT, type PaymentSucceededPayload } from '@platform/contracts';
 import { KafkaProducer } from '@platform/transport';
 import { PaymentSucceededEvent } from '../../domain/events/payment-succeeded.event.js';
 
@@ -33,14 +33,14 @@ export class PaymentSucceededRelay implements IEventHandler<PaymentSucceededEven
 
   async handle(event: PaymentSucceededEvent): Promise<void> {
     try {
-      await this.kafka.publish(KAFKA_TOPICS.PAYMENT_SUCCEEDED, toPaymentSucceededPayload(event), {
+      await this.kafka.publish(PAYMENT_SUCCEEDED_EVENT, toPaymentSucceededPayload(event), {
         key: event.userId,
         eventId: event.eventId,
         occurredAt: event.paidAt,
       });
     } catch (error) {
       this.logger.error(
-        `Failed to publish ${KAFKA_TOPICS.PAYMENT_SUCCEEDED} for payment ${event.paymentId}: ${
+        `Failed to publish ${PAYMENT_SUCCEEDED_EVENT.topic} for payment ${event.paymentId}: ${
           error instanceof Error ? error.message : String(error)
         }`,
         error instanceof Error ? error.stack : undefined,

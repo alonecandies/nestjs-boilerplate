@@ -1,6 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
-import { KAFKA_TOPICS } from '@platform/contracts';
+import { NOTIFICATION_CREATED_EVENT } from '@platform/contracts';
 import { KafkaProducer } from '@platform/transport';
 import { toNotificationCreatedPayload } from '../../mappers/notification.mapper.js';
 import { PublishNotificationCreatedCommand } from './publish-notification-created.command.js';
@@ -16,7 +16,7 @@ export class PublishNotificationCreatedHandler
   async execute({ notification }: PublishNotificationCreatedCommand): Promise<boolean> {
     try {
       await this.kafka.publish(
-        KAFKA_TOPICS.NOTIFICATION_CREATED,
+        NOTIFICATION_CREATED_EVENT,
         toNotificationCreatedPayload(notification),
         {
           // Per-user ordering: every push of one user lands on the same partition.
@@ -33,7 +33,7 @@ export class PublishNotificationCreatedHandler
       // is already stored; only the real-time push is lost. A transactional outbox would make
       // this at-least-once (documented in the README).
       this.logger.error(
-        `Could not publish ${KAFKA_TOPICS.NOTIFICATION_CREATED} for notification ${notification.id}`,
+        `Could not publish ${NOTIFICATION_CREATED_EVENT.topic} for notification ${notification.id}`,
         error instanceof Error ? error.stack : String(error),
       );
       return false;

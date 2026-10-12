@@ -1,20 +1,23 @@
 import { generateId } from '@platform/common';
-import { KAFKA_TOPICS, type KafkaTopic } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
+import {
+  FIXTURE_PAYMENT_SUCCEEDED_EVENT,
+  FIXTURE_USER_REGISTERED_EVENT,
+} from '../../test/fixtures/fixture.events.js';
 import { InvalidEventException } from './kafka.errors.js';
 import { ParseEventEnvelopePipe } from './parse-event-envelope.pipe.js';
 
 const validEnvelope = (): Record<string, unknown> => ({
   id: generateId(),
-  type: KAFKA_TOPICS.PAYMENT_SUCCEEDED,
+  type: FIXTURE_PAYMENT_SUCCEEDED_EVENT.topic,
   version: 1,
   occurredAt: '2026-09-01T10:00:00.000Z',
-  source: 'billing-service',
+  source: 'fixture-service',
   correlationId: 'corr-1',
   payload: {
     paymentId: generateId(),
     userId: generateId(),
-    stripeCheckoutSessionId: 'cs_test_1',
     amountTotal: 1999,
     currency: 'usd',
     paidAt: '2026-09-01T10:00:00.000Z',
@@ -32,7 +35,7 @@ function thrownBy(fn: () => unknown): unknown {
 }
 
 describe('ParseEventEnvelopePipe', () => {
-  const pipe = new ParseEventEnvelopePipe(KAFKA_TOPICS.PAYMENT_SUCCEEDED);
+  const pipe = new ParseEventEnvelopePipe(FIXTURE_PAYMENT_SUCCEEDED_EVENT);
 
   it('returns the typed envelope and strips unknown keys (tolerant reader)', () => {
     const raw = { ...validEnvelope(), extra: 'ignored' };
@@ -48,7 +51,7 @@ describe('ParseEventEnvelopePipe', () => {
     expect(error).toBeInstanceOf(InvalidEventException);
     expect(error).toMatchObject({
       code: 'INVALID_EVENT',
-      details: { topic: KAFKA_TOPICS.PAYMENT_SUCCEEDED },
+      details: { topic: FIXTURE_PAYMENT_SUCCEEDED_EVENT.topic },
     });
     expect((error as InvalidEventException).issues).toEqual([
       expect.objectContaining({ path: 'payload.amountTotal' }),
@@ -64,7 +67,7 @@ describe('ParseEventEnvelopePipe', () => {
   });
 
   it('rejects an envelope of another type or version', () => {
-    const wrongType = { ...validEnvelope(), type: KAFKA_TOPICS.USER_REGISTERED };
+    const wrongType = { ...validEnvelope(), type: FIXTURE_USER_REGISTERED_EVENT.topic };
     expect(() => pipe.transform(wrongType)).toThrow(InvalidEventException);
     const error = thrownBy(() => pipe.transform({ ...validEnvelope(), version: 2 }));
     expect(error).toBeInstanceOf(InvalidEventException);
@@ -73,9 +76,9 @@ describe('ParseEventEnvelopePipe', () => {
     ]);
   });
 
-  it('fails fast for an unknown topic', () => {
-    expect(() => new ParseEventEnvelopePipe('nope.v1' as KafkaTopic)).toThrow(
-      /Unknown Kafka topic/,
+  it('fails fast for a contract whose topic has no version suffix', () => {
+    expect(() => new ParseEventEnvelopePipe({ topic: 'nope', payload: z.object({}) })).toThrow(
+      /no "\.v<major>" suffix/,
     );
   });
 });

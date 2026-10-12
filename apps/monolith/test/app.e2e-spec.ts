@@ -11,7 +11,7 @@ await vi.hoisted(async () => {
 import { BillingLocalAdapter, BillingPort } from '@domain/billing';
 import { NotificationsLocalAdapter, NotificationsPort } from '@domain/notifications';
 import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
-import { KAFKA_TOPICS } from '@platform/contracts';
+import { USER_REGISTERED_EVENT } from '@platform/contracts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { bearer, expectProblem, graphql, multipartFile } from './support/http.js';
 import { createMonolithE2eApp, type MonolithE2e } from './support/monolith-e2e-app.js';
@@ -139,11 +139,9 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
       expect(stored?.passwordHash).toMatch(/^\$argon2id\$/);
 
       // UserRegisteredEvent → UserRegisteredRelay → Kafka, after the handler committed.
-      await vi.waitFor(() =>
-        expect(e2e.kafka.envelopes(KAFKA_TOPICS.USER_REGISTERED)).toHaveLength(1),
-      );
-      expect(e2e.kafka.envelopes(KAFKA_TOPICS.USER_REGISTERED)[0]).toMatchObject({
-        type: KAFKA_TOPICS.USER_REGISTERED,
+      await vi.waitFor(() => expect(e2e.kafka.envelopes(USER_REGISTERED_EVENT)).toHaveLength(1));
+      expect(e2e.kafka.envelopes(USER_REGISTERED_EVENT)[0]).toMatchObject({
+        type: USER_REGISTERED_EVENT.topic,
         source: 'monolith-e2e',
         payload: { userId: tokens.user.id, email: 'ada@example.com', displayName: 'Ada' },
       });

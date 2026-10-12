@@ -1,7 +1,11 @@
 import { CommandBus } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
 import { generateId } from '@platform/common';
-import { createEventEnvelope, KAFKA_TOPICS } from '@platform/contracts';
+import {
+  createEventEnvelope,
+  PAYMENT_SUCCEEDED_EVENT,
+  USER_REGISTERED_EVENT,
+} from '@platform/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USER_ID } from '../../../test/support/fixtures.js';
 import { InMemoryKafkaServer } from '../../../test/support/in-memory-kafka.server.js';
@@ -13,7 +17,7 @@ import { IdentityEventsConsumer } from './identity-events.consumer.js';
 const registeredAt = '2026-09-29T07:00:00.000Z';
 const userRegistered = () =>
   createEventEnvelope(
-    KAFKA_TOPICS.USER_REGISTERED,
+    USER_REGISTERED_EVENT,
     { userId: USER_ID, email: 'ada@example.com', displayName: 'Ada', registeredAt },
     { id: generateId(), source: 'identity-service' },
   );
@@ -22,7 +26,7 @@ const PAYMENT_ID = '01920000-0000-7000-8000-0000000000aa';
 const paidAt = '2026-09-29T07:30:00.000Z';
 const paymentSucceeded = () =>
   createEventEnvelope(
-    KAFKA_TOPICS.PAYMENT_SUCCEEDED,
+    PAYMENT_SUCCEEDED_EVENT,
     {
       paymentId: PAYMENT_ID,
       userId: USER_ID,
@@ -62,7 +66,7 @@ describe('Kafka consumers (Nest RPC pipeline, in-memory broker)', () => {
     it('USER_REGISTERED → WelcomeUserCommand (dates revived), nothing dead-lettered', async () => {
       commandBus.execute.mockResolvedValue(undefined);
 
-      await server.dispatch(KAFKA_TOPICS.USER_REGISTERED, userRegistered(), USER_ID);
+      await server.dispatch(USER_REGISTERED_EVENT.topic, userRegistered(), USER_ID);
 
       const [command] = commandBus.execute.mock.calls[0] ?? [];
       expect(command).toBeInstanceOf(WelcomeUserCommand);
@@ -79,14 +83,14 @@ describe('Kafka consumers (Nest RPC pipeline, in-memory broker)', () => {
       const envelope = { ...userRegistered(), payload: { userId: 'nope' } };
 
       await expect(
-        server.dispatch(KAFKA_TOPICS.USER_REGISTERED, envelope, USER_ID),
+        server.dispatch(USER_REGISTERED_EVENT.topic, envelope, USER_ID),
       ).resolves.toBeUndefined();
 
       expect(commandBus.execute).not.toHaveBeenCalled();
       const [record] = server.deadLetters();
-      expect(record?.topic).toBe(`${KAFKA_TOPICS.USER_REGISTERED}.dlq`);
+      expect(record?.topic).toBe(`${USER_REGISTERED_EVENT.topic}.dlq`);
       expect(record?.messages[0]?.headers).toMatchObject({
-        'x-original-topic': KAFKA_TOPICS.USER_REGISTERED,
+        'x-original-topic': USER_REGISTERED_EVENT.topic,
         'x-error-type': 'INVALID_EVENT',
       });
       // The original bytes are kept for replay.
@@ -94,7 +98,7 @@ describe('Kafka consumers (Nest RPC pipeline, in-memory broker)', () => {
     });
 
     it('dead-letters an envelope of another topic (type mismatch)', async () => {
-      await server.dispatch(KAFKA_TOPICS.USER_REGISTERED, paymentSucceeded());
+      await server.dispatch(USER_REGISTERED_EVENT.topic, paymentSucceeded());
       expect(commandBus.execute).not.toHaveBeenCalled();
       expect(server.deadLetters()).toHaveLength(1);
     });
@@ -103,7 +107,7 @@ describe('Kafka consumers (Nest RPC pipeline, in-memory broker)', () => {
       commandBus.execute.mockRejectedValue(new Error('mail queue unavailable'));
 
       await expect(
-        server.dispatch(KAFKA_TOPICS.USER_REGISTERED, userRegistered()),
+        server.dispatch(USER_REGISTERED_EVENT.topic, userRegistered()),
       ).resolves.toBeUndefined();
 
       const [record] = server.deadLetters();
@@ -117,7 +121,7 @@ describe('Kafka consumers (Nest RPC pipeline, in-memory broker)', () => {
     it('PAYMENT_SUCCEEDED → SendPaymentReceiptCommand', async () => {
       commandBus.execute.mockResolvedValue(undefined);
 
-      await server.dispatch(KAFKA_TOPICS.PAYMENT_SUCCEEDED, paymentSucceeded(), USER_ID);
+      await server.dispatch(PAYMENT_SUCCEEDED_EVENT.topic, paymentSucceeded(), USER_ID);
 
       const [command] = commandBus.execute.mock.calls[0] ?? [];
       expect(command).toBeInstanceOf(SendPaymentReceiptCommand);
@@ -132,12 +136,12 @@ describe('Kafka consumers (Nest RPC pipeline, in-memory broker)', () => {
 
     it('dead-letters a negative amount (schema violation) to billing.payment-succeeded.v1.dlq', async () => {
       const bad = paymentSucceeded();
-      await server.dispatch(KAFKA_TOPICS.PAYMENT_SUCCEEDED, {
+      await server.dispatch(PAYMENT_SUCCEEDED_EVENT.topic, {
         ...bad,
         payload: { ...bad.payload, amountTotal: -1 },
       });
       expect(commandBus.execute).not.toHaveBeenCalled();
-      expect(server.deadLetters()[0]?.topic).toBe(`${KAFKA_TOPICS.PAYMENT_SUCCEEDED}.dlq`);
+      expect(server.deadLetters()[0]?.topic).toBe(`${PAYMENT_SUCCEEDED_EVENT.topic}.dlq`);
     });
   });
 });
