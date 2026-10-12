@@ -8,14 +8,15 @@ import { addKnownLocalSecretIssue, isKnownLocalSecret } from '../env/production-
 export const DEV_JWT_ACCESS_SECRET = 'dev-access-secret-change-me-please-32chars';
 export const DEV_JWT_REFRESH_SECRET = 'dev-refresh-secret-change-me-please-32chars';
 
-const MIN_SECRET_LENGTH = 32;
+/** Every HS256 JWT secret (access and refresh) is at least this long, in every environment. */
+export const MIN_JWT_SECRET_LENGTH = 32;
 
 export const authEnvSchema = z
   .object({
     NODE_ENV: zNodeEnv(),
-    JWT_ACCESS_SECRET: zStr(DEV_JWT_ACCESS_SECRET, { min: MIN_SECRET_LENGTH }),
+    JWT_ACCESS_SECRET: zStr(DEV_JWT_ACCESS_SECRET, { min: MIN_JWT_SECRET_LENGTH }),
     JWT_ACCESS_TTL_SEC: zInt(900, { min: 1 }),
-    JWT_REFRESH_SECRET: zStr(DEV_JWT_REFRESH_SECRET, { min: MIN_SECRET_LENGTH }),
+    JWT_REFRESH_SECRET: zStr(DEV_JWT_REFRESH_SECRET, { min: MIN_JWT_SECRET_LENGTH }),
     JWT_REFRESH_TTL_SEC: zInt(604_800, { min: 1 }),
     JWT_ISSUER: zStr('nestjs-boilerplate'),
     JWT_AUDIENCE: zStr('nestjs-boilerplate'),

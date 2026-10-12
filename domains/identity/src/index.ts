@@ -80,6 +80,12 @@ export {
 // env-example specs validate these namespaces too).
 export { type PasswordConfig, passwordConfig } from './infrastructure/security/password.config.js';
 export { PasswordHasher } from './infrastructure/security/password-hasher.service.js';
+export {
+  DEV_JWT_REFRESH_SECRET,
+  type RefreshTokenConfig,
+  refreshTokenConfig,
+} from './infrastructure/security/refresh-token.config.js';
+export { TokenIssuer } from './infrastructure/security/token-issuer.service.js';
 // Presentation: GraphQL types other domains reference (billing's `Payment.user`).
 export { AuthPayloadModel } from './presentation/graphql/models/auth-payload.model.js';
 export { UserModel } from './presentation/graphql/models/user.model.js';

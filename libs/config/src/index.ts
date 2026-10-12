@@ -10,7 +10,7 @@ export * from './app-config.module.js';
 export * from './define-config-namespace.js';
 export * from './env/env.helpers.js';
 export * from './env/parse-env.js';
-export { isGoogleApisHost } from './env/production-guards.js';
+export * from './env/production-guards.js';
 export * from './namespaces/app.config.js';
 export * from './namespaces/auth.config.js';
 export * from './namespaces/cache.config.js';

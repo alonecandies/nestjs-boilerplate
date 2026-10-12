@@ -350,6 +350,7 @@
         "@nestjs/core": "catalog:",
         "@nestjs/cqrs": "catalog:",
         "@nestjs/graphql": "catalog:",
+        "@nestjs/jwt": "catalog:",
         "@nestjs/microservices": "catalog:",
         "@nestjs/passport": "catalog:",
         "@nestjs/schedule": "catalog:",

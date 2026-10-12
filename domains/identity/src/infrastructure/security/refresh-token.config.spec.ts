@@ -1,0 +1,115 @@
+import { DEV_JWT_ACCESS_SECRET, EnvValidationError } from '@platform/config';
+import { describe, expect, expectTypeOf, it } from 'vitest';
+import {
+  DEV_JWT_REFRESH_SECRET,
+  type RefreshTokenConfig,
+  refreshTokenConfig,
+} from './refresh-token.config.js';
+
+const PROD = { NODE_ENV: 'production' } as const;
+/** The docker-compose fallback for JWT_REFRESH_SECRET (publicly known). */
+const COMPOSE_REFRESH_SECRET = 'compose-local-refresh-secret-not-for-production-0002';
+
+const errorOf = (fn: () => unknown): EnvValidationError => {
+  try {
+    fn();
+  } catch (error) {
+    if (error instanceof EnvValidationError) return error;
+    throw error;
+  }
+  throw new Error('expected an EnvValidationError');
+};
+
+describe('refreshToken config namespace', () => {
+  it('defaults to the development secret and a 7-day TTL, never exposing the access secret', () => {
+    expect(refreshTokenConfig.parse({})).toEqual({
+      refreshSecret: DEV_JWT_REFRESH_SECRET,
+      refreshTtlSec: 604_800,
+    } satisfies RefreshTokenConfig);
+    expect(refreshTokenConfig.KEY).toBe('CONFIGURATION(refreshToken)');
+    expectTypeOf<RefreshTokenConfig['refreshSecret']>().toEqualTypeOf<string>();
+    expectTypeOf<RefreshTokenConfig['refreshTtlSec']>().toEqualTypeOf<number>();
+  });
+
+  it('requires a secret of at least 32 characters in every environment', () => {
+    const error = errorOf(() => refreshTokenConfig.parse({ JWT_REFRESH_SECRET: 'short' }));
+    expect(error.namespace).toBe('refreshToken');
+    expect(error.message).toContain('→ at JWT_REFRESH_SECRET');
+  });
+
+  it('rejects the development default in production, even with the opt-out', () => {
+    const error = errorOf(() =>
+      refreshTokenConfig.parse({ ...PROD, ALLOW_KNOWN_LOCAL_SECRETS: 'true' }),
+    );
+    expect(error.message).toContain('→ at JWT_REFRESH_SECRET');
+    expect(error.message).toContain('development default');
+    expect(error.message).not.toContain(DEV_JWT_REFRESH_SECRET);
+  });
+
+  it('rejects the compose fallback in production unless ALLOW_KNOWN_LOCAL_SECRETS', () => {
+    const env = { ...PROD, JWT_REFRESH_SECRET: COMPOSE_REFRESH_SECRET };
+    expect(errorOf(() => refreshTokenConfig.parse(env)).message).toContain(
+      'ALLOW_KNOWN_LOCAL_SECRETS',
+    );
+    expect(
+      refreshTokenConfig.parse({ ...env, ALLOW_KNOWN_LOCAL_SECRETS: 'true' }).refreshSecret,
+    ).toBe(COMPOSE_REFRESH_SECRET);
+  });
+
+  it('rejects a refresh secret equal to the access secret in production', () => {
+    const same = 's'.repeat(48);
+    const error = errorOf(() =>
+      refreshTokenConfig.parse({ ...PROD, JWT_ACCESS_SECRET: same, JWT_REFRESH_SECRET: same }),
+    );
+    expect(error.message).toContain('→ at JWT_REFRESH_SECRET');
+    expect(error.message).toContain('must differ');
+  });
+
+  it('accepts a strong distinct secret in production and the dev default elsewhere', () => {
+    expect(
+      refreshTokenConfig.parse({
+        ...PROD,
+        JWT_ACCESS_SECRET: 'a'.repeat(48),
+        JWT_REFRESH_SECRET: 'b'.repeat(48),
+      }).refreshSecret,
+    ).toBe('b'.repeat(48));
+    expect(refreshTokenConfig.parse({ NODE_ENV: 'test' }).refreshSecret).toBe(
+      DEV_JWT_REFRESH_SECRET,
+    );
+    // The access secret is only compared here; the platform `auth` namespace owns its rules.
+    expect(() =>
+      refreshTokenConfig.parse({ JWT_ACCESS_SECRET: DEV_JWT_ACCESS_SECRET }),
+    ).not.toThrow();
+  });
+});
+
+describe('refreshToken production guards match the platform ones', () => {
+  const PROD = { NODE_ENV: 'production', JWT_ACCESS_SECRET: 'a'.repeat(48) } as const;
+
+  it.each([
+    'compose-local-refresh-secret-not-for-production-0002',
+    '<a random secret of at least 32 characters>',
+    'set-a-real-refresh-secret-here-please-...',
+  ])('refuses the publicly known value %s with the shared message and opt-out', (value) => {
+    const env = { ...PROD, JWT_REFRESH_SECRET: value };
+    const error = errorOf(() => refreshTokenConfig.parse(env));
+    expect(error.message).toContain('JWT_REFRESH_SECRET is a publicly known value');
+    expect(error.message).toContain('ALLOW_KNOWN_LOCAL_SECRETS=true');
+    expect(() =>
+      refreshTokenConfig.parse({ ...env, ALLOW_KNOWN_LOCAL_SECRETS: 'true' }),
+    ).not.toThrow();
+  });
+
+  it('compares with the auth default when JWT_ACCESS_SECRET is unset', () => {
+    // refreshToken reads JWT_ACCESS_SECRET only for the must-differ rule. Its default must be auth's, or a refresh
+    // secret equal to the access secret the services really use would pass.
+    const error = errorOf(() =>
+      refreshTokenConfig.parse({
+        NODE_ENV: 'production',
+        JWT_REFRESH_SECRET: DEV_JWT_ACCESS_SECRET,
+        ALLOW_KNOWN_LOCAL_SECRETS: 'true',
+      }),
+    );
+    expect(error.message).toContain('must differ');
+  });
+});
