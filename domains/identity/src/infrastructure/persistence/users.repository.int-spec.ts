@@ -1,8 +1,16 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { type INestApplicationContext, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { generateId, isUuidV7, sha256Hex } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
-import { DatabaseModule, DRIZZLE, type DrizzleDB } from '@platform/database';
+import {
+  type DatabaseMigrationSet,
+  DatabaseModule,
+  DRIZZLE,
+  type DrizzleDB,
+  platformMigrations,
+} from '@platform/database';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { sql } from 'drizzle-orm';
 import { ClsModule } from 'nestjs-cls';
@@ -55,6 +63,24 @@ class IdentityPersistenceModule {}
 })
 class SingleConnectionModule {}
 
+/**
+ * Boots IdentityPersistenceModule. `abortOnError: false`: a failing boot rejects with its own
+ * error, where Nest's default calls process.abort() and kills the Vitest worker before afterAll.
+ */
+const boot = (): Promise<INestApplicationContext> =>
+  NestFactory.createApplicationContext(IdentityPersistenceModule, {
+    logger: false,
+    abortOnError: false,
+  });
+
+/** Entries in a set's drizzle journal: once applied, its bookkeeping table holds one row each. */
+const journalSize = (set: DatabaseMigrationSet): number => {
+  const journal = JSON.parse(readFileSync(join(set.folder, 'meta', '_journal.json'), 'utf8')) as {
+    entries: unknown[];
+  };
+  return journal.entries.length;
+};
+
 const sleep = (ms: number): Promise<'timeout'> =>
   new Promise((resolve) => setTimeout(() => resolve('timeout'), ms));
 
@@ -78,13 +104,21 @@ const register = (email: string, displayName = 'Integration User'): UserAggregat
 
 describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on PostgreSQL 18', () => {
   let container: StartedPostgreSqlContainer | undefined;
-  let app: INestApplicationContext;
+  let app: INestApplicationContext | undefined;
   let db: DrizzleDB<IdentitySchema>;
   let usersRepo: DrizzleUsersRepository;
   let sessionsRepo: DrizzleSessionsRepository;
   let transaction: DrizzleTransactionRunner;
   const run = generateId().slice(-12);
   const email = (name: string): string => `${name}.${run}@example.com`;
+
+  /** Bookkeeping rows of the platform set (schema `app`) and of identity's set. */
+  const bookkeeping = async (): Promise<{ app: number; identity: number }> => {
+    const [counts] = await db.execute<{ app: number; identity: number }>(sql`
+      select (select count(*)::int from app.__drizzle_migrations) as app,
+        (select count(*)::int from identity.__drizzle_migrations) as identity`);
+    return { app: counts?.app ?? -1, identity: counts?.identity ?? -1 };
+  };
 
   beforeAll(async () => {
     let url = process.env['INTEGRATION_DATABASE_URL'];
@@ -98,7 +132,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     }
     vi.stubEnv('DATABASE_URL', url);
     vi.stubEnv('SERVICE_NAME', 'identity-int');
-    app = await NestFactory.createApplicationContext(IdentityPersistenceModule, { logger: false });
+    app = await boot();
     db = app.get(DRIZZLE);
     usersRepo = app.get(DrizzleUsersRepository);
     sessionsRepo = app.get(DrizzleSessionsRepository);
@@ -131,6 +165,26 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
       select n.nspname as schema from pg_extension e join pg_namespace n on n.oid = e.extnamespace
       where e.extname = 'pg_trgm'`);
     expect(trgm?.schema).toBe('public');
+  });
+
+  it('puts no table and no user_role type in public', async () => {
+    // The platform set's pg_trgm puts functions, operators and types in public, never tables.
+    // Under this spec's role `app`, an unqualified table or enum lands in schema `app` instead
+    // (search_path "$user", public), where the first test's lists catch it.
+    const tables = await db.execute<{ name: string }>(sql`
+      select table_name as name from information_schema.tables where table_schema = 'public'`);
+    expect(tables.map((row) => row.name)).toEqual([]);
+    const types = await db.execute<{ name: string }>(sql`
+      select t.typname as name from pg_type t join pg_namespace n on n.oid = t.typnamespace
+      where n.nspname = 'public' and t.typname = 'user_role'`);
+    expect(types.map((row) => row.name)).toEqual([]);
+  });
+
+  it("records one bookkeeping row per journal entry, in each set's own table", async () => {
+    await expect(bookkeeping()).resolves.toEqual({
+      app: journalSize(platformMigrations),
+      identity: journalSize(identityMigrations),
+    });
   });
 
   it('insert → findById (no hash) / findCredentialsByEmail (hash) / existsByEmail', async () => {
@@ -321,5 +375,18 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     // ...and deleting the user cascades.
     await db.execute(sql`delete from identity.users where id = ${user.id}`);
     await expect(sessionsRepo.findById(session.id)).resolves.toBeNull();
+  });
+
+  // Last: it replaces the context (and the repositories) the tests above share.
+  it('a second boot of the same wiring against the same database applies nothing', async () => {
+    const before = await bookkeeping();
+    // A restart: the first context and its pool are gone before the second one boots.
+    const first = app;
+    app = undefined; // afterAll then closes only what is open, even if the boot below throws
+    await first?.close();
+    // Rejects, failing this test, if the restart re-ran a migration (`CREATE TYPE` again).
+    app = await boot();
+    db = app.get(DRIZZLE);
+    await expect(bookkeeping()).resolves.toEqual(before);
   });
 });
