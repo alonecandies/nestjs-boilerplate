@@ -33,6 +33,7 @@ export { GetUserByIdQuery } from './application/queries/get-user-by-id/get-user-
 export { GetUsersByIdsQuery } from './application/queries/get-users-by-ids/get-users-by-ids.query.js';
 export { ListUsersQuery } from './application/queries/list-users/list-users.query.js';
 // Domain.
+export { normalizeEmail } from './domain/email.js';
 export { UserRegisteredEvent } from './domain/events/user-registered.event.js';
 export { UserRolesChangedEvent } from './domain/events/user-roles-changed.event.js';
 export {

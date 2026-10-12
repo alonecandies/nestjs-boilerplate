@@ -10,7 +10,7 @@ presentation classes run in the monolith (in-process) and in the gateway (over g
 ```
 src/
 ├── domain/                 UserAggregate, UserRegisteredEvent, UserRolesChangedEvent, session rules,
-│                           identity errors, USER_ROLES (pure TS: @nestjs/cqrs, @platform/common, lodash)
+│                           identity errors, USER_ROLES, normalizeEmail (pure TS: @nestjs/cqrs, @platform/common, lodash)
 ├── application/
 │   ├── commands/           RegisterUser, Login, RefreshSession, Logout, UpdateUserRoles, PurgeExpiredSessions
 │   ├── queries/            GetUserById, GetUsersByIds, ListUsers

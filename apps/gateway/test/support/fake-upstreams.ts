@@ -3,6 +3,7 @@ import {
   EmailAlreadyTakenException,
   InvalidCredentialsException,
   InvalidRefreshTokenException,
+  normalizeEmail,
   UsersPort,
 } from '@domain/identity';
 import type {
@@ -24,7 +25,7 @@ import type {
   NotificationPage,
 } from '@domain/notifications-contracts';
 import { type AccessTokenDenylist, isRole, type TokenService } from '@platform/auth';
-import { EntityNotFoundException, generateId, normalizeEmail } from '@platform/common';
+import { EntityNotFoundException, generateId } from '@platform/common';
 
 /*
  * In-memory stand-ins for identity- and notifications-service, bound IN PLACE OF the gRPC

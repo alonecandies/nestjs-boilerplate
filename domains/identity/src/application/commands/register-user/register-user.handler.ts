@@ -1,7 +1,8 @@
 import type { AuthTokens } from '@domain/identity-contracts';
 import { CommandHandler, EventPublisher, type ICommandHandler } from '@nestjs/cqrs';
 import { PasswordHasher } from '@platform/auth';
-import { generateId, normalizeEmail } from '@platform/common';
+import { generateId } from '@platform/common';
+import { normalizeEmail } from '../../../domain/email.js';
 import { EmailAlreadyTakenException } from '../../../domain/identity.errors.js';
 import { UserAggregate } from '../../../domain/user.aggregate.js';
 import { toUserRecord } from '../../mappers/user.mapper.js';

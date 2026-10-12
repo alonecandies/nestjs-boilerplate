@@ -1,6 +1,6 @@
-import { normalizeEmail } from '@platform/common';
 import { Transform, type TransformFnParams } from 'class-transformer';
 import { isString } from 'lodash-es';
+import { normalizeEmail } from '../../domain/email.js';
 
 /*
  * class-transformer normalisers for DTOs and GraphQL inputs. They run inside the global

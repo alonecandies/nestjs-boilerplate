@@ -1,10 +1,5 @@
 import { deburr, kebabCase, repeat, truncate } from 'lodash-es';
 
-/** Canonical form used for uniqueness checks and lookups (`users.email` stores this form). */
-export function normalizeEmail(email: string): string {
-  return email.trim().toLowerCase();
-}
-
 /**
  * `john.doe@example.com` → `j******e@example.com`. For logs and notifications where the address
  * must be recognisable to its owner but not harvestable.
