@@ -379,6 +379,7 @@
         "@testcontainers/postgresql": "catalog:",
         "@types/lodash-es": "catalog:",
         "@types/passport-local": "catalog:",
+        "drizzle-kit": "catalog:",
       },
     },
     "domains/identity/contracts": {

@@ -199,13 +199,16 @@ close the "committed but not published" window; it is not implemented.
   `refresh_token_hash`, `user_agent`, `ip`, `expires_at`, `revoked_at`, `replaced_by_id`,
   `created_at`; indexes `sessions_user_id_idx`, `sessions_expires_at_idx`.
 - Keyset pagination on `users.id DESC` uses the PK. The `ILIKE '%q%'` search uses
-  `users_search_trgm_idx` (pg_trgm GIN on `email` + `display_name`, migration
-  `0001_users_search_trgm`, which also creates the extension). Trigrams need 3+ characters, so
+  `users_search_trgm_idx` (pg_trgm GIN on `email` + `display_name`; the extension comes from
+  `@platform/database`'s platform set, which always runs first). Trigrams need 3+ characters, so
   every transport rejects a shorter search term (`IDENTITY_LIMITS.SEARCH_MIN_LENGTH`; a blank one
   means "no filter").
 
-The schema file imports only `drizzle-orm` and a dependency-free relative file, so drizzle-kit can
-load it. Migrations are generated centrally in `@platform/database`.
+The tables and the `user_role` enum live in the `identity` Postgres schema (`identityPgSchema`); raw SQL qualifies
+them (`identity.users`). The schema file imports only `drizzle-orm` and a dependency-free relative file, so
+drizzle-kit can load it. Identity owns its migration history: `drizzle.config.ts` generates
+`src/infrastructure/persistence/migrations` (`bun run --filter @domain/identity db:generate`), bookkeeping in
+`identity.__drizzle_migrations`, and `identityMigrations` applies it after the platform set.
 
 ## Configuration
 

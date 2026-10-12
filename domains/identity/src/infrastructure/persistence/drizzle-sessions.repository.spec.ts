@@ -33,7 +33,7 @@ describe('DrizzleSessionsRepository', () => {
       expiresAt: NOW,
     });
     expect(executed[0]?.sql).toMatch(
-      /^insert into "sessions" \("id", "user_id", "refresh_token_hash", "user_agent", "ip", "expires_at", "revoked_at", "replaced_by_id", "created_at"\)/,
+      /^insert into "identity"\."sessions" \("id", "user_id", "refresh_token_hash", "user_agent", "ip", "expires_at", "revoked_at", "replaced_by_id", "created_at"\)/,
     );
   });
 
@@ -50,7 +50,7 @@ describe('DrizzleSessionsRepository', () => {
     await expect(repository.revokeForRotation(input)).resolves.toBe(true);
 
     expect(executed[0]?.sql).toBe(
-      'update "sessions" set "revoked_at" = $1, "replaced_by_id" = $2 where ("sessions"."id" = $3 and "sessions"."user_id" = $4 and "sessions"."refresh_token_hash" = $5 and "sessions"."revoked_at" is null and "sessions"."expires_at" > $6) returning "id"',
+      'update "identity"."sessions" set "revoked_at" = $1, "replaced_by_id" = $2 where ("identity"."sessions"."id" = $3 and "identity"."sessions"."user_id" = $4 and "identity"."sessions"."refresh_token_hash" = $5 and "identity"."sessions"."revoked_at" is null and "identity"."sessions"."expires_at" > $6) returning "id"',
     );
     expect(executed[0]?.params).toEqual([
       NOW.toISOString(),
@@ -74,9 +74,9 @@ describe('DrizzleSessionsRepository', () => {
     );
     await expect(repository.revokeAllForUser(ids.user, NOW)).resolves.toBe(4);
 
-    expect(executed[0]?.sql).toContain('"sessions"."revoked_at" is null');
+    expect(executed[0]?.sql).toContain('"identity"."sessions"."revoked_at" is null');
     expect(executed[1]?.sql).toBe(
-      'update "sessions" set "revoked_at" = $1 where ("sessions"."user_id" = $2 and "sessions"."revoked_at" is null)',
+      'update "identity"."sessions" set "revoked_at" = $1 where ("identity"."sessions"."user_id" = $2 and "identity"."sessions"."revoked_at" is null)',
     );
   });
 
@@ -84,7 +84,7 @@ describe('DrizzleSessionsRepository', () => {
     const { repository, executed } = setup(() => affected(12));
     await expect(repository.deleteExpired(NOW, 500)).resolves.toBe(12);
     expect(executed[0]?.sql).toBe(
-      'delete from "sessions" where "sessions"."id" in (select "id" from "sessions" where "sessions"."expires_at" <= $1 limit $2)',
+      'delete from "identity"."sessions" where "identity"."sessions"."id" in (select "id" from "identity"."sessions" where "identity"."sessions"."expires_at" <= $1 limit $2)',
     );
     expect(executed[0]?.params).toEqual([NOW.toISOString(), 500]);
   });

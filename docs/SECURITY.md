@@ -150,7 +150,7 @@ There is no seed account. Every registration gets the `user` role. Promote the f
 directly in Postgres, then log in again (roles are read into the next token):
 
 ```sql
-UPDATE users SET roles = ARRAY['admin']::user_role[] WHERE email = 'you@example.com';
+UPDATE identity.users SET roles = ARRAY['admin']::identity.user_role[] WHERE email = 'you@example.com';
 ```
 
 After that, admins manage roles through `PATCH /v1/users/:id/roles` or `updateUserRoles`.

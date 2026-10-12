@@ -64,7 +64,8 @@ export {
   IdentityCoreModule,
 } from './identity-core.module.js';
 export { IdentityGrpcModule } from './identity-grpc.module.js';
-// Infrastructure: the Drizzle schema for DatabaseModule / drizzle-kit.
+// Infrastructure: the Drizzle schema and the migration set for DatabaseModule / drizzle-kit.
+export { identityMigrations } from './infrastructure/persistence/identity.migrations.js';
 export {
   type IdentitySchema,
   identitySchema,

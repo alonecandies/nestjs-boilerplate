@@ -17,10 +17,8 @@
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --config ../../vitest.config.ts --project database",
     "clean": "rimraf dist coverage",
-    "db:generate": "drizzle-kit generate",
     "db:migrate": "node --env-file-if-exists=../../.env dist/migrate.js",
-    "db:migrate:dev": "node --env-file-if-exists=../../.env --conditions=@repo/source --import @swc-node/register/esm-register src/migrate.ts",
-    "db:studio": "drizzle-kit studio"
+    "db:migrate:dev": "node --env-file-if-exists=../../.env --conditions=@repo/source --import @swc-node/register/esm-register src/migrate.ts"
   },
   "dependencies": {
     "@platform/common": "workspace:*",
