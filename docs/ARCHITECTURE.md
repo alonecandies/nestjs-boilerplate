@@ -103,7 +103,7 @@ static forLocal(): DynamicModule {
   };
 }
 static forRemote(options: GrpcClientsModuleOptions = {}): DynamicModule {
-  const target = { spec: IDENTITY_GRPC_PACKAGE, url: grpcConfig.parse().clients.identity };
+  const target = { spec: IDENTITY_GRPC_PACKAGE, url: identityGrpcClientConfig.parse().url };
   return {
     module: IdentityApiModule,
     imports: [GrpcClientsModule.register(target, options), GraphqlLoadersModule],

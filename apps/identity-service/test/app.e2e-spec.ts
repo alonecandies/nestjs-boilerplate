@@ -84,7 +84,6 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
       LOG_LEVEL: 'silent',
       SERVICE_NAME: 'identity-service',
       GRPC_URL: grpcUrl,
-      IDENTITY_GRPC_URL: grpcUrl,
       GRPC_DEADLINE_MS: '3000',
       // Nothing may reach real infrastructure: unreachable ports wherever a client could connect.
       DATABASE_URL: 'postgres://app:app@127.0.0.1:1/app',

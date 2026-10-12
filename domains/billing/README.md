@@ -19,12 +19,12 @@ src/
 
 ## Modules and wiring
 
-| Module                         | Contents                                                                                                         | Used by          |
-| ------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `BillingCoreModule`            | CQRS handlers, `PaymentSucceededRelay`, Drizzle repositories, the Stripe adapter (`StripeModule.forRootAsync()`) | (via the others) |
-| `BillingGrpcModule`            | `BillingCoreModule` + `BillingGrpcController` (`billing.v1.BillingService`)                                      | billing-service  |
-| `BillingApiModule.forLocal()`  | `BillingController` + `BillingResolver` + `BillingPort → BillingLocalAdapter` + `BillingCoreModule`              | monolith         |
-| `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule(['billing'])`  | gateway          |
+| Module                         | Contents                                                                                                                                         | Used by          |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------- |
+| `BillingCoreModule`            | CQRS handlers, `PaymentSucceededRelay`, Drizzle repositories, the Stripe adapter (`StripeModule.forRootAsync()`)                                 | (via the others) |
+| `BillingGrpcModule`            | `BillingCoreModule` + `BillingGrpcController` (`billing.v1.BillingService`)                                                                      | billing-service  |
+| `BillingApiModule.forLocal()`  | `BillingController` + `BillingResolver` + `BillingPort → BillingLocalAdapter` + `BillingCoreModule`                                              | monolith         |
+| `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule.register({ spec: BILLING_GRPC_PACKAGE, url })` | gateway          |
 
 The REST controller and GraphQL resolver are the same classes in both topologies; they only know
 `BillingPort`. Both adapters return the `@domain/billing-contracts` `billing.v1` shapes.
@@ -257,7 +257,7 @@ through `TransactionHost` and join the active transaction.
 
 `stripe` namespace (`src/infrastructure/stripe/stripe.config.ts`, owned by billing; production rejects the dev placeholders, the compose fallbacks and local redirect URLs): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`
 (redirect URLs are never taken from REST clients: no open redirect), `STRIPE_MAX_NETWORK_RETRIES`,
-`STRIPE_TIMEOUT_MS`. Gateway: `BILLING_GRPC_URL`, `GRPC_DEADLINE_MS`.
+`STRIPE_TIMEOUT_MS`. Gateway: `BILLING_GRPC_URL` (`billingGrpcClient` namespace, `src/infrastructure/adapters/grpc/billing-grpc-client.config.ts`), `GRPC_DEADLINE_MS` (platform `grpc`).
 
 ## Tests
 

@@ -1,9 +1,9 @@
 import { NOTIFICATIONS_GRPC_PACKAGE } from '@domain/notifications-contracts';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
-import { grpcConfig } from '@platform/config';
 import { GrpcClientsModule } from '@platform/transport';
 import { NotificationsPort } from './application/ports/notifications.port.js';
 import { NotificationsGrpcAdapter } from './infrastructure/adapters/grpc/notifications-grpc.adapter.js';
+import { notificationsGrpcClientConfig } from './infrastructure/adapters/grpc/notifications-grpc-client.config.js';
 import { NotificationsLocalAdapter } from './infrastructure/adapters/local/notifications-local.adapter.js';
 import { NotificationsCoreModule } from './notifications-core.module.js';
 import { NotificationsResolver } from './presentation/graphql/notifications.resolver.js';
@@ -47,7 +47,8 @@ export class NotificationsApiModule {
   static forRemote(): DynamicModule {
     const target = {
       spec: NOTIFICATIONS_GRPC_PACKAGE,
-      url: grpcConfig.parse().clients.notifications,
+      // Read when the module is defined: a client target cannot come from DI.
+      url: notificationsGrpcClientConfig.parse().url,
     };
     return {
       module: NotificationsApiModule,

@@ -307,7 +307,7 @@ export const ORDERS_GRPC_PACKAGE: GrpcPackageSpec = {
 };
 ```
 
-**3. Client target.** In `libs/config/src/namespaces/grpc.config.ts`, add `ORDERS_GRPC_URL: zStr('localhost:50054')` to the schema and `orders: env.ORDERS_GRPC_URL` to the `clients` map. `forRemote()` passes it as the `url` of `GrpcClientsModule.register({ spec, url })`. Document it in the root `.env.example` and in `apps/gateway/.env.example`.
+**3. Client target.** Add `domains/orders/src/infrastructure/adapters/grpc/orders-grpc-client.config.ts`, a copy of `billing-grpc-client.config.ts` with the namespace `ordersGrpcClient` and `ORDERS_GRPC_URL: zStr('localhost:50054')`. `OrdersApiModule.forRemote()` passes `ordersGrpcClientConfig.parse().url` as the `url` of `GrpcClientsModule.register()`. Document the variable in the root `.env.example` and in `apps/gateway/.env.example`.
 
 **4. Server side, in the lib.** Add `OrdersGrpcController` under `presentation/grpc/` and `OrdersGrpcModule` (imports `OrdersCoreModule` and declares the controller):
 

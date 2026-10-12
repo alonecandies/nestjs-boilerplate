@@ -210,7 +210,7 @@ load it. Migrations are generated centrally in `@platform/database`.
 ## Configuration
 
 Read through `@platform/config` namespaces: `auth` (`JWT_*`, `ARGON2_*`, `AUTH_DENYLIST_ENABLED`),
-`grpc` (`IDENTITY_GRPC_URL`, `GRPC_DEADLINE_MS`) for the gateway, `throttle`
+`identityGrpcClient` (`IDENTITY_GRPC_URL`) and `grpc` (`GRPC_DEADLINE_MS`) for the gateway, `throttle`
 (`THROTTLE_AUTH_LIMIT` / `THROTTLE_AUTH_TTL_MS` for `@AuthThrottle`), `redis` (key prefix of
 locks, denylist and cache).
 

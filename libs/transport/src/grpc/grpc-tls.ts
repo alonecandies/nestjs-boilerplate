@@ -27,7 +27,8 @@ export function createGrpcServerCredentials(
 /**
  * Channel credentials from `grpcConfig.tls`: verify the server against `caPath` (the system roots
  * when unset) and present this process's certificate for mutual TLS. The server certificate must
- * name the host of the target (`IDENTITY_GRPC_URL` etc.) in its SANs. `undefined` = plaintext.
+ * name the host of the dialed target (the `url` of `GrpcClientsModule.register()`) in its SANs.
+ * `undefined` = plaintext.
  */
 export function createGrpcChannelCredentials(
   tls: GrpcTlsConfig | undefined,

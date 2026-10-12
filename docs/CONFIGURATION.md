@@ -90,24 +90,27 @@ app listens on 3000 and every gRPC server on `0.0.0.0:50051` (see
 Derived from each `apps/*/src/app.module.ts` and the `ConfigModule.forFeature()` calls of the libs
 it imports. A process ignores (and does not validate) variables of namespaces it does not load.
 
-| Namespace       | monolith |      gateway      | identity-service |  notifications-service  | billing-service | Loaded by                                                          |
-| --------------- | :------: | :---------------: | :--------------: | :---------------------: | :-------------: | ------------------------------------------------------------------ |
-| `app`           |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `AppConfigModule.forRoot()` (global)                               |
-| `observability` |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `AppConfigModule.forRoot()` (global)                               |
-| `database`      |    ✓     |                   |        ✓         |                         |        ✓        | `DatabaseModule`                                                   |
-| `cassandra`     |    ✓     |                   |                  |            ✓            |                 | `CassandraModule`                                                  |
-| `redis`         |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `RedisModule`, `AppQueueModule`, `AppCacheModule`, GraphQL pub/sub |
-| `kafka`         |    ✓     | ✓ (consumer only) |   ✓ (producer)   | ✓ (producer + consumer) |  ✓ (producer)   | `KafkaProducerModule`, `connectKafkaConsumer`                      |
-| `grpc`          |          |    ✓ (clients)    |    ✓ (server)    |       ✓ (server)        |   ✓ (server)    | `GrpcClientsModule.register()`, app module + `connectGrpcServer`   |
-| `auth`          |    ✓     |         ✓         |        ✓         |                         |                 | `AuthModule`                                                       |
-| `throttle`      |    ✓     |         ✓         |                  |                         |                 | `AppThrottlerModule`                                               |
-| `cache`         |    ✓     |         ✓         |                  |                         |                 | `AppCacheModule`                                                   |
-| `graphql`       |    ✓     |         ✓         |                  |                         |                 | `AppGraphqlModule`                                                 |
-| `mail`          |    ✓     |                   |                  |            ✓            |                 | `AppMailerModule`                                                  |
-| `storage`       |    ✓     |         ✓         |                  |                         |                 | `StorageModule`, `FilesModule`                                     |
-| `stripe`        |    ✓     |                   |                  |                         |        ✓        | `StripeModule`, `BillingCoreModule`                                |
-| `monolith`      |    ✓     |                   |                  |                         |                 | `apps/monolith/src/main.ts`                                        |
-| `gateway`       |          |         ✓         |                  |                         |                 | `apps/gateway/src/main.ts`                                         |
+| Namespace                 | monolith |      gateway      | identity-service |  notifications-service  | billing-service | Loaded by                                                          |
+| ------------------------- | :------: | :---------------: | :--------------: | :---------------------: | :-------------: | ------------------------------------------------------------------ |
+| `app`                     |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `AppConfigModule.forRoot()` (global)                               |
+| `observability`           |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `AppConfigModule.forRoot()` (global)                               |
+| `database`                |    ✓     |                   |        ✓         |                         |        ✓        | `DatabaseModule`                                                   |
+| `cassandra`               |    ✓     |                   |                  |            ✓            |                 | `CassandraModule`                                                  |
+| `redis`                   |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `RedisModule`, `AppQueueModule`, `AppCacheModule`, GraphQL pub/sub |
+| `kafka`                   |    ✓     | ✓ (consumer only) |   ✓ (producer)   | ✓ (producer + consumer) |  ✓ (producer)   | `KafkaProducerModule`, `connectKafkaConsumer`                      |
+| `grpc`                    |          |    ✓ (clients)    |    ✓ (server)    |       ✓ (server)        |   ✓ (server)    | `GrpcClientsModule.register()`, app module + `connectGrpcServer`   |
+| `identityGrpcClient`      |          |         ✓         |                  |                         |                 | `IdentityApiModule.forRemote()`                                    |
+| `notificationsGrpcClient` |          |         ✓         |                  |                         |                 | `NotificationsApiModule.forRemote()`                               |
+| `billingGrpcClient`       |          |         ✓         |                  |                         |                 | `BillingApiModule.forRemote()`                                     |
+| `auth`                    |    ✓     |         ✓         |        ✓         |                         |                 | `AuthModule`                                                       |
+| `throttle`                |    ✓     |         ✓         |                  |                         |                 | `AppThrottlerModule`                                               |
+| `cache`                   |    ✓     |         ✓         |                  |                         |                 | `AppCacheModule`                                                   |
+| `graphql`                 |    ✓     |         ✓         |                  |                         |                 | `AppGraphqlModule`                                                 |
+| `mail`                    |    ✓     |                   |                  |            ✓            |                 | `AppMailerModule`                                                  |
+| `storage`                 |    ✓     |         ✓         |                  |                         |                 | `StorageModule`, `FilesModule`                                     |
+| `stripe`                  |    ✓     |                   |                  |                         |        ✓        | `StripeModule`, `BillingCoreModule`                                |
+| `monolith`                |    ✓     |                   |                  |                         |                 | `apps/monolith/src/main.ts`                                        |
+| `gateway`                 |          |         ✓         |                  |                         |                 | `apps/gateway/src/main.ts`                                         |
 
 The gateway holds no Postgres, Cassandra, SMTP or Stripe settings: it reaches those contexts over
 gRPC (`IdentityApiModule.forRemote()` etc.). The Stripe webhook is received by the gateway and
@@ -242,7 +245,7 @@ consumes)
 > identity-service and billing-service only produce today. Every replica of an app must share its
 > group, and the gateway's group must differ from notifications-service's.
 
-### `grpc` — internal RPC (server bind, client targets, TLS)
+### `grpc` — internal RPC (server bind, deadline, message limits, TLS)
 
 [`grpc.config.ts`](../libs/config/src/namespaces/grpc.config.ts) · gateway (clients),
 identity/notifications/billing services (servers)
@@ -250,9 +253,6 @@ identity/notifications/billing services (servers)
 | Variable                       | Default                         | Description                                                                                                                                        |
 | ------------------------------ | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `GRPC_URL`                     | `0.0.0.0:50051`                 | Server bind address of **this** service (host dev: identity 50051, notifications 50052, billing 50053).                                            |
-| `IDENTITY_GRPC_URL`            | `localhost:50051`               | Client target (any grpc-js target syntax: `host:port`, `dns:///svc:port`, …).                                                                      |
-| `NOTIFICATIONS_GRPC_URL`       | `localhost:50052`               | Client target.                                                                                                                                     |
-| `BILLING_GRPC_URL`             | `localhost:50053`               | Client target.                                                                                                                                     |
 | `GRPC_DEADLINE_MS`             | `5000`                          | Default per-call deadline; every client call has one.                                                                                              |
 | `GRPC_MAX_MESSAGE_BYTES`       | `4194304`                       | Max send/receive message size (≥ 1024).                                                                                                            |
 | `GRPC_TLS_CA_PATH`             | —                               | PEM bundle that signed the **peers'** certificates (client-cert verification on servers; server verification on clients, system roots when unset). |
@@ -261,6 +261,21 @@ identity/notifications/billing services (servers)
 | `GRPC_TLS_REQUIRE_CLIENT_CERT` | `true`                          | Servers require a client certificate signed by the CA (mTLS). `false` = server-side TLS only.                                                      |
 | `GRPC_ALLOW_INSECURE`          | `false`                         | Explicit opt-out that lets `NODE_ENV=production` boot with plaintext gRPC (service mesh / NetworkPolicy secures it).                               |
 | `GRPC_REFLECTION`              | on unless `NODE_ENV=production` | gRPC server reflection (grpcurl / Postman).                                                                                                        |
+
+### `identityGrpcClient`, `notificationsGrpcClient`, `billingGrpcClient` — gRPC client targets
+
+One namespace per domain, next to its gRPC adapter, read by that domain's `XApiModule.forRemote()` when the
+gateway's module tree is defined:
+[`identity-grpc-client.config.ts`](../domains/identity/src/infrastructure/adapters/grpc/identity-grpc-client.config.ts),
+[`notifications-grpc-client.config.ts`](../domains/notifications/src/infrastructure/adapters/grpc/notifications-grpc-client.config.ts),
+[`billing-grpc-client.config.ts`](../domains/billing/src/infrastructure/adapters/grpc/billing-grpc-client.config.ts)
+· gateway. Deadlines, message limits and TLS stay in `grpc`.
+
+| Variable                 | Default           | Description                                                                             |
+| ------------------------ | ----------------- | --------------------------------------------------------------------------------------- |
+| `IDENTITY_GRPC_URL`      | `localhost:50051` | identity-service target (any grpc-js target syntax: `host:port`, `dns:///svc:port`, …). |
+| `NOTIFICATIONS_GRPC_URL` | `localhost:50052` | notifications-service target.                                                           |
+| `BILLING_GRPC_URL`       | `localhost:50053` | billing-service target.                                                                 |
 
 ### `auth` — JWT + Argon2id
 

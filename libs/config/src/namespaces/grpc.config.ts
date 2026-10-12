@@ -7,9 +7,6 @@ export const grpcEnvSchema = z
   .object({
     NODE_ENV: zNodeEnv(),
     GRPC_URL: zStr('0.0.0.0:50051'),
-    IDENTITY_GRPC_URL: zStr('localhost:50051'),
-    NOTIFICATIONS_GRPC_URL: zStr('localhost:50052'),
-    BILLING_GRPC_URL: zStr('localhost:50053'),
     GRPC_DEADLINE_MS: zInt(5000, { min: 1 }),
     GRPC_MAX_MESSAGE_BYTES: zInt(4_194_304, { min: 1024 }),
     // TLS for internal gRPC (PEM files). CERT + KEY switch it on, for the server AND as the client
@@ -54,12 +51,6 @@ export const grpcEnvSchema = z
   .transform((env) => ({
     /** Server bind address of THIS service. */
     url: env.GRPC_URL,
-    /** Client targets (any grpc-js target syntax: `host:port`, `dns:///svc:port`, …). */
-    clients: {
-      identity: env.IDENTITY_GRPC_URL,
-      notifications: env.NOTIFICATIONS_GRPC_URL,
-      billing: env.BILLING_GRPC_URL,
-    },
     /** Default per-call deadline; every client call MUST have one or a hung upstream pins resources. */
     deadlineMs: env.GRPC_DEADLINE_MS,
     maxMessageBytes: env.GRPC_MAX_MESSAGE_BYTES,
@@ -81,6 +72,9 @@ export const grpcEnvSchema = z
     reflection: env.GRPC_REFLECTION ?? env.NODE_ENV !== 'production',
   }));
 
-/** gRPC server bind address, client targets, deadlines, message limits, TLS and reflection. */
+/**
+ * gRPC server bind address, call deadlines, message limits, TLS and reflection. Client targets
+ * belong to each domain (`identityGrpcClient`, `notificationsGrpcClient`, `billingGrpcClient`).
+ */
 export const grpcConfig = defineConfigNamespace('grpc', grpcEnvSchema);
 export type GrpcConfig = ConfigType<typeof grpcConfig>;

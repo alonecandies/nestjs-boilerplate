@@ -94,11 +94,6 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
     });
     expect(grpcConfig.parse({})).toEqual({
       url: '0.0.0.0:50051',
-      clients: {
-        identity: 'localhost:50051',
-        notifications: 'localhost:50052',
-        billing: 'localhost:50053',
-      },
       deadlineMs: 5000,
       maxMessageBytes: 4_194_304,
       tls: undefined,

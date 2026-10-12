@@ -1,10 +1,10 @@
 import { BILLING_GRPC_PACKAGE } from '@domain/billing-contracts';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
-import { grpcConfig } from '@platform/config';
 import { GrpcClientsModule } from '@platform/transport';
 import { BillingPort } from './application/ports/billing.port.js';
 import { BillingCoreModule } from './billing-core.module.js';
 import { BillingGrpcAdapter } from './infrastructure/adapters/grpc/billing-grpc.adapter.js';
+import { billingGrpcClientConfig } from './infrastructure/adapters/grpc/billing-grpc-client.config.js';
 import { BillingLocalAdapter } from './infrastructure/adapters/local/billing-local.adapter.js';
 import { BillingResolver } from './presentation/graphql/billing.resolver.js';
 import { BillingController } from './presentation/http/billing.controller.js';
@@ -45,7 +45,11 @@ export class BillingApiModule {
    * client URL (`BILLING_GRPC_URL`) is read when `forRemote()` is called.
    */
   static forRemote(): DynamicModule {
-    const target = { spec: BILLING_GRPC_PACKAGE, url: grpcConfig.parse().clients.billing };
+    const target = {
+      spec: BILLING_GRPC_PACKAGE,
+      // Read when the module is defined: a client target cannot come from DI.
+      url: billingGrpcClientConfig.parse().url,
+    };
     return {
       module: BillingApiModule,
       imports: [GrpcClientsModule.register(target)],
