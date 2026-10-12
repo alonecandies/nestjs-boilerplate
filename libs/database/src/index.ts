@@ -26,6 +26,8 @@ export * from './drizzle/drizzle-transactional.adapter.js';
 export * from './drizzle/inject-drizzle.decorator.js';
 export * from './drizzle/postgres-options.js';
 export * from './health/database.health.js';
+export * from './migrator/migration-sets.js';
 export * from './migrator/migrations.constants.js';
 export * from './migrator/run-migrations.js';
 export * from './pagination/keyset.js';
+export * from './platform/platform.migrations.js';

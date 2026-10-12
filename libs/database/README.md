@@ -20,6 +20,9 @@ code (`DatabaseModule` `postgres.ssl`) wins at runtime, but the boot check only 
 | `DatabaseModule.forRootAsync<S>(options: DatabaseModuleOptions<S>): DynamicModule`                                                                      | module (global) | Pool + Drizzle handle, transactional CLS plugin, migrations on boot, health indicator                                                   |
 | `DatabaseModuleOptions<S>`                                                                                                                              | interface       | `{ schema: S; migrationsFolder?; runMigrations?; transactional?: boolean \| DatabaseTransactionalOptions; postgres?: PostgresOptions }` |
 | `DatabaseTransactionalOptions`                                                                                                                          | interface       | `{ defaultTxOptions?: PgTransactionConfig; enableTransactionProxy?: boolean }`                                                          |
+| `DatabaseMigrationSet`                                                                                                                                  | interface       | `{ name; folder; migrationsSchema; migrationsTable }`: one migration history with its own bookkeeping table                             |
+| `platformMigrations`                                                                                                                                    | const           | The platform set (`src/platform/migrations`, bookkeeping `app.__drizzle_migrations`): always applied first                              |
+| `withPlatformMigrations(sets)`                                                                                                                          | fn              | `[platformMigrations, ...sets]`; throws on a set listed twice or two sets sharing a bookkeeping table                                   |
 | `DRIZZLE`, `DATABASE_MODULE_OPTIONS`                                                                                                                    | symbols         | Injection tokens                                                                                                                        |
 | `InjectDrizzle()`                                                                                                                                       | decorator       | `@InjectDrizzle() private readonly db: DrizzleDB<typeof schema>`                                                                        |
 | `DrizzleDB<S>`, `DrizzleTransaction<S>`, `DrizzleExecutor<S>`, `DrizzleSchema`                                                                          | types           | Handle (`PostgresJsDatabase<S> & { $client: Sql }`), tx handle, db-or-tx, schema record                                                 |
@@ -139,3 +142,19 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
   does not match `ORDER BY … DESC`.
 - `drizzle.config.ts` drops globs that match nothing, so `drizzle-kit check/studio` work before any domain
   schema exists. `generate` still reports "No schema files found".
+
+## Platform migration set
+
+`platformMigrations` (`src/platform/migrations`, bookkeeping in `app.__drizzle_migrations`) holds the SQL no domain
+owns: the `app` schema and the extensions domain tables rely on (`pg_trgm` for identity's trigram index, created
+`WITH SCHEMA public` because drizzle-kit writes `gin_trgm_ops` unqualified). It is applied before every domain set,
+under the same advisory lock, and cannot be left out.
+
+The files are hand-written: drizzle-kit has nothing to diff here, and `drizzle-kit generate --custom` refuses to run
+without a schema file. The runtime migrator reads only `meta/_journal.json` and the `.sql` files. To add a file:
+
+1. create `src/platform/migrations/NNNN_<name>.sql` (next index; statements separated by `--> statement-breakpoint`);
+2. append `{ "idx": N, "version": "7", "when": <Date.now()>, "tag": "NNNN_<name>", "breakpoints": true }` to
+   `src/platform/migrations/meta/_journal.json`. `when` must be larger than the previous entry's: drizzle applies only
+   files newer than the last applied one;
+3. never edit an applied file. `platform.migrations.spec.ts` checks the journal against the folder.

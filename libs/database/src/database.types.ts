@@ -10,6 +10,20 @@ export interface DatabaseTransactionalOptions {
   enableTransactionProxy?: boolean;
 }
 
+/**
+ * One migration history: a drizzle-kit output folder plus its OWN bookkeeping table. Each domain
+ * exports one (`identityMigrations`, `billingMigrations`); `platformMigrations` always runs first.
+ */
+export interface DatabaseMigrationSet {
+  /** Label in logs and run summaries; unique within one process. */
+  readonly name: string;
+  /** `meta/_journal.json` + `NNNN_*.sql`, resolved from `import.meta.dirname` (src or dist). */
+  readonly folder: string;
+  /** Schema of the bookkeeping table `<migrationsSchema>.<migrationsTable>`, never shared. */
+  readonly migrationsSchema: string;
+  readonly migrationsTable: string;
+}
+
 export interface DatabaseModuleOptions<TSchema extends DrizzleSchema = DrizzleSchema> {
   /**
    * Drizzle schema (tables + relations) — enables the typed relational API (`db.query.users…`).
