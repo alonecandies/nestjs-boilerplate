@@ -54,6 +54,7 @@
   "devDependencies": {
     "@platform/testing": "workspace:*",
     "@nestjs/testing": "catalog:",
+    "@testcontainers/postgresql": "catalog:",
     "@types/lodash-es": "catalog:",
     "drizzle-kit": "catalog:"
   }
