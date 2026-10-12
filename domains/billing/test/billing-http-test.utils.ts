@@ -1,14 +1,15 @@
 /*
- * Edge test harness: real AuthModule (JWT guards → RBAC guards, tokens issued by the real
- * TokenService with the dev/test secret), Redis replaced by the in-memory fake, and the common
- * enhancers (both validation pipes + problem+json filter) exactly as the apps install them.
+ * Edge test harness: real AuthModule (JWT guards → RBAC guards; tokens signed by
+ * signTestAccessToken with the app's auth config), Redis replaced by the in-memory fake, and the
+ * common enhancers (both validation pipes + problem+json filter) exactly as the apps install them.
  */
 
 import { Global, type INestApplication, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { Role, TokenService } from '@platform/auth';
+import { Role } from '@platform/auth';
+import { signTestAccessToken } from '@platform/auth/testing';
 import { generateId } from '@platform/common';
-import { redisConfig } from '@platform/config';
+import { type AuthConfig, authConfig, redisConfig } from '@platform/config';
 import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 
@@ -31,7 +32,10 @@ export interface TestPrincipal {
 export async function loginAs(app: INestApplication, ...roles: Role[]): Promise<TestPrincipal> {
   const id = generateId();
   const email = `${roles.join('-') || 'nobody'}-${id.slice(-6)}@example.com`;
-  const { token } = await app.get(TokenService).issueAccessToken({ id, email, roles });
+  const { token } = await signTestAccessToken(
+    { id, email, roles },
+    { config: app.get<AuthConfig>(authConfig.KEY) },
+  );
   return { id, email, authorization: `Bearer ${token}` };
 }
 

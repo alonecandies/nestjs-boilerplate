@@ -225,7 +225,7 @@ through `TransactionHost` and join the active transaction.
   adapter (null normalisation, metadata, error mapping), gRPC controller (bus mapping, zod payload schemas).
 - Drizzle repositories: real Drizzle SQL generation on a recording postgres.js fake (ON CONFLICT targets,
   `FOR UPDATE`, optimistic lock, prepared list statements).
-- `billing.controller.spec.ts` — Fastify app with the real `AuthModule` guards (tokens from `TokenService`):
+- `billing.controller.spec.ts` — Fastify app with the real `AuthModule` guards (tokens from `signTestAccessToken`, `@platform/auth/testing`):
   401/403, 400 validation (body, query, `Idempotency-Key`), serialisation, raw-body webhook, OpenAPI document.
 - `billing.resolver.spec.ts` — Apollo on Fastify: payments + batched `user` field, RBAC, input validation.
 - `test/stripe-webhook.flow.spec.ts` — raw body → controller → local adapter → handler → relay → Kafka fake.

@@ -1,8 +1,9 @@
 import { Global, type INestApplication, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { AuthModule, type Role, TokenService } from '@platform/auth';
+import { AuthModule, type Role } from '@platform/auth';
+import { signTestAccessToken } from '@platform/auth/testing';
 import { generateId } from '@platform/common';
-import { AppConfigModule, redisConfig } from '@platform/config';
+import { AppConfigModule, type AuthConfig, authConfig, redisConfig } from '@platform/config';
 import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 
@@ -16,7 +17,7 @@ import { InMemoryRedis } from '@platform/redis/testing';
 export class FakeRedisModule {}
 
 /**
- * The real auth stack of an edge app: config, JWT issuing/verification (dev secrets), the
+ * The real auth stack of an edge app: config, JWT verification (dev secrets), the
  * denylist on an in-memory Redis and the GLOBAL guards (JwtAuthGuard → RolesGuard →
  * PermissionsGuard). Requests in tests carry genuine signed tokens.
  */
@@ -33,15 +34,16 @@ export interface TestPrincipal {
   exp: number;
 }
 
-/** Issues a real access token for a user with `roles`. */
+/** A real access token for a user with `roles`, signed with the app's `auth` config. */
 export async function principal(
   app: INestApplication,
   roles: Role[],
   id: string = generateId(),
 ): Promise<TestPrincipal> {
-  const issued = await app
-    .get(TokenService)
-    .issueAccessToken({ id, email: 'p@example.com', roles });
+  const issued = await signTestAccessToken(
+    { id, email: 'p@example.com', roles },
+    { config: app.get<AuthConfig>(authConfig.KEY) },
+  );
   return { id, token: issued.token, jti: issued.jti, exp: issued.exp };
 }
 

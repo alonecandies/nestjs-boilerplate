@@ -157,7 +157,7 @@ the lifetime of presigned URLs. See `@platform/storage` for the driver variables
 ## Tests (`bunx vitest run --project files`; no infrastructure needed)
 
 - `files.controller.spec.ts` runs a Fastify test app built from the real `AuthModule` guards,
-  the common enhancers, `StorageModule({ driver: 'memory' })` and real JWTs from `TokenService`.
+  the common enhancers, `StorageModule({ driver: 'memory' })` and real JWTs from `signTestAccessToken` (`@platform/auth/testing`).
   It covers:
   - real multipart uploads through `app.inject` with a `FormData` payload; storage receives a
     `Readable`, not a buffer
