@@ -84,13 +84,13 @@ const PAYMENT_ROWS = [
 const processedEvents = new Set<string>();
 const postgres = createFakePostgres(billingSchema, (sql, params) => {
   if (sql === 'select 1') return [{ '?column?': 1 }];
-  if (sql.startsWith('insert into "stripe_events"')) {
+  if (sql.startsWith('insert into "billing"."stripe_events"')) {
     const [eventId] = params as [string];
     if (processedEvents.has(eventId)) return []; // ON CONFLICT DO NOTHING
     processedEvents.add(eventId);
     return [{ id: eventId }];
   }
-  if (sql.includes('from "payments" where "payments"."user_id"')) {
+  if (sql.includes('from "billing"."payments" where "billing"."payments"."user_id"')) {
     if (params[0] === BROKEN_DB_USER_ID) {
       throw new Error('connection terminated unexpectedly (db 10.0.0.12:5432)');
     }
@@ -255,7 +255,7 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
       // The fake answers only the first-page statement: the resumed query is a different one.
       expect(second.items).toEqual([]);
       const resumed = postgres.executed.at(-1);
-      expect(resumed?.sql).toContain('"payments"."id" < $2');
+      expect(resumed?.sql).toContain('"billing"."payments"."id" < $2');
       expect(resumed?.params).toEqual([USER_ID, PAID_ID, 2]);
     });
 
@@ -310,10 +310,10 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
 
       expect(postgres.executed.slice(before).map((query) => query.sql)).toEqual([
         'BEGIN',
-        expect.stringContaining('insert into "stripe_events"'),
+        expect.stringContaining('insert into "billing"."stripe_events"'),
         'COMMIT',
         'BEGIN',
-        expect.stringContaining('insert into "stripe_events"'),
+        expect.stringContaining('insert into "billing"."stripe_events"'),
         'COMMIT',
       ]);
     });

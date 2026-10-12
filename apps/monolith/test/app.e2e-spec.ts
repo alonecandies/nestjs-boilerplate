@@ -360,7 +360,9 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
       });
       expect(response.statusCode, response.body).toBe(200);
       expect(response.json()).toEqual({ items: [], nextCursor: null });
-      const select = e2e.postgres.queries.find(({ sql }) => sql.includes('from "payments"'));
+      const select = e2e.postgres.queries.find(({ sql }) =>
+        sql.includes('from "billing"."payments"'),
+      );
       expect(select?.params).toContain(tokens.user.id);
     });
 
