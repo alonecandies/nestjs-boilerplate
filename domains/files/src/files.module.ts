@@ -1,8 +1,8 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { MultipartModule, type MultipartModuleOptions } from '@nestjs/platform-fastify/multipart';
-import { type StorageConfig, storageConfig } from '@platform/config';
 import { FilesService } from './application/files.service.js';
+import { type FilesConfig, filesConfig } from './files.config.js';
 import { FilesResolver } from './presentation/graphql/files.resolver.js';
 import { FilesController } from './presentation/http/files.controller.js';
 
@@ -17,13 +17,14 @@ import { FilesController } from './presentation/http/files.controller.js';
  */
 @Module({
   imports: [
-    ConfigModule.forFeature(storageConfig),
+    // The files context's own namespace (upload limits); storage settings belong to StorageModule.
+    ConfigModule.forFeature(filesConfig),
     // Module-wide default of every upload interceptor declared in this module: the per-file
     // byte limit comes from config (a decorator argument can't read it).
     MultipartModule.registerAsync({
-      imports: [ConfigModule.forFeature(storageConfig)],
-      inject: [storageConfig.KEY],
-      useFactory: (cfg: StorageConfig): MultipartModuleOptions => ({
+      imports: [ConfigModule.forFeature(filesConfig)],
+      inject: [filesConfig.KEY],
+      useFactory: (cfg: FilesConfig): MultipartModuleOptions => ({
         limits: { fileSize: cfg.maxUploadBytes },
       }),
     }),

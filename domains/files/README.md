@@ -49,7 +49,7 @@ export class AppModule {}
 // adapter registers @fastify/multipart on first use anyway, and FilesModule's own limits win in both cases.
 ```
 
-`FilesModule` imports `ConfigModule.forFeature(storageConfig)` and
+`FilesModule` imports `ConfigModule.forFeature(filesConfig)` (its own `files` namespace) and
 `MultipartModule.registerAsync(...)`. The second one makes `limits.fileSize = STORAGE_MAX_UPLOAD_BYTES`
 the default of the upload interceptor, because a decorator argument cannot read config. It
 provides `FilesService` and `FilesResolver`, registers `FilesController` and exports
@@ -131,7 +131,7 @@ users/{userId}/{uuidv7}-{safeFilename}      e.g. users/01a0…/01a0…-quarterly
 Malformed keys that reach the service (for example over GraphQL, or from other callers) raise
 @platform/storage's 422 `INVALID_STORAGE_KEY`. Storage outages raise its 502 `STORAGE_ERROR`.
 
-## Configuration (`storage` namespace)
+## Configuration (`files` namespace, `src/files.config.ts`)
 
 `STORAGE_MAX_UPLOAD_BYTES` (26214400) caps streamed uploads through the multipart `limits.fileSize`
 and presigned uploads through the announced `contentLength`. `STORAGE_MAX_CONCURRENT_UPLOADS` (4) caps
@@ -139,13 +139,13 @@ streamed uploads in flight per process (per replica / cluster worker); presigned
 counted. Memory budget: each streamed upload holds up to ~15 MiB of off-heap Buffers (S3 driver:
 `(S3_UPLOAD_QUEUE_SIZE + 1) × S3_UPLOAD_PART_SIZE`), outside `--max-old-space-size`, so keep
 `cap × 15 MiB` well below `container memory − max-old-space-size` (gateway: 4 × 15 = 60 MiB of
-512 − 384 = 128 MiB). `STORAGE_SIGNED_URL_TTL_SEC` (900) is
+512 − 384 = 128 MiB). The variables keep their `STORAGE_` names. `STORAGE_SIGNED_URL_TTL_SEC` (900, platform `storage` namespace) is
 the lifetime of presigned URLs. See `@platform/storage` for the driver variables (`STORAGE_DRIVER`, `S3_*`,
 `GCS_*`).
 
 ## Public API (`src/index.ts`)
 
-- `FilesModule`, `FilesService` (`upload`, `createUploadUrl`, `createDownloadUrl`, `deleteFile`, `maxUploadBytes`), `UPLOADED_BY_METADATA_KEY`
+- `FilesModule`, `FilesService` (`upload`, `createUploadUrl`, `createDownloadUrl`, `deleteFile`, `maxUploadBytes`), `UPLOADED_BY_METADATA_KEY`, `filesConfig` / `FilesConfig` (the `files` namespace)
 - `FilesController`, `FilesResolver`, `CreateUploadUrlInput`, `PresignedUploadModel`, `PresignedUploadHeaderModel`
 - zod schemas and types: `CreatePresignedUploadBodySchema`, `FileKeyQuerySchema`, `UploadedFileResponseSchema`, `PresignedUploadResponseSchema`, `DownloadUrlResponseSchema`
 - key and access helpers: `buildUserFileKey`, `userFilesPrefix`, `isFileKeyOwnedBy`, `isValidFileKey`, `filenameOfFileKey`, `resolveFileAccess`

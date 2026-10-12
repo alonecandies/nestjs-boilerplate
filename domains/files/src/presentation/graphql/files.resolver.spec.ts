@@ -4,7 +4,6 @@ import { GraphQLSchemaBuilderModule, GraphQLSchemaFactory, Query, Resolver } fro
 import { Test } from '@nestjs/testing';
 import { makeAuthUser, PERMISSIONS_KEY, PermissionsGuard, Role } from '@platform/auth';
 import { PermissionDeniedException } from '@platform/common';
-import { storageConfig } from '@platform/config';
 import { InMemoryStorageService } from '@platform/storage';
 import { validate } from 'class-validator';
 import type { GraphQLSchema } from 'graphql';
@@ -12,6 +11,7 @@ import { mapValues } from 'lodash-es';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { FilesService } from '../../application/files.service.js';
 import { FileTooLargeException } from '../../domain/files.errors.js';
+import { filesConfig } from '../../files.config.js';
 import { CreateUploadUrlInput } from './create-upload-url.input.js';
 import { FilesResolver } from './files.resolver.js';
 
@@ -82,7 +82,7 @@ describe('FilesResolver', () => {
 
   describe('createUploadUrl', () => {
     const user = makeAuthUser({ roles: [Role.User] });
-    const config = storageConfig.parse({ STORAGE_MAX_UPLOAD_BYTES: '1024' });
+    const config = filesConfig.parse({ STORAGE_MAX_UPLOAD_BYTES: '1024' });
     const resolver = new FilesResolver(new FilesService(new InMemoryStorageService(), config));
 
     it('maps the presigned upload to the GraphQL model (headers as a list)', async () => {

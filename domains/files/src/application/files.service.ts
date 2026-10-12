@@ -1,6 +1,5 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { DomainValidationException } from '@platform/common';
-import { type StorageConfig, storageConfig } from '@platform/config';
 import { StorageService } from '@platform/storage';
 import { assertAllowedContentType } from '../domain/file-content-type.js';
 import {
@@ -9,6 +8,7 @@ import {
   FileTooLargeException,
   UploadCapacityExceededException,
 } from '../domain/files.errors.js';
+import { type FilesConfig, filesConfig } from '../files.config.js';
 import { UPLOAD_RETRY_AFTER_SEC } from '../files.constants.js';
 import { resolveFileAccess } from './file-access.policy.js';
 import { buildUserFileKey, filenameOfFileKey } from './file-key.js';
@@ -39,7 +39,7 @@ export class FilesService {
 
   constructor(
     private readonly storage: StorageService,
-    @Inject(storageConfig.KEY) private readonly config: StorageConfig,
+    @Inject(filesConfig.KEY) private readonly config: FilesConfig,
   ) {}
 
   /** `STORAGE_MAX_UPLOAD_BYTES` — what the edge must bound streamed uploads to. */

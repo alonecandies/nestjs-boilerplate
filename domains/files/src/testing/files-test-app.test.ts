@@ -7,6 +7,7 @@ import { generateId, provideCommonEnhancers } from '@platform/common';
 import { storageConfig } from '@platform/config';
 import { InMemoryStorageService, StorageModule, StorageService } from '@platform/storage';
 import { createFastifyTestApp } from '@platform/testing';
+import { filesConfig } from '../files.config.js';
 import { FilesModule } from '../files.module.js';
 
 /**
@@ -53,9 +54,12 @@ export async function createFilesTestApp(options: FilesTestAppOptions = {}): Pro
   const builder = Test.createTestingModule({ imports: [FilesTestModule] })
     .overrideProvider(AccessTokenDenylist)
     .useValue(openDenylist)
+    // Storage defaults whatever the process environment holds (as before the limits moved).
     .overrideProvider(storageConfig.KEY)
+    .useValue(storageConfig.parse({}))
+    .overrideProvider(filesConfig.KEY)
     .useValue(
-      storageConfig.parse({
+      filesConfig.parse({
         STORAGE_MAX_UPLOAD_BYTES: String(options.maxUploadBytes ?? 4096),
         ...(options.maxConcurrentUploads === undefined
           ? {}

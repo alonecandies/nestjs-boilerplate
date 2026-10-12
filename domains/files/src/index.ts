@@ -10,6 +10,7 @@ export * from './application/files.service.js';
 export type * from './application/files.types.js';
 export * from './domain/file-content-type.js';
 export * from './domain/files.errors.js';
+export * from './files.config.js';
 export * from './files.constants.js';
 export * from './files.module.js';
 export * from './presentation/graphql/create-upload-url.input.js';

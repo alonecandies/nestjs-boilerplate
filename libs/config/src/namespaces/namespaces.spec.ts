@@ -107,7 +107,6 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
     });
     expect(storageConfig.parse({})).toMatchObject({
       driver: 's3',
-      maxConcurrentUploads: 4,
       s3: {
         endpoint: 'http://localhost:9000',
         publicEndpoint: 'http://localhost:9000',
@@ -213,6 +212,12 @@ describe('config namespaces — derived values and coercion', () => {
     ).toEqual({ enabled: true, appKey: 'k', appSecret: 's', serviceId: 'gw' });
   });
 
+  it('storage holds no upload limits (the files namespace of @domain/files owns them)', () => {
+    const storage = storageConfig.parse({ STORAGE_MAX_UPLOAD_BYTES: '1024' });
+    expect(storage).not.toHaveProperty('maxUploadBytes');
+    expect(storage).not.toHaveProperty('maxConcurrentUploads');
+  });
+
   it('storage: public endpoint defaults to the endpoint', () => {
     expect(
       storageConfig.parse({
@@ -235,7 +240,6 @@ describe('config namespaces — invalid values produce errors naming the env var
     [mailConfig, { SMTP_SECURE: 'yes' }, 'SMTP_SECURE'],
     [storageConfig, { STORAGE_DRIVER: 'azure' }, 'STORAGE_DRIVER'],
     [storageConfig, { STORAGE_SIGNED_URL_TTL_SEC: '999999' }, 'STORAGE_SIGNED_URL_TTL_SEC'],
-    [storageConfig, { STORAGE_MAX_CONCURRENT_UPLOADS: '0' }, 'STORAGE_MAX_CONCURRENT_UPLOADS'],
     [cacheConfig, { CACHE_L1_TTL_MS: '60000' }, 'CACHE_L1_TTL_MS'],
     [observabilityConfig, { METRICS_BEARER_TOKEN: 'short' }, 'METRICS_BEARER_TOKEN'],
     [authConfig, { JWT_ACCESS_SECRET: 'short' }, 'JWT_ACCESS_SECRET'],

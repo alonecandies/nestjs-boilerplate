@@ -2,7 +2,6 @@ import { Readable } from 'node:stream';
 import { Logger } from '@nestjs/common';
 import { makeAuthUser, Role } from '@platform/auth';
 import { DomainValidationException, generateId } from '@platform/common';
-import { type StorageConfig, storageConfig } from '@platform/config';
 import { InMemoryStorageService, type StorageService, type StoredObject } from '@platform/storage';
 import { createMock } from '@platform/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -13,9 +12,10 @@ import {
   UnsupportedFileTypeException,
   UploadCapacityExceededException,
 } from '../domain/files.errors.js';
+import { type FilesConfig, filesConfig } from '../files.config.js';
 import { FilesService, UPLOADED_BY_METADATA_KEY } from './files.service.js';
 
-const config: StorageConfig = storageConfig.parse({ STORAGE_MAX_UPLOAD_BYTES: '1000' });
+const config: FilesConfig = filesConfig.parse({ STORAGE_MAX_UPLOAD_BYTES: '1000' });
 
 describe('FilesService', () => {
   const alice = makeAuthUser({ roles: [Role.User] });
@@ -108,7 +108,7 @@ describe('FilesService', () => {
 
   describe('upload concurrency cap (STORAGE_MAX_CONCURRENT_UPLOADS)', () => {
     const MAX = 2;
-    const capped: StorageConfig = storageConfig.parse({
+    const capped: FilesConfig = filesConfig.parse({
       STORAGE_MAX_UPLOAD_BYTES: '1000',
       STORAGE_MAX_CONCURRENT_UPLOADS: String(MAX),
     });
