@@ -1,11 +1,12 @@
-import { AuthPort, UsersPort } from '@domain/identity';
+import { AuthPort, refreshTokenConfig, TokenIssuer, UsersPort } from '@domain/identity';
 import { NotificationsPort } from '@domain/notifications';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import { JwtService } from '@nestjs/jwt';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
-import { AccessTokenDenylist, TokenService } from '@platform/auth';
+import { AccessTokenDenylist } from '@platform/auth';
 import { buildFastifyOptions, configureHttpApp, setupApiDocs } from '@platform/bootstrap';
-import { appConfig } from '@platform/config';
+import { appConfig, authConfig } from '@platform/config';
 import { GRAPHQL_PUB_SUB } from '@platform/graphql';
 import { createL1Store, REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
@@ -47,15 +48,16 @@ export async function createGatewayE2eApp() {
   const identity = new FakeIdentityState();
   const notifications = new FakeNotificationsPort();
   const storage = new InMemoryStorageService();
+  // identity-service's signer, built from the env the gateway's AuthModule verifies with.
+  const issuer = new TokenIssuer(new JwtService(), authConfig.parse(), refreshTokenConfig.parse());
 
   const builder = Test.createTestingModule({ imports: [AppModule] })
     .overrideProvider(REDIS_CLIENT)
     .useValue(redis.asRedis())
     .overrideProvider(AuthPort)
     .useFactory({
-      factory: (tokens: TokenService, denylist: AccessTokenDenylist) =>
-        new FakeAuthPort(identity, tokens, denylist),
-      inject: [TokenService, AccessTokenDenylist],
+      factory: (denylist: AccessTokenDenylist) => new FakeAuthPort(identity, issuer, denylist),
+      inject: [AccessTokenDenylist],
     })
     .overrideProvider(UsersPort)
     .useValue(new FakeUsersPort(identity))

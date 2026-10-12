@@ -1,20 +1,21 @@
-import type { AccessTokenDenylist, TokenService } from '@platform/auth';
+import type { AccessTokenDenylist } from '@platform/auth';
 import { UnauthenticatedException } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { mockOf } from '../../../../test/mocks.js';
+import type { TokenIssuer } from '../../../infrastructure/security/token-issuer.service.js';
 import type { SessionsRepository } from '../../persistence/sessions.repository.js';
 import { LogoutCommand } from './logout.command.js';
 import { LogoutHandler } from './logout.handler.js';
 
 describe('LogoutHandler', () => {
   let denylist: ReturnType<typeof mockOf<AccessTokenDenylist>>;
-  let tokens: ReturnType<typeof mockOf<TokenService>>;
+  let tokens: ReturnType<typeof mockOf<TokenIssuer>>;
   let sessions: ReturnType<typeof mockOf<SessionsRepository>>;
   let handler: LogoutHandler;
 
   beforeEach(() => {
     denylist = mockOf<AccessTokenDenylist>({ deny: async () => undefined });
-    tokens = mockOf<TokenService>({
+    tokens = mockOf<TokenIssuer>({
       verifyRefreshToken: async () => ({
         sub: 'u-1',
         jti: 's-9',

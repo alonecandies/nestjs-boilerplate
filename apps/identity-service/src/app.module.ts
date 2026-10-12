@@ -38,7 +38,7 @@ import { KafkaProducerModule } from '@platform/transport';
     DatabaseModule.forRootAsync({ schema: identitySchema }),
     RedisModule.forRootAsync(),
     KafkaProducerModule.forRootAsync(),
-    // TokenService / AccessTokenDenylist for the handlers (PasswordHasher comes with
+    // AccessTokenDenylist for LogoutHandler (PasswordHasher and TokenIssuer come with
     // IdentityCoreModule). No global guards: the service only answers the gateway, which
     // authenticates and authorises every request.
     AuthModule.forRootAsync({ globalGuards: false }),

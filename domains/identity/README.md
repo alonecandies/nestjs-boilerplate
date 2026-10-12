@@ -24,7 +24,8 @@ src/
 │   ├── adapters/local/     AuthLocalAdapter, UsersLocalAdapter (CommandBus / QueryBus)
 │   ├── adapters/grpc/      AuthGrpcAdapter, UsersGrpcAdapter, IdentityGrpcCaller (deadline + breaker + metadata)
 │   ├── scheduling/         PurgeExpiredSessionsCron (@Cron hourly + @WithLock)
-│   └── security/           PasswordHasher (Argon2id; password.config.ts: ARGON2_*)
+│   └── security/           PasswordHasher (Argon2id; password.config.ts), TokenIssuer (access + refresh
+│                           JWTs, refresh verification; refresh-token.config.ts)
 └── presentation/
     ├── http/               AuthController, UsersController, DTOs, response classes, LocalStrategy, LoginRequestGuard
     ├── graphql/            UsersResolver, AuthResolver, UserModel, AuthPayloadModel, UserConnectionModel,
@@ -38,12 +39,12 @@ abstractions; only `IdentityCoreModule` knows they are Drizzle/Postgres.
 
 ## Modules and app wiring
 
-| Module                                  | Contents                                                                                                                                                | Used by                    |
-| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
-| `IdentityCoreModule`                    | command/query/event handlers, relay, repositories (Drizzle), `TransactionRunner`, `SessionTokensService`, cron, `PasswordHasher` (`password` namespace) | monolith, identity-service |
-| `IdentityGrpcModule`                    | `IdentityCoreModule` + `AuthGrpcController`, `UsersGrpcController`                                                                                      | identity-service           |
-| `IdentityApiModule.forLocal()`          | REST controllers, GraphQL resolvers, `LocalStrategy`, `UserReadCache`, `users` DataLoader + ports → local adapters + `IdentityCoreModule`               | monolith                   |
-| `IdentityApiModule.forRemote(options?)` | same presentation + ports → gRPC adapters + `GrpcClientsModule.register({ spec: IDENTITY_GRPC_PACKAGE, url }, options)`                                 | gateway                    |
+| Module                                  | Contents                                                                                                                                                                                                                     | Used by                    |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
+| `IdentityCoreModule`                    | command/query/event handlers, relay, repositories (Drizzle), `TransactionRunner`, `SessionTokensService`, cron, `PasswordHasher` (`password` namespace), `TokenIssuer` (own `JwtModule`; `auth` + `refreshToken` namespaces) | monolith, identity-service |
+| `IdentityGrpcModule`                    | `IdentityCoreModule` + `AuthGrpcController`, `UsersGrpcController`                                                                                                                                                           | identity-service           |
+| `IdentityApiModule.forLocal()`          | REST controllers, GraphQL resolvers, `LocalStrategy`, `UserReadCache`, `users` DataLoader + ports → local adapters + `IdentityCoreModule`                                                                                    | monolith                   |
+| `IdentityApiModule.forRemote(options?)` | same presentation + ports → gRPC adapters + `GrpcClientsModule.register({ spec: IDENTITY_GRPC_PACKAGE, url }, options)`                                                                                                      | gateway                    |
 
 The modules assume these app-level (global) modules:
 
@@ -109,8 +110,10 @@ No Kafka consumer group is needed: identity only **produces** `identity.user-reg
   GraphQL: `AuthPort.login`): unknown email burns `verifyDummy` (equal timing), wrong password and
   unknown email share one 401 `INVALID_CREDENTIALS`. Outdated argon2 parameters are re-hashed
   transparently (best effort).
-- **Tokens**: access JWT (15 min, HS256, `jti` uuidv7) and refresh JWT (7 d, separate secret,
-  `jti` = session id). The `sessions` row stores `sha256(refreshToken)` only.
+- **Tokens**: `TokenIssuer` signs the access JWT (15 min, HS256, `jti` uuidv7; `JWT_ACCESS_*` from
+  the platform `auth` namespace that every verifier shares) and the refresh JWT (7 d, its own
+  secret from identity's `refreshToken` namespace, `jti` = session id), and verifies refresh
+  tokens. The `sessions` row stores `sha256(refreshToken)` only.
 - **Refresh rotation**: verify the JWT (no DB access for garbage) → one transaction:
   `UPDATE sessions SET revoked_at, replaced_by_id WHERE id AND user_id AND refresh_token_hash AND
 revoked_at IS NULL AND expires_at > now RETURNING id` (compare-and-set: concurrent refreshes of
@@ -210,7 +213,7 @@ load it. Migrations are generated centrally in `@platform/database`.
 
 ## Configuration
 
-Identity's own `password` namespace (`ARGON2_MEMORY_COST`, `ARGON2_TIME_COST`, `ARGON2_PARALLELISM`; `infrastructure/security/password.config.ts`, loaded by `IdentityCoreModule`) and these `@platform/config` namespaces: `auth` (`JWT_*`, `AUTH_DENYLIST_ENABLED`),
+Identity's own namespaces, loaded by `IdentityCoreModule` (`infrastructure/security/`): `password` (`ARGON2_MEMORY_COST`, `ARGON2_TIME_COST`, `ARGON2_PARALLELISM`) and `refreshToken` (`JWT_REFRESH_SECRET`, `JWT_REFRESH_TTL_SEC`; it reads `JWT_ACCESS_SECRET` only for the production must-differ check). From `@platform/config`: `auth` (`JWT_ACCESS_*`, `JWT_ISSUER`/`JWT_AUDIENCE`, `AUTH_DENYLIST_ENABLED`),
 `grpc` (`IDENTITY_GRPC_URL`, `GRPC_DEADLINE_MS`) for the gateway, `throttle`
 (`THROTTLE_AUTH_LIMIT` / `THROTTLE_AUTH_TTL_MS` for `@AuthThrottle`), `redis` (key prefix of
 locks, denylist and cache).
@@ -220,7 +223,7 @@ locks, denylist and cache).
 `bunx vitest run --project identity` needs no infrastructure:
 
 - domain: aggregate invariants/events, session rules, role list vs `@platform/auth`;
-- security: `PasswordHasher` (Argon2id parameters, per-hash salt, over-long inputs, rehash detection) and the `password` namespace;
+- security: `PasswordHasher` (Argon2id parameters, per-hash salt, over-long inputs, rehash detection), `TokenIssuer` (claims accepted by the platform `TokenService`, refresh verification, `typ` cross-check, expiry) and the `password` / `refreshToken` namespaces (defaults, production guards);
 - every command/query handler with mocked repositories/ports (rotation order, reuse detection
   outside the transaction, timing-safe login, rehash, batching/order of `GetUsersByIds`, …);
 - repositories: Drizzle's real query building over a fake postgres.js client (exact SQL, keyset,

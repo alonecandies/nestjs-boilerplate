@@ -1,19 +1,19 @@
-import type { TokenService } from '@platform/auth';
 import { sha256Hex } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { makeUserRecord } from '../../../test/fixtures.js';
 import { mockOf } from '../../../test/mocks.js';
+import type { TokenIssuer } from '../../infrastructure/security/token-issuer.service.js';
 import type { SessionsRepository } from '../persistence/sessions.repository.js';
 import { SessionTokensService } from './session-tokens.service.js';
 
 describe('SessionTokensService', () => {
   const expiresAt = new Date('2026-10-06T12:00:00.000Z');
-  let tokens: ReturnType<typeof mockOf<TokenService>>;
+  let tokens: ReturnType<typeof mockOf<TokenIssuer>>;
   let sessions: ReturnType<typeof mockOf<SessionsRepository>>;
   let service: SessionTokensService;
 
   beforeEach(() => {
-    tokens = mockOf<TokenService>({
+    tokens = mockOf<TokenIssuer>({
       issueRefreshToken: async () => ({ token: 'refresh-jwt', expiresAt }),
       issueAccessToken: async () => ({ token: 'access-jwt', jti: 'jti', expiresIn: 900, exp: 1 }),
     });

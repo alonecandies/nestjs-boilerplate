@@ -1,7 +1,7 @@
 import type { AuthTokens } from '@domain/identity-contracts';
 import { Logger } from '@nestjs/common';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
-import { AuthErrorCode, type RefreshTokenClaims, TokenService } from '@platform/auth';
+import { AuthErrorCode, type RefreshTokenClaims } from '@platform/auth';
 import {
   type DomainException,
   generateId,
@@ -14,6 +14,7 @@ import {
   SessionExpiredException,
 } from '../../../domain/identity.errors.js';
 import { classifyRefreshRejection } from '../../../domain/session.js';
+import { TokenIssuer } from '../../../infrastructure/security/token-issuer.service.js';
 import { SessionsRepository } from '../../persistence/sessions.repository.js';
 import { TransactionRunner } from '../../persistence/transaction-runner.js';
 import { UsersRepository } from '../../persistence/users.repository.js';
@@ -34,7 +35,7 @@ export class RefreshSessionHandler implements ICommandHandler<RefreshSessionComm
   private readonly logger = new Logger(RefreshSessionHandler.name);
 
   constructor(
-    private readonly tokens: TokenService,
+    private readonly tokens: TokenIssuer,
     private readonly users: UsersRepository,
     private readonly sessions: SessionsRepository,
     private readonly sessionTokens: SessionTokensService,

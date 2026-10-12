@@ -26,19 +26,22 @@ const subject = {
   roles: [Role.Admin, Role.User],
 };
 
+type DecodedClaims = Record<string, unknown> & { iat: number; exp: number };
+
 describe('signTestAccessToken parity with TokenIssuer', () => {
-  it('signs the claims production issues: same keys; same iss, aud, typ, email and roles', async () => {
-    const issued = jwt.decode<Record<string, unknown>>(
-      (await issuer.issueAccessToken(subject)).token,
-    );
-    const signed = jwt.decode<Record<string, unknown>>(
+  it('signs the claims production issues: same keys; same sub, iss, aud, typ, email, roles and TTL', async () => {
+    const issued = jwt.decode<DecodedClaims>((await issuer.issueAccessToken(subject)).token);
+    const signed = jwt.decode<DecodedClaims>(
       (await signTestAccessToken(subject, { config: access })).token,
     );
 
     expect(Object.keys(signed).sort()).toEqual(Object.keys(issued).sort());
-    for (const claim of ['iss', 'aud', 'typ', 'email', 'roles']) {
+    for (const claim of ['sub', 'iss', 'aud', 'typ', 'email', 'roles']) {
       expect(signed[claim], claim).toEqual(issued[claim]);
     }
+    // The configured TTL (600 s, not the 900 s default) reached both tokens.
+    expect(issued.exp - issued.iat).toBe(600);
+    expect(signed.exp - signed.iat).toBe(issued.exp - issued.iat);
     expect(issued).toMatchObject({ iss: 'parity-issuer', aud: 'parity-audience' });
   });
 });

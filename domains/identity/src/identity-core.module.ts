@@ -1,5 +1,7 @@
 import { Module, type Provider } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { JwtModule } from '@nestjs/jwt';
+import { authConfig } from '@platform/config';
 import { LoginHandler } from './application/commands/login/login.handler.js';
 import { LogoutHandler } from './application/commands/logout/logout.handler.js';
 import { PurgeExpiredSessionsHandler } from './application/commands/purge-expired-sessions/purge-expired-sessions.handler.js';
@@ -21,6 +23,8 @@ import { DrizzleUsersRepository } from './infrastructure/persistence/drizzle-use
 import { PurgeExpiredSessionsCron } from './infrastructure/scheduling/purge-expired-sessions.cron.js';
 import { passwordConfig } from './infrastructure/security/password.config.js';
 import { PasswordHasher } from './infrastructure/security/password-hasher.service.js';
+import { refreshTokenConfig } from './infrastructure/security/refresh-token.config.js';
+import { TokenIssuer } from './infrastructure/security/token-issuer.service.js';
 
 export const IDENTITY_COMMAND_HANDLERS = [
   RegisterUserHandler,
@@ -44,21 +48,31 @@ const PERSISTENCE: Provider[] = [
 
 /**
  * The identity core: CQRS handlers, the Kafka relay, repositories, the session purge cron and
- * `PasswordHasher` (Argon2id, its own `password` config namespace).
+ * identity's security services: `PasswordHasher` (`password` namespace) and `TokenIssuer` (its own
+ * `JwtModule`; `auth` + `refreshToken` namespaces).
  * Imported by the monolith (through `IdentityApiModule.forLocal()`) and identity-service
  * (through `IdentityGrpcModule`). Expects the app-level global modules: `CqrsModule.forRoot()`,
  * `DatabaseModule.forRootAsync({ schema: identitySchema })` (Drizzle + transactional CLS plugin),
- * `RedisModule` (denylist, locks), `AuthModule` (TokenService, denylist),
+ * `RedisModule` (denylist, locks), `AuthModule` (the access-token denylist),
  * `KafkaProducerModule` and — for the cron — `ScheduleModule.forRoot()`.
  */
 @Module({
-  imports: [ConfigModule.forFeature(passwordConfig)],
+  imports: [
+    ConfigModule.forFeature(passwordConfig),
+    // TokenIssuer: the access-token settings stay in the platform `auth` namespace (every verifier
+    // reads them); the refresh secret and TTL are identity's own. Every sign/verify call passes
+    // its secret, algorithm, iss and aud, so this JwtModule carries no defaults.
+    ConfigModule.forFeature(authConfig),
+    ConfigModule.forFeature(refreshTokenConfig),
+    JwtModule.register({}),
+  ],
   providers: [
     ...IDENTITY_COMMAND_HANDLERS,
     ...IDENTITY_QUERY_HANDLERS,
     ...IDENTITY_EVENT_HANDLERS,
     ...PERSISTENCE,
     PasswordHasher,
+    TokenIssuer,
     SessionTokensService,
     PurgeExpiredSessionsCron,
   ],

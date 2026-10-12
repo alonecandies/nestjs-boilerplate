@@ -118,6 +118,7 @@
       "devDependencies": {
         "@domain/identity-contracts": "workspace:*",
         "@domain/notifications-contracts": "workspace:*",
+        "@nestjs/jwt": "catalog:",
         "@nestjs/testing": "catalog:",
         "@platform/testing": "workspace:*",
         "cache-manager": "catalog:",
