@@ -1,9 +1,9 @@
 import 'reflect-metadata';
+import { NOTIFICATIONS_GRPC_PACKAGE } from '@domain/notifications-contracts';
 import { Logger } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { createServiceApp, listen } from '@platform/bootstrap';
 import { withTimeout } from '@platform/common';
-import { NOTIFICATIONS_GRPC_PACKAGE } from '@platform/contracts';
 import { flushLogs } from '@platform/observability';
 import { connectGrpcServer, connectKafkaConsumer } from '@platform/transport';
 import { AppModule } from './app.module.js';

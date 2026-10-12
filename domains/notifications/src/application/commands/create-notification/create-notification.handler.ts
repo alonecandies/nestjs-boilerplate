@@ -1,6 +1,6 @@
+import type { Notification } from '@domain/notifications-contracts';
 import { CommandHandler, EventPublisher, type ICommandHandler } from '@nestjs/cqrs';
 import { generateId } from '@platform/common';
-import type { Notification } from '@platform/contracts';
 import { NotificationEntity } from '../../../domain/notification.entity.js';
 import { deriveNotificationId } from '../../../domain/notification-id.js';
 import { toNotificationContract } from '../../mappers/notification.mapper.js';

@@ -1,3 +1,4 @@
+import type { AuthTokens } from '@domain/identity-contracts';
 import {
   Body,
   ClassSerializerInterceptor,
@@ -25,7 +26,6 @@ import {
 } from '@nestjs/swagger';
 import { type AuthUser, CurrentUser, LocalAuthGuard } from '@platform/auth';
 import { Public, type RequestLike } from '@platform/common';
-import type { AuthTokens } from '@platform/contracts';
 import { AuthThrottle } from '@platform/redis';
 import { AuthPort } from '../../application/ports/auth.port.js';
 import { clientInfoOf } from '../shared/client-info.util.js';

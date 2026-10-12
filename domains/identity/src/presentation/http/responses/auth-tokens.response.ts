@@ -1,6 +1,6 @@
+import type { AuthTokens } from '@domain/identity-contracts';
 import { ApiProperty } from '@nestjs/swagger';
 import { ExternalServiceException } from '@platform/common';
-import type { AuthTokens } from '@platform/contracts';
 import { Exclude, Expose, Type } from 'class-transformer';
 import { UserResponse } from './user.response.js';
 

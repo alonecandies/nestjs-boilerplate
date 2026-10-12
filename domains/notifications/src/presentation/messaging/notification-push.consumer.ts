@@ -1,6 +1,7 @@
+import { NOTIFICATION_CREATED_EVENT } from '@domain/notifications-contracts';
 import { Logger } from '@nestjs/common';
 import { Payload } from '@nestjs/microservices';
-import { type EventEnvelopeOf, NOTIFICATION_CREATED_EVENT } from '@platform/contracts';
+import type { EventEnvelopeOf } from '@platform/contracts';
 import { type GraphqlPubSub, InjectPubSub } from '@platform/graphql';
 import { InjectRedis, RedisKeyService } from '@platform/redis';
 import {

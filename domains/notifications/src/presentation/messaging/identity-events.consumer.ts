@@ -1,6 +1,7 @@
+import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
 import { CommandBus } from '@nestjs/cqrs';
 import { Payload } from '@nestjs/microservices';
-import { type EventEnvelopeOf, USER_REGISTERED_EVENT } from '@platform/contracts';
+import type { EventEnvelopeOf } from '@platform/contracts';
 import {
   KafkaConsumerController,
   KafkaEventPattern,

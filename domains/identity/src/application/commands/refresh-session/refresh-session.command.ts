@@ -1,5 +1,5 @@
+import type { AuthTokens, ClientInfo } from '@domain/identity-contracts';
 import { Command } from '@nestjs/cqrs';
-import type { AuthTokens, ClientInfo } from '@platform/contracts';
 
 /** Rotates a refresh token: revokes its session and opens the successor (reuse detection). */
 export class RefreshSessionCommand extends Command<AuthTokens> {

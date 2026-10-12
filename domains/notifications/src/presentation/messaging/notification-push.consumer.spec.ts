@@ -1,11 +1,11 @@
+import {
+  NOTIFICATION_CREATED_EVENT,
+  type NotificationCreatedPayload,
+} from '@domain/notifications-contracts';
 import { Test } from '@nestjs/testing';
 import { generateId } from '@platform/common';
 import { redisConfig } from '@platform/config';
-import {
-  createEventEnvelope,
-  NOTIFICATION_CREATED_EVENT,
-  type NotificationCreatedPayload,
-} from '@platform/contracts';
+import { createEventEnvelope } from '@platform/contracts';
 import { GRAPHQL_PUB_SUB } from '@platform/graphql';
 import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';

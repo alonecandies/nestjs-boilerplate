@@ -1,11 +1,11 @@
 import { createServer } from 'node:net';
+import { BILLING_GRPC_PACKAGE } from '@domain/billing-contracts';
 import { type INestMicroservice, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { DomainValidationException, generateId } from '@platform/common';
 import { AppConfigModule, grpcConfig } from '@platform/config';
-import { BILLING_GRPC_PACKAGE } from '@platform/contracts';
 import { createGrpcServerStrategy } from '@platform/transport';
 import { ClsModule } from 'nestjs-cls';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';

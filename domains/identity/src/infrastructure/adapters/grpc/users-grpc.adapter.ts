@@ -1,5 +1,3 @@
-import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
-import type { ClientGrpc } from '@nestjs/microservices';
 import {
   IDENTITY_GRPC_PACKAGE,
   type ListUsersRequest,
@@ -8,7 +6,9 @@ import {
   type User,
   type UserPage,
   type UsersServiceClient,
-} from '@platform/contracts';
+} from '@domain/identity-contracts';
+import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
+import type { ClientGrpc } from '@nestjs/microservices';
 import type { UsersPort } from '../../../application/ports/users.port.js';
 import { normalizeUser, normalizeUserPage } from './grpc-contract.normalizer.js';
 import { IdentityGrpcCaller } from './identity-grpc.caller.js';

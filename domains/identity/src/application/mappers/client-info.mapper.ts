@@ -1,4 +1,4 @@
-import type { ClientInfo } from '@platform/contracts';
+import type { ClientInfo } from '@domain/identity-contracts';
 import { isString } from 'lodash-es';
 import { IDENTITY_LIMITS } from '../../identity.constants.js';
 

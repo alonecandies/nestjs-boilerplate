@@ -1,5 +1,9 @@
+import {
+  NOTIFICATION_TYPES,
+  type Notification,
+  type NotificationType,
+} from '@domain/notifications-contracts';
 import { isUuidV7, uuidV7Timestamp } from '@platform/common';
-import { NOTIFICATION_TYPES, type Notification, type NotificationType } from '@platform/contracts';
 
 /** A contract notification as every edge renders it (REST, GraphQL, WebSocket). */
 export interface NotificationView {

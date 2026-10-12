@@ -1,6 +1,6 @@
+import type { User } from '@domain/identity-contracts';
 import { ApiProperty } from '@nestjs/swagger';
 import { Role } from '@platform/auth';
-import type { User } from '@platform/contracts';
 import { Exclude, Expose } from 'class-transformer';
 import { toUserView } from '../../shared/user-view.js';
 

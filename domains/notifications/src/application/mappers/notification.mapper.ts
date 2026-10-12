@@ -3,7 +3,7 @@ import type {
   NotificationCreatedPayload,
   NotificationPage,
   NotificationType,
-} from '@platform/contracts';
+} from '@domain/notifications-contracts';
 import type { NotificationKind, NotificationProps } from '../../domain/notification.types.js';
 import type { NotificationsSlice } from '../ports/notifications.repository.js';
 

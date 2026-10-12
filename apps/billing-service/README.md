@@ -31,7 +31,7 @@ loaded here too, though unused.)
 | `BillingGrpcModule`                                                      | `BillingCoreModule` + `BillingGrpcController`                                                                      |
 | `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`            | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC too                                  |
 
-`main.ts`: `createServiceApp(AppModule)` → `connectGrpcServer(app, ['billing'])` →
+`main.ts`: `createServiceApp(AppModule)` → `connectGrpcServer(app, [BILLING_GRPC_PACKAGE])` →
 `startAllMicroservices()` → `listen(app)`.
 
 | RPC                                    | Dispatches                                                                                                   |

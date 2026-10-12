@@ -1,3 +1,4 @@
+import type { NotificationsServiceClient } from '@domain/notifications-contracts';
 import type { Metadata } from '@grpc/grpc-js';
 import type { ClientGrpc } from '@nestjs/microservices';
 import {
@@ -6,7 +7,6 @@ import {
   uuidV7Timestamp,
 } from '@platform/common';
 import { grpcConfig } from '@platform/config';
-import type { NotificationsServiceClient } from '@platform/contracts';
 import { createMock } from '@platform/testing';
 import {
   createErrorTrailers,

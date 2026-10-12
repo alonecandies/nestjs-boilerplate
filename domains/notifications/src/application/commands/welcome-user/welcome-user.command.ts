@@ -1,5 +1,5 @@
+import type { Notification } from '@domain/notifications-contracts';
 import { Command } from '@nestjs/cqrs';
-import type { Notification } from '@platform/contracts';
 
 export interface WelcomeUserInput {
   userId: string;

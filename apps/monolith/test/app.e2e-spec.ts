@@ -9,9 +9,9 @@ await vi.hoisted(async () => {
 });
 
 import { BillingLocalAdapter, BillingPort } from '@domain/billing';
+import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
 import { NotificationsLocalAdapter, NotificationsPort } from '@domain/notifications';
 import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
-import { USER_REGISTERED_EVENT } from '@platform/contracts';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { bearer, expectProblem, graphql, multipartFile } from './support/http.js';
 import { createMonolithE2eApp, type MonolithE2e } from './support/monolith-e2e-app.js';

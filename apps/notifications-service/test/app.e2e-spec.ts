@@ -1,3 +1,10 @@
+import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
+import {
+  NOTIFICATION_CREATED_EVENT,
+  NOTIFICATIONS_GRPC_PACKAGE,
+  type NotificationPage,
+  type NotificationsServiceClient,
+} from '@domain/notifications-contracts';
 import { type ServiceError, status } from '@grpc/grpc-js';
 import { getQueueToken } from '@nestjs/bullmq';
 import { ClientGrpcProxy } from '@nestjs/microservices';
@@ -6,14 +13,7 @@ import { Test } from '@nestjs/testing';
 import { CASSANDRA_CLIENT } from '@platform/cassandra';
 import { DomainValidationException, EntityNotFoundException, generateId } from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
-import {
-  createEventEnvelope,
-  NOTIFICATION_CREATED_EVENT,
-  NOTIFICATIONS_GRPC_PACKAGE,
-  type NotificationPage,
-  type NotificationsServiceClient,
-  USER_REGISTERED_EVENT,
-} from '@platform/contracts';
+import { createEventEnvelope } from '@platform/contracts';
 import { MAIL_QUEUE, MailProcessor } from '@platform/mailer';
 import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';

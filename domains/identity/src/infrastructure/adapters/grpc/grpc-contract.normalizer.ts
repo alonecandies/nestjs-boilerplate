@@ -1,4 +1,4 @@
-import type { AuthTokens, User, UserPage } from '@platform/contracts';
+import type { AuthTokens, User, UserPage } from '@domain/identity-contracts';
 import { isEmpty } from 'lodash-es';
 
 /**

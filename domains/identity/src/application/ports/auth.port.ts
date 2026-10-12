@@ -4,7 +4,7 @@ import type {
   LogoutRequest,
   RefreshTokensRequest,
   RegisterRequest,
-} from '@platform/contracts';
+} from '@domain/identity-contracts';
 
 /**
  * Authentication flows as seen by the presentation layer (REST, GraphQL, passport-local).

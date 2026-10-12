@@ -12,12 +12,12 @@ vi.mock('@domain/identity', async () => {
   return { UserModel, USERS_LOADER: 'users' };
 });
 
+import type { Payment } from '@domain/billing-contracts';
 import { Injectable, type OnModuleInit } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { AuthModule } from '@platform/auth';
 import { generateId, provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
-import type { Payment } from '@platform/contracts';
 import { AppGraphqlModule, DataLoaderRegistry } from '@platform/graphql';
 import { createFastifyTestApp, type Mocked } from '@platform/testing';
 import DataLoader from 'dataloader';

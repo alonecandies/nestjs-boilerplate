@@ -1,9 +1,9 @@
+import type { Payment } from '@domain/billing-contracts';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Test } from '@nestjs/testing';
 import { AuthModule } from '@platform/auth';
 import { DomainValidationException, generateId, provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
-import type { Payment } from '@platform/contracts';
 import { createFastifyTestApp, createMock, type Mocked } from '@platform/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {

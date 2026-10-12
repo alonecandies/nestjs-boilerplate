@@ -1,5 +1,5 @@
+import { defineEventContract, type EventContract } from '@platform/contracts';
 import { z } from 'zod';
-import { defineEventContract, type EventContract } from './event-contract.js';
 
 /** Payload of `billing.payment-succeeded.v1`: a Stripe Checkout Session was paid. */
 export const paymentSucceededPayload = z.object({

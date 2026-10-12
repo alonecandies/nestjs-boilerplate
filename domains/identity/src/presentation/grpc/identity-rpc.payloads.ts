@@ -1,4 +1,3 @@
-import { MAX_CURSOR_LENGTH, MAX_PAGE_LIMIT } from '@platform/common';
 import type {
   ClientInfo,
   GetUserRequest,
@@ -9,7 +8,8 @@ import type {
   RefreshTokensRequest,
   RegisterRequest,
   UpdateUserRolesRequest,
-} from '@platform/contracts';
+} from '@domain/identity-contracts';
+import { MAX_CURSOR_LENGTH, MAX_PAGE_LIMIT } from '@platform/common';
 import { z } from 'zod';
 import { IDENTITY_LIMITS } from '../../identity.constants.js';
 

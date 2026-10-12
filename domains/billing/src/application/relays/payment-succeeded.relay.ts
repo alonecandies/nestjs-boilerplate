@@ -1,6 +1,6 @@
+import { PAYMENT_SUCCEEDED_EVENT, type PaymentSucceededPayload } from '@domain/billing-contracts';
 import { Logger } from '@nestjs/common';
 import { EventsHandler, type IEventHandler } from '@nestjs/cqrs';
-import { PAYMENT_SUCCEEDED_EVENT, type PaymentSucceededPayload } from '@platform/contracts';
 import { KafkaProducer } from '@platform/transport';
 import { PaymentSucceededEvent } from '../../domain/events/payment-succeeded.event.js';
 

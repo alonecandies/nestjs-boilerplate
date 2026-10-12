@@ -1,6 +1,6 @@
+import type { User } from '@domain/identity-contracts';
 import { type IQueryHandler, QueryHandler } from '@nestjs/cqrs';
 import { DomainValidationException, isUuid } from '@platform/common';
-import type { User } from '@platform/contracts';
 import { keyBy, uniq } from 'lodash-es';
 import { IDENTITY_LIMITS } from '../../../identity.constants.js';
 import { toUserContract } from '../../mappers/user.mapper.js';

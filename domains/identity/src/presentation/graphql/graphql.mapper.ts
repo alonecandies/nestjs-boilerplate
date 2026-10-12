@@ -1,5 +1,5 @@
+import type { AuthTokens, User, UserPage } from '@domain/identity-contracts';
 import { ExternalServiceException } from '@platform/common';
-import type { AuthTokens, User, UserPage } from '@platform/contracts';
 import { toUserView } from '../shared/user-view.js';
 import { AuthPayloadModel } from './models/auth-payload.model.js';
 import { UserModel } from './models/user.model.js';

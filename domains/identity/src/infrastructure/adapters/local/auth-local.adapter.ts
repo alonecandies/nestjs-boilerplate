@@ -1,12 +1,12 @@
-import { Injectable } from '@nestjs/common';
-import { CommandBus } from '@nestjs/cqrs';
 import type {
   AuthTokens,
   LoginRequest,
   LogoutRequest,
   RefreshTokensRequest,
   RegisterRequest,
-} from '@platform/contracts';
+} from '@domain/identity-contracts';
+import { Injectable } from '@nestjs/common';
+import { CommandBus } from '@nestjs/cqrs';
 import {
   toLoginCommand,
   toLogoutCommand,

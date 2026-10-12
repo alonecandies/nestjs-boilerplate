@@ -1,5 +1,5 @@
+import type { User } from '@domain/identity-contracts';
 import { Injectable, Logger } from '@nestjs/common';
-import type { User } from '@platform/contracts';
 import { AppCacheService } from '@platform/redis';
 import { UsersPort } from '../../application/ports/users.port.js';
 import { USER_CACHE_TTL_MS, userCacheKey } from '../../identity.constants.js';

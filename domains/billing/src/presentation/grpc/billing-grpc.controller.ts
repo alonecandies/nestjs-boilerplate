@@ -1,5 +1,3 @@
-import { CommandBus, QueryBus } from '@nestjs/cqrs';
-import { Payload } from '@nestjs/microservices';
 import {
   type BillingServiceController,
   BillingServiceControllerMethods,
@@ -9,7 +7,9 @@ import {
   type HandleStripeWebhookResponse,
   type ListPaymentsRequest,
   type PaymentList,
-} from '@platform/contracts';
+} from '@domain/billing-contracts';
+import { CommandBus, QueryBus } from '@nestjs/cqrs';
+import { Payload } from '@nestjs/microservices';
 import { GrpcController, ZodRpcValidationPipe } from '@platform/transport';
 import { CreateCheckoutSessionCommand } from '../../application/commands/create-checkout-session/create-checkout-session.command.js';
 import { HandleStripeWebhookCommand } from '../../application/commands/handle-stripe-webhook/handle-stripe-webhook.command.js';

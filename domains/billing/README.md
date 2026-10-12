@@ -27,7 +27,7 @@ src/
 | `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule(['billing'])` | gateway          |
 
 The REST controller and GraphQL resolver are the same classes in both topologies; they only know
-`BillingPort`. Both adapters return the `@platform/contracts` `billing.v1` shapes.
+`BillingPort`. Both adapters return the `@domain/billing-contracts` `billing.v1` shapes.
 
 ```ts
 // billing-service (HTTP :3003 for /health + /metrics, gRPC :50053)
@@ -46,7 +46,7 @@ The REST controller and GraphQL resolver are the same classes in both topologies
   ],
 })
 export class AppModule {}
-// main.ts: createServiceApp(AppModule) → connectGrpcServer(app, ['billing']) → startAllMicroservices → listen
+// main.ts: createServiceApp(AppModule) → connectGrpcServer(app, [BILLING_GRPC_PACKAGE]) → startAllMicroservices → listen
 
 // monolith: CqrsModule.forRoot(), DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema } }),
 //           KafkaProducerModule, StripeModule, AuthModule, AppThrottlerModule, AppGraphqlModule,

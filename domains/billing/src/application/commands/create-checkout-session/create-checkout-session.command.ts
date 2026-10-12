@@ -1,5 +1,5 @@
+import type { CheckoutSession, CreateCheckoutSessionRequest } from '@domain/billing-contracts';
 import { Command } from '@nestjs/cqrs';
-import type { CheckoutSession, CreateCheckoutSessionRequest } from '@platform/contracts';
 
 /**
  * Starts a Stripe Checkout for `quantity × priceId` and records a `pending` payment.

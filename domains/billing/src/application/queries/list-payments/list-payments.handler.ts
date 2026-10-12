@@ -1,5 +1,5 @@
+import type { PaymentList } from '@domain/billing-contracts';
 import { type IQueryHandler, QueryHandler } from '@nestjs/cqrs';
-import type { PaymentList } from '@platform/contracts';
 import { clamp, isInteger } from 'lodash-es';
 import { BILLING_LIMITS } from '../../../billing.constants.js';
 import { toPaymentListContract } from '../../mappers/payment.mapper.js';

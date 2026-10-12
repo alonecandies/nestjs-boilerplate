@@ -1,18 +1,24 @@
 // Fails when docker/kafka/topics.txt drifts from the Kafka contracts: it must provision exactly the
-// topic of every exported event contract (`<EVENT>_EVENT`) plus its `.dlq` twin (broker
-// auto-creation is off, so a missing topic makes consumers fail at boot). Needs the built
-// contracts (`bun run build`):
+// topic of every event contract (`<EVENT>_EVENT`) exported by a domains/<x>/contracts package, plus
+// its `.dlq` twin (broker auto-creation is off, so a missing topic makes consumers fail at boot).
+// Needs the built contracts packages (`bun run build`):
 //   node scripts/docker/check-kafka-topics.mjs
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import * as contracts from '@platform/contracts';
+import { deadLetterTopic, isEventContract } from '@platform/contracts';
 
-const { deadLetterTopic, isEventContract } = contracts;
-const topics = Object.values(contracts)
-  .filter(isEventContract)
-  .map((contract) => contract.topic);
+const root = join(import.meta.dirname, '..', '..');
+const topics = [];
+for (const domain of readdirSync(join(root, 'domains'))) {
+  const manifest = join(root, 'domains', domain, 'contracts', 'package.json');
+  if (!existsSync(manifest)) continue;
+  const { name } = JSON.parse(readFileSync(manifest, 'utf8'));
+  for (const value of Object.values(await import(name))) {
+    if (isEventContract(value)) topics.push(value.topic);
+  }
+}
 
-const file = join(import.meta.dirname, '..', '..', 'docker', 'kafka', 'topics.txt');
+const file = join(root, 'docker', 'kafka', 'topics.txt');
 const provisioned = readFileSync(file, 'utf8')
   .split('\n')
   .map((line) => line.replace(/#.*/, '').trim())

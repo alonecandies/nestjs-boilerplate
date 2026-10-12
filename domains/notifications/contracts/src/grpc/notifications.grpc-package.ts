@@ -1,7 +1,7 @@
 import { join } from 'node:path';
+import type { GrpcPackageSpec } from '@platform/contracts';
 // Value import on purpose: registers the Timestamp <-> Date wrapper (see identity.grpc-package.ts).
 import { NOTIFICATIONS_SERVICE_NAME } from '../generated/notifications/v1/notifications.pb.js';
-import type { GrpcPackageSpec } from './grpc-package-spec.js';
 
 /** `notifications.v1`: NotificationsService (inbox listing, mark as read). */
 export const NOTIFICATIONS_GRPC_PACKAGE: GrpcPackageSpec = {

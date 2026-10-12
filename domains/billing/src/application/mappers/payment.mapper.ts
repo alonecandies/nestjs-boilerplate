@@ -1,5 +1,5 @@
+import type { Payment as PaymentContract, PaymentList } from '@domain/billing-contracts';
 import type { CursorPage } from '@platform/common';
-import type { Payment as PaymentContract, PaymentList } from '@platform/contracts';
 import type { Payment } from '../../domain/payment.aggregate.js';
 
 /**

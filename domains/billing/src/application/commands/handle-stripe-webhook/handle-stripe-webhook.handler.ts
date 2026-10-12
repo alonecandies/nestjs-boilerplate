@@ -1,7 +1,7 @@
+import type { HandleStripeWebhookResponse } from '@domain/billing-contracts';
 import { Logger } from '@nestjs/common';
 import { CommandHandler, EventPublisher, type ICommandHandler } from '@nestjs/cqrs';
 import { isUuid } from '@platform/common';
-import type { HandleStripeWebhookResponse } from '@platform/contracts';
 import { Transactional } from '@platform/database';
 import { InjectMetric } from '@platform/observability';
 import { StripeService } from '@platform/payments';

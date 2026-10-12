@@ -1,5 +1,5 @@
+import type { NotificationType } from '@domain/notifications-contracts';
 import { Field, ObjectType, registerEnumType } from '@nestjs/graphql';
-import type { NotificationType } from '@platform/contracts';
 import { GraphQLJSONObject, GraphQLUUID } from '@platform/graphql';
 
 /** GraphQL enum names (SCREAMING_CASE) → wire values; exhaustive over the contract's types. */

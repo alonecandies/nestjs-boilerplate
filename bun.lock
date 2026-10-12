@@ -47,6 +47,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@domain/billing": "workspace:*",
+        "@domain/billing-contracts": "workspace:*",
         "@fastify/static": "catalog:",
         "@grpc/grpc-js": "catalog:",
         "@grpc/proto-loader": "catalog:",
@@ -115,6 +116,8 @@
         "zod": "catalog:",
       },
       "devDependencies": {
+        "@domain/identity-contracts": "workspace:*",
+        "@domain/notifications-contracts": "workspace:*",
         "@nestjs/testing": "catalog:",
         "@platform/testing": "workspace:*",
         "cache-manager": "catalog:",
@@ -126,6 +129,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@domain/identity": "workspace:*",
+        "@domain/identity-contracts": "workspace:*",
         "@fastify/static": "catalog:",
         "@grpc/grpc-js": "catalog:",
         "@grpc/proto-loader": "catalog:",
@@ -200,6 +204,7 @@
         "zod": "catalog:",
       },
       "devDependencies": {
+        "@domain/identity-contracts": "workspace:*",
         "@nestjs/testing": "catalog:",
         "@platform/testing": "workspace:*",
         "cache-manager": "catalog:",
@@ -212,6 +217,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@domain/notifications": "workspace:*",
+        "@domain/notifications-contracts": "workspace:*",
         "@fastify/static": "catalog:",
         "@grpc/grpc-js": "catalog:",
         "@grpc/proto-loader": "catalog:",
@@ -240,6 +246,7 @@
         "rxjs": "catalog:",
       },
       "devDependencies": {
+        "@domain/identity-contracts": "workspace:*",
         "@nestjs/testing": "catalog:",
         "@platform/testing": "workspace:*",
       },
@@ -248,7 +255,9 @@
       "name": "@domain/billing",
       "version": "0.0.0",
       "dependencies": {
+        "@domain/billing-contracts": "workspace:*",
         "@domain/identity": "workspace:*",
+        "@domain/identity-contracts": "workspace:*",
         "@grpc/grpc-js": "catalog:",
         "@nestjs/common": "catalog:",
         "@nestjs/config": "catalog:",
@@ -285,6 +294,25 @@
         "@types/lodash-es": "catalog:",
       },
     },
+    "domains/billing/contracts": {
+      "name": "@domain/billing-contracts",
+      "version": "0.0.0",
+      "dependencies": {
+        "@grpc/grpc-js": "catalog:",
+        "@nestjs/common": "catalog:",
+        "@nestjs/core": "catalog:",
+        "@nestjs/microservices": "catalog:",
+        "@platform/contracts": "workspace:*",
+        "protobufjs": "catalog:",
+        "reflect-metadata": "catalog:",
+        "rxjs": "catalog:",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@bufbuild/buf": "catalog:",
+        "ts-proto": "catalog:",
+      },
+    },
     "domains/files": {
       "name": "@domain/files",
       "version": "0.0.0",
@@ -315,6 +343,7 @@
       "name": "@domain/identity",
       "version": "0.0.0",
       "dependencies": {
+        "@domain/identity-contracts": "workspace:*",
         "@grpc/grpc-js": "catalog:",
         "@nestjs/common": "catalog:",
         "@nestjs/config": "catalog:",
@@ -351,10 +380,32 @@
         "@types/passport-local": "catalog:",
       },
     },
+    "domains/identity/contracts": {
+      "name": "@domain/identity-contracts",
+      "version": "0.0.0",
+      "dependencies": {
+        "@grpc/grpc-js": "catalog:",
+        "@nestjs/common": "catalog:",
+        "@nestjs/core": "catalog:",
+        "@nestjs/microservices": "catalog:",
+        "@platform/contracts": "workspace:*",
+        "protobufjs": "catalog:",
+        "reflect-metadata": "catalog:",
+        "rxjs": "catalog:",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@bufbuild/buf": "catalog:",
+        "ts-proto": "catalog:",
+      },
+    },
     "domains/notifications": {
       "name": "@domain/notifications",
       "version": "0.0.0",
       "dependencies": {
+        "@domain/billing-contracts": "workspace:*",
+        "@domain/identity-contracts": "workspace:*",
+        "@domain/notifications-contracts": "workspace:*",
         "@grpc/grpc-js": "catalog:",
         "@nestjs/common": "catalog:",
         "@nestjs/config": "catalog:",
@@ -391,6 +442,25 @@
         "@nestjs/testing": "catalog:",
         "@platform/testing": "workspace:*",
         "@types/lodash-es": "catalog:",
+      },
+    },
+    "domains/notifications/contracts": {
+      "name": "@domain/notifications-contracts",
+      "version": "0.0.0",
+      "dependencies": {
+        "@grpc/grpc-js": "catalog:",
+        "@nestjs/common": "catalog:",
+        "@nestjs/core": "catalog:",
+        "@nestjs/microservices": "catalog:",
+        "@platform/contracts": "workspace:*",
+        "protobufjs": "catalog:",
+        "reflect-metadata": "catalog:",
+        "rxjs": "catalog:",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@bufbuild/buf": "catalog:",
+        "ts-proto": "catalog:",
       },
     },
     "libs/auth": {
@@ -508,10 +578,6 @@
         "reflect-metadata": "catalog:",
         "rxjs": "catalog:",
         "zod": "catalog:",
-      },
-      "devDependencies": {
-        "@bufbuild/buf": "catalog:",
-        "ts-proto": "catalog:",
       },
     },
     "libs/database": {
@@ -1084,11 +1150,17 @@
 
     "@domain/billing": ["@domain/billing@workspace:domains/billing"],
 
+    "@domain/billing-contracts": ["@domain/billing-contracts@workspace:domains/billing/contracts"],
+
     "@domain/files": ["@domain/files@workspace:domains/files"],
 
     "@domain/identity": ["@domain/identity@workspace:domains/identity"],
 
+    "@domain/identity-contracts": ["@domain/identity-contracts@workspace:domains/identity/contracts"],
+
     "@domain/notifications": ["@domain/notifications@workspace:domains/notifications"],
+
+    "@domain/notifications-contracts": ["@domain/notifications-contracts@workspace:domains/notifications/contracts"],
 
     "@drizzle-team/brocli": ["@drizzle-team/brocli@0.10.2", "", {}, "sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w=="],
 

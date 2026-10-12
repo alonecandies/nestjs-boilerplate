@@ -1,5 +1,5 @@
+import { defineEventContract, type EventContract } from '@platform/contracts';
 import { z } from 'zod';
-import { defineEventContract, type EventContract } from './event-contract.js';
 
 /** Notification kinds. The gRPC `Notification.type` field carries the same values as a string. */
 export const NOTIFICATION_TYPES = ['welcome', 'payment_receipt', 'digest', 'system'] as const;

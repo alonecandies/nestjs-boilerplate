@@ -195,8 +195,8 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
 
 ## Bootstrap jobs & migrations
 
-- **Kafka topics** ([`docker/kafka/topics.txt`](../docker/kafka/topics.txt)) = `@platform/contracts` `KAFKA_TOPIC_VALUES` +
-  `DEAD_LETTER_TOPIC_VALUES` (3 topics × 6 partitions + 3 `.dlq` × 1). Broker auto-creation is **off**, as in
+- **Kafka topics** ([`docker/kafka/topics.txt`](../docker/kafka/topics.txt)) = the topic of every `<EVENT>_EVENT` contract in
+  `domains/*/contracts` + its `.dlq` twin (3 topics × 6 partitions + 3 `.dlq` × 1). Broker auto-creation is **off**, as in
   production: a missing topic fails loudly at consumer start instead of being created by a typo.
   `node scripts/docker/check-kafka-topics.mjs` (after `bun run build`) fails when the file drifts from the contracts.
 - **Cassandra**: `cassandra-init` creates `CREATE KEYSPACE IF NOT EXISTS <CASSANDRA_KEYSPACE>` with
@@ -429,7 +429,7 @@ Runs on pushes to `master` and on pull requests. Test layout and the integration
 
 - **verify**: Node 24 (`.nvmrc`) + Bun 1.4.3, `bun install --frozen-lockfile`, `bun run check` (Biome, ESLint,
   Prettier, tsc), `bun run test`, `bun run build`, generated-artefact drift (`proto:gen` + `buf lint` + `db:generate`,
-  then a clean `git diff`/`git status` of `libs/contracts/src/generated` and `libs/database/src/migrations`),
+  then a clean `git diff`/`git status` of `domains/*/contracts/src/generated` and `libs/database/src/migrations`),
   commitlint over the PR's commits (pull requests only), then the config drift checks (`.env.example`, Kafka topics).
 - **integration**: `bun run test:int` (`INTEGRATION=1`, every `<package>:int` project): Postgres from testcontainers,
   Redis from a job service container (`REDIS_URL=redis://localhost:6379`).

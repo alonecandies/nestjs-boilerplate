@@ -1,5 +1,3 @@
-import { Injectable } from '@nestjs/common';
-import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import type {
   CheckoutSession,
   CreateCheckoutSessionRequest,
@@ -7,7 +5,9 @@ import type {
   HandleStripeWebhookResponse,
   ListPaymentsRequest,
   PaymentList,
-} from '@platform/contracts';
+} from '@domain/billing-contracts';
+import { Injectable } from '@nestjs/common';
+import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { CreateCheckoutSessionCommand } from '../../../application/commands/create-checkout-session/create-checkout-session.command.js';
 import { HandleStripeWebhookCommand } from '../../../application/commands/handle-stripe-webhook/handle-stripe-webhook.command.js';
 import type { BillingPort } from '../../../application/ports/billing.port.js';

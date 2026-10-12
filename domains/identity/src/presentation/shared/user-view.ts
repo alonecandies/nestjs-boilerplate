@@ -1,6 +1,6 @@
+import type { User } from '@domain/identity-contracts';
 import { isRole, type Role } from '@platform/auth';
 import { isUuidV7, uuidV7Timestamp } from '@platform/common';
-import type { User } from '@platform/contracts';
 import { isDate, isNumber, isString } from 'lodash-es';
 
 /** The user as every presentation (REST response, GraphQL model) renders it. */

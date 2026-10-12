@@ -1,5 +1,5 @@
+import type { Payment, PaymentList } from '@domain/billing-contracts';
 import { Field, Float, ID, Int, ObjectType, registerEnumType } from '@nestjs/graphql';
-import type { Payment, PaymentList } from '@platform/contracts';
 import { GraphQLUUID } from '@platform/graphql';
 import { toUpper, zipObject } from 'lodash-es';
 import { PAYMENT_STATUSES, type PaymentStatus } from '../../../domain/payment-status.enum.js';

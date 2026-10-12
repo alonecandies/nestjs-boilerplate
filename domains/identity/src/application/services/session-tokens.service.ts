@@ -1,7 +1,7 @@
+import type { AuthTokens, ClientInfo } from '@domain/identity-contracts';
 import { Injectable } from '@nestjs/common';
 import { TokenService } from '@platform/auth';
 import { generateId, sha256Hex } from '@platform/common';
-import type { AuthTokens, ClientInfo } from '@platform/contracts';
 import { BEARER_TOKEN_TYPE } from '../../identity.constants.js';
 import { toSessionClient } from '../mappers/client-info.mapper.js';
 import { toAccessTokenSubject, toUserContract } from '../mappers/user.mapper.js';

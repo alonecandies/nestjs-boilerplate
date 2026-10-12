@@ -1,5 +1,5 @@
+import type { AuthTokens, User } from '@domain/identity-contracts';
 import { generateId } from '@platform/common';
-import type { AuthTokens, User } from '@platform/contracts';
 import type { UserRecord } from '../src/application/persistence/users.repository.js';
 import type { UserSnapshot } from '../src/domain/user.aggregate.js';
 

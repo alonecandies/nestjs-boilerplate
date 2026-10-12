@@ -1,6 +1,6 @@
+import type { UserPage } from '@domain/identity-contracts';
 import { type IQueryHandler, QueryHandler } from '@nestjs/cqrs';
 import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from '@platform/common';
-import type { UserPage } from '@platform/contracts';
 import { clamp, isNil, trim } from 'lodash-es';
 import { IDENTITY_LIMITS } from '../../../identity.constants.js';
 import { toUserContract } from '../../mappers/user.mapper.js';

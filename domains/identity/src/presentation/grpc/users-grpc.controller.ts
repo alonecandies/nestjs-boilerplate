@@ -1,5 +1,3 @@
-import { CommandBus, QueryBus } from '@nestjs/cqrs';
-import { Payload } from '@nestjs/microservices';
 import {
   type GetUserRequest,
   type GetUsersByIdsRequest,
@@ -10,7 +8,9 @@ import {
   type UserPage,
   type UsersServiceController,
   UsersServiceControllerMethods,
-} from '@platform/contracts';
+} from '@domain/identity-contracts';
+import { CommandBus, QueryBus } from '@nestjs/cqrs';
+import { Payload } from '@nestjs/microservices';
 import { GrpcController, ZodRpcValidationPipe } from '@platform/transport';
 import {
   toListUsersQuery,

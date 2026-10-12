@@ -1,6 +1,6 @@
+import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
 import { Logger } from '@nestjs/common';
 import { EventsHandler, type IEventHandler } from '@nestjs/cqrs';
-import { USER_REGISTERED_EVENT } from '@platform/contracts';
 import { KafkaProducer } from '@platform/transport';
 import { UserRegisteredEvent } from '../../domain/events/user-registered.event.js';
 

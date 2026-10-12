@@ -1,5 +1,5 @@
+import { defineEventContract, type EventContract } from '@platform/contracts';
 import { z } from 'zod';
-import { defineEventContract, type EventContract } from './event-contract.js';
 
 /** Payload of `identity.user-registered.v1`: a user account was created. */
 export const userRegisteredPayload = z.object({

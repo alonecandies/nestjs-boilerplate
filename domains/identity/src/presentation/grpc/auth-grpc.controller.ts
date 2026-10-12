@@ -1,5 +1,3 @@
-import { CommandBus } from '@nestjs/cqrs';
-import { Payload } from '@nestjs/microservices';
 import {
   type AuthServiceController,
   AuthServiceControllerMethods,
@@ -8,7 +6,9 @@ import {
   type LogoutRequest,
   type RefreshTokensRequest,
   type RegisterRequest,
-} from '@platform/contracts';
+} from '@domain/identity-contracts';
+import { CommandBus } from '@nestjs/cqrs';
+import { Payload } from '@nestjs/microservices';
 import { GrpcController, ZodRpcValidationPipe } from '@platform/transport';
 import {
   toLoginCommand,

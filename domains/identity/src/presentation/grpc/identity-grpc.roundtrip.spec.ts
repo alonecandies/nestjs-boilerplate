@@ -1,3 +1,4 @@
+import { IDENTITY_GRPC_PACKAGE } from '@domain/identity-contracts';
 import { Global, type INestMicroservice, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
@@ -10,7 +11,6 @@ import {
   UnauthenticatedException,
 } from '@platform/common';
 import { AppConfigModule, grpcConfig } from '@platform/config';
-import { IDENTITY_GRPC_PACKAGE } from '@platform/contracts';
 import { AppCacheService } from '@platform/redis';
 import { createGrpcServerStrategy } from '@platform/transport';
 import { ClsModule } from 'nestjs-cls';

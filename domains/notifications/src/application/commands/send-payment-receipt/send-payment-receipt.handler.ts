@@ -1,6 +1,6 @@
+import type { Notification } from '@domain/notifications-contracts';
 import { Logger } from '@nestjs/common';
 import { CommandBus, CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
-import type { Notification } from '@platform/contracts';
 import { defineMail, formatMoney, MailService } from '@platform/mailer';
 import { toUpper } from 'lodash-es';
 import { NotificationRecipientsRepository } from '../../ports/notification-recipients.repository.js';

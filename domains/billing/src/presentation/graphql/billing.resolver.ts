@@ -1,7 +1,7 @@
 import { USERS_LOADER, UserModel } from '@domain/identity';
+import type { User } from '@domain/identity-contracts';
 import { Args, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
 import { type AuthUser, CurrentUser, Permission, RequirePermissions } from '@platform/auth';
-import type { User } from '@platform/contracts';
 import { type GraphqlLoaders, Loader } from '@platform/graphql';
 import { BillingPort } from '../../application/ports/billing.port.js';
 import { resolvePaymentsOwner } from '../payments-scope.js';

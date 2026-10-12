@@ -1,6 +1,7 @@
+import { PAYMENT_SUCCEEDED_EVENT } from '@domain/billing-contracts';
 import { CommandBus } from '@nestjs/cqrs';
 import { Payload } from '@nestjs/microservices';
-import { type EventEnvelopeOf, PAYMENT_SUCCEEDED_EVENT } from '@platform/contracts';
+import type { EventEnvelopeOf } from '@platform/contracts';
 import {
   KafkaConsumerController,
   KafkaEventPattern,

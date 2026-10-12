@@ -1,5 +1,5 @@
+import type { AuthTokens, ClientInfo } from '@domain/identity-contracts';
 import { Command } from '@nestjs/cqrs';
-import type { AuthTokens, ClientInfo } from '@platform/contracts';
 
 /** Creates an account (default role `user`) and opens its first session. */
 export class RegisterUserCommand extends Command<AuthTokens> {

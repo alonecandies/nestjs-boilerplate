@@ -1,6 +1,6 @@
+import type { NotificationCreatedPayload } from '@domain/notifications-contracts';
 import { GraphQLSchemaHost } from '@nestjs/graphql';
 import { Role } from '@platform/auth';
-import type { NotificationCreatedPayload } from '@platform/contracts';
 import { type GqlContext, GRAPHQL_PUB_SUB, type GraphqlPubSub } from '@platform/graphql';
 import { type ExecutionResult, parse, printSchema, subscribe } from 'graphql';
 import { PubSub } from 'graphql-subscriptions';

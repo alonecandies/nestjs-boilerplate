@@ -1,5 +1,5 @@
+import type { PaymentList } from '@domain/billing-contracts';
 import { Query } from '@nestjs/cqrs';
-import type { PaymentList } from '@platform/contracts';
 
 /**
  * One page of payments, newest first. `userId` omitted = every user (the edge enforces

@@ -1,5 +1,5 @@
+import type { User } from '@domain/identity-contracts';
 import { Injectable, type OnModuleInit } from '@nestjs/common';
-import type { User } from '@platform/contracts';
 import { DataLoaderRegistry } from '@platform/graphql';
 import DataLoader from 'dataloader';
 import { keyBy } from 'lodash-es';

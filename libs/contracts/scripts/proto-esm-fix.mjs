@@ -1,5 +1,6 @@
 // Post-`buf generate` fixes that make ts-proto's NestJS output load under native ESM (Node 24) and
-// type-check under the repo's strict tsconfig. Idempotent; run by `bun run proto:gen`.
+// type-check under the repo's strict tsconfig. Idempotent; every contracts package's `proto:gen`
+// runs it on its own output: `node ../../../libs/contracts/scripts/proto-esm-fix.mjs src/generated`.
 //
 // 1. `import { wrappers } from "protobufjs";` -> default import + destructure.
 //    protobufjs 7 is CommonJS and Node's cjs-module-lexer cannot see the `wrappers` named export, so
@@ -13,7 +14,12 @@
 import { readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, relative, resolve } from 'node:path';
 
-const root = resolve(process.argv[2] ?? join(import.meta.dirname, '..', 'src', 'generated'));
+const [target] = process.argv.slice(2);
+if (target === undefined) {
+  console.error('usage: node proto-esm-fix.mjs <generated dir>');
+  process.exit(2);
+}
+const root = resolve(target);
 
 const WRAPPERS_NAMED = /^import \{ wrappers \} from "protobufjs";$/m;
 const WRAPPERS_FIXED = 'import protobufjs from "protobufjs";\nconst { wrappers } = protobufjs;';

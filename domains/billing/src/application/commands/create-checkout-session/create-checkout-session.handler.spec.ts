@@ -1,10 +1,10 @@
+import type { CreateCheckoutSessionRequest } from '@domain/billing-contracts';
 import {
   DomainConflictException,
   ExternalServiceException,
   generateId,
   isUuidV7,
 } from '@platform/common';
-import type { CreateCheckoutSessionRequest } from '@platform/contracts';
 import type { StripeService } from '@platform/payments';
 import { createMock, type Mocked } from '@platform/testing';
 import { beforeEach, describe, expect, it } from 'vitest';

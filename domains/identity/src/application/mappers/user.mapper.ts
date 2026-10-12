@@ -1,5 +1,5 @@
+import type { User } from '@domain/identity-contracts';
 import { type AccessTokenSubject, isRole } from '@platform/auth';
-import type { User } from '@platform/contracts';
 import type { UserSnapshot } from '../../domain/user.aggregate.js';
 import type { UserRecord } from '../persistence/users.repository.js';
 

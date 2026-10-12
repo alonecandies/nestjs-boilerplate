@@ -1,5 +1,5 @@
+import type { ClientInfo } from '@domain/identity-contracts';
 import { getHeaderValue, type RequestLike } from '@platform/common';
-import type { ClientInfo } from '@platform/contracts';
 
 /**
  * Client fingerprint stored on the session (audit / theft investigation). `req.ip` honours

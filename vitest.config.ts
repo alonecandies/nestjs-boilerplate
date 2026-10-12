@@ -9,28 +9,47 @@ const INTEGRATION = process.env.INTEGRATION === '1';
 
 type WorkspaceDir = 'apps' | 'domains' | 'libs';
 
-/** Every folder under apps/, domains/ and libs/ that has a package.json is a Vitest project named after it. */
-const packagesIn = (dir: WorkspaceDir): string[] =>
+interface WorkspacePackage {
+  /** Vitest project name: the folder name, `<domain>-contracts` for domains/<domain>/contracts. */
+  name: string;
+  root: string;
+}
+
+/**
+ * Every folder under apps/, domains/ and libs/ that has a package.json is a Vitest project named
+ * after it. A domain's nested contracts package (domains/<x>/contracts) is the project
+ * `<x>-contracts`; the domain's own project only includes its src/ and test/ folders.
+ */
+const packagesIn = (dir: WorkspaceDir): WorkspacePackage[] =>
   readdirSync(join(ROOT, dir), { withFileTypes: true })
     .filter(
       (entry) => entry.isDirectory() && existsSync(join(ROOT, dir, entry.name, 'package.json')),
     )
-    .map((entry) => entry.name);
+    .flatMap((entry) => {
+      const root = join(ROOT, dir, entry.name);
+      const contracts = join(root, 'contracts');
+      return existsSync(join(contracts, 'package.json'))
+        ? [
+            { name: entry.name, root },
+            { name: `${entry.name}-contracts`, root: contracts },
+          ]
+        : [{ name: entry.name, root }];
+    });
 
-const unitProject = (dir: WorkspaceDir, name: string): TestProjectInlineConfiguration => ({
+const unitProject = ({ name, root }: WorkspacePackage): TestProjectInlineConfiguration => ({
   extends: true,
   test: {
     name,
-    root: join(ROOT, dir, name),
+    root,
     include: ['src/**/*.spec.ts', 'test/**/*.spec.ts'],
   },
 });
 
-const e2eProject = (name: string): TestProjectInlineConfiguration => ({
+const e2eProject = ({ name, root }: WorkspacePackage): TestProjectInlineConfiguration => ({
   extends: true,
   test: {
     name: `${name}:e2e`,
-    root: join(ROOT, 'apps', name),
+    root,
     include: ['test/**/*.e2e-spec.ts'],
     testTimeout: 30_000,
     hookTimeout: 60_000,
@@ -38,11 +57,11 @@ const e2eProject = (name: string): TestProjectInlineConfiguration => ({
 });
 
 /** Integration tests need Docker (testcontainers) — opt in with INTEGRATION=1. */
-const intProject = (dir: WorkspaceDir, name: string): TestProjectInlineConfiguration => ({
+const intProject = ({ name, root }: WorkspacePackage): TestProjectInlineConfiguration => ({
   extends: true,
   test: {
     name: `${name}:int`,
-    root: join(ROOT, dir, name),
+    root,
     include: ['src/**/*.int-spec.ts', 'test/**/*.int-spec.ts'],
     testTimeout: 120_000,
     hookTimeout: 180_000,
@@ -100,21 +119,22 @@ export default defineConfig({
     restoreMocks: true,
     coverage: {
       provider: 'v8',
-      include: ['apps/*/src/**/*.ts', 'domains/*/src/**/*.ts', 'libs/*/src/**/*.ts'],
+      include: [
+        'apps/*/src/**/*.ts',
+        'domains/*/src/**/*.ts',
+        'domains/*/contracts/src/**/*.ts',
+        'libs/*/src/**/*.ts',
+      ],
       exclude: ['**/generated/**', '**/*.spec.ts', '**/*.int-spec.ts', '**/index.ts', '**/main.ts'],
       reporter: ['text-summary', 'html', 'lcov'],
     },
     projects: [
-      ...domains.map((name) => unitProject('domains', name)),
-      ...libs.map((name) => unitProject('libs', name)),
-      ...apps.map((name) => unitProject('apps', name)),
-      ...apps.map((name) => e2eProject(name)),
+      ...domains.map(unitProject),
+      ...libs.map(unitProject),
+      ...apps.map(unitProject),
+      ...apps.map(e2eProject),
       ...(INTEGRATION
-        ? [
-            ...domains.map((name) => intProject('domains', name)),
-            ...libs.map((name) => intProject('libs', name)),
-            ...apps.map((name) => intProject('apps', name)),
-          ]
+        ? [...domains.map(intProject), ...libs.map(intProject), ...apps.map(intProject)]
         : []),
     ],
   },

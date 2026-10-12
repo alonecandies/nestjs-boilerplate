@@ -1,5 +1,5 @@
+import type { User } from '@domain/identity-contracts';
 import { Command } from '@nestjs/cqrs';
-import type { User } from '@platform/contracts';
 
 /** Replaces a user's roles (admin operation). */
 export class UpdateUserRolesCommand extends Command<User> {

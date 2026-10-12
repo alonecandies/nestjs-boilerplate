@@ -4,12 +4,12 @@
  * @Transactional against the in-memory store) → EventBus → PaymentSucceededRelay → Kafka (fake).
  */
 
+import { PAYMENT_SUCCEEDED_EVENT } from '@domain/billing-contracts';
 import { CqrsModule } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
 import { AuthModule } from '@platform/auth';
 import { provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
-import { PAYMENT_SUCCEEDED_EVENT } from '@platform/contracts';
 import { makeCounterProvider } from '@platform/observability';
 import { StripeService } from '@platform/payments';
 import { createFastifyTestApp } from '@platform/testing';

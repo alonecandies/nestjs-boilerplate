@@ -1,5 +1,5 @@
+import type { Notification, NotificationPage } from '@domain/notifications-contracts';
 import { isUuidV7, uuidV7Timestamp } from '@platform/common';
-import type { Notification, NotificationPage } from '@platform/contracts';
 import { isEmpty, isNil, isPlainObject, isString, pickBy } from 'lodash-es';
 
 /**

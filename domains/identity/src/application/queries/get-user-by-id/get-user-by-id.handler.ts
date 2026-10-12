@@ -1,6 +1,6 @@
+import type { User } from '@domain/identity-contracts';
 import { type IQueryHandler, QueryHandler } from '@nestjs/cqrs';
 import { EntityNotFoundException } from '@platform/common';
-import type { User } from '@platform/contracts';
 import { toUserContract } from '../../mappers/user.mapper.js';
 import { UsersRepository } from '../../persistence/users.repository.js';
 import { GetUserByIdQuery } from './get-user-by-id.query.js';

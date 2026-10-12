@@ -1,6 +1,11 @@
+import type {
+  ListUsersRequest,
+  UpdateUserRolesRequest,
+  User,
+  UserPage,
+} from '@domain/identity-contracts';
 import { Injectable } from '@nestjs/common';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
-import type { ListUsersRequest, UpdateUserRolesRequest, User, UserPage } from '@platform/contracts';
 import {
   toListUsersQuery,
   toUpdateUserRolesCommand,

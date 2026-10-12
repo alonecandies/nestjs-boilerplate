@@ -2,7 +2,7 @@ import type {
   ListNotificationsRequest,
   MarkNotificationReadRequest,
   NotificationPage,
-} from '@platform/contracts';
+} from '@domain/notifications-contracts';
 
 /**
  * The seam between the edges (REST controller, GraphQL resolver, WebSocket gateway) and the

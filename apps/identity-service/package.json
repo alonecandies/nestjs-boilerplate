@@ -22,6 +22,7 @@
     "@platform/common": "workspace:*",
     "@platform/config": "workspace:*",
     "@platform/contracts": "workspace:*",
+    "@domain/identity-contracts": "workspace:*",
     "@platform/database": "workspace:*",
     "@domain/identity": "workspace:*",
     "@platform/observability": "workspace:*",

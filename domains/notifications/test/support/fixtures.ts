@@ -1,5 +1,5 @@
+import type { Notification, NotificationPage } from '@domain/notifications-contracts';
 import { generateId } from '@platform/common';
-import type { Notification, NotificationPage } from '@platform/contracts';
 import type { Mocked } from '@platform/testing';
 import { vi } from 'vitest';
 import type { NotificationsPort } from '../../src/application/ports/notifications.port.js';

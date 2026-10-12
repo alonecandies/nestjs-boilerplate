@@ -1,5 +1,3 @@
-import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
-import type { ClientGrpc } from '@nestjs/microservices';
 import {
   AUTH_SERVICE_NAME,
   type AuthServiceClient,
@@ -9,7 +7,9 @@ import {
   type LogoutRequest,
   type RefreshTokensRequest,
   type RegisterRequest,
-} from '@platform/contracts';
+} from '@domain/identity-contracts';
+import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
+import type { ClientGrpc } from '@nestjs/microservices';
 import type { AuthPort } from '../../../application/ports/auth.port.js';
 import { normalizeAuthTokens } from './grpc-contract.normalizer.js';
 import { IdentityGrpcCaller } from './identity-grpc.caller.js';

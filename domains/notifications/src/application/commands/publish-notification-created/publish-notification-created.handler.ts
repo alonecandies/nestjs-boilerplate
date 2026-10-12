@@ -1,6 +1,6 @@
+import { NOTIFICATION_CREATED_EVENT } from '@domain/notifications-contracts';
 import { Logger } from '@nestjs/common';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
-import { NOTIFICATION_CREATED_EVENT } from '@platform/contracts';
 import { KafkaProducer } from '@platform/transport';
 import { toNotificationCreatedPayload } from '../../mappers/notification.mapper.js';
 import { PublishNotificationCreatedCommand } from './publish-notification-created.command.js';

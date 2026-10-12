@@ -1,4 +1,4 @@
-import { NOTIFICATION_CREATED_EVENT } from '@platform/contracts';
+import { NOTIFICATION_CREATED_EVENT } from '@domain/notifications-contracts';
 import { FakeKafkaProducer } from '@platform/transport';
 import { describe, expect, it } from 'vitest';
 import { makeNotificationProps } from '../../../../test/support/fixtures.js';

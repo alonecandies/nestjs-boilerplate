@@ -1,3 +1,4 @@
+import type { AuthTokens } from '@domain/identity-contracts';
 import { Logger } from '@nestjs/common';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { AuthErrorCode, type RefreshTokenClaims, TokenService } from '@platform/auth';
@@ -7,7 +8,6 @@ import {
   sha256Hex,
   UnauthenticatedException,
 } from '@platform/common';
-import type { AuthTokens } from '@platform/contracts';
 import {
   InvalidRefreshTokenException,
   RefreshTokenReuseDetectedException,

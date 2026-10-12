@@ -1,7 +1,3 @@
-import type { Metadata } from '@grpc/grpc-js';
-import { Inject, Injectable, type OnModuleInit, Optional } from '@nestjs/common';
-import type { ClientGrpc } from '@nestjs/microservices';
-import { type GrpcConfig, grpcConfig } from '@platform/config';
 import {
   type ListNotificationsRequest,
   type MarkNotificationReadRequest,
@@ -9,7 +5,11 @@ import {
   NOTIFICATIONS_SERVICE_NAME,
   type NotificationPage,
   type NotificationsServiceClient,
-} from '@platform/contracts';
+} from '@domain/notifications-contracts';
+import type { Metadata } from '@grpc/grpc-js';
+import { Inject, Injectable, type OnModuleInit, Optional } from '@nestjs/common';
+import type { ClientGrpc } from '@nestjs/microservices';
+import { type GrpcConfig, grpcConfig } from '@platform/config';
 import {
   callerContextFromCls,
   createOutgoingMetadata,

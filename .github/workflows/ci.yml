@@ -75,10 +75,10 @@ jobs:
       - name: Generated artefacts drift (protos, migrations) + buf lint
         run: |
           bun run proto:gen
-          bun run --filter @platform/contracts proto:lint
+          bun run proto:lint
           bun run db:generate
-          git diff --exit-code -- libs/contracts/src/generated libs/transport/test/fixtures/src/generated libs/database/src/migrations
-          test -z "$(git status --porcelain -- libs/contracts/src/generated libs/transport/test/fixtures/src/generated libs/database/src/migrations)"
+          git diff --exit-code -- domains/*/contracts/src/generated libs/transport/test/fixtures/src/generated libs/database/src/migrations
+          test -z "$(git status --porcelain -- domains/*/contracts/src/generated libs/transport/test/fixtures/src/generated libs/database/src/migrations)"
 
       # Releases (lerna --conventional-commits) derive versions and changelogs from commit messages;
       # husky's commit-msg hook is skipped by --no-verify and web edits, so validate the PR range.

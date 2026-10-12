@@ -1,4 +1,9 @@
-import type { ListUsersRequest, UpdateUserRolesRequest, User, UserPage } from '@platform/contracts';
+import type {
+  ListUsersRequest,
+  UpdateUserRolesRequest,
+  User,
+  UserPage,
+} from '@domain/identity-contracts';
 
 /**
  * User queries and administration for the presentation layer (and other domains' GraphQL

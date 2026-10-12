@@ -1,6 +1,6 @@
+import { BILLING_GRPC_PACKAGE } from '@domain/billing-contracts';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
 import { grpcConfig } from '@platform/config';
-import { BILLING_GRPC_PACKAGE } from '@platform/contracts';
 import { GrpcClientsModule } from '@platform/transport';
 import { BillingPort } from './application/ports/billing.port.js';
 import { BillingCoreModule } from './billing-core.module.js';

@@ -5,7 +5,7 @@ import type {
   RefreshTokensRequest,
   RegisterRequest,
   UpdateUserRolesRequest,
-} from '@platform/contracts';
+} from '@domain/identity-contracts';
 import { LoginCommand } from '../commands/login/login.command.js';
 import { LogoutCommand } from '../commands/logout/logout.command.js';
 import { RefreshSessionCommand } from '../commands/refresh-session/refresh-session.command.js';

@@ -5,24 +5,26 @@ import {
   InvalidRefreshTokenException,
   UsersPort,
 } from '@domain/identity';
-import { NotificationNotFoundException, NotificationsPort } from '@domain/notifications';
-import { type AccessTokenDenylist, isRole, type TokenService } from '@platform/auth';
-import { EntityNotFoundException, generateId, normalizeEmail } from '@platform/common';
 import type {
   AuthTokens,
-  ListNotificationsRequest,
   ListUsersRequest,
   LoginRequest,
   LogoutRequest,
-  MarkNotificationReadRequest,
-  Notification,
-  NotificationPage,
   RefreshTokensRequest,
   RegisterRequest,
   UpdateUserRolesRequest,
   User,
   UserPage,
-} from '@platform/contracts';
+} from '@domain/identity-contracts';
+import { NotificationNotFoundException, NotificationsPort } from '@domain/notifications';
+import type {
+  ListNotificationsRequest,
+  MarkNotificationReadRequest,
+  Notification,
+  NotificationPage,
+} from '@domain/notifications-contracts';
+import { type AccessTokenDenylist, isRole, type TokenService } from '@platform/auth';
+import { EntityNotFoundException, generateId, normalizeEmail } from '@platform/common';
 
 /*
  * In-memory stand-ins for identity- and notifications-service, bound IN PLACE OF the gRPC

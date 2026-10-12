@@ -35,7 +35,7 @@ only the composition root.
 | `NotificationsGrpcModule`, `NotificationsMessagingModule`                          | `NotificationsCoreModule` (shared, one instance) + gRPC controller + Kafka consumers    |
 | `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`                      | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC/Kafka too |
 
-`main.ts`: `createServiceApp(AppModule)` → `connectGrpcServer(app, ['notifications'])` +
+`main.ts`: `createServiceApp(AppModule)` → `connectGrpcServer(app, [NOTIFICATIONS_GRPC_PACKAGE])` +
 `connectKafkaConsumer(app, { groupId: NOTIFICATIONS_CONSUMER_GROUP })` → `startAllMicroservices()`
 → `listen(app)`. The consumer group is pinned in code
 (`src/notifications-service.constants.ts`): every replica must share it, and a renamed group would

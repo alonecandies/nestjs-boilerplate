@@ -23,6 +23,8 @@
     "@platform/common": "workspace:*",
     "@platform/config": "workspace:*",
     "@platform/contracts": "workspace:*",
+    "@domain/billing-contracts": "workspace:*",
+    "@domain/identity-contracts": "workspace:*",
     "@platform/database": "workspace:*",
     "@platform/graphql": "workspace:*",
     "@domain/identity": "workspace:*",

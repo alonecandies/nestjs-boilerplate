@@ -1,4 +1,4 @@
-import type { Payment, PaymentList } from '@platform/contracts';
+import type { Payment, PaymentList } from '@domain/billing-contracts';
 import { z } from 'zod';
 import { PAYMENT_STATUSES } from '../../../domain/payment-status.enum.js';
 

@@ -57,6 +57,7 @@
   },
   "devDependencies": {
     "@platform/testing": "workspace:*",
+    "@domain/identity-contracts": "workspace:*",
     "@nestjs/testing": "catalog:",
     "cache-manager": "catalog:",
     "drizzle-orm": "catalog:",

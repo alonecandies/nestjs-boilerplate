@@ -34,7 +34,7 @@ WORKDIR /repo
 
 # ---- manifests only: the install layers stay cached until a package.json / bun.lock changes ---
 FROM toolchain AS manifests
-COPY --parents package.json bun.lock bunfig.toml apps/*/package.json domains/*/package.json libs/*/package.json ./
+COPY --parents package.json bun.lock bunfig.toml apps/*/package.json domains/*/package.json domains/*/contracts/package.json libs/*/package.json ./
 # `patchedDependencies` (kafkajs idle-timer fix) must be present before install, or bun aborts.
 COPY patches ./patches
 
@@ -65,7 +65,7 @@ FROM deps AS build
 ARG APP
 RUN test -n "${APP}" || { echo "error: --build-arg APP=<folder under apps/> is required" >&2; exit 1; }
 COPY . .
-RUN bun run --filter "./libs/*" --filter "./domains/*" --filter "./apps/${APP}" build
+RUN bun run --filter "./libs/*" --filter "./domains/*" --filter "./domains/*/contracts" --filter "./apps/${APP}" build
 
 # ---- production node_modules for ONLY this app's dependency closure ----------------------------
 FROM manifests AS prod-deps

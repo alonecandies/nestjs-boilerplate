@@ -1,15 +1,15 @@
 import { billingSchema, PaymentStatus, payments } from '@domain/billing';
+import {
+  BILLING_GRPC_PACKAGE,
+  type BillingServiceClient,
+  type PaymentList,
+} from '@domain/billing-contracts';
 import { type ServiceError, status } from '@grpc/grpc-js';
 import { ClientGrpcProxy } from '@nestjs/microservices';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { DomainValidationException, ExternalServiceException, generateId } from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
-import {
-  BILLING_GRPC_PACKAGE,
-  type BillingServiceClient,
-  type PaymentList,
-} from '@platform/contracts';
 import { DRIZZLE } from '@platform/database';
 import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';

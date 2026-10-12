@@ -1,5 +1,8 @@
-# buf v2 workspace for the gRPC contracts. Protos live under src/ so swc `copyFiles` ships them to
-# dist/proto (PROTO_DIR resolves to <pkg>/src/proto in dev and <pkg>/dist/proto in prod).
+# Shared buf policy of every domains/<x>/contracts package (and of the @platform/transport test
+# fixture). Each package runs buf from its own folder with
+# `--config ../../../libs/contracts/buf.yaml`, so `src/proto` below is THAT package's proto root:
+# buf rejects module paths outside the folder it runs in, so one workspace listing every domain is
+# impossible. Protos live under src/ so swc `copyFiles` ships them to dist/proto.
 version: v2
 modules:
   - path: src/proto

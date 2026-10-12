@@ -1,8 +1,8 @@
+import type { AuthTokens } from '@domain/identity-contracts';
 import { Injectable } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { LOCAL_STRATEGY } from '@platform/auth';
 import type { RequestLike } from '@platform/common';
-import type { AuthTokens } from '@platform/contracts';
 import { Strategy } from 'passport-local';
 import { AuthPort } from '../../../application/ports/auth.port.js';
 import { clientInfoOf } from '../../shared/client-info.util.js';

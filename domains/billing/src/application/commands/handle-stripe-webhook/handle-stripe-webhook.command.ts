@@ -1,5 +1,5 @@
+import type { HandleStripeWebhookResponse } from '@domain/billing-contracts';
 import { Command } from '@nestjs/cqrs';
-import type { HandleStripeWebhookResponse } from '@platform/contracts';
 
 /** A Stripe webhook delivery, exactly as received: raw body bytes + `Stripe-Signature` header. */
 export class HandleStripeWebhookCommand extends Command<HandleStripeWebhookResponse> {

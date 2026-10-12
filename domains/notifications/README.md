@@ -51,7 +51,7 @@ imports: ([
   NotificationsMessagingModule,
 ],
   // main.ts
-  connectGrpcServer(app, ['notifications']));
+  connectGrpcServer(app, [NOTIFICATIONS_GRPC_PACKAGE]));
 connectKafkaConsumer(app, { groupId: 'notifications-service' });
 ```
 
@@ -62,7 +62,7 @@ imports: [
   AppConfigModule.forRoot(), ObservabilityModule.forRoot(...),
   RedisModule.forRootAsync(), AuthModule.forRootAsync(), AppThrottlerModule.forRootAsync(),
   AppGraphqlModule.forRootAsync(), GraphqlPubSubModule,
-  NotificationsApiModule.forRemote(),    // GrpcClientsModule.register(['notifications']) inside
+  NotificationsApiModule.forRemote(),    // GrpcClientsModule.register({ spec: NOTIFICATIONS_GRPC_PACKAGE, url }) inside
 ],
 // main.ts
 app.useWebSocketAdapter(await createRedisIoAdapter(app));

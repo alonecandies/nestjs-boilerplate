@@ -586,7 +586,7 @@ if (!ack.ok) console.error(ack.error.code); // e.g. NOTIFICATION_NOT_FOUND, VALI
 ## gRPC
 
 gRPC is the internal API between the gateway and the services. It is not a public API. The contracts live in
-`libs/contracts/src/proto/<context>/v1/*.proto`. TypeScript types and controller decorators are generated with ts-proto
+`domains/<context>/contracts/src/proto/<context>/v1/*.proto`. TypeScript types and controller decorators are generated with ts-proto
 (`bun run proto:gen`). `google.protobuf.Timestamp` maps to `Date`, which is why `protobufjs` is pinned to 7.x.
 
 ```mermaid
@@ -695,8 +695,8 @@ gateway reports that as 422.
 ## Kafka
 
 Kafka carries integration events between bounded contexts. It is used in both topologies: the monolith produces and
-consumes its own events. Topic names follow `<context>.<event-name>.v<major>` and are defined in `KAFKA_TOPICS`
-(`@platform/contracts`). A breaking payload change ships as a new `.v2` topic, consumed alongside the old one. Additive
+consumes its own events. Topic names follow `<context>.<event-name>.v<major>` and are defined once, as an `EventContract`
+in the producer's `@domain/<context>-contracts`. A breaking payload change ships as a new `.v2` topic, consumed alongside the old one. Additive
 changes stay on the same topic, because readers ignore fields they do not know: zod strips unknown keys instead of
 rejecting them.
 

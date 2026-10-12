@@ -1,6 +1,6 @@
+import { NOTIFICATIONS_GRPC_PACKAGE } from '@domain/notifications-contracts';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
 import { grpcConfig } from '@platform/config';
-import { NOTIFICATIONS_GRPC_PACKAGE } from '@platform/contracts';
 import { GrpcClientsModule } from '@platform/transport';
 import { NotificationsPort } from './application/ports/notifications.port.js';
 import { NotificationsGrpcAdapter } from './infrastructure/adapters/grpc/notifications-grpc.adapter.js';

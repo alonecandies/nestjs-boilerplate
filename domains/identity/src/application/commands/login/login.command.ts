@@ -1,5 +1,5 @@
+import type { AuthTokens, ClientInfo } from '@domain/identity-contracts';
 import { Command } from '@nestjs/cqrs';
-import type { AuthTokens, ClientInfo } from '@platform/contracts';
 
 /** Verifies email + password and opens a new session. */
 export class LoginCommand extends Command<AuthTokens> {

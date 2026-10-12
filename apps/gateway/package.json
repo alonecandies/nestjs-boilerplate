@@ -50,6 +50,8 @@
   },
   "devDependencies": {
     "@platform/testing": "workspace:*",
+    "@domain/identity-contracts": "workspace:*",
+    "@domain/notifications-contracts": "workspace:*",
     "@nestjs/testing": "catalog:",
     "cache-manager": "catalog:",
     "graphql-subscriptions": "catalog:"

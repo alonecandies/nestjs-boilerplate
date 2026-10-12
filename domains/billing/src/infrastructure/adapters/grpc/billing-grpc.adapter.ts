@@ -1,7 +1,3 @@
-import type { Metadata } from '@grpc/grpc-js';
-import { Inject, Injectable, type OnModuleInit, Optional } from '@nestjs/common';
-import type { ClientGrpc } from '@nestjs/microservices';
-import { type GrpcConfig, grpcConfig } from '@platform/config';
 import {
   BILLING_GRPC_PACKAGE,
   BILLING_SERVICE_NAME,
@@ -13,7 +9,11 @@ import {
   type ListPaymentsRequest,
   type Payment,
   type PaymentList,
-} from '@platform/contracts';
+} from '@domain/billing-contracts';
+import type { Metadata } from '@grpc/grpc-js';
+import { Inject, Injectable, type OnModuleInit, Optional } from '@nestjs/common';
+import type { ClientGrpc } from '@nestjs/microservices';
+import { type GrpcConfig, grpcConfig } from '@platform/config';
 import {
   callerContextFromCls,
   createOutgoingMetadata,

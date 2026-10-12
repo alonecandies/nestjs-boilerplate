@@ -1,8 +1,8 @@
+import type { BillingServiceClient, Payment } from '@domain/billing-contracts';
 import { Metadata, status } from '@grpc/grpc-js';
 import type { ClientGrpc } from '@nestjs/microservices';
 import { EntityNotFoundException, generateId } from '@platform/common';
 import { grpcConfig } from '@platform/config';
-import { type BillingServiceClient, type Payment } from '@platform/contracts';
 import { GRPC_METADATA_KEYS, GrpcCircuitBreakers } from '@platform/transport';
 import { of, throwError } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';

@@ -1,4 +1,9 @@
 import { identitySchema, users } from '@domain/identity';
+import {
+  type AuthServiceClient,
+  IDENTITY_GRPC_PACKAGE,
+  type UsersServiceClient,
+} from '@domain/identity-contracts';
 import { type ServiceError, status } from '@grpc/grpc-js';
 import { ClientGrpcProxy } from '@nestjs/microservices';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -10,11 +15,6 @@ import {
   UnauthenticatedException,
 } from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
-import {
-  type AuthServiceClient,
-  IDENTITY_GRPC_PACKAGE,
-  type UsersServiceClient,
-} from '@platform/contracts';
 import { DRIZZLE } from '@platform/database';
 import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';

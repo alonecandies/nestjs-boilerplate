@@ -270,8 +270,8 @@ This continues the `orders` example: the context moves into its own `orders-serv
 
 ```mermaid
 flowchart LR
-  P[proto in libs/contracts] --> G[bun run proto:gen]
-  G --> R[GRPC_PACKAGES + grpc config]
+  P[proto in domains/orders/contracts] --> G[bun run proto:gen]
+  G --> R[ORDERS_GRPC_PACKAGE + client URL]
   R --> S[OrdersGrpcModule + controller]
   S --> A[apps/orders-service]
   R --> C[OrdersGrpcAdapter + forRemote]
@@ -279,34 +279,35 @@ flowchart LR
   A --> D[compose service + CI image matrix]
 ```
 
-**1. Contract.** Write `libs/contracts/src/proto/orders/v1/orders.proto` (`package orders.v1; service OrdersService { … }`). Timestamps use `google.protobuf.Timestamp`, and int64 fields arrive as decimal strings. Then:
+**1. Contract.** Create the contracts package `domains/orders/contracts` (`@domain/orders-contracts`; copy `domains/billing/contracts`) and write `src/proto/orders/v1/orders.proto` (`package orders.v1; service OrdersService { … }`). Timestamps use `google.protobuf.Timestamp`, and int64 fields arrive as decimal strings. Then:
 
 ```bash
-bun run --filter @platform/contracts proto:lint   # buf lint (STANDARD minus two response-naming rules)
-bun run proto:gen                            # buf generate + scripts/proto-esm-fix.mjs (needs `node` on PATH)
+bun run proto:lint   # buf lint of every contracts package (STANDARD minus two response-naming rules)
+bun run proto:gen    # buf generate + libs/contracts/scripts/proto-esm-fix.mjs (needs `node` on PATH)
 ```
 
-Commit `libs/contracts/src/generated/**`. CI regenerates it and fails on any diff. Re-export it from `libs/contracts/src/index.ts` in both forms, flat and as a namespace (in case a later `v2` reuses message names):
+Commit `domains/orders/contracts/src/generated/**`. CI regenerates it and fails on any diff. Re-export it from `domains/orders/contracts/src/index.ts` in both forms, flat and as a namespace (in case a later `v2` reuses message names):
 
 ```ts
 export * from './generated/orders/v1/orders.pb.js';
 export * as ordersV1 from './generated/orders/v1/orders.pb.js';
 ```
 
-**2. Register the package** in `GRPC_PACKAGES` (`libs/contracts/src/grpc/grpc-packages.ts`). Take the service name from the generated constant so it cannot drift from the proto:
+**2. Export the package spec** `ORDERS_GRPC_PACKAGE` from `domains/orders/contracts/src/grpc/orders.grpc-package.ts` (and the barrel). Value-import the service name from the generated module, so it cannot drift from the proto and the Timestamp ↔ Date wrapper is always registered:
 
 ```ts
-orders: {
+export const ORDERS_GRPC_PACKAGE: GrpcPackageSpec = {
   package: 'orders.v1',
+  protoDir: join(import.meta.dirname, '..', 'proto'),
   protoPath: ['orders/v1/orders.proto'],
   services: [ORDERS_SERVICE_NAME],
   clientToken: 'ORDERS_GRPC_CLIENT',
   // Only methods that are safe to run twice: these are retried on UNAVAILABLE.
   idempotentMethods: { [ORDERS_SERVICE_NAME]: ['GetOrder', 'ListOrders'] },
-},
+};
 ```
 
-**3. Client target.** In `libs/config/src/namespaces/grpc.config.ts`, add `ORDERS_GRPC_URL: zStr('localhost:50054')` to the schema and `orders: env.ORDERS_GRPC_URL` to the `clients` map. `createGrpcClientOptions` reads `cfg.clients[name]`. Document it in the root `.env.example` and in `apps/gateway/.env.example`.
+**3. Client target.** In `libs/config/src/namespaces/grpc.config.ts`, add `ORDERS_GRPC_URL: zStr('localhost:50054')` to the schema and `orders: env.ORDERS_GRPC_URL` to the `clients` map. `forRemote()` passes it as the `url` of `GrpcClientsModule.register({ spec, url })`. Document it in the root `.env.example` and in `apps/gateway/.env.example`.
 
 **4. Server side, in the lib.** Add `OrdersGrpcController` under `presentation/grpc/` and `OrdersGrpcModule` (imports `OrdersCoreModule` and declares the controller):
 
@@ -323,11 +324,12 @@ export class OrdersGrpcController implements OrdersServiceController {
 }
 ```
 
-**5. Client side, in the lib.** Add `OrdersGrpcAdapter implements OrdersPort` under `infrastructure/adapters/grpc/`. Base it on `BillingGrpcAdapter`: inject `GRPC_PACKAGES.orders.clientToken`, `grpcConfig.KEY` and `GrpcCircuitBreakers`, and wrap every call in `grpcCall(…, { timeoutMs, operation, breaker })`. proto-loader decodes absent message fields as `null`, so normalise them the way `normalizePayment` does. Then add the remote binding:
+**5. Client side, in the lib.** Add `OrdersGrpcAdapter implements OrdersPort` under `infrastructure/adapters/grpc/`. Base it on `BillingGrpcAdapter`: inject `ORDERS_GRPC_PACKAGE.clientToken`, `grpcConfig.KEY` and `GrpcCircuitBreakers`, and wrap every call in `grpcCall(…, { timeoutMs, operation, breaker })`. proto-loader decodes absent message fields as `null`, so normalise them the way `normalizePayment` does. Then add the remote binding:
 
 ```ts
 static forRemote(): DynamicModule {
-  return { module: OrdersApiModule, imports: [GrpcClientsModule.register(['orders'])],
+  const target = { spec: ORDERS_GRPC_PACKAGE, url: grpcConfig.parse().clients.orders };
+  return { module: OrdersApiModule, imports: [GrpcClientsModule.register(target)],
     controllers: [OrdersController], providers: [OrdersResolver, { provide: OrdersPort, useClass: OrdersGrpcAdapter }], exports: [OrdersPort] };
 }
 ```
@@ -338,7 +340,7 @@ static forRemote(): DynamicModule {
 - `.env.example`: `SERVICE_NAME=orders-service`, `PORT=3004`, `GRPC_URL=0.0.0.0:50054`, `KAFKA_GROUP_ID=orders-service`, `DATABASE_RUN_MIGRATIONS=true`.
 - `src/instrument.ts`: `startTracing({ serviceName: 'orders-service' })`.
 - `src/app.module.ts`: the global modules the core needs (`AppConfigModule.forRoot()`, `ConfigModule.forFeature(grpcConfig)`, `ObservabilityModule.forRoot({ healthContributors })`, `CqrsModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: ordersSchema })`, `RedisModule.forRootAsync()`, `KafkaProducerModule.forRootAsync()`), then `OrdersGrpcModule` and `provideCommonEnhancersAsync(…)`.
-- `src/main.ts`: `connectGrpcServer(app, ['orders'])` after `createServiceApp(AppModule)` and before `app.startAllMicroservices()` and `listen(app)`.
+- `src/main.ts`: `connectGrpcServer(app, [ORDERS_GRPC_PACKAGE])` after `createServiceApp(AppModule)` and before `app.startAllMicroservices()` and `listen(app)`.
 
 Add root scripts by copying `dev:billing` (`"dev:orders": "bun run setup:env && bun run --filter @app/orders-service dev"`), and append the service to `dev:microservices`.
 
@@ -458,14 +460,12 @@ Integration events use topics named `<context>.<event>.v<major>`, plus a `.dlq` 
 
 Broker auto-creation is **off**, locally as in production. Adding a topic touches the contracts and the provisioning file:
 
-| Where                                           | What                                                                                                                                                         |
-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `libs/contracts/src/events/topics.ts`           | Add the name to `KAFKA_TOPICS`. The `.dlq` names are derived automatically.                                                                                  |
-| `libs/contracts/src/events/<context>.events.ts` | The zod payload schema (a tolerant reader: unknown keys are stripped).                                                                                       |
-| `libs/contracts/src/events/event-registry.ts`   | Register the schema in `EVENT_PAYLOAD_SCHEMAS` **and** `EVENT_ENVELOPE_SCHEMAS`.                                                                             |
-| `docker/kafka/topics.txt`                       | `name:partitions:replication-factor[:config=value]` for the topic **and** its `.dlq`. The one-shot `kafka-init` service creates them on `docker compose up`. |
+| Where                                                        | What                                                                                                                                                                       |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `domains/<context>/contracts/src/events/<context>.events.ts` | The zod payload schema (a tolerant reader: unknown keys are stripped) and its contract: `defineEventContract('<context>.<event>.v1', schema)`. The `.dlq` name is derived. |
+| `docker/kafka/topics.txt`                                    | `name:partitions:replication-factor[:config=value]` for the topic **and** its `.dlq`. The one-shot `kafka-init` service creates them on `docker compose up`.               |
 
-Check the provisioning file against the contracts with `bun run build && node scripts/docker/check-kafka-topics.mjs`. The script imports the built `@platform/contracts`, and CI runs it. After editing `topics.txt`, re-run `bun run docker:infra` so `kafka-init` creates the new topic idempotently.
+Check the provisioning file against the contracts with `bun run build && node scripts/docker/check-kafka-topics.mjs`. The script imports every built `domains/*/contracts` package, and CI runs it. After editing `topics.txt`, re-run `bun run docker:infra` so `kafka-init` creates the new topic idempotently.
 
 Producing and consuming:
 
@@ -484,7 +484,7 @@ Producing and consuming:
 | `TS1484: 'X' is a type and must be imported using a type-only import`                    | The opposite case: an interface or type alias imported as a value under `verbatimModuleSyntax`. `bun run lint:fix` repairs it.                                                                                                           |
 | `ReferenceError: Cannot access 'X' before initialization`                                | An ESM import cycle reached by decorator metadata. Break the cycle, or use `forwardRef(() => X)` + `WrapperType<X>`.                                                                                                                     |
 | `Cannot find module …/dist/index.js` when starting an app                                | The process ran without `--conditions=@repo/source`, for example the `start` script or a bare `node`, and libs are not built. Use `bun run dev`, or run `bun run build` first.                                                           |
-| gRPC Timestamps arrive as `{ seconds, nanos }`                                           | The process imported only _types_ from `@platform/contracts`, or a second `protobufjs` copy exists. Import any value from `@platform/contracts` (gRPC options do), and keep the single `protobufjs@7` from the root `overrides`.         |
+| gRPC Timestamps arrive as `{ seconds, nanos }`                                           | The process imported only _types_ from a contracts package, or a second `protobufjs` copy exists. Import any value from it (every `<X>_GRPC_PACKAGE` does), and keep the single `protobufjs@7` from the root `overrides`.                |
 | gRPC server error `object expected` on a Timestamp field                                 | The handler returned an ISO string. Return a `Date`.                                                                                                                                                                                     |
 | `instanceof` fails across packages, or `ClientsModule` is registered twice               | Two copies of a `@nestjs/*` package. Keep `linker = "hoisted"` in `bunfig.toml` and do not add per-package `node_modules`.                                                                                                               |
 | A Kafka consumer fails at boot with an unknown topic, or "coordinator is loading" errors | The topic is missing from `docker/kafka/topics.txt`, or infra was started without the init job. Run `bun run docker:infra`. A few "coordinator is loading" warnings on a fresh broker are normal.                                        |
@@ -492,7 +492,7 @@ Producing and consuming:
 | Cassandra: `NoHostAvailableError`, or every query fails                                  | `CASSANDRA_LOCAL_DC` must equal the node's data center (`datacenter1` in compose). Otherwise the driver ignores the node. Cassandra also needs about a minute on first start.                                                            |
 | Boot hangs about 2 min, then fails on a CQL migration                                    | A crashed instance left a claim in `applying`. Run the `DELETE` printed in the log, then restart.                                                                                                                                        |
 | `bun run proto:gen` fails with `env: node: No such file or directory`                    | `protoc-gen-ts_proto` is a `#!/usr/bin/env node` script. Put Node 24 on `PATH` (`nvm use`).                                                                                                                                              |
-| CI "Generated artefacts drift" fails                                                     | A `.proto` or `*.schema.ts` changed without a regenerated output. Run `bun run proto:gen` / `bun run db:generate` and commit `libs/contracts/src/generated` / `libs/database/src/migrations`.                                            |
+| CI "Generated artefacts drift" fails                                                     | A `.proto` or `*.schema.ts` changed without a regenerated output. Run `bun run proto:gen` / `bun run db:generate` and commit `domains/*/contracts/src/generated` / `libs/database/src/migrations`.                                       |
 | CI "Config drift" fails                                                                  | A config schema reads a variable that the root `.env.example` does not list, or `topics.txt` and the contracts disagree. Run `node scripts/check-env-example.mjs` (and the topics check after a build).                                  |
 | Latency rises sharply under load in a container (Argon2 login, uploads)                  | `UV_THREADPOOL_SIZE` is above the container's CPU quota. Measured: 16 threads on a 2-CPU cap raised p95 from 36 ms to 304 ms. Keep it ≤ the CPUs the process gets (default 4). See [PERFORMANCE.md](PERFORMANCE.md).                     |
 | Stripe checkout or webhook returns errors locally                                        | `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` are placeholders. Set test keys, then forward webhooks with `stripe listen --forward-to localhost:3000/v1/billing/webhooks/stripe`.                                                          |

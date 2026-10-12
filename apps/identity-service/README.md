@@ -28,7 +28,7 @@ composition root.
 | `IdentityGrpcModule`                                                     | `IdentityCoreModule` + `AuthGrpcController`, `UsersGrpcController`                                                 |
 | `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`            | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC too                                  |
 
-`main.ts`: `createServiceApp(AppModule)` → `connectGrpcServer(app, ['identity'])` →
+`main.ts`: `createServiceApp(AppModule)` → `connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE])` →
 `startAllMicroservices()` → `listen(app)`. The HTTP port opens last, so readiness probes only see
 the pod once gRPC accepts calls.
 

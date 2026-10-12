@@ -1,10 +1,10 @@
+import { NOTIFICATION_CREATED_EVENT } from '@domain/notifications-contracts';
 import { Global, Module, type Type } from '@nestjs/common';
 import { CommandBus, CqrsModule, QueryBus } from '@nestjs/cqrs';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { AuthModule } from '@platform/auth';
 import { CASSANDRA_CLIENT, type CassandraClient } from '@platform/cassandra';
 import { AppConfigModule } from '@platform/config';
-import { NOTIFICATION_CREATED_EVENT } from '@platform/contracts';
 import { GraphqlPubSubModule } from '@platform/graphql';
 import { MailService } from '@platform/mailer';
 import { AppThrottlerModule } from '@platform/redis';

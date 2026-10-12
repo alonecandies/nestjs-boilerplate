@@ -1,6 +1,6 @@
+import type { User } from '@domain/identity-contracts';
 import { CommandHandler, EventPublisher, type ICommandHandler } from '@nestjs/cqrs';
 import { EntityNotFoundException } from '@platform/common';
-import type { User } from '@platform/contracts';
 import { CannotRemoveLastAdminException } from '../../../domain/identity.errors.js';
 import { ADMIN_ROLE } from '../../../domain/user-role.js';
 import { toUserContract } from '../../mappers/user.mapper.js';

@@ -1,7 +1,7 @@
+import { NOTIFICATIONS_SERVICE_NAME } from '@domain/notifications-contracts';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { GrpcStatus } from '@nestjs/microservices';
 import { Test } from '@nestjs/testing';
-import { NOTIFICATIONS_SERVICE_NAME } from '@platform/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeNotificationPage, USER_ID } from '../../../test/support/fixtures.js';
 import { InMemoryGrpcServer } from '../../../test/support/in-memory-grpc.server.js';

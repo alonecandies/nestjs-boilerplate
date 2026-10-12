@@ -1,6 +1,6 @@
+import { BILLING_SERVICE_NAME } from '@domain/billing-contracts';
 import type { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { DomainValidationException, generateId } from '@platform/common';
-import { BILLING_SERVICE_NAME } from '@platform/contracts';
 import { createMock } from '@platform/testing';
 import { ZodRpcValidationPipe } from '@platform/transport';
 import { describe, expect, it } from 'vitest';

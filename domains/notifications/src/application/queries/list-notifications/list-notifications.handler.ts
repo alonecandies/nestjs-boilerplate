@@ -1,5 +1,5 @@
+import type { NotificationPage } from '@domain/notifications-contracts';
 import { type IQueryHandler, QueryHandler } from '@nestjs/cqrs';
-import type { NotificationPage } from '@platform/contracts';
 import { clamp } from 'lodash-es';
 import {
   DEFAULT_NOTIFICATIONS_PAGE_SIZE,

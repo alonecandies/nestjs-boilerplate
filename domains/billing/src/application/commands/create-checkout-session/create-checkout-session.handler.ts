@@ -1,8 +1,8 @@
+import type { CheckoutSession } from '@domain/billing-contracts';
 import { Inject, Logger } from '@nestjs/common';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { DomainConflictException, generateId } from '@platform/common';
 import { type StripeConfig, stripeConfig } from '@platform/config';
-import type { CheckoutSession } from '@platform/contracts';
 import { StripeService } from '@platform/payments';
 import type Stripe from 'stripe';
 import {

@@ -1,13 +1,13 @@
-import type { Metadata } from '@grpc/grpc-js';
-import { CommandBus, QueryBus } from '@nestjs/cqrs';
-import { Ctx, Payload } from '@nestjs/microservices';
 import {
   type ListNotificationsRequest,
   type MarkNotificationReadRequest,
   type NotificationPage,
   type NotificationsServiceController,
   NotificationsServiceControllerMethods,
-} from '@platform/contracts';
+} from '@domain/notifications-contracts';
+import type { Metadata } from '@grpc/grpc-js';
+import { CommandBus, QueryBus } from '@nestjs/cqrs';
+import { Ctx, Payload } from '@nestjs/microservices';
 import { GrpcController, ZodRpcValidationPipe } from '@platform/transport';
 import { MarkNotificationReadCommand } from '../../application/commands/mark-notification-read/mark-notification-read.command.js';
 import { ListNotificationsQuery } from '../../application/queries/list-notifications/list-notifications.query.js';

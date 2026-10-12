@@ -15,7 +15,7 @@ src/
 │   ├── commands/           RegisterUser, Login, RefreshSession, Logout, UpdateUserRoles, PurgeExpiredSessions
 │   ├── queries/            GetUserById, GetUsersByIds, ListUsers
 │   ├── event-handlers/     UserRegisteredRelay (→ Kafka), UserRolesChangedAuditHandler
-│   ├── ports/              AuthPort, UsersPort (abstract classes, @platform/contracts types)
+│   ├── ports/              AuthPort, UsersPort (abstract classes, @domain/identity-contracts types)
 │   ├── persistence/        UsersRepository, SessionsRepository, TransactionRunner (abstractions)
 │   ├── services/           SessionTokensService (open session + issue the token pair)
 │   └── mappers/            contract/record/request mappers
@@ -42,15 +42,15 @@ abstractions; only `IdentityCoreModule` knows they are Drizzle/Postgres.
 | `IdentityCoreModule`                    | command/query/event handlers, relay, repositories (Drizzle), `TransactionRunner`, `SessionTokensService`, cron                            | monolith, identity-service |
 | `IdentityGrpcModule`                    | `IdentityCoreModule` + `AuthGrpcController`, `UsersGrpcController`                                                                        | identity-service           |
 | `IdentityApiModule.forLocal()`          | REST controllers, GraphQL resolvers, `LocalStrategy`, `UserReadCache`, `users` DataLoader + ports → local adapters + `IdentityCoreModule` | monolith                   |
-| `IdentityApiModule.forRemote(options?)` | same presentation + ports → gRPC adapters + `GrpcClientsModule.register(['identity'], options)`                                           | gateway                    |
+| `IdentityApiModule.forRemote(options?)` | same presentation + ports → gRPC adapters + `GrpcClientsModule.register({ spec: IDENTITY_GRPC_PACKAGE, url }, options)`                   | gateway                    |
 
 The modules assume these app-level (global) modules:
 
-| App              | Required global modules                                                                                                                                                                                                                                                                                                        |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| monolith         | `AppConfigModule`, `ObservabilityModule`, `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema } })`, `RedisModule`, `AppCacheModule`, `AuthModule` (before `AppThrottlerModule`), `AppThrottlerModule`, `KafkaProducerModule`, `AppGraphqlModule` |
-| gateway          | `AppConfigModule`, `ObservabilityModule`, `RedisModule`, `AppCacheModule`, `AuthModule`, `AppThrottlerModule`, `AppGraphqlModule` (no DB, no CQRS, no Kafka producer needed for identity)                                                                                                                                      |
-| identity-service | `AppConfigModule`, `ObservabilityModule`, `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: identitySchema })`, `RedisModule` (denylist + locks), `KafkaProducerModule`, `AuthModule.forRootAsync({ globalGuards: false })`; `main.ts`: `connectGrpcServer(app, ['identity'])`        |
+| App              | Required global modules                                                                                                                                                                                                                                                                                                            |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| monolith         | `AppConfigModule`, `ObservabilityModule`, `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema } })`, `RedisModule`, `AppCacheModule`, `AuthModule` (before `AppThrottlerModule`), `AppThrottlerModule`, `KafkaProducerModule`, `AppGraphqlModule`     |
+| gateway          | `AppConfigModule`, `ObservabilityModule`, `RedisModule`, `AppCacheModule`, `AuthModule`, `AppThrottlerModule`, `AppGraphqlModule` (no DB, no CQRS, no Kafka producer needed for identity)                                                                                                                                          |
+| identity-service | `AppConfigModule`, `ObservabilityModule`, `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: identitySchema })`, `RedisModule` (denylist + locks), `KafkaProducerModule`, `AuthModule.forRootAsync({ globalGuards: false })`; `main.ts`: `connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE])` |
 
 ```ts
 // apps/monolith/src/app.module.ts

@@ -1,8 +1,5 @@
-import {
-  NOTIFICATION_CREATED_EVENT,
-  NOTIFICATION_TYPES,
-  parseEventEnvelope,
-} from '@platform/contracts';
+import { NOTIFICATION_CREATED_EVENT, NOTIFICATION_TYPES } from '@domain/notifications-contracts';
+import { parseEventEnvelope } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { makeNotificationProps } from '../../../test/support/fixtures.js';
 import { NOTIFICATION_KINDS } from '../../domain/notification.types.js';

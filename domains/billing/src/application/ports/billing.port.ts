@@ -5,7 +5,7 @@ import type {
   HandleStripeWebhookResponse,
   ListPaymentsRequest,
   PaymentList,
-} from '@platform/contracts';
+} from '@domain/billing-contracts';
 
 /**
  * The billing API as seen by presentation code (REST controller, GraphQL resolver). Bound to

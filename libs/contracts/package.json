@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Wire contracts: gRPC protobuf definitions + ts-proto (NestJS) types, and zod-validated Kafka integration-event envelopes.",
+  "description": "Generic wire-contract plumbing for the domain contracts packages: GrpcPackageSpec and proto-loader options, EventContract and validated Kafka envelopes, topic helpers, and the shared buf policy and ts-proto template.",
   "exports": {
     ".": {
       "@repo/source": "./src/index.ts",
@@ -21,9 +21,7 @@
     "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --config ../../vitest.config.ts --project contracts",
-    "clean": "rimraf dist coverage",
-    "proto:gen": "buf generate && node scripts/proto-esm-fix.mjs",
-    "proto:lint": "buf lint"
+    "clean": "rimraf dist coverage"
   },
   "dependencies": {
     "@grpc/grpc-js": "catalog:",
@@ -34,9 +32,5 @@
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
     "zod": "catalog:"
-  },
-  "devDependencies": {
-    "@bufbuild/buf": "catalog:",
-    "ts-proto": "catalog:"
   }
 }

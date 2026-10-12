@@ -1,9 +1,9 @@
+import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
 import { Global, Module } from '@nestjs/common';
 import { CqrsModule } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
 import { PasswordHasher, Role } from '@platform/auth';
 import { provideCommonEnhancers } from '@platform/common';
-import { USER_REGISTERED_EVENT } from '@platform/contracts';
 import { DRIZZLE, TransactionHost } from '@platform/database';
 import { AppCacheService } from '@platform/redis';
 import { createFastifyTestApp } from '@platform/testing';

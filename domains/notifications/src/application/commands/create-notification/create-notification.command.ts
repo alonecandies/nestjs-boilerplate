@@ -1,5 +1,5 @@
+import type { Notification } from '@domain/notifications-contracts';
 import { Command } from '@nestjs/cqrs';
-import type { Notification } from '@platform/contracts';
 import type { NotificationKind } from '../../../domain/notification.types.js';
 
 export interface CreateNotificationInput {

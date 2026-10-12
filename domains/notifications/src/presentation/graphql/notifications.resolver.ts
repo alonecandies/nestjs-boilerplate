@@ -1,6 +1,6 @@
+import type { NotificationCreatedPayload, NotificationPage } from '@domain/notifications-contracts';
 import { Args, Mutation, Query, Resolver, Subscription } from '@nestjs/graphql';
 import { CurrentUser, Permission, RequirePermissions } from '@platform/auth';
-import type { NotificationCreatedPayload, NotificationPage } from '@platform/contracts';
 import { type GqlContext, type GraphqlPubSub, InjectPubSub } from '@platform/graphql';
 import { notificationFromCreatedPayload } from '../../application/mappers/notification.mapper.js';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';

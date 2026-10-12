@@ -1,4 +1,4 @@
-import { NOTIFICATION_TYPES, type NotificationPage } from '@platform/contracts';
+import { NOTIFICATION_TYPES, type NotificationPage } from '@domain/notifications-contracts';
 import { z } from 'zod';
 import {
   DEFAULT_NOTIFICATIONS_PAGE_SIZE,

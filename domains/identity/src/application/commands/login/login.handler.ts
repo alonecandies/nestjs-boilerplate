@@ -1,8 +1,8 @@
+import type { AuthTokens } from '@domain/identity-contracts';
 import { Logger } from '@nestjs/common';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { PasswordHasher } from '@platform/auth';
 import { normalizeEmail } from '@platform/common';
-import type { AuthTokens } from '@platform/contracts';
 import { InvalidCredentialsException } from '../../../domain/identity.errors.js';
 import type { UserSnapshot } from '../../../domain/user.aggregate.js';
 import { toUserRecord } from '../../mappers/user.mapper.js';

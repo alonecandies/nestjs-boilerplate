@@ -1,6 +1,6 @@
+import { IDENTITY_GRPC_PACKAGE } from '@domain/identity-contracts';
 import { type DynamicModule, Module, type Provider } from '@nestjs/common';
 import { grpcConfig } from '@platform/config';
-import { IDENTITY_GRPC_PACKAGE } from '@platform/contracts';
 import { GraphqlLoadersModule } from '@platform/graphql';
 import { GrpcClientsModule, type GrpcClientsModuleOptions } from '@platform/transport';
 import { AuthPort } from './application/ports/auth.port.js';

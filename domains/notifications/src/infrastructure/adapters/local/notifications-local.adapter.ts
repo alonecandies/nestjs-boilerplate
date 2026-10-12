@@ -1,10 +1,10 @@
-import { Injectable } from '@nestjs/common';
-import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import type {
   ListNotificationsRequest,
   MarkNotificationReadRequest,
   NotificationPage,
-} from '@platform/contracts';
+} from '@domain/notifications-contracts';
+import { Injectable } from '@nestjs/common';
+import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { MarkNotificationReadCommand } from '../../../application/commands/mark-notification-read/mark-notification-read.command.js';
 import type { NotificationsPort } from '../../../application/ports/notifications.port.js';
 import { ListNotificationsQuery } from '../../../application/queries/list-notifications/list-notifications.query.js';

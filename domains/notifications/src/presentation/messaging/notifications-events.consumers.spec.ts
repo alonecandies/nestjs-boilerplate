@@ -1,11 +1,9 @@
+import { PAYMENT_SUCCEEDED_EVENT } from '@domain/billing-contracts';
+import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
 import { CommandBus } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
 import { generateId } from '@platform/common';
-import {
-  createEventEnvelope,
-  PAYMENT_SUCCEEDED_EVENT,
-  USER_REGISTERED_EVENT,
-} from '@platform/contracts';
+import { createEventEnvelope } from '@platform/contracts';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { USER_ID } from '../../../test/support/fixtures.js';
 import { InMemoryKafkaServer } from '../../../test/support/in-memory-kafka.server.js';
