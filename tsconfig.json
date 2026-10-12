@@ -22,6 +22,7 @@
     "libs/*/test",
     "libs/*/*.ts",
     "*.ts",
+    "scripts/**/*.ts",
     "typings/**/*.d.ts"
   ],
   "exclude": ["**/node_modules", "**/dist", "**/coverage"]

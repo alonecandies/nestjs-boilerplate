@@ -72,6 +72,12 @@ const domains = packagesIn('domains');
 const libs = packagesIn('libs');
 const apps = packagesIn('apps');
 
+/** Repo tooling under scripts/ (e.g. the layer boundary check), specs only. */
+const scriptsProject: TestProjectInlineConfiguration = {
+  extends: true,
+  test: { name: 'scripts', root: join(ROOT, 'scripts'), include: ['**/*.spec.ts'] },
+};
+
 export default defineConfig({
   root: ROOT,
   plugins: [
@@ -133,6 +139,7 @@ export default defineConfig({
       ...libs.map(unitProject),
       ...apps.map(unitProject),
       ...apps.map(e2eProject),
+      scriptsProject,
       ...(INTEGRATION
         ? [...domains.map(intProject), ...libs.map(intProject), ...apps.map(intProject)]
         : []),
