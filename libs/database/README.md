@@ -1,12 +1,13 @@
 # @platform/database
 
 PostgreSQL for the monorepo. It provides a tuned **postgres.js** pool, **Drizzle ORM** (a global
-`DatabaseModule`), transactions that propagate through CLS (`@Transactional()`), drizzle-kit
-migrations applied by an **advisory-locked** runner (at boot or from the `migrate.ts` CLI), a
-readiness contributor, and **uuidv7 keyset-pagination** helpers.
+`DatabaseModule`), transactions that propagate through CLS (`@Transactional()`), **migration sets** applied by an
+**advisory-locked** runner (at boot, or by each app's `migrate.ts` through `runMigrationsCli`), a readiness
+contributor, and **uuidv7 keyset-pagination** helpers.
 
-Domain tables live in the domain packages as `*.schema.ts` files (`domains/identity`, `domains/billing`). This package
-owns the connection, the migration history and the tooling.
+Domain tables live in the domain packages, each in its own Postgres schema with its own drizzle-kit config and
+migration history (`domains/identity`, `domains/billing`). This package owns the connection, the runner, the
+**platform set** (schema `app`, extensions) and the rule that the platform set always runs first.
 
 Production refuses a `DATABASE_URL` without TLS (`?sslmode=verify-full`, `require` or `verify-ca`, `ssl=true`, or
 `sslrootcert=system`; as in postgres.js, the last value of a repeated parameter wins). An `ssl` option passed in
@@ -15,43 +16,52 @@ code (`DatabaseModule` `postgres.ssl`) wins at runtime, but the boot check only 
 
 ## Public API
 
-| Export                                                                                                                                                  | Kind            | Purpose                                                                                                                                 |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `DatabaseModule.forRootAsync<S>(options: DatabaseModuleOptions<S>): DynamicModule`                                                                      | module (global) | Pool + Drizzle handle, transactional CLS plugin, migrations on boot, health indicator                                                   |
-| `DatabaseModuleOptions<S>`                                                                                                                              | interface       | `{ schema: S; migrationsFolder?; runMigrations?; transactional?: boolean \| DatabaseTransactionalOptions; postgres?: PostgresOptions }` |
-| `DatabaseTransactionalOptions`                                                                                                                          | interface       | `{ defaultTxOptions?: PgTransactionConfig; enableTransactionProxy?: boolean }`                                                          |
-| `DatabaseMigrationSet`                                                                                                                                  | interface       | `{ name; folder; migrationsSchema; migrationsTable }`: one migration history with its own bookkeeping table                             |
-| `platformMigrations`                                                                                                                                    | const           | The platform set (`src/platform/migrations`, bookkeeping `app.__drizzle_migrations`): always applied first                              |
-| `withPlatformMigrations(sets)`                                                                                                                          | fn              | `[platformMigrations, ...sets]`; throws on a set listed twice or two sets sharing a bookkeeping table                                   |
-| `DRIZZLE`, `DATABASE_MODULE_OPTIONS`                                                                                                                    | symbols         | Injection tokens                                                                                                                        |
-| `InjectDrizzle()`                                                                                                                                       | decorator       | `@InjectDrizzle() private readonly db: DrizzleDB<typeof schema>`                                                                        |
-| `DrizzleDB<S>`, `DrizzleTransaction<S>`, `DrizzleExecutor<S>`, `DrizzleSchema`                                                                          | types           | Handle (`PostgresJsDatabase<S> & { $client: Sql }`), tx handle, db-or-tx, schema record                                                 |
-| `DrizzleTransactionalAdapter<S>`, `DrizzleTransactionHost<S>`                                                                                           | types           | Adapter and `TransactionHost` typing for your schema                                                                                    |
-| `Transactional`, `TransactionHost`, `InjectTransaction`, `InjectTransactionHost`, `Propagation`                                                         | re-exports      | From `@nestjs-cls/transactional` (same package instance)                                                                                |
-| `DrizzlePostgresTransactionalAdapter`, `normalizeTxConfig(config)`                                                                                      | class, fn       | Drizzle adapter that drops empty tx configs (see Gotchas)                                                                               |
-| `runMigrations(url, options?): Promise<MigrationRunSummary>`                                                                                            | fn              | Single-session client + `pg_try_advisory_lock` polling + drizzle `migrate()`                                                            |
-| `RunMigrationsOptions`, `MigrationRunSummary`, `DEFAULT_MIGRATIONS_FOLDER`                                                                              | types, const    | `{ migrationsFolder?, logger?, applicationName?, lockTimeoutMs?, lockPollIntervalMs? }` → `{ folder, total, applied }`                  |
-| `MIGRATIONS_SCHEMA` (`public`), `MIGRATIONS_TABLE` (`__drizzle_migrations`), `MIGRATIONS_ADVISORY_LOCK_ID`                                              | consts          | Shared with `drizzle.config.ts`                                                                                                         |
-| `DatabaseHealthIndicator`                                                                                                                               | provider        | `HealthContributor` with key `postgres` (`select 1`, 2 s timeout, cancels the query)                                                    |
-| `keysetWhere(col, cursor, dir?)`, `keysetOrder(col, dir?)`, `keysetFetchLimit(limit)`, `keysetPage(rows, limit)`, `keysetPageBy(rows, limit, cursorOf)` | fns             | Seek pagination → `CursorPage<T>` from `@platform/common`                                                                               |
-| `encodeIdCursor(id)`, `decodeIdCursor(cursor)`, `normalizePageLimit(limit)`, `IdCursor`, `KeysetDirection`                                              | fns, types      | A bad cursor throws a 422 `INVALID_CURSOR`                                                                                              |
-| `buildPostgresOptions(cfg, ctx, overrides?)`, `PostgresOptions`, `IDLE_IN_TRANSACTION_TIMEOUT_MS`                                                       | fn, type        | Config → postgres.js options (seconds vs ms handled)                                                                                    |
-| `createDrizzleDatabase(cfg, app, options, logger?)`                                                                                                     | fn              | The factory behind `DRIZZLE`, usable outside Nest                                                                                       |
-| `isTransientConnectionError(e)`, `describePostgresUrl(url)`, `DrizzleQueryLogger`                                                                       | helpers         | Boot retries, credential-free log target, SQL debug logging                                                                             |
+| Export                                                                                                                                                  | Kind            | Purpose                                                                                                                                                           |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DatabaseModule.forRootAsync<S>(options: DatabaseModuleOptions<S>): DynamicModule`                                                                      | module (global) | Pool + Drizzle handle, transactional CLS plugin, migrations on boot, health indicator. Validates `migrations` when called                                         |
+| `DatabaseModuleOptions<S>`                                                                                                                              | interface       | `{ schema: S; migrations: readonly DatabaseMigrationSet[]; runMigrations?; transactional?: boolean \| DatabaseTransactionalOptions; postgres?: PostgresOptions }` |
+| `DatabaseTransactionalOptions`                                                                                                                          | interface       | `{ defaultTxOptions?: PgTransactionConfig; enableTransactionProxy?: boolean }`                                                                                    |
+| `DatabaseMigrationSet`                                                                                                                                  | interface       | `{ name; folder; migrationsSchema; migrationsTable }`: one migration history with its own bookkeeping table                                                       |
+| `platformMigrations`                                                                                                                                    | const           | The platform set (`src/platform/migrations`, bookkeeping `app.__drizzle_migrations`): always applied first                                                        |
+| `withPlatformMigrations(sets)`                                                                                                                          | fn              | `[platformMigrations, ...sets]`; throws on a set listed twice or two sets sharing a bookkeeping table                                                             |
+| `DRIZZLE`, `DATABASE_MODULE_OPTIONS`                                                                                                                    | symbols         | Injection tokens                                                                                                                                                  |
+| `InjectDrizzle()`                                                                                                                                       | decorator       | `@InjectDrizzle() private readonly db: DrizzleDB<typeof schema>`                                                                                                  |
+| `DrizzleDB<S>`, `DrizzleTransaction<S>`, `DrizzleExecutor<S>`, `DrizzleSchema`                                                                          | types           | Handle (`PostgresJsDatabase<S> & { $client: Sql }`), tx handle, db-or-tx, schema record                                                                           |
+| `DrizzleTransactionalAdapter<S>`, `DrizzleTransactionHost<S>`                                                                                           | types           | Adapter and `TransactionHost` typing for your schema                                                                                                              |
+| `Transactional`, `TransactionHost`, `InjectTransaction`, `InjectTransactionHost`, `Propagation`                                                         | re-exports      | From `@nestjs-cls/transactional` (same package instance)                                                                                                          |
+| `DrizzlePostgresTransactionalAdapter`, `normalizeTxConfig(config)`                                                                                      | class, fn       | Drizzle adapter that drops empty tx configs (see Gotchas)                                                                                                         |
+| `runMigrations(url, options): Promise<MigrationRunSummary>`                                                                                             | fn              | Exactly `options.migrations`, in order: single-session client + `pg_try_advisory_lock` polling + drizzle `migrate()` per set                                      |
+| `RunMigrationsOptions`, `MigrationRunSummary`, `MigrationSetSummary`                                                                                    | types           | `{ migrations, logger?, applicationName?, lockTimeoutMs?, lockPollIntervalMs? }` → `{ sets: [{ name, folder, total, applied }], total, applied }`                 |
+| `runMigrationsCli(migrations, args?)`                                                                                                                   | fn              | Body of every app's `src/migrate.ts`: config from env, platform set + `migrations`, JSON log lines, `process.exitCode`                                            |
+| `MIGRATIONS_TABLE` (`__drizzle_migrations`), `MIGRATIONS_ADVISORY_LOCK_ID`                                                                              | consts          | The bookkeeping table name of every set; the one lock key                                                                                                         |
+| `DatabaseHealthIndicator`                                                                                                                               | provider        | `HealthContributor` with key `postgres` (`select 1`, 2 s timeout, cancels the query)                                                                              |
+| `keysetWhere(col, cursor, dir?)`, `keysetOrder(col, dir?)`, `keysetFetchLimit(limit)`, `keysetPage(rows, limit)`, `keysetPageBy(rows, limit, cursorOf)` | fns             | Seek pagination → `CursorPage<T>` from `@platform/common`                                                                                                         |
+| `encodeIdCursor(id)`, `decodeIdCursor(cursor)`, `normalizePageLimit(limit)`, `IdCursor`, `KeysetDirection`                                              | fns, types      | A bad cursor throws a 422 `INVALID_CURSOR`                                                                                                                        |
+| `buildPostgresOptions(cfg, ctx, overrides?)`, `PostgresOptions`, `IDLE_IN_TRANSACTION_TIMEOUT_MS`                                                       | fn, type        | Config → postgres.js options (seconds vs ms handled)                                                                                                              |
+| `createDrizzleDatabase(cfg, app, options, logger?)`                                                                                                     | fn              | The factory behind `DRIZZLE`, usable outside Nest                                                                                                                 |
+| `isTransientConnectionError(e)`, `describePostgresUrl(url)`, `DrizzleQueryLogger`                                                                       | helpers         | Boot retries, credential-free log target, SQL debug logging                                                                                                       |
 
 ## Usage
 
 ```ts
+// apps/identity-service/src/database.migrations.ts — one list for AppModule and migrate.ts
+export const DATABASE_MIGRATIONS: readonly DatabaseMigrationSet[] = [identityMigrations];
+
 // app.module.ts
 import { identitySchema } from '@domain/identity'; // the domain's tables + relations record
 @Module({
   imports: [
     AppConfigModule.forRoot(),
     ObservabilityModule.forRoot({ healthContributors: [DatabaseHealthIndicator] }),
-    DatabaseModule.forRootAsync({ schema: identitySchema }), // monolith: { ...identitySchema, ...billingSchema }
+    // monolith: { ...identitySchema, ...billingSchema } and [identityMigrations, billingMigrations]
+    DatabaseModule.forRootAsync({ schema: identitySchema, migrations: DATABASE_MIGRATIONS }),
   ],
 })
 export class AppModule {}
+
+// migrate.ts — the release job (`node dist/migrate.js`)
+import 'reflect-metadata';
+await runMigrationsCli(DATABASE_MIGRATIONS);
 
 // users.repository.ts (infrastructure layer)
 import { type DrizzleTransactionalAdapter, keysetFetchLimit, keysetOrder, keysetPage, keysetWhere, TransactionHost } from '@platform/database';
@@ -75,32 +85,43 @@ export class DrizzleUsersRepository {
 async execute(cmd: RegisterUserCommand) { await this.users.insert(...); await this.sessions.insert(...); }
 ```
 
-Migrations:
+## Migrations
+
+| Set                  | Postgres schema | Files                                                        | Produced by                                                      |
+| -------------------- | --------------- | ------------------------------------------------------------ | ---------------------------------------------------------------- |
+| `platformMigrations` | `app`           | `libs/database/src/platform/migrations`                      | hand-written ([Platform migration set](#platform-migration-set)) |
+| `identityMigrations` | `identity`      | `domains/identity/src/infrastructure/persistence/migrations` | `domains/identity/drizzle.config.ts`                             |
+| `billingMigrations`  | `billing`       | `domains/billing/src/infrastructure/persistence/migrations`  | `domains/billing/drizzle.config.ts`                              |
+
+- **Order.** `DatabaseModule` (with `runMigrations` / `DATABASE_RUN_MIGRATIONS`) and `runMigrationsCli` apply
+  `withPlatformMigrations(migrations)`: the platform set, then the app's sets in array order, under ONE advisory lock
+  (`MIGRATIONS_ADVISORY_LOCK_ID`) on one dedicated connection. identity-service and billing-service can share a
+  database and boot together: their runs are serialised.
+- **One bookkeeping table per set** (`<schema>.__drizzle_migrations`). drizzle's migrator compares file timestamps only
+  with the newest row of the table it writes to, so two histories in one table would silently skip the older one's
+  files. `withPlatformMigrations` rejects a shared table.
+- Each set's pending files run in one transaction (all-or-nothing per set); a set that already ran stays applied when
+  a later set fails.
 
 ```bash
-bun run db:generate        # drizzle-kit generate → libs/database/src/migrations (commit the output)
-bun run db:migrate         # node dist/migrate.js (after build); [--migrations-folder <dir>]
-bun run db:migrate:dev     # same, from TS sources
-bun run db:studio
+bun run db:generate                                    # drizzle-kit generate in every domain (commit the output)
+bun run --filter @domain/identity db:generate --name <change>
+bun run db:migrate                                     # the monolith's src/migrate.ts from sources (root .env)
+bun run --filter @app/identity-service db:migrate      # an app's dist/migrate.js (after build): the release job
+bun run db:studio                                      # Drizzle Studio per domain (identity 4983, billing 4984)
 ```
 
-The `migrate.ts` CLI logs one JSON object per line (`ConsoleLogger({ json: true })`, what log shippers ingest
-from deploy jobs); `LOG_PRETTY=true` (default in development) switches to coloured text. Exit code 0 = schema
-current, 1 = failure.
+`runMigrationsCli` logs one JSON object per line (`ConsoleLogger({ json: true })`, what log shippers ingest from
+deploy jobs); `LOG_PRETTY=true` (default in development) switches to coloured text. Exit code 0 = schema current,
+1 = failure (an unknown flag included).
 
-`src/migrations/0000_init.sql` is the committed initial migration for identity + billing: the `user_role`
-and `payment_status` enums, `users` (unique `users_email_unique`), `sessions` (FK `user_id → users.id`
-`ON DELETE CASCADE`, `sessions_user_id_idx`, `sessions_expires_at_idx`), `payments` (unique
-`payments_stripe_checkout_session_id_unique`, `payments_user_id_id_idx`, unique
-`payments_user_id_idempotency_key_uq`) and `stripe_events`. Both uuid primary keys default to PG18's
-`uuidv7()`. `0001_users_search_trgm.sql` adds `CREATE EXTENSION IF NOT EXISTS pg_trgm` (hand-added on top of
-the generated SQL) and the `users_search_trgm_idx` GIN index (`email`, `display_name` `gin_trgm_ops`) for the
-identity user search. Identity's `users.repository.int-spec.ts` applies them to a real Postgres 18. Schema changes: edit a
-domain `*.schema.ts`, run `db:generate --name <change>`, commit the new file plus `meta/`. Never edit an applied
-migration.
+A domain's first migration comes from `bun run --filter @domain/<x> db:generate --name init`. drizzle-kit writes
+`CREATE SCHEMA "<x>";` first, but the migrator has already created that schema for `<x>.__drizzle_migrations`, so
+change that line to `CREATE SCHEMA IF NOT EXISTS "<x>";` (the domain's `*.migrations.spec.ts` checks it). Every other
+generated file is committed as generated. Never edit an applied migration.
 
-Set `DATABASE_RUN_MIGRATIONS=true` (or `runMigrations: true`) to migrate at boot. Replicas that boot
-together are serialised by the advisory lock. In production, prefer running the CLI as a one-off job.
+Set `DATABASE_RUN_MIGRATIONS=true` (or `runMigrations: true`) to migrate at boot. In production, prefer each app's
+`dist/migrate.js` as a one-off job.
 
 ## Environment (`database` namespace, plus `SERVICE_NAME` from `app`)
 
@@ -114,11 +135,14 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
 
 - Unit (`bunx vitest run --project database`) needs no database. `test/fake-sql.ts` fakes the postgres.js pool
   (`unsafe`, `begin`, `end`), so drizzle's real session code runs: module wiring, `@Transactional()` commit and
-  rollback, boot retries, the migration lock and health are all covered.
+  rollback, boot retries, the platform-first rule, the per-set runner under one lock, the CLI and health are covered.
 - Integration (`INTEGRATION=1 bunx vitest run --project database:int`) uses `postgres:18.6-alpine3.24` through
-  testcontainers. It covers concurrent `runMigrations`, the CLI, boot migrations, startup GUCs, `uuidv7()` defaults,
-  transactions, keyset paging, health and shutdown. The fixtures in `test/fixtures/migrations` are real drizzle-kit
-  output: `drizzle-kit generate --dialect=postgresql --schema=./test/fixtures/widgets.schema.ts --out=./test/fixtures/migrations --casing=snake_case`.
+  testcontainers. It covers concurrent `runMigrations` over two sets, separate bookkeeping tables (`gadgets`, a set
+  with older timestamps, still applies), the CLI (`test/fixtures/migrate.ts`, an app-style entry), boot migrations,
+  startup GUCs, `uuidv7()` defaults, transactions, keyset paging, health and shutdown. `test/fixtures/migrations` is
+  real drizzle-kit output
+  (`drizzle-kit generate --dialect=postgresql --schema=./test/fixtures/widgets.schema.ts --out=./test/fixtures/migrations --casing=snake_case`);
+  `test/fixtures/gadgets/migrations` is hand-written.
 
 ## Gotchas
 
@@ -131,17 +155,20 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
 - `DrizzleDB` is a type alias: inject it with `@InjectDrizzle()` and import the type with `import type`.
   `TransactionHost` is a class and must be imported as a value.
 - `*.schema.ts` files may import only `drizzle-orm*` and relative files, because drizzle-kit loads them with its own
-  loader. `casing: 'snake_case'` must match in `drizzle.config.ts` and at runtime. Raw SQL still uses snake_case.
+  loader. Declare tables with `pgSchema('<x>').table(...)` and export the `pgSchema` object (drizzle-kit emits
+  `CREATE SCHEMA` only for exports). `casing: 'snake_case'` must match in every `drizzle.config.ts` and at runtime.
+  Raw SQL uses snake_case and schema-qualified names (`identity.users`, `ARRAY['user']::identity.user_role[]`).
+- The compose and testcontainers role is `app`, and the platform set creates schema `app`: the default `search_path`
+  (`"$user", public`) then starts with `app`, so unqualified DDL run as that role lands in `app`. Qualify names in
+  hand-written SQL.
 - Pass `date.toISOString()` for a JS `Date` inside a raw ` sql` `` template, not the `Date` itself. Operators
   (`lt(col, date)`) are fine.
-- `migrate()` runs every pending migration in **one transaction**, so `CREATE INDEX CONCURRENTLY` is impossible.
-  A migration whose journal timestamp is older than the last applied one is **silently skipped**: regenerate after
-  merges and run `drizzle-kit check` in CI.
+- `migrate()` runs a set's pending migrations in **one transaction**, so `CREATE INDEX CONCURRENTLY` is impossible.
+  A migration whose journal timestamp is older than the last applied one **of the same set** is **silently
+  skipped**: regenerate after merges and run `drizzle-kit check` in CI.
 - Build prepared statements in the constructor body, never in field initialisers.
 - Keyset indexes: a plain ASC btree is scanned backwards for `DESC`. Drizzle's `.desc()` emits `NULLS LAST`, which
   does not match `ORDER BY … DESC`.
-- `drizzle.config.ts` drops globs that match nothing, so `drizzle-kit check/studio` work before any domain
-  schema exists. `generate` still reports "No schema files found".
 
 ## Platform migration set
 

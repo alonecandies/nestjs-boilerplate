@@ -43,9 +43,10 @@ const PERSISTENCE: Provider[] = [
  * The identity core: CQRS handlers, the Kafka relay, repositories and the session purge cron.
  * Imported by the monolith (through `IdentityApiModule.forLocal()`) and identity-service
  * (through `IdentityGrpcModule`). Expects the app-level global modules: `CqrsModule.forRoot()`,
- * `DatabaseModule.forRootAsync({ schema: identitySchema })` (Drizzle + transactional CLS plugin),
- * `RedisModule` (denylist, locks), `AuthModule` (TokenService, PasswordHasher, denylist),
- * `KafkaProducerModule` and — for the cron — `ScheduleModule.forRoot()`.
+ * `DatabaseModule.forRootAsync({ schema: identitySchema, migrations: [identityMigrations] })`
+ * (Drizzle + transactional CLS plugin), `RedisModule` (denylist, locks), `AuthModule`
+ * (TokenService, PasswordHasher, denylist), `KafkaProducerModule` and — for the cron —
+ * `ScheduleModule.forRoot()`.
  */
 @Module({
   providers: [

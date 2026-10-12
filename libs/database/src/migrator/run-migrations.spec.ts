@@ -129,6 +129,40 @@ describe('runMigrations', () => {
     expect(sql.end).toHaveBeenCalledWith({ timeout: 5 });
   });
 
+  it('stops at a failing set: names it, never attempts the next one, still unlocks and closes', async () => {
+    const identity = migrationSet('identity', ['0000_init']);
+    const billing = migrationSet('billing', ['0000_init']);
+    const audit = migrationSet('audit', ['0000_init']);
+    const failure = new Error('relation "payments" already exists');
+    const events: string[] = [];
+    vi.mocked(migrate).mockImplementation(async (_db, config) => {
+      events.push(`migrate ${config.migrationsSchema ?? ''}`);
+      if (config.migrationsSchema === 'billing') throw failure;
+    });
+    const sql = createFakeSql((query) => {
+      if (query.includes('pg_try_advisory_lock')) {
+        events.push('lock');
+        return [{ locked: true }];
+      }
+      if (query.includes('pg_advisory_unlock')) events.push('unlock');
+      return [];
+    });
+    vi.mocked(postgres).mockReturnValue(sql as never);
+
+    const error = await runMigrations(URL, {
+      migrations: [identity, billing, audit],
+      logger: silentLogger(),
+    }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      message: `Migration set "billing" (${billing.folder}) failed`,
+      cause: failure,
+    });
+    expect(events).toEqual(['lock', 'migrate identity', 'migrate billing', 'unlock']);
+    expect(sql.end).toHaveBeenCalledWith({ timeout: 5 });
+  });
+
   it('waits for the advisory lock, then gives up with a clear error and closes the client', async () => {
     const set = migrationSet('x', ['0000_x']);
     const lockValues: unknown[][] = [];

@@ -78,7 +78,7 @@ export class DatabaseModule {
   ): DynamicModule {
     // Checked when the module is defined, not at the first migrating boot: a set listed twice or a
     // shared bookkeeping table then fails every test that builds the app module.
-    withPlatformMigrations(options.migrations ?? []);
+    withPlatformMigrations(options.migrations);
     const transactional = resolveTransactionalOptions(options.transactional);
     return {
       module: DatabaseModule,

@@ -10,6 +10,7 @@ import { ObservabilityModule } from '@platform/observability';
 import { StripeModule } from '@platform/payments';
 import { RedisHealthIndicator, RedisModule } from '@platform/redis';
 import { KafkaProducerModule } from '@platform/transport';
+import { DATABASE_MIGRATIONS } from './database.migrations.js';
 
 /**
  * billing-service: `billing.v1.BillingService` over gRPC (served by `connectGrpcServer` in
@@ -32,9 +33,10 @@ import { KafkaProducerModule } from '@platform/transport';
     CqrsModule.forRoot(),
     // PurgeStripeEventsCron (hourly, @WithLock so only one replica runs it).
     ScheduleModule.forRoot(),
-    // Migrations run at boot when DATABASE_RUN_MIGRATIONS=true (advisory-locked). Also provides
-    // the transactional CLS plugin behind the webhook handler's @Transactional().
-    DatabaseModule.forRootAsync({ schema: billingSchema }),
+    // The platform set, then billing's history (DATABASE_MIGRATIONS, shared with migrate.ts), at boot
+    // when DATABASE_RUN_MIGRATIONS=true (advisory-locked). Also provides the transactional CLS plugin
+    // behind the webhook handler's @Transactional().
+    DatabaseModule.forRootAsync({ schema: billingSchema, migrations: DATABASE_MIGRATIONS }),
     RedisModule.forRootAsync(),
     KafkaProducerModule.forRootAsync(),
     // The Stripe client (secret key, retries, timeout) + webhook signature verification.

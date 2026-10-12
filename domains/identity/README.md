@@ -243,7 +243,7 @@ locks, denylist and cache).
 Integration (Docker): `INTEGRATION=1 bunx vitest run --project identity:int` runs
 `infrastructure/persistence/users.repository.int-spec.ts` on PostgreSQL 18 (testcontainers, or an
 existing throwaway database via `INTEGRATION_DATABASE_URL`). It boots the real `DatabaseModule`, which
-applies the generated `@platform/database` migrations, then covers the repositories: the hash-free
+applies the platform set and identity's own history (schema `identity`), then covers the repositories: the hash-free
 projection, `users_email_unique` → `EMAIL_TAKEN`, `findByIds`, keyset + literal ILIKE search,
 `user_role[]` updates, DB defaults, the session FK cascade and compare-and-set rotation, the row
 lock of `findAggregate` and the admin-count lock (a concurrent caller waits), server-side prepared

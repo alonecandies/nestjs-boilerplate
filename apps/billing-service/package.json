@@ -11,6 +11,8 @@
     "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
     "start": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --import ./dist/instrument.js dist/main.js",
     "start:prod": "node --import ./dist/instrument.js dist/main.js",
+    "db:migrate": "node --env-file-if-exists=../../.env --env-file-if-exists=.env dist/migrate.js",
+    "db:migrate:dev": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --conditions=@repo/source --import @swc-node/register/esm-register src/migrate.ts",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --config ../../vitest.config.ts --project billing-service",
     "test:e2e": "vitest run --config ../../vitest.config.ts --project billing-service:e2e",

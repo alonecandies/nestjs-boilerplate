@@ -10,6 +10,7 @@ import { DatabaseHealthIndicator, DatabaseModule } from '@platform/database';
 import { ObservabilityModule } from '@platform/observability';
 import { RedisHealthIndicator, RedisModule } from '@platform/redis';
 import { KafkaProducerModule } from '@platform/transport';
+import { DATABASE_MIGRATIONS } from './database.migrations.js';
 
 /**
  * identity-service: `identity.v1.AuthService` + `identity.v1.UsersService` over gRPC (served by
@@ -33,9 +34,9 @@ import { KafkaProducerModule } from '@platform/transport';
     CqrsModule.forRoot(),
     // PurgeExpiredSessionsCron (hourly, @WithLock so only one replica runs it).
     ScheduleModule.forRoot(),
-    // Migrations run at boot when DATABASE_RUN_MIGRATIONS=true (advisory-locked, so replicas
-    // starting together apply them once).
-    DatabaseModule.forRootAsync({ schema: identitySchema }),
+    // The platform set, then identity's history (DATABASE_MIGRATIONS, shared with migrate.ts), at
+    // boot when DATABASE_RUN_MIGRATIONS=true (advisory-locked: replicas starting together apply them once).
+    DatabaseModule.forRootAsync({ schema: identitySchema, migrations: DATABASE_MIGRATIONS }),
     RedisModule.forRootAsync(),
     KafkaProducerModule.forRootAsync(),
     // TokenService / PasswordHasher / AccessTokenDenylist for the handlers. No global guards:

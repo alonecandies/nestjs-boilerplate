@@ -33,9 +33,9 @@ export interface DatabaseModuleOptions<TSchema extends DrizzleSchema = DrizzleSc
   /**
    * The domain migration sets this process owns, in order. Applied after `platformMigrations`
    * (always first, never listed here) under one advisory lock when `runMigrations` /
-   * DATABASE_RUN_MIGRATIONS is on. Omitted: the platform set alone.
+   * DATABASE_RUN_MIGRATIONS is on. `[]` when the process owns no tables.
    */
-  migrations?: readonly DatabaseMigrationSet[];
+  migrations: readonly DatabaseMigrationSet[];
   /** Overrides `DATABASE_RUN_MIGRATIONS`. */
   runMigrations?: boolean;
   /**

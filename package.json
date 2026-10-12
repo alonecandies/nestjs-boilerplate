@@ -155,7 +155,7 @@
     "proto:gen": "bun run --filter './domains/*/contracts' --filter @platform/transport proto:gen",
     "proto:lint": "bun run --filter './domains/*/contracts' proto:lint",
     "db:generate": "bun run --filter '@domain/*' db:generate",
-    "db:migrate": "bun run --filter @platform/database db:migrate:dev",
+    "db:migrate": "bun run --filter @app/monolith db:migrate:dev",
     "db:studio": "bun run --parallel --filter '@domain/*' db:studio",
     "docker:infra": "docker compose up -d --wait",
     "docker:monolith": "docker compose --profile monolith up -d --build --wait",

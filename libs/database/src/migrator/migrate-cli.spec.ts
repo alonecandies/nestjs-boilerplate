@@ -59,9 +59,10 @@ describe('runMigrationsCli', () => {
   });
 
   it('exits 1 when the app lists the platform set itself', async () => {
-    vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
     await runMigrationsCli([platformMigrations], []);
     expect(runMigrations).not.toHaveBeenCalled();
     expect(process.exitCode).toBe(1);
+    expect(String(err.mock.calls[0]?.[0])).toContain('listed twice');
   });
 });

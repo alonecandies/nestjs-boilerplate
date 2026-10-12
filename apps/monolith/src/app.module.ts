@@ -32,6 +32,7 @@ import {
 } from '@platform/redis';
 import { StorageModule } from '@platform/storage';
 import { KafkaProducerModule } from '@platform/transport';
+import { DATABASE_MIGRATIONS } from './database.migrations.js';
 import { PaymentUserFieldResolver } from './graphql/payment-user.resolver.js';
 
 /** Both Postgres contexts live in the monolith's database (one drizzle instance, one pool). */
@@ -66,7 +67,7 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
 
     // Data stores. Migrations: DATABASE_RUN_MIGRATIONS / CASSANDRA_RUN_MIGRATIONS (advisory lock /
     // LWT claim, so concurrent replicas are safe) or `bun run db:migrate` as a release job.
-    DatabaseModule.forRootAsync({ schema: DATABASE_SCHEMA }),
+    DatabaseModule.forRootAsync({ schema: DATABASE_SCHEMA, migrations: DATABASE_MIGRATIONS }),
     CassandraModule.forRootAsync({ migrations: [notificationsCassandraMigrations] }),
     RedisModule.forRootAsync(),
     AppCacheModule.forRootAsync(),

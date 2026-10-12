@@ -5,7 +5,8 @@
  *
  * Wiring: `BillingCoreModule` (handlers, relay, repositories) + `BillingGrpcModule`
  * (billing-service) or `BillingApiModule.forLocal()` (monolith) / `.forRemote()` (gateway).
- * `billingSchema` goes into `DatabaseModule.forRootAsync({ schema })`.
+ * `billingSchema` and the migration set `billingMigrations` go into
+ * `DatabaseModule.forRootAsync({ schema, migrations })`.
  */
 
 // Application

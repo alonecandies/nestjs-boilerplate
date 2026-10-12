@@ -5,7 +5,8 @@
  *
  * Wiring: `IdentityCoreModule` (handlers, repositories, relay, cron), `IdentityGrpcModule`
  * (identity-service), `IdentityApiModule.forLocal()` (monolith) / `.forRemote()` (gateway).
- * `identitySchema` goes into `DatabaseModule.forRootAsync({ schema })`.
+ * `identitySchema` and the migration set `identityMigrations` go into
+ * `DatabaseModule.forRootAsync({ schema, migrations })`.
  */
 
 // Application: ports, commands/queries (for other in-process callers), mappers.

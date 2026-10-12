@@ -130,7 +130,9 @@ const summarize = (sets: MigrationSetSummary[]): MigrationRunSummary => ({
  *   of that table, so a shared table would skip the files of the set with older timestamps;
  * - drizzle runs a set's pending migrations in one transaction (all-or-nothing per set), so
  *   `CREATE INDEX CONCURRENTLY` cannot be used; a set that already ran stays applied when a later
- *   set fails.
+ *   set fails;
+ * - a failing set stops the run (the sets after it are not attempted) with an error that names it
+ *   and carries the driver's error as `cause`.
  *
  * Every journal is read before connecting (a malformed one fails the run up front). A set whose
  * folder has no `meta/_journal.json` yet is skipped with a warning; when no set has one, nothing
@@ -182,7 +184,15 @@ export async function runMigrations(
     locked = true;
     const results: MigrationSetSummary[] = [];
     for (const { set, total } of plan) {
-      results.push(total === null ? skipped(set) : await applySet(sql, set, total, logger));
+      if (total === null) {
+        results.push(skipped(set));
+        continue;
+      }
+      try {
+        results.push(await applySet(sql, set, total, logger));
+      } catch (error) {
+        throw new Error(`Migration set "${set.name}" (${set.folder}) failed`, { cause: error });
+      }
     }
     return summarize(results);
   } finally {

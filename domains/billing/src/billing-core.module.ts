@@ -20,10 +20,10 @@ import { PurgeStripeEventsCron } from './infrastructure/scheduling/purge-stripe-
  * `BillingApiModule.forLocal()`).
  *
  * Expects these global app-level modules: `AppConfigModule`, `CqrsModule.forRoot()`,
- * `DatabaseModule.forRootAsync({ schema: billingSchema })` (DRIZZLE + `@Transactional()`),
- * `StripeModule.forRootAsync()`, `KafkaProducerModule.forRootAsync()`, `RedisModule.forRootAsync()`
- * (the purge cron's distributed lock) and — for the cron to be scheduled —
- * `ScheduleModule.forRoot()`.
+ * `DatabaseModule.forRootAsync({ schema: billingSchema, migrations: [billingMigrations] })`
+ * (DRIZZLE + `@Transactional()`), `StripeModule.forRootAsync()`,
+ * `KafkaProducerModule.forRootAsync()`, `RedisModule.forRootAsync()` (the purge cron's distributed
+ * lock) and — for the cron to be scheduled — `ScheduleModule.forRoot()`.
  */
 @Module({
   imports: [ConfigModule.forFeature(stripeConfig)],

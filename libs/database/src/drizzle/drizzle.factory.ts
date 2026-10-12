@@ -36,7 +36,7 @@ export async function createDrizzleDatabase<TSchema extends DrizzleSchema>(
   if (options.runMigrations ?? cfg.runMigrations) {
     // The platform set first, then the app's domain sets in order, all under one advisory lock.
     await runMigrations(cfg.url, {
-      migrations: withPlatformMigrations(options.migrations ?? []),
+      migrations: withPlatformMigrations(options.migrations),
       logger,
       applicationName: app.serviceName,
     });
