@@ -188,4 +188,122 @@ describe('scripts/check-boundaries.mjs', () => {
     expect(output).not.toContain('fake-orders.ts');
     expect(output).not.toContain('orders.int-spec.ts');
   });
+
+  it.each([
+    ['export * from', "export * from '@domain/users';\n"],
+    ['export { x } from', "export { User } from '@domain/users';\n"],
+    ['import type', "import type { User } from '@domain/users';\n"],
+    ['a side-effect import', "import '@domain/users';\n"],
+    ['a dynamic import()', "const users = await import('@domain/users');\n"],
+    ['require()', "const users = require('@domain/users');\n"],
+    ['vi.mock', "vi.mock('@domain/users');\n"],
+    ['vi.doMock', "vi.doMock('@domain/users');\n"],
+    ['vi.importActual', "const users = await vi.importActual('@domain/users');\n"],
+    ['vi.importMock', "const users = await vi.importMock('@domain/users');\n"],
+    ['declare module', "declare module '@domain/users' {}\n"],
+  ])('sees %s reaching another domain', (_form, source) => {
+    const { status, output } = check({ ...LAYERED, 'domains/orders/src/users.spec.ts': source });
+    expect(status).toBe(1);
+    expect(output).toContain('Layer boundary violations (1):');
+    expect(output).toContain('domains/orders/src/users.spec.ts: must not import "@domain/users"');
+  });
+
+  it('lets an app depend on and import a contracts package', () => {
+    const { status, output } = check({
+      ...LAYERED,
+      'apps/api/package.json': manifest('@app/api', {
+        '@domain/orders': 'workspace:*',
+        '@domain/orders-contracts': 'workspace:*',
+      }),
+      'apps/api/src/events.ts': "import { ORDER_PLACED_EVENT } from '@domain/orders-contracts';\n",
+    });
+    expect(output).toContain('Layer boundaries OK (7 packages');
+    expect(status).toBe(0);
+  });
+
+  it('reports each import once: test-only code in production source, the domain rule in tests', () => {
+    const fake = "import { FakeUsers } from '@domain/users/testing';\n";
+    const { status, output } = check({
+      ...LAYERED,
+      'domains/orders/src/fake.ts': fake,
+      'domains/orders/src/fake.spec.ts': fake,
+    });
+    expect(status).toBe(1);
+    expect(output).toContain('Layer boundary violations (2):');
+    expect(output).toContain(
+      'domains/orders/src/fake.ts: must not import "@domain/users/testing" (test-only code must not reach production source)',
+    );
+    expect(output).toContain(
+      'domains/orders/src/fake.spec.ts: must not import "@domain/users/testing" (a domain may import another domain only through its @domain/<x>-contracts package)',
+    );
+  });
+
+  it('counts only test suffixes and test/ or testing/ folders as test code', () => {
+    const fake = "import { FakeOrders } from '@domain/orders/testing';\n";
+    const { status, output } = check({
+      ...LAYERED,
+      'domains/orders/src/tests/helper.ts': fake,
+      'domains/orders/src/test-utils.ts': fake,
+      'domains/orders/src/orders.e2e-spec.ts': fake,
+      'domains/orders/src/orders.test.ts': fake,
+    });
+    expect(status).toBe(1);
+    expect(output).toContain('Layer boundary violations (2):');
+    expect(output).toContain(
+      'domains/orders/src/tests/helper.ts: must not import "@domain/orders/testing" (test-only code',
+    );
+    expect(output).toContain(
+      'domains/orders/src/test-utils.ts: must not import "@domain/orders/testing" (test-only code',
+    );
+    expect(output).not.toContain('orders.e2e-spec.ts');
+    expect(output).not.toContain('orders.test.ts');
+  });
+
+  it('ignores imports in whole-line comments', () => {
+    const { status, output } = check({
+      ...LAYERED,
+      'domains/orders/src/notes.ts': [
+        "// import { User } from '@domain/users';",
+        '/**',
+        ' * Example:',
+        " *   import { User } from '@domain/users';",
+        " *   vi.mock('../../../users/src/index.js');",
+        ' */',
+        "  /** export * from '@domain/users'; */",
+        'export const notes = 1;',
+        '',
+      ].join('\n'),
+    });
+    expect(output).toContain('Layer boundaries OK (7 packages');
+    expect(status).toBe(0);
+  });
+
+  it('never lets comment handling hide a real import', () => {
+    const forbidden = "import { User } from '@domain/users';";
+    const { status, output } = check({
+      ...LAYERED,
+      // A naive /* … */ strip would cut from the `/*` in 'libs/*/src' to the end of the JSDoc below.
+      'domains/orders/src/globs.ts': [
+        "const GLOBS = ['src/**/*.ts', 'libs/*/src'];",
+        forbidden,
+        '/** The users port. */',
+        '',
+      ].join('\n'),
+      'domains/orders/src/url.ts': `const DOCS = 'https://example.com/docs'; ${forbidden}\n`,
+      'domains/orders/src/after-comment.ts': `/* users */ ${forbidden}\n`,
+      // An opener that never closes (here inside a template literal) is not a comment.
+      'domains/orders/src/banner.ts': [
+        'const BANNER = `',
+        '/* generated',
+        '`;',
+        forbidden,
+        '',
+      ].join('\n'),
+    });
+    expect(status).toBe(1);
+    expect(output).toContain('Layer boundary violations (4):');
+    for (const file of ['globs.ts', 'url.ts', 'after-comment.ts', 'banner.ts']) {
+      expect(output).toContain(`domains/orders/src/${file}: must not import "@domain/users"`);
+    }
+  });
 });

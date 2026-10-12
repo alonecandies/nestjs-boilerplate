@@ -10,6 +10,8 @@
 // included, because Biome's noUndeclaredDependencies is off for specs), so a package can neither
 // declare nor quietly import what its layer forbids. A relative specifier must stay inside its
 // own package: reaching into a sibling or a nested package by path is an import too.
+// Production source must not import a `@<scope>/<pkg>/testing` package subpath (tests may). Not
+// covered: relative `./testing/...` imports and deeper `@<scope>/<pkg>/<dir>/testing` subpaths.
 //   node scripts/check-boundaries.mjs [--root <repo root>]
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -26,9 +28,15 @@ const DEPENDENCY_FIELDS = [
 ];
 const SOURCE_FILE = /\.(?:[cm]?[jt]s|tsx)$/;
 const SKIPPED_DIRS = new Set(['node_modules', 'dist', 'coverage', 'generated']);
-// import/export … from 'x', import('x'), require('x'), vi.mock('x'), declare module 'x', import 'x'
+// import/export … from 'x', import('x'), require('x'), declare module 'x', import 'x', and the
+// Vitest loaders vi.mock('x'), vi.doMock('x'), vi.importActual('x') and vi.importMock('x')
 const SPECIFIER =
-  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bvi\.mock\s*\(\s*|\bdeclare\s+module\s+|\bimport\s+)['"]([^'"]+)['"]/g;
+  /(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*|\bvi\.(?:mock|doMock|importActual|importMock)\s*\(\s*|\bdeclare\s+module\s+|\bimport\s+)['"]([^'"]+)['"]/g;
+// Whole-line comments: a `//` line, or a block comment that starts a line, up to its `*/` (code
+// after that stays). Their specifiers (a commented-out import, a JSDoc example) are not imports.
+// Comments after code stay, so no string (a glob like 'src/**/*.ts', a URL) can cut real code; the
+// blind spot is a template-literal line that starts with `/*` and is closed by a later `*/`.
+const LINE_COMMENT = /^[ \t]*(?:\/\/.*|\/\*[\s\S]*?\*\/)/gm;
 const CONTRACTS_PACKAGE = /^@domain\/[^/]+-contracts(?:\/|$)/;
 const PLATFORM_CONTRACTS = /^@platform\/contracts(?:\/|$)/;
 const WORKSPACE_SCOPE = /^@(?:app|domain|platform)\//;
@@ -67,7 +75,7 @@ function violation(kind, domain, specifier) {
   }
 }
 
-/** Every workspace package: { dir (absolute), where (relative), kind, name, domain? }. */
+/** Every workspace package: { dir (absolute), kind, name, domain (the <x> of its folder) }. */
 const packages = [];
 const subdirs = (dir) =>
   existsSync(dir)
@@ -132,7 +140,7 @@ for (const pkg of packages) {
     }
   }
   for (const file of sourceFiles(pkg.dir)) {
-    const source = readFileSync(file, 'utf8');
+    const source = readFileSync(file, 'utf8').replace(LINE_COMMENT, '');
     for (const [, specifier] of source.matchAll(SPECIFIER)) {
       if (specifier.startsWith('.')) {
         if (ownerOf(resolve(dirname(file), specifier)) !== pkg) {
@@ -146,6 +154,7 @@ for (const pkg of packages) {
         problems.push(
           `${relative(root, file)}: must not import "${specifier}" (test-only code must not reach production source)`,
         );
+        continue;
       }
       const reason = violation(pkg.kind, pkg.domain, specifier);
       if (reason)
