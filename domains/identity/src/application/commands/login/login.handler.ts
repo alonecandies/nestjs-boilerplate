@@ -1,10 +1,10 @@
 import type { AuthTokens } from '@domain/identity-contracts';
 import { Logger } from '@nestjs/common';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
-import { PasswordHasher } from '@platform/auth';
 import { normalizeEmail } from '../../../domain/email.js';
 import { InvalidCredentialsException } from '../../../domain/identity.errors.js';
 import type { UserSnapshot } from '../../../domain/user.aggregate.js';
+import { PasswordHasher } from '../../../infrastructure/security/password-hasher.service.js';
 import { toUserRecord } from '../../mappers/user.mapper.js';
 import { UsersRepository } from '../../persistence/users.repository.js';
 import { SessionTokensService } from '../../services/session-tokens.service.js';

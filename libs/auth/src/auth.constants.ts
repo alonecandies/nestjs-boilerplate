@@ -25,9 +25,6 @@ export const JWT_CLOCK_TOLERANCE_SEC = 5;
  */
 export const DENYLIST_CHECK_TIMEOUT_MS = 250;
 
-/** Longest password accepted for hashing/verification (argon2 cost DoS guard). */
-export const MAX_PASSWORD_LENGTH = 1_024;
-
 /**
  * Stable `code`s of the auth-specific `UnauthenticatedException`s, so clients can react (e.g.
  * refresh on `TOKEN_EXPIRED`, re-login on `TOKEN_REVOKED`). The HTTP status stays 401.

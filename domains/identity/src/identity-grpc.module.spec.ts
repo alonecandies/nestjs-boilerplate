@@ -10,6 +10,8 @@ import { FakeRedisModule } from '../test/auth-test.module.js';
 import { createFakePostgres } from '../test/fake-postgres.js';
 import { NOW } from '../test/fixtures.js';
 import { IdentityGrpcModule } from './identity-grpc.module.js';
+import { passwordConfig } from './infrastructure/security/password.config.js';
+import { PasswordHasher } from './infrastructure/security/password-hasher.service.js';
 import { UsersGrpcController } from './presentation/grpc/users-grpc.controller.js';
 
 const USER_ID = '01994f6c-1c3a-7b4e-9f00-5d1e2a3b4c5d';
@@ -76,5 +78,13 @@ describe('IdentityGrpcModule (identity-service wiring)', () => {
       updatedAt: NOW,
     });
     expect(database.executed.at(-1)?.sql).toContain('where "users"."id" = $1');
+  });
+
+  it('hashes with the identity-owned PasswordHasher, configured by the password namespace', async () => {
+    const { argon2 } = passwordConfig.parse();
+    const hasher = moduleRef.get(PasswordHasher);
+    const hash = await hasher.hash('correct horse battery staple');
+    expect(hash).toContain(`$m=${argon2.memoryCost},t=${argon2.timeCost},p=${argon2.parallelism}$`);
+    await expect(hasher.verify(hash, 'correct horse battery staple')).resolves.toBe(true);
   });
 });

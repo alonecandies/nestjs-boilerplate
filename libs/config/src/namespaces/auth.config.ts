@@ -19,10 +19,6 @@ export const authEnvSchema = z
     JWT_REFRESH_TTL_SEC: zInt(604_800, { min: 1 }),
     JWT_ISSUER: zStr('nestjs-boilerplate'),
     JWT_AUDIENCE: zStr('nestjs-boilerplate'),
-    // OWASP 2024 Argon2id baseline: m=19 MiB, t=2, p=1.
-    ARGON2_MEMORY_COST: zInt(19_456, { min: 8 }),
-    ARGON2_TIME_COST: zInt(2, { min: 1 }),
-    ARGON2_PARALLELISM: zInt(1, { min: 1, max: 255 }),
     AUTH_DENYLIST_ENABLED: zBool(true),
     // LOCAL compose stack only: accept the publicly known compose fallbacks in production mode.
     ALLOW_KNOWN_LOCAL_SECRETS: zBool(false),
@@ -63,15 +59,9 @@ export const authEnvSchema = z
     refreshTtlSec: env.JWT_REFRESH_TTL_SEC,
     issuer: env.JWT_ISSUER,
     audience: env.JWT_AUDIENCE,
-    argon2: {
-      /** KiB. Hashing runs on the libuv threadpool — size UV_THREADPOOL_SIZE for login bursts. */
-      memoryCost: env.ARGON2_MEMORY_COST,
-      timeCost: env.ARGON2_TIME_COST,
-      parallelism: env.ARGON2_PARALLELISM,
-    },
     denylistEnabled: env.AUTH_DENYLIST_ENABLED,
   }));
 
-/** JWT signing/verification, token TTLs, Argon2id cost, access-token denylist. */
+/** JWT signing/verification, token TTLs, access-token denylist. */
 export const authConfig = defineConfigNamespace('auth', authEnvSchema);
 export type AuthConfig = ConfigType<typeof authConfig>;

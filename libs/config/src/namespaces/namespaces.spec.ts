@@ -131,7 +131,6 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       refreshTtlSec: 604_800,
       issuer: 'nestjs-boilerplate',
       audience: 'nestjs-boilerplate',
-      argon2: { memoryCost: 19_456, timeCost: 2, parallelism: 1 },
       denylistEnabled: true,
     } satisfies AuthConfig);
     expect(graphqlConfig.parse({})).toMatchObject({
@@ -315,7 +314,7 @@ describe('registered factories', () => {
   it('keep precise inferred types', () => {
     expectTypeOf<AppConfig['port']>().toEqualTypeOf<number>();
     expectTypeOf<AppConfig['nodeEnv']>().toEqualTypeOf<'development' | 'test' | 'production'>();
-    expectTypeOf<AuthConfig['argon2']['memoryCost']>().toEqualTypeOf<number>();
+    expectTypeOf<AuthConfig['accessTtlSec']>().toEqualTypeOf<number>();
     expectTypeOf(storageConfig.parse)
       .returns.toHaveProperty('driver')
       .toEqualTypeOf<'s3' | 'gcs'>();

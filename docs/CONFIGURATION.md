@@ -100,6 +100,7 @@ it imports. A process ignores (and does not validate) variables of namespaces it
 | `kafka`         |    ✓     | ✓ (consumer only) |   ✓ (producer)   | ✓ (producer + consumer) |  ✓ (producer)   | `KafkaProducerModule`, `connectKafkaConsumer`                      |
 | `grpc`          |          |    ✓ (clients)    |    ✓ (server)    |       ✓ (server)        |   ✓ (server)    | `GrpcClientsModule.register()`, app module + `connectGrpcServer`   |
 | `auth`          |    ✓     |         ✓         |        ✓         |                         |                 | `AuthModule`                                                       |
+| `password`      |    ✓     |                   |        ✓         |                         |                 | `IdentityCoreModule` (`@domain/identity`)                          |
 | `throttle`      |    ✓     |         ✓         |                  |                         |                 | `AppThrottlerModule`                                               |
 | `cache`         |    ✓     |         ✓         |                  |                         |                 | `AppCacheModule`                                                   |
 | `graphql`       |    ✓     |         ✓         |                  |                         |                 | `AppGraphqlModule`                                                 |
@@ -262,7 +263,7 @@ identity/notifications/billing services (servers)
 | `GRPC_ALLOW_INSECURE`          | `false`                         | Explicit opt-out that lets `NODE_ENV=production` boot with plaintext gRPC (service mesh / NetworkPolicy secures it).                               |
 | `GRPC_REFLECTION`              | on unless `NODE_ENV=production` | gRPC server reflection (grpcurl / Postman).                                                                                                        |
 
-### `auth` — JWT + Argon2id
+### `auth` — JWT
 
 [`auth.config.ts`](../libs/config/src/namespaces/auth.config.ts) · gateway, monolith,
 identity-service · details in [SECURITY.md](SECURITY.md)
@@ -275,9 +276,6 @@ identity-service · details in [SECURITY.md](SECURITY.md)
 | `JWT_REFRESH_TTL_SEC`       | `604800`                                      | Refresh token lifetime (7 days).                                                                                                                                                                                                                                                                                                                                                                                                            |
 | `JWT_ISSUER`                | `nestjs-boilerplate`                          | `iss` claim.                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `JWT_AUDIENCE`              | `nestjs-boilerplate`                          | `aud` claim.                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `ARGON2_MEMORY_COST`        | `19456`                                       | KiB (OWASP baseline m = 19 MiB). Hashing runs on the libuv pool (see `UV_THREADPOOL_SIZE`).                                                                                                                                                                                                                                                                                                                                                 |
-| `ARGON2_TIME_COST`          | `2`                                           | Iterations.                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `ARGON2_PARALLELISM`        | `1`                                           | Lanes, `1`–`255`.                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `AUTH_DENYLIST_ENABLED`     | `true`                                        | Redis denylist of logged-out access tokens (`jti`).                                                                                                                                                                                                                                                                                                                                                                                         |
 | `ALLOW_KNOWN_LOCAL_SECRETS` | `false`                                       | Local compose stack only. Production rejects publicly known values (the compose fallbacks, placeholders such as `whsec_...` or `<random>`, the RustFS keys) for the JWT secrets, the Stripe key and webhook secret, and the S3 keys unless this is `true`. The JWT and Stripe development defaults are rejected regardless; the RustFS default S3 keys are accepted under this flag. Read by the `auth`, `stripe` and `storage` namespaces. |
 
@@ -286,6 +284,17 @@ Generate secrets with:
 ```bash
 node -e "console.log(require('node:crypto').randomBytes(48).toString('base64url'))"
 ```
+
+### `password` — Argon2id (identity)
+
+[`password.config.ts`](../domains/identity/src/infrastructure/security/password.config.ts) · monolith,
+identity-service (loaded by `IdentityCoreModule`)
+
+| Variable             | Default | Description                                                                                 |
+| -------------------- | ------- | ------------------------------------------------------------------------------------------- |
+| `ARGON2_MEMORY_COST` | `19456` | KiB (OWASP baseline m = 19 MiB). Hashing runs on the libuv pool (see `UV_THREADPOOL_SIZE`). |
+| `ARGON2_TIME_COST`   | `2`     | Iterations.                                                                                 |
+| `ARGON2_PARALLELISM` | `1`     | Lanes, `1`–`255`.                                                                           |
 
 ### `throttle` — rate limiting (Redis-backed `@nestjs/throttler`)
 

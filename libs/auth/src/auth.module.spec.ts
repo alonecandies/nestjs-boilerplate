@@ -10,7 +10,6 @@ import { AuthModule } from './auth.module.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { PermissionsGuard } from './guards/permissions.guard.js';
 import { RolesGuard } from './guards/roles.guard.js';
-import { PasswordHasher } from './password/password-hasher.service.js';
 import { Role } from './rbac/role.enum.js';
 import { signTestAccessToken } from './testing/sign-test-access-token.js';
 import { AccessTokenDenylist } from './tokens/access-token-denylist.service.js';
@@ -32,7 +31,7 @@ describe('AuthModule (DI wiring)', () => {
     app = undefined;
   });
 
-  it('provides token verification, hashing and the denylist from config', async () => {
+  it('provides token verification and the denylist from config', async () => {
     @Module({
       imports: [
         ConfigModule.forRoot({ ignoreEnvFile: true }),
@@ -51,9 +50,6 @@ describe('AuthModule (DI wiring)', () => {
     const denylist = app.get(AccessTokenDenylist);
     await denylist.deny(issued.jti, issued.exp);
     await expect(denylist.isDenied(issued.jti)).resolves.toBe(true);
-
-    const hasher = app.get(PasswordHasher);
-    await expect(hasher.verify(await hasher.hash('pw'), 'pw')).resolves.toBe(true);
 
     // JwtService defaults (no expiresIn, iss/aud set) stay compatible with TokenService.
     const raw = await app.get(JwtService).signAsync({ sub: 'x', typ: 'other' });

@@ -310,7 +310,7 @@ each with a `.dlq`) travel in a zod-validated envelope defined in `libs/contract
 │   ├── billing/                   # Stripe checkout, payments        │ domain / application /
 │   └── files/                     # uploads, presigned URLs          ┘ infrastructure / presentation
 ├── libs/                          # platform + shared kernel, no business rules (@platform/*)
-│   ├── auth/                      # JWT strategy, guards, RBAC, password hashing (Argon2id)
+│   ├── auth/                      # JWT strategy, guards, RBAC, access-token denylist
 │   ├── bootstrap/                 # createHttpApp (Fastify), API docs, cluster mode, process handlers
 │   ├── cassandra/                 # client, CQL migrator, paging, health
 │   ├── common/                    # errors, filters, pipes, interceptors, middlewares, utils (uuid v7)

@@ -20,8 +20,8 @@ Related: [Architecture](ARCHITECTURE.md) · [Development](DEVELOPMENT.md) · [Do
 
 ## Authentication
 
-Implemented in [`libs/auth`](../libs/auth/README.md) (tokens, guards, hashing) and
-[`domains/identity`](../domains/identity/README.md) (sessions, rotation, logout).
+Implemented in [`libs/auth`](../libs/auth/README.md) (tokens, guards) and
+[`domains/identity`](../domains/identity/README.md) (password hashing, sessions, rotation, logout).
 
 ### Tokens
 
@@ -84,11 +84,11 @@ session of the given `refreshToken`, or **every** session when the body omits it
 
 ### Passwords
 
-- Argon2id via `@node-rs/argon2` (`PasswordHasher`, `libs/auth/src/password/`). Parameters from
+- Argon2id via `@node-rs/argon2` (`PasswordHasher`, `domains/identity/src/infrastructure/security/`). Parameters from
   `ARGON2_MEMORY_COST` (19456 KiB), `ARGON2_TIME_COST` (2), `ARGON2_PARALLELISM` (1): the OWASP
   minimum profile. Hashes with outdated parameters are re-hashed transparently at login.
 - Password length 8–128 at registration (`IDENTITY_LIMITS`); `MAX_PASSWORD_LENGTH` (1024) in
-  `@platform/auth` bounds the hashing cost of any input.
+  `@domain/identity` bounds the hashing cost of any input.
 - Login runs `verifyDummy` for unknown emails so response timing does not reveal which accounts
   exist; wrong password and unknown email share one 401 `INVALID_CREDENTIALS`.
 - Registration and login are throttled per IP by `@AuthThrottle()` (`THROTTLE_AUTH_LIMIT` = 10 per

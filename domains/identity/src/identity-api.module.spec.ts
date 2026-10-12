@@ -2,7 +2,7 @@ import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
 import { Global, Module } from '@nestjs/common';
 import { CqrsModule } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
-import { PasswordHasher, Role } from '@platform/auth';
+import { Role } from '@platform/auth';
 import { provideCommonEnhancers } from '@platform/common';
 import { DRIZZLE, TransactionHost } from '@platform/database';
 import { AppCacheService } from '@platform/redis';
@@ -17,6 +17,7 @@ import { UsersPort } from './application/ports/users.port.js';
 import { IdentityApiModule } from './identity-api.module.js';
 import { AuthLocalAdapter } from './infrastructure/adapters/local/auth-local.adapter.js';
 import { UsersLocalAdapter } from './infrastructure/adapters/local/users-local.adapter.js';
+import { PasswordHasher } from './infrastructure/security/password-hasher.service.js';
 
 /*
  * Monolith composition without infrastructure: IdentityApiModule.forLocal() (→ IdentityCoreModule)

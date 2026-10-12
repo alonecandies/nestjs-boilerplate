@@ -52,6 +52,7 @@ export { isUserRole, USER_ROLES, type UserRole } from './domain/user-role.js';
 export {
   IDENTITY_LIMITS,
   IdentityErrorCode,
+  MAX_PASSWORD_LENGTH,
   USER_CACHE_TTL_MS,
   USERS_LOADER,
   userCacheKey,
@@ -75,6 +76,10 @@ export {
   users,
   usersRelations,
 } from './infrastructure/persistence/identity.schema.js';
+// Infrastructure: identity's security services and their config namespaces (the apps'
+// env-example specs validate these namespaces too).
+export { type PasswordConfig, passwordConfig } from './infrastructure/security/password.config.js';
+export { PasswordHasher } from './infrastructure/security/password-hasher.service.js';
 // Presentation: GraphQL types other domains reference (billing's `Payment.user`).
 export { AuthPayloadModel } from './presentation/graphql/models/auth-payload.model.js';
 export { UserModel } from './presentation/graphql/models/user.model.js';

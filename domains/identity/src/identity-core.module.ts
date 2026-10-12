@@ -1,4 +1,5 @@
 import { Module, type Provider } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { LoginHandler } from './application/commands/login/login.handler.js';
 import { LogoutHandler } from './application/commands/logout/logout.handler.js';
 import { PurgeExpiredSessionsHandler } from './application/commands/purge-expired-sessions/purge-expired-sessions.handler.js';
@@ -18,6 +19,8 @@ import { DrizzleSessionsRepository } from './infrastructure/persistence/drizzle-
 import { DrizzleTransactionRunner } from './infrastructure/persistence/drizzle-transaction.runner.js';
 import { DrizzleUsersRepository } from './infrastructure/persistence/drizzle-users.repository.js';
 import { PurgeExpiredSessionsCron } from './infrastructure/scheduling/purge-expired-sessions.cron.js';
+import { passwordConfig } from './infrastructure/security/password.config.js';
+import { PasswordHasher } from './infrastructure/security/password-hasher.service.js';
 
 export const IDENTITY_COMMAND_HANDLERS = [
   RegisterUserHandler,
@@ -40,19 +43,22 @@ const PERSISTENCE: Provider[] = [
 ];
 
 /**
- * The identity core: CQRS handlers, the Kafka relay, repositories and the session purge cron.
+ * The identity core: CQRS handlers, the Kafka relay, repositories, the session purge cron and
+ * `PasswordHasher` (Argon2id, its own `password` config namespace).
  * Imported by the monolith (through `IdentityApiModule.forLocal()`) and identity-service
  * (through `IdentityGrpcModule`). Expects the app-level global modules: `CqrsModule.forRoot()`,
  * `DatabaseModule.forRootAsync({ schema: identitySchema })` (Drizzle + transactional CLS plugin),
- * `RedisModule` (denylist, locks), `AuthModule` (TokenService, PasswordHasher, denylist),
+ * `RedisModule` (denylist, locks), `AuthModule` (TokenService, denylist),
  * `KafkaProducerModule` and — for the cron — `ScheduleModule.forRoot()`.
  */
 @Module({
+  imports: [ConfigModule.forFeature(passwordConfig)],
   providers: [
     ...IDENTITY_COMMAND_HANDLERS,
     ...IDENTITY_QUERY_HANDLERS,
     ...IDENTITY_EVENT_HANDLERS,
     ...PERSISTENCE,
+    PasswordHasher,
     SessionTokensService,
     PurgeExpiredSessionsCron,
   ],
