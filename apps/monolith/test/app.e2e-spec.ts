@@ -8,10 +8,11 @@ await vi.hoisted(async () => {
   Object.assign(process.env, MONOLITH_E2E_ENV);
 });
 
-import { BillingLocalAdapter, BillingPort } from '@domain/billing';
+import { BILLING_LOG_REDACT_PATHS, BillingLocalAdapter, BillingPort } from '@domain/billing';
 import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
 import { NotificationsLocalAdapter, NotificationsPort } from '@domain/notifications';
 import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
+import { PARAMS_PROVIDER_TOKEN, type Params } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { bearer, expectProblem, graphql, multipartFile } from './support/http.js';
 import { createMonolithE2eApp, type MonolithE2e } from './support/monolith-e2e-app.js';
@@ -52,6 +53,13 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
     expect(e2e.app.get(NotificationsPort, { strict: false })).toBeInstanceOf(
       NotificationsLocalAdapter,
     );
+  });
+
+  it('composes billing’s log redaction paths into the logger (the Stripe-Signature header is never logged)', () => {
+    const { pinoHttp } = e2e.app.get<Params>(PARAMS_PROVIDER_TOKEN);
+    expect(pinoHttp).toMatchObject({
+      redact: { paths: expect.arrayContaining([...BILLING_LOG_REDACT_PATHS]) },
+    });
   });
 
   describe('ops endpoints', () => {

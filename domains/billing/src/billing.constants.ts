@@ -67,3 +67,6 @@ export const PAID_WITHOUT_CURRENCY_METRIC = 'billing_checkout_paid_without_curre
 
 /** gRPC circuit-breaker / operation names (logs, metrics). */
 export const BILLING_GRPC_UPSTREAM = 'billing';
+
+/** Header carrying Stripe's webhook signature (lower-case: Node lower-cases incoming header names). */
+export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';

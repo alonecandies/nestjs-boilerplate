@@ -6,7 +6,6 @@ export const HTTP_HEADERS = {
   REQUEST_ID: 'x-request-id',
   CORRELATION_ID: 'x-correlation-id',
   IDEMPOTENCY_KEY: 'idempotency-key',
-  STRIPE_SIGNATURE: 'stripe-signature',
   RETRY_AFTER: 'retry-after',
 } as const;
 

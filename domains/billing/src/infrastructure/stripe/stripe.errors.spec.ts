@@ -46,6 +46,7 @@ describe('toPaymentDomainException', () => {
       }),
     );
     expect(mapped).toBeInstanceOf(ServiceUnavailableException);
+    expect(mapped?.code).toBe('PAYMENT_PROVIDER_RATE_LIMITED');
     expect(mapped?.details).toEqual({ stripeRequestId: 'req_42' });
   });
 

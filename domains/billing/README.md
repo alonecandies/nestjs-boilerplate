@@ -63,6 +63,9 @@ What the edge (monolith / gateway) must provide:
   `Payment.user` (`PaymentUserFieldResolver` in `apps/monolith` and `apps/gateway`, over identity's `users`
   DataLoader), so billing never imports identity.
 - An HTTP app created with `rawBody: true` (`req.rawBody` for `application/json`).
+- `BILLING_LOG_REDACT_PATHS` in the logger's redact paths, so the `stripe-signature` header is never logged:
+  `ObservabilityModule.forRoot({ redactPaths: BILLING_LOG_REDACT_PATHS })`. An HTTP edge serving the Stripe webhook
+  needs it (monolith, gateway); billing-service receives the webhook over gRPC and needs none.
 - `nestjs-cls` (from `ObservabilityModule`) is used by the gRPC adapter to propagate request/correlation ids.
 
 `BillingCoreModule` expects the global `CqrsModule.forRoot()`, `DatabaseModule` (DRIZZLE + `@Transactional()`)
@@ -283,8 +286,7 @@ through `TransactionHost` and join the active transaction.
 
 ## Gotchas
 
-- The webhook route must receive the **raw body** (`createHttpApp(…, { rawBody: true })`); re-serialised JSON
-  never verifies. It is `@Public()` and `@SkipThrottle()` — Stripe retries on any non-2xx.
+- The webhook route's raw-body, `@Public()` and `@SkipThrottle()` requirements: see **Stripe adapter** above.
 - Stripe idempotency keys are account-wide, so the client `Idempotency-Key` is never forwarded verbatim; it is
   mapped per user to a payment id, and the Stripe key is `checkout-<paymentId>`.
 - `billing.schema.ts` may only import `drizzle-orm` and dependency-free relative files (drizzle-kit loader).

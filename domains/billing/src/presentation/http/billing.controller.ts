@@ -28,9 +28,9 @@ import {
 } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import { type AuthUser, CurrentUser, Permission, RequirePermissions } from '@platform/auth';
-import { HTTP_HEADERS, Public } from '@platform/common';
+import { Public } from '@platform/common';
 import { BillingPort } from '../../application/ports/billing.port.js';
-import { BILLING_LIMITS } from '../../billing.constants.js';
+import { BILLING_LIMITS, STRIPE_SIGNATURE_HEADER } from '../../billing.constants.js';
 import { resolvePaymentsOwner } from '../payments-scope.js';
 import {
   type CheckoutSessionResponse,
@@ -113,7 +113,7 @@ export class BillingController {
   @SerializeOptions({ schema: stripeWebhookResponseSchema })
   handleStripeWebhook(
     @RawBody() rawBody: Buffer | undefined,
-    @HeaderValue(HTTP_HEADERS.STRIPE_SIGNATURE) signature: string | undefined,
+    @HeaderValue(STRIPE_SIGNATURE_HEADER) signature: string | undefined,
   ): Promise<StripeWebhookResponse> {
     // Needs the app created with `rawBody: true` (createHttpApp({ rawBody: true })): the signature
     // covers the exact bytes, re-serialised JSON never verifies.

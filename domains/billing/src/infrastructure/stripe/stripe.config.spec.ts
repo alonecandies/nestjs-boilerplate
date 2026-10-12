@@ -61,6 +61,12 @@ describe('stripe production guards', () => {
     expect(error.message).toContain('→ at STRIPE_WEBHOOK_SECRET');
   });
 
+  it('still rejects the development placeholders with ALLOW_KNOWN_LOCAL_SECRETS (the opt-out covers the compose fallbacks only)', () => {
+    const error = errorOf(() => stripeConfig.parse({ ...PROD, ALLOW_KNOWN_LOCAL_SECRETS: 'true' }));
+    expect(error.message).toContain('→ at STRIPE_SECRET_KEY');
+    expect(error.message).toContain('→ at STRIPE_WEBHOOK_SECRET');
+  });
+
   it('rejects the compose fallbacks and the docs placeholders unless ALLOW_KNOWN_LOCAL_SECRETS', () => {
     const compose = {
       ...PROD,

@@ -9,8 +9,9 @@ await vi.hoisted(async () => {
   Object.assign(process.env, GATEWAY_E2E_ENV);
 });
 
-import { BillingGrpcAdapter, BillingPort } from '@domain/billing';
+import { BILLING_LOG_REDACT_PATHS, BillingGrpcAdapter, BillingPort } from '@domain/billing';
 import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
+import { PARAMS_PROVIDER_TOKEN, type Params } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createGatewayE2eApp, type GatewayE2e } from './support/gateway-e2e-app.js';
 import { bearer, expectProblem, graphql, multipartFile } from './support/http.js';
@@ -54,6 +55,13 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
 
   it('binds the ports to gRPC adapters (billing is not faked here)', () => {
     expect(e2e.app.get(BillingPort, { strict: false })).toBeInstanceOf(BillingGrpcAdapter);
+  });
+
+  it('composes billing’s log redaction paths into the logger (the Stripe-Signature header is never logged)', () => {
+    const { pinoHttp } = e2e.app.get<Params>(PARAMS_PROVIDER_TOKEN);
+    expect(pinoHttp).toMatchObject({
+      redact: { paths: expect.arrayContaining([...BILLING_LOG_REDACT_PATHS]) },
+    });
   });
 
   describe('ops endpoints', () => {

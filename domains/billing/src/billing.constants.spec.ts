@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BillingErrorCode } from './billing.constants.js';
+import { BillingErrorCode, STRIPE_SIGNATURE_HEADER } from './billing.constants.js';
 
 describe('BillingErrorCode', () => {
   it('owns the Stripe adapter codes too, with their published values', () => {
@@ -16,5 +16,11 @@ describe('BillingErrorCode', () => {
 
   it('uses every key as its own value (codes are public API: never rename)', () => {
     for (const [key, value] of Object.entries(BillingErrorCode)) expect(value).toBe(key);
+  });
+});
+
+describe('STRIPE_SIGNATURE_HEADER', () => {
+  it('is the lower-case header Stripe signs webhooks with (Node lower-cases incoming names)', () => {
+    expect(STRIPE_SIGNATURE_HEADER).toBe('stripe-signature');
   });
 });
