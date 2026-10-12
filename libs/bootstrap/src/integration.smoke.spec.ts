@@ -37,6 +37,7 @@ import {
   Role,
   TokenService,
 } from '@platform/auth';
+import { signTestAccessToken } from '@platform/auth/testing';
 import {
   CorrelationIdMiddleware,
   EntityNotFoundException,
@@ -150,7 +151,8 @@ describe('infrastructure libs compose into one Fastify app (no infrastructure)',
   let tokens: TokenService;
 
   const bearer = async (roles: Role[] = [Role.User]) => {
-    const issued = await tokens.issueAccessToken({
+    // Signed with the `auth` namespace of process.env, which the app's AuthModule verifies with.
+    const issued = await signTestAccessToken({
       id: generateId(),
       email: 'ada@example.com',
       roles,
@@ -244,7 +246,7 @@ describe('infrastructure libs compose into one Fastify app (no infrastructure)',
       expectProblem(response, 401, 'INVALID_TOKEN');
     });
 
-    it('accepts a TokenService-issued access token: 200 with req.user', async () => {
+    it('accepts a signed access token (verified locally): 200 with req.user', async () => {
       const { authorization, token } = await bearer([Role.User]);
       const claims = await tokens.verifyAccessToken(token);
       const response = await app.inject({

@@ -6,6 +6,7 @@ import { InMemoryRedis } from '@platform/redis/testing';
 import { describe, expect, it } from 'vitest';
 import { createJwtModuleOptions } from '../auth.module.js';
 import { Role } from '../rbac/role.enum.js';
+import { signTestAccessToken } from '../testing/sign-test-access-token.js';
 import { AccessTokenDenylist } from '../tokens/access-token-denylist.service.js';
 import { TokenService } from '../tokens/token.service.js';
 import { authenticateSocket, extractBearerToken, extractSocketToken } from './socket-auth.js';
@@ -50,7 +51,7 @@ describe('authenticateSocket', () => {
   const user = { id: 'u-1', email: 'a@b.c', roles: [Role.Moderator] };
 
   it('returns the AuthUser for a valid, non-revoked token', async () => {
-    const { token, jti } = await tokens.issueAccessToken(user);
+    const { token, jti } = await signTestAccessToken(user, { config });
     await expect(authenticateSocket(tokens, denylist, `Bearer ${token}`)).resolves.toMatchObject({
       id: 'u-1',
       roles: [Role.Moderator],
@@ -70,7 +71,7 @@ describe('authenticateSocket', () => {
     };
     await expect(codeOf(undefined)).resolves.toBe('MISSING_TOKEN');
     await expect(codeOf('not.a.jwt')).resolves.toBe('INVALID_TOKEN');
-    const { token, jti, exp } = await tokens.issueAccessToken(user);
+    const { token, jti, exp } = await signTestAccessToken(user, { config });
     await denylist.deny(jti, exp);
     await expect(codeOf(token)).resolves.toBe('TOKEN_REVOKED');
   });
