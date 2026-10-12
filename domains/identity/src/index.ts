@@ -74,7 +74,7 @@ export {
   users,
   usersRelations,
 } from './infrastructure/persistence/identity.schema.js';
-// Presentation: GraphQL types other domains reference (billing's `Payment.user`).
+// Presentation: GraphQL types the apps compose with (`Payment.user` in `PaymentUserFieldResolver`).
 export { AuthPayloadModel } from './presentation/graphql/models/auth-payload.model.js';
 export { UserModel } from './presentation/graphql/models/user.model.js';
 export { UserConnectionModel } from './presentation/graphql/models/user-connection.model.js';

@@ -1,7 +1,3 @@
-// Only identity's `UserModel` GraphQL type is referenced (by BillingResolver); keep the identity
-// context out of this wiring test.
-vi.mock('@domain/identity', () => ({ UserModel: class UserModel {}, USERS_LOADER: 'users' }));
-
 import { Global, type INestApplicationContext, Module } from '@nestjs/common';
 import { CqrsModule, QueryBus } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
@@ -9,7 +5,7 @@ import { AppConfigModule } from '@platform/config';
 import { DRIZZLE, TransactionHost } from '@platform/database';
 import { StripeService } from '@platform/payments';
 import { FakeKafkaProducer, KafkaProducer } from '@platform/transport';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
   createRecordingDrizzle,
   createTestStripeService,

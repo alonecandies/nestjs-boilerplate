@@ -6,7 +6,7 @@ import { keyBy } from 'lodash-es';
 import { UsersPort } from '../../application/ports/users.port.js';
 import { IDENTITY_LIMITS, USERS_LOADER } from '../../identity.constants.js';
 
-/** Typed `@Loader(USERS_LOADER)` / `ctx.loaders.users` for every domain that imports this lib. */
+/** Typed `@Loader(USERS_LOADER)` / `ctx.loaders.users` for every package that imports this lib. */
 declare module '@platform/graphql' {
   interface GraphqlLoaders {
     readonly users: DataLoader<string, User | null>;
@@ -16,7 +16,7 @@ declare module '@platform/graphql' {
 /**
  * Registers the `users` DataLoader: every `load(id)` of one GraphQL operation is coalesced into
  * ONE `UsersPort.getUsersByIds` call (one SQL `IN (...)` locally, one RPC remotely) — e.g.
- * billing's `Payment.user` over a list of payments is 1 lookup, not N. Per-operation instances
+ * `Payment.user` (composed in the apps) over a list of payments is 1 lookup, not N. Per-operation instances
  * (no REQUEST scope, no cross-user cache).
  */
 @Injectable()

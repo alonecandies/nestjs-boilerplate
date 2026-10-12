@@ -4,8 +4,8 @@ import { GraphQLUUID } from '@platform/graphql';
 import { RoleEnum } from '../role.enum.js';
 
 /**
- * GraphQL `User`. Exported for other domains' fields (e.g. billing's `Payment.user`, resolved
- * through the `users` DataLoader).
+ * GraphQL `User`. Exported for the cross-domain field the apps compose (`Payment.user` in
+ * `PaymentUserFieldResolver`, resolved through the `users` DataLoader).
  */
 @ObjectType('User', { description: 'A user account' })
 export class UserModel {

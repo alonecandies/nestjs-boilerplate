@@ -19,6 +19,7 @@ import {
   RedisModule,
 } from '@platform/redis';
 import { StorageModule } from '@platform/storage';
+import { PaymentUserFieldResolver } from './graphql/payment-user.resolver.js';
 
 /**
  * The API gateway of the microservices topology. It serves the SAME presentation as the monolith
@@ -63,6 +64,8 @@ import { StorageModule } from '@platform/storage';
     FilesModule,
   ],
   providers: [
+    // `Payment.user` (billing → identity): the one cross-domain GraphQL field is composed here.
+    PaymentUserFieldResolver,
     // Validation pipes (class-validator + Standard Schema), problem+json filter, handler timeout.
     ...provideCommonEnhancersAsync({
       inject: [appConfig.KEY],

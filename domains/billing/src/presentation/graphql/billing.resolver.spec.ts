@@ -1,26 +1,12 @@
-// Isolate from the identity context: only its `UserModel` GraphQL type is needed here.
-vi.mock('@domain/identity', async () => {
-  const { Field, ID, ObjectType } = await import('@nestjs/graphql');
-  @ObjectType('User')
-  class UserModel {
-    @Field(() => ID)
-    id: string;
-
-    @Field()
-    displayName: string;
-  }
-  return { UserModel, USERS_LOADER: 'users' };
-});
-
 import type { Payment } from '@domain/billing-contracts';
-import { Injectable, type OnModuleInit } from '@nestjs/common';
+import { GraphQLSchemaHost } from '@nestjs/graphql';
 import { Test } from '@nestjs/testing';
 import { AuthModule } from '@platform/auth';
 import { generateId, provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
-import { AppGraphqlModule, DataLoaderRegistry } from '@platform/graphql';
+import { AppGraphqlModule } from '@platform/graphql';
 import { createFastifyTestApp, type Mocked } from '@platform/testing';
-import DataLoader from 'dataloader';
+import { printSchema } from 'graphql';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   FakeRedisModule,
@@ -34,25 +20,6 @@ import { BillingResolver } from './billing.resolver.js';
 /** `NestFastifyApplication`, typed through @platform/testing (billing does not depend on platform-fastify). */
 type TestApp = Awaited<ReturnType<typeof createFastifyTestApp>>;
 
-/** What identity's registrar does: one batched `getUsersByIds` per operation. */
-const userBatches: string[][] = [];
-
-@Injectable()
-class UsersLoaderStub implements OnModuleInit {
-  constructor(private readonly registry: DataLoaderRegistry) {}
-
-  onModuleInit(): void {
-    this.registry.register(
-      'users',
-      () =>
-        new DataLoader<string, { id: string; displayName: string } | null>(async (ids) => {
-          userBatches.push([...ids]);
-          return ids.map((id) => ({ id, displayName: `user ${id.slice(-4)}` }));
-        }),
-    );
-  }
-}
-
 const PAYMENTS_QUERY = /* GraphQL */ `
   query Payments($all: Boolean, $cursor: String) {
     payments(all: $all, limit: 10, cursor: $cursor) {
@@ -62,7 +29,7 @@ const PAYMENTS_QUERY = /* GraphQL */ `
         amountTotal
         currency
         createdAt
-        user { id displayName }
+        userId
       }
       nextCursor
     }
@@ -133,7 +100,6 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
       ],
       providers: [
         BillingResolver,
-        UsersLoaderStub,
         { provide: BillingPort, useValue: port },
         ...provideCommonEnhancers({ exposeInternalErrors: true }),
       ],
@@ -153,11 +119,10 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
   beforeEach(() => {
     port.listPayments.mockReset();
     port.createCheckoutSession.mockReset();
-    userBatches.length = 0;
   });
 
   describe('Query.payments', () => {
-    it("returns the caller's payments with users resolved in ONE batch", async () => {
+    it("returns the caller's payments, each with its owner's userId", async () => {
       const other = generateId();
       port.listPayments.mockResolvedValue({
         items: [
@@ -183,9 +148,9 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
         amountTotal: 2500,
         currency: 'usd',
         createdAt: '2026-09-01T10:00:00.000Z',
-        user: { id: user.id },
+        userId: user.id,
       });
-      expect(userBatches).toEqual([[user.id, other]]);
+      expect(items[2]).toMatchObject({ userId: other });
     });
 
     it('all: true is FORBIDDEN without billing:read-all', async () => {
@@ -267,6 +232,15 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
 
       expect(body.errors?.[0]?.extensions?.status).toBe(400);
       expect(port.createCheckoutSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('schema', () => {
+    it('exposes the owner as Payment.userId only: the apps compose Payment.user', () => {
+      const sdl = printSchema(app.get(GraphQLSchemaHost).schema);
+
+      expect(sdl).toMatch(/type Payment \{[^}]*\buserId: UUID!/);
+      expect(sdl).not.toMatch(/type Payment \{[^}]*\buser:/);
     });
   });
 });

@@ -241,7 +241,7 @@ Apollo Server 5 on Fastify, code-first ([`@platform/graphql`](../libs/graphql/RE
 
 ### DataLoader per operation, without REQUEST scope
 
-Field resolvers that fetch a related entity (for example `Payment.user`) go through a DataLoader,
+Field resolvers that fetch a related entity (for example `Payment.user`, composed in the apps by `PaymentUserFieldResolver`) go through a DataLoader,
 so a page of 50 payments costs **one** `getUsersByIds` call instead of 50 `getUser` calls (one
 gRPC hop and one `WHERE id = ANY(…)` query in the microservice topology).
 

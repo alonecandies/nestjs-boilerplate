@@ -36,7 +36,7 @@ export const IdentityErrorCode = {
 } as const;
 export type IdentityErrorCode = (typeof IdentityErrorCode)[keyof typeof IdentityErrorCode];
 
-/** DataLoader name registered by the identity Api module (`@Loader(USERS_LOADER)` in other domains). */
+/** DataLoader name registered by the identity Api module (`@Loader(USERS_LOADER)` in the apps' `PaymentUserFieldResolver`). */
 export const USERS_LOADER = 'users';
 
 /** Read-through cache of `GET /v1/users/:id` (blueprint §3.16): key `user:{id}`, 30 s. */

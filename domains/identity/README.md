@@ -233,8 +233,9 @@ locks, denylist and cache).
   the identity controllers (validation, mapping, null normalisation, error codes across the hop);
 - compositions: `IdentityApiModule.forLocal()` (real CQRS + handlers + repositories, fake
   Postgres/Redis/Kafka: register → SQL → Kafka event, login with real argon2) and
-  `IdentityGrpcModule`. Billing's `billing-identity.composition.spec.ts` composes this lib with
-  billing in one GraphQL app (`Payment.user` through the `users` loader).
+  `IdentityGrpcModule`. `apps/monolith/test/payment-user.e2e-spec.ts` and
+  `apps/gateway/test/payment-user.e2e-spec.ts` compose this lib with billing in one GraphQL schema
+  (`Payment.user` through the `users` loader).
 
 Integration (Docker): `INTEGRATION=1 bunx vitest run --project identity:int` runs
 `infrastructure/persistence/users.repository.int-spec.ts` on PostgreSQL 18 (testcontainers, or an

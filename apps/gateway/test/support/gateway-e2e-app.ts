@@ -1,3 +1,4 @@
+import { BillingPort } from '@domain/billing';
 import { AuthPort, UsersPort } from '@domain/identity';
 import { NotificationsPort } from '@domain/notifications';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
@@ -34,14 +35,19 @@ export type GatewayE2e = Awaited<ReturnType<typeof createGatewayE2eApp>>;
  * | `REDIS_CLIENT` (denylist, throttler) | `InMemoryRedis`                                     |
  * | `AuthPort`, `UsersPort`           | fake identity-service (`FakeAuthPort`/`FakeUsersPort`) |
  * | `NotificationsPort`               | fake notifications-service inbox                       |
- * | `BillingPort`                     | NOT faked: the real gRPC adapter → a dead upstream     |
+ * | `BillingPort`                     | the real gRPC adapter → a dead upstream; or `options.billing` |
  * | `CACHE_MANAGER`                   | real L1 tier only (L2 is node-redis)                   |
  * | `GRAPHQL_PUB_SUB`                 | in-process `PubSub`                                    |
  * | `StorageService`                  | `InMemoryStorageService`                               |
  *
  * The Kafka push consumer and the Redis Socket.IO adapter are not connected (no broker / Redis).
  */
-export async function createGatewayE2eApp() {
+export interface GatewayE2eOptions {
+  /** Binds `BillingPort` to this stand-in for billing-service (default: the real gRPC adapter). */
+  billing?: BillingPort;
+}
+
+export async function createGatewayE2eApp(options: GatewayE2eOptions = {}) {
   const config = appConfig.parse();
   const redis = new InMemoryRedis();
   const identity = new FakeIdentityState();
@@ -67,6 +73,8 @@ export async function createGatewayE2eApp() {
     .useValue(new PubSub())
     .overrideProvider(StorageService)
     .useValue(storage);
+  if (options.billing !== undefined)
+    builder.overrideProvider(BillingPort).useValue(options.billing);
 
   const app: NestFastifyApplication = await createFastifyTestApp(
     builder,

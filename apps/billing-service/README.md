@@ -13,8 +13,7 @@ verified.
 | Kafka   | produces                   | `billing.payment-succeeded.v1` (key `userId`; envelope id = domain event id) |
 
 The domain logic lives in [`@domain/billing`](../../domains/billing); this app is only the composition
-root. (`@domain/billing` imports `@domain/identity` for the GraphQL `Payment.user` field, so its code is
-loaded here too, though unused.)
+root.
 
 ## Composition (`src/app.module.ts`)
 

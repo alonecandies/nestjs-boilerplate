@@ -32,6 +32,7 @@ import {
 } from '@platform/redis';
 import { StorageModule } from '@platform/storage';
 import { KafkaProducerModule } from '@platform/transport';
+import { PaymentUserFieldResolver } from './graphql/payment-user.resolver.js';
 
 /** Both Postgres contexts live in the monolith's database (one drizzle instance, one pool). */
 const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
@@ -93,6 +94,8 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
     FilesModule,
   ],
   providers: [
+    // `Payment.user` (billing → identity): the one cross-domain GraphQL field is composed here.
+    PaymentUserFieldResolver,
     // Validation pipes (class-validator + Standard Schema), problem+json filter, handler timeout.
     ...provideCommonEnhancersAsync({
       inject: [appConfig.KEY],

@@ -45,6 +45,7 @@
     "@nestjs/common": "catalog:",
     "@nestjs/config": "catalog:",
     "@nestjs/cqrs": "catalog:",
+    "@nestjs/graphql": "catalog:",
     "@nestjs/platform-fastify": "catalog:",
     "@nestjs/schedule": "catalog:",
     "class-transformer": "catalog:",
@@ -61,6 +62,7 @@
     "@nestjs/testing": "catalog:",
     "cache-manager": "catalog:",
     "drizzle-orm": "catalog:",
+    "graphql": "catalog:",
     "graphql-subscriptions": "catalog:"
   }
 }

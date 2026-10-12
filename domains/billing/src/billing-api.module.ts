@@ -25,9 +25,9 @@ const presentation = (
  * The presentation classes are identical in both topologies; only the `BillingPort` binding differs.
  *
  * App requirements: global auth guards (`AuthModule.forRootAsync()`), `provideCommonEnhancers*()`
- * (both validation pipes + problem+json filter), `AppGraphqlModule.forRootAsync()` plus identity's
- * API module (it registers the `users` DataLoader behind `Payment.user`), and an HTTP app created
- * with `rawBody: true` for the Stripe webhook.
+ * (both validation pipes + problem+json filter), `AppGraphqlModule.forRootAsync()` and an HTTP app
+ * created with `rawBody: true` for the Stripe webhook. `Payment.user` is not billing's: the apps
+ * compose it (`PaymentUserFieldResolver`) over identity's `users` DataLoader.
  */
 @Module({})
 export class BillingApiModule {

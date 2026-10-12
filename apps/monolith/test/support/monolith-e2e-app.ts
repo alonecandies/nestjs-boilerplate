@@ -28,6 +28,7 @@ import {
   createFakePostgres,
   createFakeQueue,
   createL1OnlyCache,
+  type FakeRows,
 } from './fake-infrastructure.js';
 import { createInMemoryIdentityPersistence } from './in-memory-identity.js';
 
@@ -41,7 +42,7 @@ export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
  * | provider                                   | fake                                         |
  * |--------------------------------------------|----------------------------------------------|
  * | `REDIS_CLIENT` (denylist, throttler, locks) | `InMemoryRedis`                              |
- * | `DRIZZLE`                                  | real drizzle over a fake postgres.js client  |
+ * | `DRIZZLE`                                  | real drizzle over a fake postgres.js client (rows: `options.postgresRows`) |
  * | identity repositories + TransactionRunner  | in-memory (the handlers above them are real) |
  * | `CASSANDRA_CLIENT`                         | empty result sets                            |
  * | BullMQ `mail` queue / `MailProcessor`      | recording queue / no worker                  |
@@ -52,12 +53,20 @@ export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
  *
  * The Kafka consumer and the Redis Socket.IO adapter are not connected (no broker / Redis).
  */
-export async function createMonolithE2eApp() {
+export interface MonolithE2eOptions {
+  /** Rows the fake Postgres answers a statement with (`sql` whitespace-normalised); default none. */
+  postgresRows?: (sql: string, params: unknown[]) => FakeRows;
+}
+
+export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
   const config = appConfig.parse();
   const redis = new InMemoryRedis();
   const kafka = new FakeKafkaProducer({ source: config.serviceName });
   const identity = createInMemoryIdentityPersistence();
-  const postgres = createFakePostgres({ ...identitySchema, ...billingSchema });
+  const postgres = createFakePostgres(
+    { ...identitySchema, ...billingSchema },
+    options.postgresRows,
+  );
   const cassandra = createFakeCassandra();
   const mailQueue = createFakeQueue();
   const storage = new InMemoryStorageService();

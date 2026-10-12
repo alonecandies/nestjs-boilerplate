@@ -68,14 +68,14 @@ off.
 
 ## Endpoints
 
-| Surface  | Where                                                                                                                                                                                                                                                                                             |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Ops      | `GET /health/live`, `GET /health/ready` (redis only), `GET /metrics`, `GET /docs` (Scalar), `GET /openapi.json`, `GET /openapi.yaml`                                                                                                                                                              |
-| Identity | `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/refresh`, `POST /v1/auth/logout`, `GET /v1/auth/me`, `GET /v1/users`, `GET /v1/users/:id`, `PATCH /v1/users/:id/roles`                                                                                                            |
-| Notifs   | `GET /v1/notifications`, `POST /v1/notifications/:id/read`; Socket.IO namespace `/notifications` (`auth: { token }`, websocket transport)                                                                                                                                                         |
-| Billing  | `POST /v1/billing/checkout-sessions`, `POST /v1/billing/webhooks/stripe` (raw bytes + signature forwarded to billing-service), `GET /v1/billing/payments`                                                                                                                                         |
-| Files    | `POST /v1/files` (streaming multipart), `POST /v1/files/presigned-uploads`, `GET /v1/files/download-url`, `DELETE /v1/files` — edge-only, straight to object storage                                                                                                                              |
-| GraphQL  | `POST /graphql`: `me`, `user`, `users`, `notifications`, `payments` (`Payment.user` batched by the `users` DataLoader); mutations `register`, `login`, `refreshTokens`, `updateUserRoles`, `markNotificationRead`, `createCheckoutSession`, `createUploadUrl`; subscription `notificationCreated` |
+| Surface  | Where                                                                                                                                                                                                                                                                                                                                          |
+| -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Ops      | `GET /health/live`, `GET /health/ready` (redis only), `GET /metrics`, `GET /docs` (Scalar), `GET /openapi.json`, `GET /openapi.yaml`                                                                                                                                                                                                           |
+| Identity | `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/refresh`, `POST /v1/auth/logout`, `GET /v1/auth/me`, `GET /v1/users`, `GET /v1/users/:id`, `PATCH /v1/users/:id/roles`                                                                                                                                                         |
+| Notifs   | `GET /v1/notifications`, `POST /v1/notifications/:id/read`; Socket.IO namespace `/notifications` (`auth: { token }`, websocket transport)                                                                                                                                                                                                      |
+| Billing  | `POST /v1/billing/checkout-sessions`, `POST /v1/billing/webhooks/stripe` (raw bytes + signature forwarded to billing-service), `GET /v1/billing/payments`                                                                                                                                                                                      |
+| Files    | `POST /v1/files` (streaming multipart), `POST /v1/files/presigned-uploads`, `GET /v1/files/download-url`, `DELETE /v1/files` — edge-only, straight to object storage                                                                                                                                                                           |
+| GraphQL  | `POST /graphql`: `me`, `user`, `users`, `notifications`, `payments` (`Payment.user` composed here by `PaymentUserFieldResolver`, batched by the `users` DataLoader); mutations `register`, `login`, `refreshTokens`, `updateUserRoles`, `markNotificationRead`, `createCheckoutSession`, `createUploadUrl`; subscription `notificationCreated` |
 
 Errors are RFC 9457 `application/problem+json`; every response carries `x-request-id` and
 `x-correlation-id`, which also travel to the services as gRPC metadata.
@@ -91,6 +91,9 @@ Errors are RFC 9457 `application/problem+json`; every response carries `x-reques
   storage → the `Api` modules `.forRemote()` + `FilesModule`. No DatabaseModule, Cassandra,
   mailer, Stripe, CQRS or Core module. Root providers: `provideCommonEnhancersAsync`; root
   middleware: `CorrelationIdMiddleware`, `MaintenanceModeMiddleware`.
+- `src/graphql/payment-user.resolver.ts` — `PaymentUserFieldResolver` adds `Payment.user` (billing → identity)
+  through identity's `users` DataLoader: the one cross-domain GraphQL field lives in the composition root, so
+  billing never imports identity.
 - `src/main.ts` — `runClustered` → `createHttpApp(AppModule, { rawBody, multipart })` → Redis
   Socket.IO adapter → `connectKafkaConsumer` (group `gateway-push`) → `setupApiDocs` →
   `startAllMicroservices` → `listen`.
@@ -105,12 +108,12 @@ Errors are RFC 9457 `application/problem+json`; every response carries `x-reques
 
 ```bash
 bunx vitest run --project gateway          # unit (src/**/*.spec.ts)
-bunx vitest run --project gateway:e2e      # e2e (test/app.e2e-spec.ts) — no Docker needed
+bunx vitest run --project gateway:e2e      # e2e (test/*.e2e-spec.ts) — no Docker needed
 ```
 
 The e2e suite boots the real `AppModule` with the production HTTP wiring and binds `AuthPort`,
 `UsersPort` and `NotificationsPort` to in-memory fake services (`test/support/fake-upstreams.ts`)
 that return the same `@platform/contracts` shapes and DomainExceptions as the gRPC adapters. Billing
-keeps its real gRPC adapter, pointed at a dead upstream, to assert the 503 mapping. `REDIS_CLIENT`
+keeps its real gRPC adapter, pointed at a dead upstream, to assert the 503 mapping; `test/payment-user.e2e-spec.ts` binds `BillingPort` to a stub instead (`createGatewayE2eApp({ billing })`) to prove `Payment.user` over the remote ports. `REDIS_CLIENT`
 → `InMemoryRedis`, `CACHE_MANAGER` → L1 only, `GRAPHQL_PUB_SUB` → in-process PubSub,
 `StorageService` → in-memory.

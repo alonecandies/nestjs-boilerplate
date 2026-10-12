@@ -60,8 +60,9 @@ What the edge (monolith / gateway) must provide:
 - `AuthModule.forRootAsync()` (global JWT → roles → permissions guards; import it before `AppThrottlerModule`).
 - `provideCommonEnhancers*()`: both validation pipes (class-validator for GraphQL inputs, Standard Schema for
   the zod REST bodies/queries) and the problem+json filter.
-- `AppGraphqlModule.forRootAsync()` and **identity's Api module**: it registers the `users` DataLoader behind
-  `Payment.user` and the `User` GraphQL type.
+- `AppGraphqlModule.forRootAsync()`. Billing exposes a payment's owner as `Payment.userId` only: the apps add
+  `Payment.user` (`PaymentUserFieldResolver` in `apps/monolith` and `apps/gateway`, over identity's `users`
+  DataLoader), so billing never imports identity.
 - An HTTP app created with `rawBody: true` (`req.rawBody` for `application/json`).
 - `nestjs-cls` (from `ObservabilityModule`) is used by the gRPC adapter to propagate request/correlation ids.
 
@@ -108,7 +109,7 @@ type Payment {
   stripeCheckoutSessionId: String
   createdAt: DateTime
   updatedAt: DateTime
-  user: User # batched through identity's `users` DataLoader
+  user: User # added by the apps (PaymentUserFieldResolver), batched through identity's `users` DataLoader
 }
 enum PaymentStatus {
   PENDING
@@ -227,12 +228,11 @@ through `TransactionHost` and join the active transaction.
   `FOR UPDATE`, optimistic lock, prepared list statements).
 - `billing.controller.spec.ts` — Fastify app with the real `AuthModule` guards (tokens from `TokenService`):
   401/403, 400 validation (body, query, `Idempotency-Key`), serialisation, raw-body webhook, OpenAPI document.
-- `billing.resolver.spec.ts` — Apollo on Fastify: payments + batched `user` field, RBAC, input validation.
+- `billing.resolver.spec.ts` — Apollo on Fastify: payments (owner as `userId`; billing defines no `user` field), RBAC, input validation.
 - `test/stripe-webhook.flow.spec.ts` — raw body → controller → local adapter → handler → relay → Kafka fake.
 - `billing.modules.spec.ts` — DI wiring of `BillingGrpcModule`, `BillingApiModule.forLocal()` / `.forRemote()`.
-- `billing-identity.composition.spec.ts` — the REAL `@domain/identity` next to billing in one app (one CQRS bus, one
-  GraphQL schema): `Payment.user` is identity's `User`, resolved through identity's `users` DataLoader → UsersPort →
-  QueryBus → repository in ONE batched lookup; both REST surfaces served. (The other specs mock `@domain/identity`.)
+- `Payment.user` is tested where it is composed: `apps/monolith/test/payment-user.e2e-spec.ts` (local ports, ONE
+  batched `GetUsersByIds`) and `apps/gateway/test/payment-user.e2e-spec.ts` (remote ports, ONE `GetUsersByIds` RPC).
 - `presentation/grpc/billing-grpc.roundtrip.spec.ts` — `BillingApiModule.forRemote()` ↔ `BillingGrpcController`
   over real loopback gRPC: the remote adapter returns the local mapper's exact shape (int64 string, Date, absent
   optionals), webhook bytes arrive untouched, domain codes survive the hop.
@@ -244,4 +244,3 @@ through `TransactionHost` and join the active transaction.
 - Stripe idempotency keys are account-wide, so the client `Idempotency-Key` is never forwarded verbatim; it is
   mapped per user to a payment id, and the Stripe key is `checkout-<paymentId>`.
 - `billing.schema.ts` may only import `drizzle-orm` and dependency-free relative files (drizzle-kit loader).
-- `@domain/billing`'s barrel imports `@domain/identity` (for `UserModel`), so billing-service also loads identity's code.

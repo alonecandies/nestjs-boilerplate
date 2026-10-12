@@ -93,6 +93,9 @@ Errors are RFC 9457 `application/problem+json` (`type`, `title`, `status`, `deta
   import a Core module a second time. Root providers: `provideCommonEnhancersAsync` (both
   validation pipes, the problem+json filter, the handler timeout); root middleware:
   `CorrelationIdMiddleware`, `MaintenanceModeMiddleware`.
+- `src/graphql/payment-user.resolver.ts` — `PaymentUserFieldResolver` adds `Payment.user` (billing → identity)
+  through identity's `users` DataLoader: the one cross-domain GraphQL field lives in the composition root, so
+  billing never imports identity.
 - `src/main.ts` — `runClustered` → `createHttpApp(AppModule, { rawBody, multipart })` → Redis
   Socket.IO adapter → `connectKafkaConsumer` (hybrid app, `inheritAppConfig`) → `setupApiDocs` →
   `startAllMicroservices` → `listen`.
@@ -110,7 +113,7 @@ Errors are RFC 9457 `application/problem+json` (`type`, `title`, `status`, `deta
 
 ```bash
 bunx vitest run --project monolith         # unit (src/**/*.spec.ts)
-bunx vitest run --project monolith:e2e     # e2e (test/app.e2e-spec.ts) — no Docker needed
+bunx vitest run --project monolith:e2e     # e2e (test/*.e2e-spec.ts) — no Docker needed
 ```
 
 The e2e suite boots the real `AppModule` with the production HTTP wiring (`configureHttpApp`,

@@ -23,7 +23,7 @@ export class PaymentModel {
   @Field(() => ID)
   id: string;
 
-  /** Parent key of the batched `user` field (DataLoader). */
+  /** Owner. The apps compose `Payment.user` from it (identity's `users` DataLoader). */
   @Field(() => GraphQLUUID)
   userId: string;
 

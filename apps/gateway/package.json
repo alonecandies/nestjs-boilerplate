@@ -39,6 +39,7 @@
     "@nestjs/cache-manager": "catalog:",
     "@nestjs/common": "catalog:",
     "@nestjs/config": "catalog:",
+    "@nestjs/graphql": "catalog:",
     "@nestjs/platform-fastify": "catalog:",
     "class-transformer": "catalog:",
     "class-validator": "catalog:",
@@ -54,6 +55,7 @@
     "@domain/notifications-contracts": "workspace:*",
     "@nestjs/testing": "catalog:",
     "cache-manager": "catalog:",
+    "graphql": "catalog:",
     "graphql-subscriptions": "catalog:"
   }
 }

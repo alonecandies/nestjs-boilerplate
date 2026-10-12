@@ -1,8 +1,5 @@
-import { USERS_LOADER, UserModel } from '@domain/identity';
-import type { User } from '@domain/identity-contracts';
-import { Args, Mutation, Parent, Query, ResolveField, Resolver } from '@nestjs/graphql';
+import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
 import { type AuthUser, CurrentUser, Permission, RequirePermissions } from '@platform/auth';
-import { type GraphqlLoaders, Loader } from '@platform/graphql';
 import { BillingPort } from '../../application/ports/billing.port.js';
 import { resolvePaymentsOwner } from '../payments-scope.js';
 import { PaymentsArgs } from './args/payments.args.js';
@@ -15,9 +12,10 @@ import {
 } from './models/payment.model.js';
 
 /**
- * `payments(all, limit, cursor)` (a keyset-paginated connection) and `createCheckoutSession(input)`. Authentication/RBAC come from the
- * global, context-aware guards; `Payment.user` is resolved through identity's `users` DataLoader,
- * so a page of N payments costs ONE batched user lookup (no N+1).
+ * `payments(all, limit, cursor)` (a keyset-paginated connection) and `createCheckoutSession(input)`.
+ * Authentication/RBAC come from the global, context-aware guards. A payment's owner is exposed as
+ * `Payment.userId` only: the apps compose `Payment.user` (`PaymentUserFieldResolver`, over
+ * identity's `users` DataLoader), so billing never imports identity.
  */
 @Resolver(() => PaymentModel)
 export class BillingResolver {
@@ -56,14 +54,5 @@ export class BillingResolver {
       quantity: input.quantity,
       idempotencyKey: input.idempotencyKey ?? undefined,
     });
-  }
-
-  /** Typed by identity's `GraphqlLoaders['users']` augmentation; `null` for a deleted user. */
-  @ResolveField('user', () => UserModel, { nullable: true, complexity: 5 })
-  user(
-    @Parent() payment: PaymentModel,
-    @Loader(USERS_LOADER) users: GraphqlLoaders[typeof USERS_LOADER],
-  ): Promise<User | null> {
-    return users.load(payment.userId);
   }
 }
