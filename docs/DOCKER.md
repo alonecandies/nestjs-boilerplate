@@ -141,28 +141,28 @@ the Postgres/RustFS credentials.
 
 ## Configuration of the app containers
 
-Env names are exactly those of `@platform/config` (all documented, with defaults, in [`.env.example`](../.env.example) and
+Env names are exactly those of the platform and domain config namespaces (all documented, with defaults, in [`.env.example`](../.env.example) and
 [CONFIGURATION.md](CONFIGURATION.md); `node scripts/check-env-example.mjs` fails on drift). Extra app env for the
 containers only goes in an optional `.env.docker` at the repo root (gitignored by the `.env.*` rule). Notable compose
 choices:
 
-| Setting                                    | Value                                   | Why                                                                                                                  |
-| ------------------------------------------ | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`                                 | `production` (`DOCKER_NODE_ENV`)        | same code paths as prod (docs stay on via `DOCKER_DOCS_ENABLED=true`)                                                |
-| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | `compose-local-…` (`DOCKER_JWT_*`)      | production mode rejects the dev-default secrets; these are NOT secret                                                |
-| `OTEL_SDK_DISABLED`                        | `true` (`DOCKER_OTEL_SDK_DISABLED`)     | set `false` **and** start `observability` to send traces to `http://jaeger:4318`                                     |
-| `DATABASE_RUN_MIGRATIONS`                  | `true`                                  | advisory-locked; see [Migrations](#bootstrap-jobs--migrations)                                                       |
-| `KAFKA_GROUP_ID`                           | `monolith`, `gateway-push`, `<service>` | explicit consumer groups                                                                                             |
-| `S3_PUBLIC_ENDPOINT`                       | `http://localhost:${S3_HOST_PORT}`      | presigned URLs must be reachable from the host, not `rustfs:9000`                                                    |
-| `IDENTITY/NOTIFICATIONS/BILLING_GRPC_URL`  | `<service>:50051`                       | grpc-js resolves every A record of a scaled service (round robin)                                                    |
-| `CLUSTER_WORKERS`                          | `1`                                     | scale with replicas (`--scale`), not `node:cluster`, in containers                                                   |
-| `NODE_OPTIONS`                             | `--max-old-space-size=…`                | ≈ 70–75 % of the container memory limit; the rest is off-heap (see budget below)                                     |
-| `SHUTDOWN_TIMEOUT_MS`                      | `15000`                                 | below `stop_grace_period: 20s`, so graceful shutdown finishes before SIGKILL                                         |
-| `GRPC_ALLOW_INSECURE` / `GRPC_REFLECTION`  | `true` / `true`                         | production mode refuses plaintext gRPC; local opt-out (see [below](#what-is-local-only-dont-ship-this-compose-file)) |
-| `TRUST_PROXY` (edge apps)                  | `uniquelocal` (`DOCKER_TRUST_PROXY`)    | k6 sends `X-Forwarded-For` from the private network; local only                                                      |
-| `DOCS_ENABLED` (edge apps)                 | `true` (`DOCKER_DOCS_ENABLED`)          | `/docs` + `/openapi.json` + `/openapi.yaml` despite `NODE_ENV=production`                                            |
-| `STORAGE_DRIVER`                           | `s3` (`DOCKER_STORAGE_DRIVER`)          | `gcs` switches to fake-gcs (`GCS_API_ENDPOINT=http://gcs:4443`)                                                      |
-| `LOG_LEVEL` / `LOG_PRETTY`                 | `info` (`DOCKER_LOG_LEVEL`) / `false`   | JSON logs, so Alloy/Loki can parse them                                                                              |
+| Setting                                    | Value                                   | Why                                                                                                                                                 |
+| ------------------------------------------ | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                 | `production` (`DOCKER_NODE_ENV`)        | same code paths as prod (docs stay on via `DOCKER_DOCS_ENABLED=true`)                                                                               |
+| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | `compose-local-…` (`DOCKER_JWT_*`)      | production mode rejects the dev-default secrets; these are NOT secret; only the token issuers (monolith, identity-service) get `JWT_REFRESH_SECRET` |
+| `OTEL_SDK_DISABLED`                        | `true` (`DOCKER_OTEL_SDK_DISABLED`)     | set `false` **and** start `observability` to send traces to `http://jaeger:4318`                                                                    |
+| `DATABASE_RUN_MIGRATIONS`                  | `true`                                  | advisory-locked; see [Migrations](#bootstrap-jobs--migrations)                                                                                      |
+| `KAFKA_GROUP_ID`                           | `monolith`, `gateway-push`, `<service>` | explicit consumer groups                                                                                                                            |
+| `S3_PUBLIC_ENDPOINT`                       | `http://localhost:${S3_HOST_PORT}`      | presigned URLs must be reachable from the host, not `rustfs:9000`                                                                                   |
+| `IDENTITY/NOTIFICATIONS/BILLING_GRPC_URL`  | `<service>:50051`                       | grpc-js resolves every A record of a scaled service (round robin)                                                                                   |
+| `CLUSTER_WORKERS`                          | `1`                                     | scale with replicas (`--scale`), not `node:cluster`, in containers                                                                                  |
+| `NODE_OPTIONS`                             | `--max-old-space-size=…`                | ≈ 70–75 % of the container memory limit; the rest is off-heap (see budget below)                                                                    |
+| `SHUTDOWN_TIMEOUT_MS`                      | `15000`                                 | below `stop_grace_period: 20s`, so graceful shutdown finishes before SIGKILL                                                                        |
+| `GRPC_ALLOW_INSECURE` / `GRPC_REFLECTION`  | `true` / `true`                         | production mode refuses plaintext gRPC; local opt-out (see [below](#what-is-local-only-dont-ship-this-compose-file))                                |
+| `TRUST_PROXY` (edge apps)                  | `uniquelocal` (`DOCKER_TRUST_PROXY`)    | k6 sends `X-Forwarded-For` from the private network; local only                                                                                     |
+| `DOCS_ENABLED` (edge apps)                 | `true` (`DOCKER_DOCS_ENABLED`)          | `/docs` + `/openapi.json` + `/openapi.yaml` despite `NODE_ENV=production`                                                                           |
+| `STORAGE_DRIVER`                           | `s3` (`DOCKER_STORAGE_DRIVER`)          | `gcs` switches to fake-gcs (`GCS_API_ENDPOINT=http://gcs:4443`)                                                                                     |
+| `LOG_LEVEL` / `LOG_PRETTY`                 | `info` (`DOCKER_LOG_LEVEL`) / `false`   | JSON logs, so Alloy/Loki can parse them                                                                                                             |
 
 ### Compose-only variables
 
@@ -176,7 +176,7 @@ Read by Compose for `${VAR}` interpolation (shell or root `.env`). They are comp
 | `DOCKER_NODE_ENV` / `DOCKER_LOG_LEVEL`                   | `production` / `info`                                                                 | app `NODE_ENV` / `LOG_LEVEL`                                                                                                                                       |
 | `DOCKER_OTEL_SDK_DISABLED` / `DOCKER_OTEL_SAMPLER_RATIO` | `true` / `1.0`                                                                        | tracing on/off, head-sampling ratio                                                                                                                                |
 | `DOCKER_DOCS_ENABLED` / `DOCKER_STORAGE_DRIVER`          | `true` / `s3`                                                                         | see table above                                                                                                                                                    |
-| `DOCKER_JWT_ACCESS_SECRET` / `DOCKER_JWT_REFRESH_SECRET` | `compose-local-…`                                                                     | local JWT secrets (≥ 32 chars, not secret)                                                                                                                         |
+| `DOCKER_JWT_ACCESS_SECRET` / `DOCKER_JWT_REFRESH_SECRET` | `compose-local-…`                                                                     | local JWT secrets (≥ 32 chars, not secret); the refresh one reaches only the token issuers (monolith, identity-service)                                            |
 | `DOCKER_TRUST_PROXY`                                     | `uniquelocal`                                                                         | edge apps' `TRUST_PROXY`                                                                                                                                           |
 | `DOCKER_S3_CORS_ORIGINS`                                 | `http://localhost:3000,http://localhost:5173`                                         | RustFS `RUSTFS_CORS_ALLOWED_ORIGINS` (browser presigned PUT/GET)                                                                                                   |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`    | `app` / `app` / `app`                                                                 | Postgres + the containers' `DATABASE_URL` + postgres-exporter                                                                                                      |

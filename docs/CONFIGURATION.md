@@ -529,16 +529,16 @@ optional, gitignored `.env.docker`. That is why compose-only knobs are prefixed 
 
 What the containers get regardless of your `.env` (local-only conveniences):
 
-| Variable                                         | Container value                           | Why                                                                                        |
-| ------------------------------------------------ | ----------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `NODE_ENV`                                       | `${DOCKER_NODE_ENV:-production}`          | Exercise the production guards locally                                                     |
-| `GRPC_ALLOW_INSECURE`, `GRPC_REFLECTION`         | `true`                                    | grpcurl/Postman on `127.0.0.1:5005x` without TLS (production: `GRPC_TLS_*`, no reflection) |
-| `DOCS_ENABLED`                                   | `${DOCKER_DOCS_ENABLED:-true}`            | `/docs` + `/openapi.json` even in production mode (gateway, monolith)                      |
-| `TRUST_PROXY`                                    | `${DOCKER_TRUST_PROXY:-uniquelocal}`      | k6 sends `X-Forwarded-For` from the private network (gateway, monolith)                    |
-| `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`        | `${DOCKER_JWT_*_SECRET:-compose-local-…}` | Non-default, distinct, ≥ 32 chars — **not secret**                                         |
-| `PORT`, `CLUSTER_WORKERS`, `SHUTDOWN_TIMEOUT_MS` | `3000`, `1`, `15000`                      | Every container serves HTTP on 3000; scale with replicas                                   |
-| `GRPC_URL`, `*_GRPC_URL`                         | `0.0.0.0:50051`, `<service>:50051`        | Every gRPC server listens on 50051 inside the network                                      |
-| `NODE_OPTIONS`                                   | `--max-old-space-size=…` per service      | Heap cap under each container's memory limit                                               |
+| Variable                                         | Container value                           | Why                                                                                                                                |
+| ------------------------------------------------ | ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                       | `${DOCKER_NODE_ENV:-production}`          | Exercise the production guards locally                                                                                             |
+| `GRPC_ALLOW_INSECURE`, `GRPC_REFLECTION`         | `true`                                    | grpcurl/Postman on `127.0.0.1:5005x` without TLS (production: `GRPC_TLS_*`, no reflection)                                         |
+| `DOCS_ENABLED`                                   | `${DOCKER_DOCS_ENABLED:-true}`            | `/docs` + `/openapi.json` even in production mode (gateway, monolith)                                                              |
+| `TRUST_PROXY`                                    | `${DOCKER_TRUST_PROXY:-uniquelocal}`      | k6 sends `X-Forwarded-For` from the private network (gateway, monolith)                                                            |
+| `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`        | `${DOCKER_JWT_*_SECRET:-compose-local-…}` | Non-default, distinct, ≥ 32 chars — **not secret**; the refresh secret goes only to the token issuers (monolith, identity-service) |
+| `PORT`, `CLUSTER_WORKERS`, `SHUTDOWN_TIMEOUT_MS` | `3000`, `1`, `15000`                      | Every container serves HTTP on 3000; scale with replicas                                                                           |
+| `GRPC_URL`, `*_GRPC_URL`                         | `0.0.0.0:50051`, `<service>:50051`        | Every gRPC server listens on 50051 inside the network                                                                              |
+| `NODE_OPTIONS`                                   | `--max-old-space-size=…` per service      | Heap cap under each container's memory limit                                                                                       |
 
 ### App container settings
 
@@ -556,7 +556,7 @@ What the containers get regardless of your `.env` (local-only conveniences):
 | `DOCKER_STORAGE_DRIVER`     | `s3`                                                   | → `STORAGE_DRIVER`                                                                                                  |
 | `DOCKER_TRUST_PROXY`        | `uniquelocal`                                          | → `TRUST_PROXY` (gateway, monolith)                                                                                 |
 | `DOCKER_JWT_ACCESS_SECRET`  | `compose-local-access-secret-not-for-production-0001`  | → `JWT_ACCESS_SECRET`                                                                                               |
-| `DOCKER_JWT_REFRESH_SECRET` | `compose-local-refresh-secret-not-for-production-0002` | → `JWT_REFRESH_SECRET`                                                                                              |
+| `DOCKER_JWT_REFRESH_SECRET` | `compose-local-refresh-secret-not-for-production-0002` | → `JWT_REFRESH_SECRET` (monolith, identity-service)                                                                 |
 | `DOCKER_S3_CORS_ORIGINS`    | `http://localhost:3000,http://localhost:5173`          | Browser origins allowed by RustFS's S3 listener (presigned uploads from a frontend)                                 |
 
 ### Infra credentials and pass-throughs

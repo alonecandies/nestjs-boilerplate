@@ -33,7 +33,7 @@ const COMPOSE = {
 const KNOWN_VALUE_MESSAGE = 'is a publicly known value';
 
 describe('auth', () => {
-  it('rejects the development default secrets in production, without echoing them', () => {
+  it('rejects the development default access secret in production, without echoing it', () => {
     const error = errorOf(() => authConfig.parse(PROD));
     expect(error.message).toContain('→ at JWT_ACCESS_SECRET');
     expect(error.message).toContain('development default');
@@ -56,7 +56,7 @@ describe('auth', () => {
     );
   });
 
-  it('accepts strong distinct secrets in production and dev defaults elsewhere', () => {
+  it('accepts a strong access secret in production and the dev default elsewhere', () => {
     expect(
       authConfig.parse({
         ...PROD,

@@ -26,7 +26,7 @@ x-logging: &logging
     max-size: 10m
     max-file: "3"
 
-# ---- app environment (names = @platform/config env vars) -------------------------------------------
+# ---- app environment (names = config namespace env vars) -------------------------------------------
 x-env-base: &env-base
   NODE_ENV: ${DOCKER_NODE_ENV:-production}
   LOG_LEVEL: ${DOCKER_LOG_LEVEL:-info}
@@ -63,8 +63,12 @@ x-env-base: &env-base
   OTEL_TRACES_SAMPLER_ARG: ${DOCKER_OTEL_SAMPLER_RATIO:-1.0}
 
 # NODE_ENV=production rejects the dev-default JWT secrets: use distinct local ones (not secret!).
+# The access secret goes to every access-token verifier (gateway, monolith, identity-service).
 x-env-auth: &env-auth
   JWT_ACCESS_SECRET: ${DOCKER_JWT_ACCESS_SECRET:-compose-local-access-secret-not-for-production-0001}
+
+# identity's refreshToken namespace: only the token issuers (monolith, identity-service) get it.
+x-env-identity: &env-identity
   JWT_REFRESH_SECRET: ${DOCKER_JWT_REFRESH_SECRET:-compose-local-refresh-secret-not-for-production-0002}
 
 x-env-postgres: &env-postgres
@@ -501,6 +505,7 @@ services:
       <<:
         - *env-base
         - *env-auth
+        - *env-identity
         - *env-postgres
         - *env-cassandra
         - *env-mail
@@ -591,7 +596,7 @@ services:
       target: ${APP_TARGET:-runtime}
       args: { APP: identity-service }
     environment:
-      <<: [*env-base, *env-auth, *env-postgres]
+      <<: [*env-base, *env-auth, *env-identity, *env-postgres]
       SERVICE_NAME: identity-service
       KAFKA_GROUP_ID: identity-service
       NODE_OPTIONS: --max-old-space-size=320
