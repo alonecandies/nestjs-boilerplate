@@ -26,7 +26,6 @@ const PROD = { NODE_ENV: 'production' } as const;
 /** The docker-compose fallbacks (docker-compose.yml x-env-auth / x-env-stripe / x-env-storage). */
 const COMPOSE = {
   JWT_ACCESS_SECRET: 'compose-local-access-secret-not-for-production-0001',
-  JWT_REFRESH_SECRET: 'compose-local-refresh-secret-not-for-production-0002',
   STRIPE_SECRET_KEY: 'sk_test_compose_local_not_for_production',
   STRIPE_WEBHOOK_SECRET: 'whsec_compose_local_not_for_production',
 } as const;
@@ -37,7 +36,6 @@ describe('auth', () => {
   it('rejects the development default secrets in production, without echoing them', () => {
     const error = errorOf(() => authConfig.parse(PROD));
     expect(error.message).toContain('→ at JWT_ACCESS_SECRET');
-    expect(error.message).toContain('→ at JWT_REFRESH_SECRET');
     expect(error.message).toContain('development default');
     expect(error.message).not.toContain(DEV_JWT_ACCESS_SECRET);
     // The opt-out covers the compose fallbacks only, never the development defaults.
@@ -51,7 +49,6 @@ describe('auth', () => {
     const env = { ...PROD, ...COMPOSE };
     const error = errorOf(() => authConfig.parse(env));
     expect(error.message).toContain('→ at JWT_ACCESS_SECRET');
-    expect(error.message).toContain('→ at JWT_REFRESH_SECRET');
     expect(error.message).toContain(KNOWN_VALUE_MESSAGE);
     expect(error.message).toContain('ALLOW_KNOWN_LOCAL_SECRETS');
     expect(authConfig.parse({ ...env, ALLOW_KNOWN_LOCAL_SECRETS: 'true' }).accessSecret).toBe(
@@ -59,20 +56,11 @@ describe('auth', () => {
     );
   });
 
-  it('rejects identical access and refresh secrets in production', () => {
-    const same = 's'.repeat(48);
-    const error = errorOf(() =>
-      authConfig.parse({ ...PROD, JWT_ACCESS_SECRET: same, JWT_REFRESH_SECRET: same }),
-    );
-    expect(error.message).toContain('must differ');
-  });
-
   it('accepts strong distinct secrets in production and dev defaults elsewhere', () => {
     expect(
       authConfig.parse({
         ...PROD,
         JWT_ACCESS_SECRET: 'a'.repeat(48),
-        JWT_REFRESH_SECRET: 'b'.repeat(48),
       }).accessSecret,
     ).toBe('a'.repeat(48));
     expect(authConfig.parse({ NODE_ENV: 'test' }).accessSecret).toBe(DEV_JWT_ACCESS_SECRET);

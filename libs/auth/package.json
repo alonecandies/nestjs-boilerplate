@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "JWT authentication (passport-jwt, HS256, local verification), refresh tokens, Redis access-token denylist and RBAC guards/decorators for HTTP, GraphQL and WebSocket.",
+  "description": "JWT access-token verification (passport-jwt, HS256, local), Redis access-token denylist, RBAC guards/decorators for HTTP, GraphQL and WebSocket, and a test-token signer (./testing).",
   "exports": {
     ".": {
       "@repo/source": "./src/index.ts",

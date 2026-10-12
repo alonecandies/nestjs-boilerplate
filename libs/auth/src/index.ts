@@ -1,7 +1,8 @@
 /**
- * @platform/auth — JWT authentication (passport-jwt, HS256, verified locally at every service),
- * refresh tokens, the Redis access-token denylist and RBAC
- * (roles → permissions, guards, decorators) for HTTP, GraphQL and WebSocket handlers.
+ * @platform/auth — JWT access-token verification (passport-jwt, HS256, verified locally at every
+ * service), the Redis access-token denylist and RBAC (roles → permissions, guards, decorators) for
+ * HTTP, GraphQL and WebSocket handlers. Tokens are issued by the context that owns sessions; tests
+ * sign them with `@platform/auth/testing`.
  */
 export {
   AuthErrorCode,

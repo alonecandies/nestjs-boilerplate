@@ -23,7 +23,7 @@ export interface AuthModuleSetup {
 
 /**
  * Module defaults for code that injects `JwtService` directly. `expiresIn` is deliberately NOT set:
- * `TokenService` writes `exp` into the payload and jsonwebtoken rejects both at once.
+ * token issuers write `exp` into the payload and jsonwebtoken rejects both at once.
  */
 export function createJwtModuleOptions(config: AuthConfig): JwtModuleOptions {
   return {
@@ -46,7 +46,7 @@ const GLOBAL_GUARDS: Provider[] = [
 ];
 
 /**
- * Global authentication & authorization (blueprint §3.11): JWT issuing/verification, the Redis
+ * Global authentication & authorization (blueprint §3.11): access-token verification, the Redis
  * access-token denylist, the passport `jwt` strategy and the RBAC guards.
  * Requires `RedisModule` (global) for the denylist.
  *
