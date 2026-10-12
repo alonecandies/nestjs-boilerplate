@@ -1,0 +1,296 @@
+diff --git a/libs/contracts/src/grpc/billing.grpc-package.spec.ts b/libs/contracts/src/grpc/billing.grpc-package.spec.ts
+new file mode 100644
+index 0000000..d1136bd
+--- /dev/null
++++ b/libs/contracts/src/grpc/billing.grpc-package.spec.ts
+@@ -0,0 +1,82 @@
++import { join } from 'node:path';
++import {
++  boundRpcPatterns,
++  loadGrpcPackages,
++  protoFilesUnder,
++  wireRoundTrip,
++} from '@platform/contracts/testing';
++import { describe, expect, it } from 'vitest';
++import {
++  BILLING_GRPC_PACKAGE,
++  BillingServiceControllerMethods,
++  type HandleStripeWebhookRequest,
++  type Payment,
++} from '../index.js';
++
++const PACKAGE_ROOT = join(import.meta.dirname, '..', '..');
++const root = loadGrpcPackages([BILLING_GRPC_PACKAGE]);
++
++describe('BILLING_GRPC_PACKAGE', () => {
++  it('resolves its protos under <package>/src/proto and registers every billing proto', () => {
++    expect(BILLING_GRPC_PACKAGE.protoDir).toBe(join(PACKAGE_ROOT, 'src', 'proto'));
++    const own = protoFilesUnder(BILLING_GRPC_PACKAGE.protoDir).filter((file) =>
++      file.startsWith('billing/'),
++    );
++    expect(own).toEqual([...BILLING_GRPC_PACKAGE.protoPath].sort());
++  });
++
++  it('declares the protobuf package and service the proto defines', () => {
++    expect(root.lookup('billing.v1')).toBeDefined();
++    expect(BILLING_GRPC_PACKAGE.services).toEqual(['BillingService']);
++    expect(root.lookupService('billing.v1.BillingService').name).toBe('BillingService');
++  });
++
++  it('retries only ListPayments, never checkout or the webhook', () => {
++    const billing = root.lookupService('billing.v1.BillingService');
++    expect(BILLING_GRPC_PACKAGE.idempotentMethods).toEqual({ BillingService: ['ListPayments'] });
++    expect(billing.methods['ListPayments']).toBeDefined();
++  });
++
++  it('generated BillingService decorator binds every rpc of the proto', () => {
++    const service = root.lookupService('billing.v1.BillingService');
++    expect(boundRpcPatterns(BillingServiceControllerMethods, service)).toEqual(
++      service.methodsArray.map((method) => [
++        {
++          service: 'BillingService',
++          rpc: method.name.charAt(0).toLowerCase() + method.name.slice(1),
++          streaming: 'no_stream',
++        },
++      ]),
++    );
++  });
++});
++
++describe('billing.v1 wire format (proto-loader semantics + generated types)', () => {
++  it('keeps int64 exact as decimal strings beyond 2^53', () => {
++    const payment: Payment = {
++      id: 'p1',
++      userId: 'u1',
++      status: 'succeeded',
++      amountTotal: '9007199254740993',
++      currency: 'usd',
++      priceId: 'price_1',
++      quantity: 2,
++      stripeCheckoutSessionId: 'cs_test_1',
++      createdAt: new Date('2026-01-01T00:00:00.000Z'),
++      updatedAt: new Date('2026-01-01T00:00:01.000Z'),
++    };
++    const decoded = wireRoundTrip(root, 'billing.v1.Payment', payment) as unknown as Payment;
++    expect(decoded.amountTotal).toBe('9007199254740993');
++    expect(decoded.createdAt).toBeInstanceOf(Date);
++  });
++
++  it('round-trips bytes as a Buffer', () => {
++    const webhook: HandleStripeWebhookRequest = {
++      payload: Buffer.from('{"id":"evt_1"}'),
++      signature: 't=1,v1=abc',
++    };
++    const decoded = wireRoundTrip(root, 'billing.v1.HandleStripeWebhookRequest', webhook);
++    expect(Buffer.isBuffer(decoded['payload'])).toBe(true);
++    expect((decoded['payload'] as Buffer).toString('utf8')).toBe('{"id":"evt_1"}');
++  });
++});
+diff --git a/libs/contracts/src/grpc/identity.grpc-package.spec.ts b/libs/contracts/src/grpc/identity.grpc-package.spec.ts
+new file mode 100644
+index 0000000..3c0ad06
+--- /dev/null
++++ b/libs/contracts/src/grpc/identity.grpc-package.spec.ts
+@@ -0,0 +1,123 @@
++import { join } from 'node:path';
++import {
++  boundRpcPatterns,
++  loadGrpcPackages,
++  protoFilesUnder,
++  wireRoundTrip,
++} from '@platform/contracts/testing';
++import { describe, expect, it } from 'vitest';
++import {
++  AuthServiceControllerMethods,
++  type AuthTokens,
++  IDENTITY_GRPC_PACKAGE,
++  type ListUsersRequest,
++  type LogoutRequest,
++  type User,
++  type UserPage,
++  UsersServiceControllerMethods,
++} from '../index.js';
++
++const PACKAGE_ROOT = join(import.meta.dirname, '..', '..');
++const root = loadGrpcPackages([IDENTITY_GRPC_PACKAGE]);
++
++describe('IDENTITY_GRPC_PACKAGE', () => {
++  it('resolves its protos under <package>/src/proto and registers every identity proto', () => {
++    expect(IDENTITY_GRPC_PACKAGE.protoDir).toBe(join(PACKAGE_ROOT, 'src', 'proto'));
++    const own = protoFilesUnder(IDENTITY_GRPC_PACKAGE.protoDir).filter((file) =>
++      file.startsWith('identity/'),
++    );
++    expect(own).toEqual([...IDENTITY_GRPC_PACKAGE.protoPath].sort());
++  });
++
++  it('declares the protobuf package and services the proto defines', () => {
++    expect(root.lookup('identity.v1')).toBeDefined();
++    expect(IDENTITY_GRPC_PACKAGE.services).toEqual(['AuthService', 'UsersService']);
++    for (const service of IDENTITY_GRPC_PACKAGE.services) {
++      expect(root.lookupService(`identity.v1.${service}`).name).toBe(service);
++    }
++  });
++
++  it('retries only reads that exist, never a mutation', () => {
++    const users = root.lookupService('identity.v1.UsersService');
++    const retried = IDENTITY_GRPC_PACKAGE.idempotentMethods['UsersService'] ?? [];
++    expect(retried).toEqual(['GetUser', 'GetUsersByIds', 'ListUsers']);
++    for (const method of retried) expect(users.methods[method], method).toBeDefined();
++    expect(IDENTITY_GRPC_PACKAGE.idempotentMethods['AuthService']).toBeUndefined();
++  });
++
++  it.each([
++    ['AuthService', AuthServiceControllerMethods],
++    ['UsersService', UsersServiceControllerMethods],
++  ] as const)('generated %s decorator binds every rpc of the proto', (name, decorator) => {
++    const service = root.lookupService(`identity.v1.${name}`);
++    expect(boundRpcPatterns(decorator, service)).toEqual(
++      service.methodsArray.map((method) => [
++        {
++          service: name,
++          rpc: method.name.charAt(0).toLowerCase() + method.name.slice(1),
++          streaming: 'no_stream',
++        },
++      ]),
++    );
++  });
++});
++
++describe('identity.v1 wire format (proto-loader semantics + generated types)', () => {
++  it('round-trips google.protobuf.Timestamp as Date with millisecond precision', () => {
++    const user: User = {
++      id: '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b',
++      email: 'ada@example.com',
++      displayName: 'Ada',
++      roles: ['user', 'admin'],
++      createdAt: new Date('2026-09-29T10:11:12.345Z'),
++      updatedAt: new Date('1999-12-31T23:59:59.999Z'),
++    };
++    const decoded = wireRoundTrip(root, 'identity.v1.User', user) as unknown as User;
++    expect(decoded.createdAt).toBeInstanceOf(Date);
++    expect(decoded).toEqual(user);
++  });
++
++  it('rejects ISO strings for Timestamp fields (always pass Date)', () => {
++    const type = root.lookupType('identity.v1.User');
++    expect(() => type.fromObject({ createdAt: '2026-09-29T10:11:12.345Z' })).toThrow(
++      /object expected/,
++    );
++  });
++
++  it('keeps int64 exact as a decimal string', () => {
++    const logout: LogoutRequest = {
++      userId: 'u1',
++      accessTokenJti: 'j1',
++      accessTokenExp: '9007199254740993',
++    };
++    expect(wireRoundTrip(root, 'identity.v1.LogoutRequest', logout)['accessTokenExp']).toBe(
++      '9007199254740993',
++    );
++  });
++
++  it('decodes absent message fields as null and absent optional scalars as missing keys', () => {
++    const tokens: AuthTokens = {
++      accessToken: 'a',
++      refreshToken: 'r',
++      expiresIn: 900,
++      tokenType: 'Bearer',
++    };
++    expect(wireRoundTrip(root, 'identity.v1.AuthTokens', tokens)).toEqual({
++      ...tokens,
++      user: null,
++    });
++    const lastPage: UserPage = { items: [] };
++    const decodedPage = wireRoundTrip(root, 'identity.v1.UserPage', lastPage);
++    expect(decodedPage).toEqual({ items: [] });
++    expect('nextCursor' in decodedPage).toBe(false);
++  });
++
++  it('adds the synthetic oneof key for present proto3 optional fields', () => {
++    const request: ListUsersRequest = { limit: 20, cursor: 'abc' };
++    expect(wireRoundTrip(root, 'identity.v1.ListUsersRequest', request)).toEqual({
++      limit: 20,
++      cursor: 'abc',
++      _cursor: 'cursor',
++    });
++  });
++});
+diff --git a/libs/contracts/src/grpc/notifications.grpc-package.spec.ts b/libs/contracts/src/grpc/notifications.grpc-package.spec.ts
+new file mode 100644
+index 0000000..b7344a8
+--- /dev/null
++++ b/libs/contracts/src/grpc/notifications.grpc-package.spec.ts
+@@ -0,0 +1,73 @@
++import { join } from 'node:path';
++import {
++  boundRpcPatterns,
++  loadGrpcPackages,
++  protoFilesUnder,
++  wireRoundTrip,
++} from '@platform/contracts/testing';
++import { describe, expect, it } from 'vitest';
++import {
++  NOTIFICATIONS_GRPC_PACKAGE,
++  type Notification,
++  NotificationsServiceControllerMethods,
++} from '../index.js';
++
++const PACKAGE_ROOT = join(import.meta.dirname, '..', '..');
++const root = loadGrpcPackages([NOTIFICATIONS_GRPC_PACKAGE]);
++
++describe('NOTIFICATIONS_GRPC_PACKAGE', () => {
++  it('resolves its protos under <package>/src/proto and registers every notifications proto', () => {
++    expect(NOTIFICATIONS_GRPC_PACKAGE.protoDir).toBe(join(PACKAGE_ROOT, 'src', 'proto'));
++    const own = protoFilesUnder(NOTIFICATIONS_GRPC_PACKAGE.protoDir).filter((file) =>
++      file.startsWith('notifications/'),
++    );
++    expect(own).toEqual([...NOTIFICATIONS_GRPC_PACKAGE.protoPath].sort());
++  });
++
++  it('declares the protobuf package and service the proto defines', () => {
++    expect(root.lookup('notifications.v1')).toBeDefined();
++    expect(NOTIFICATIONS_GRPC_PACKAGE.services).toEqual(['NotificationsService']);
++    expect(root.lookupService('notifications.v1.NotificationsService').name).toBe(
++      'NotificationsService',
++    );
++  });
++
++  it('retries only ListNotifications, never MarkNotificationRead', () => {
++    const service = root.lookupService('notifications.v1.NotificationsService');
++    expect(NOTIFICATIONS_GRPC_PACKAGE.idempotentMethods).toEqual({
++      NotificationsService: ['ListNotifications'],
++    });
++    expect(service.methods['ListNotifications']).toBeDefined();
++  });
++
++  it('generated NotificationsService decorator binds every rpc of the proto', () => {
++    const service = root.lookupService('notifications.v1.NotificationsService');
++    expect(boundRpcPatterns(NotificationsServiceControllerMethods, service)).toEqual(
++      service.methodsArray.map((method) => [
++        {
++          service: 'NotificationsService',
++          rpc: method.name.charAt(0).toLowerCase() + method.name.slice(1),
++          streaming: 'no_stream',
++        },
++      ]),
++    );
++  });
++});
++
++describe('notifications.v1 wire format (proto-loader semantics + generated types)', () => {
++  it('round-trips map<string, string> and Timestamp', () => {
++    const notification: Notification = {
++      id: 'n1',
++      userId: 'u1',
++      type: 'welcome',
++      title: 'Welcome',
++      body: 'Hello',
++      read: false,
++      data: { link: '/inbox', paymentId: 'p1' },
++      createdAt: new Date('2026-05-05T05:05:05.005Z'),
++    };
++    expect(wireRoundTrip(root, 'notifications.v1.Notification', notification)).toEqual(
++      notification,
++    );
++  });
++});

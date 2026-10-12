@@ -1,0 +1,76 @@
+diff --git a/libs/transport/src/grpc/grpc-controller.decorator.ts b/libs/transport/src/grpc/grpc-controller.decorator.ts
+index 45ccf5a..1b5e07f 100644
+--- a/libs/transport/src/grpc/grpc-controller.decorator.ts
++++ b/libs/transport/src/grpc/grpc-controller.decorator.ts
+@@ -19,7 +19,8 @@ import { GrpcContextInterceptor } from './grpc-context.interceptor.js';
+  * - `deferInitialization: true` runs lifecycle hooks twice.
+  * (nest-distributed §7.3)
+  *
+- * Combine it with the generated `XServiceControllerMethods()` decorator from `@platform/contracts`.
++ * Combine it with the generated `XServiceControllerMethods()` decorator from the owning domain's
++ * contracts package (`@domain/<x>-contracts`).
+  */
+ export const GrpcController = (): ClassDecorator =>
+   applyDecorators(
+diff --git a/libs/transport/src/grpc/grpc-server.options.ts b/libs/transport/src/grpc/grpc-server.options.ts
+index c8ce27a..7e354ba 100644
+--- a/libs/transport/src/grpc/grpc-server.options.ts
++++ b/libs/transport/src/grpc/grpc-server.options.ts
+@@ -10,7 +10,7 @@ import {
+ import type { GrpcConfig } from '@platform/config';
+ import {
+   GRPC_LOADER_OPTIONS,
+-  type GrpcPackageName,
++  type GrpcPackageSpec,
+   resolveGrpcPackages,
+ } from '@platform/contracts';
+ import { GRPC_KEEPALIVE } from './grpc.constants.js';
+@@ -66,7 +66,7 @@ function isHealthServer(value: unknown): value is HealthServer {
+  */
+ export function createGrpcServerOptions(
+   cfg: GrpcConfig,
+-  packages: readonly GrpcPackageName[],
++  packages: readonly GrpcPackageSpec[],
+   extras: GrpcServerOptionsExtras = {},
+ ): GrpcOptions {
+   const resolved = resolveGrpcPackages(packages);
+@@ -80,7 +80,7 @@ export function createGrpcServerOptions(
+       ...(credentials === undefined ? {} : { credentials }),
+       package: resolved.packages,
+       protoPath: resolved.protoPath,
+-      loader: { ...GRPC_LOADER_OPTIONS, includeDirs: [...GRPC_LOADER_OPTIONS.includeDirs] },
++      loader: { ...GRPC_LOADER_OPTIONS, includeDirs: resolved.includeDirs },
+       maxSendMessageLength: cfg.maxMessageBytes,
+       maxReceiveMessageLength: cfg.maxMessageBytes,
+       keepalive: { ...GRPC_KEEPALIVE },
+@@ -135,7 +135,7 @@ export class HealthReportingGrpcServer extends ServerGrpc {
+  */
+ export function createGrpcServerStrategy(
+   cfg: GrpcConfig,
+-  packages: readonly GrpcPackageName[],
++  packages: readonly GrpcPackageSpec[],
+   extras: GrpcServerOptionsExtras = {},
+ ): CustomStrategy {
+   const health =
+diff --git a/libs/transport/src/hybrid/connect-microservices.ts b/libs/transport/src/hybrid/connect-microservices.ts
+index ac88ebf..29db044 100644
+--- a/libs/transport/src/hybrid/connect-microservices.ts
++++ b/libs/transport/src/hybrid/connect-microservices.ts
+@@ -2,7 +2,7 @@ import type { INestApplication, INestApplicationContext, INestMicroservice } fro
+ import { ConfigService } from '@nestjs/config';
+ import type { CustomStrategy, KafkaOptions } from '@nestjs/microservices';
+ import { type GrpcConfig, grpcConfig, type KafkaConfig, kafkaConfig } from '@platform/config';
+-import type { GrpcPackageName } from '@platform/contracts';
++import type { GrpcPackageSpec } from '@platform/contracts';
+ import {
+   createGrpcServerStrategy,
+   type GrpcServerOptionsExtras,
+@@ -52,7 +52,7 @@ function resolveConfig<T extends object>(
+  */
+ export function connectGrpcServer(
+   app: INestApplication,
+-  packages: readonly GrpcPackageName[],
++  packages: readonly GrpcPackageSpec[],
+   extras: GrpcServerOptionsExtras = {},
+ ): INestMicroservice {
+   const cfg = resolveConfig<GrpcConfig>(app, grpcConfig);

@@ -1,0 +1,119 @@
+diff --git a/domains/billing/contracts/src/events/billing.events.ts b/domains/billing/contracts/src/events/billing.events.ts
+index a3ad0ec..e745d01 100644
+--- a/domains/billing/contracts/src/events/billing.events.ts
++++ b/domains/billing/contracts/src/events/billing.events.ts
+@@ -1,5 +1,5 @@
++import { defineEventContract, type EventContract } from '@platform/contracts';
+ import { z } from 'zod';
+-import { defineEventContract, type EventContract } from './event-contract.js';
+ 
+ /** Payload of `billing.payment-succeeded.v1`: a Stripe Checkout Session was paid. */
+ export const paymentSucceededPayload = z.object({
+diff --git a/domains/billing/contracts/src/grpc/billing.grpc-package.ts b/domains/billing/contracts/src/grpc/billing.grpc-package.ts
+index 6235b40..426a71f 100644
+--- a/domains/billing/contracts/src/grpc/billing.grpc-package.ts
++++ b/domains/billing/contracts/src/grpc/billing.grpc-package.ts
+@@ -1,7 +1,7 @@
+ import { join } from 'node:path';
++import type { GrpcPackageSpec } from '@platform/contracts';
+ // Value import on purpose: registers the Timestamp <-> Date wrapper (see identity.grpc-package.ts).
+ import { BILLING_SERVICE_NAME } from '../generated/billing/v1/billing.pb.js';
+-import type { GrpcPackageSpec } from './grpc-package-spec.js';
+ 
+ /** `billing.v1`: BillingService (Stripe Checkout sessions, webhook, payment history). */
+ export const BILLING_GRPC_PACKAGE: GrpcPackageSpec = {
+diff --git a/domains/billing/contracts/src/index.ts b/domains/billing/contracts/src/index.ts
+new file mode 100644
+index 0000000..2a3419e
+--- /dev/null
++++ b/domains/billing/contracts/src/index.ts
+@@ -0,0 +1,15 @@
++/**
++ * @domain/billing-contracts — the published language of the billing context: the billing.v1
++ * gRPC contract (ts-proto NestJS output + `BILLING_GRPC_PACKAGE`) and the payment-succeeded event
++ * (`PAYMENT_SUCCEEDED_EVENT`). Other domains and the apps depend on this package to talk to
++ * billing; only the composition roots import @domain/billing itself.
++ *
++ * - Generated types are re-exported flat (`Payment`, `PaymentList`, …) and as the
++ *   version-qualified namespace `billingV1`, the escape hatch for a later `v2`.
++ * - Loading this barrel evaluates the generated module, which registers the protobuf
++ *   Timestamp <-> Date wrapper (see grpc/billing.grpc-package.ts).
++ */
++export * from './events/billing.events.js';
++export * from './generated/billing/v1/billing.pb.js';
++export * as billingV1 from './generated/billing/v1/billing.pb.js';
++export * from './grpc/billing.grpc-package.js';
+diff --git a/domains/identity/contracts/src/events/identity.events.ts b/domains/identity/contracts/src/events/identity.events.ts
+index 8d57e07..3496460 100644
+--- a/domains/identity/contracts/src/events/identity.events.ts
++++ b/domains/identity/contracts/src/events/identity.events.ts
+@@ -1,5 +1,5 @@
++import { defineEventContract, type EventContract } from '@platform/contracts';
+ import { z } from 'zod';
+-import { defineEventContract, type EventContract } from './event-contract.js';
+ 
+ /** Payload of `identity.user-registered.v1`: a user account was created. */
+ export const userRegisteredPayload = z.object({
+diff --git a/domains/identity/contracts/src/grpc/identity.grpc-package.ts b/domains/identity/contracts/src/grpc/identity.grpc-package.ts
+index a25f080..962bea2 100644
+--- a/domains/identity/contracts/src/grpc/identity.grpc-package.ts
++++ b/domains/identity/contracts/src/grpc/identity.grpc-package.ts
+@@ -1,10 +1,10 @@
+ import { join } from 'node:path';
++import type { GrpcPackageSpec } from '@platform/contracts';
+ // Value import on purpose: evaluating the generated module registers ts-proto's
+ // google.protobuf.Timestamp <-> Date wrapper on the shared protobufjs instance. Every process that
+ // builds gRPC options for this package loads this file, so Timestamps can never silently decode
+ // as `{ seconds, nanos }` because a service only imported contract *types*.
+ import { AUTH_SERVICE_NAME, USERS_SERVICE_NAME } from '../generated/identity/v1/identity.pb.js';
+-import type { GrpcPackageSpec } from './grpc-package-spec.js';
+ 
+ /** `identity.v1`: AuthService (credential flows) and UsersService (user queries and admin). */
+ export const IDENTITY_GRPC_PACKAGE: GrpcPackageSpec = {
+diff --git a/domains/notifications/contracts/src/events/notifications.events.ts b/domains/notifications/contracts/src/events/notifications.events.ts
+index 2c2ac2d..3b93a07 100644
+--- a/domains/notifications/contracts/src/events/notifications.events.ts
++++ b/domains/notifications/contracts/src/events/notifications.events.ts
+@@ -1,5 +1,5 @@
++import { defineEventContract, type EventContract } from '@platform/contracts';
+ import { z } from 'zod';
+-import { defineEventContract, type EventContract } from './event-contract.js';
+ 
+ /** Notification kinds. The gRPC `Notification.type` field carries the same values as a string. */
+ export const NOTIFICATION_TYPES = ['welcome', 'payment_receipt', 'digest', 'system'] as const;
+diff --git a/domains/notifications/contracts/src/grpc/notifications.grpc-package.ts b/domains/notifications/contracts/src/grpc/notifications.grpc-package.ts
+index 6b4bd8e..6da8e72 100644
+--- a/domains/notifications/contracts/src/grpc/notifications.grpc-package.ts
++++ b/domains/notifications/contracts/src/grpc/notifications.grpc-package.ts
+@@ -1,7 +1,7 @@
+ import { join } from 'node:path';
++import type { GrpcPackageSpec } from '@platform/contracts';
+ // Value import on purpose: registers the Timestamp <-> Date wrapper (see identity.grpc-package.ts).
+ import { NOTIFICATIONS_SERVICE_NAME } from '../generated/notifications/v1/notifications.pb.js';
+-import type { GrpcPackageSpec } from './grpc-package-spec.js';
+ 
+ /** `notifications.v1`: NotificationsService (inbox listing, mark as read). */
+ export const NOTIFICATIONS_GRPC_PACKAGE: GrpcPackageSpec = {
+diff --git a/domains/notifications/contracts/src/index.ts b/domains/notifications/contracts/src/index.ts
+new file mode 100644
+index 0000000..a059791
+--- /dev/null
++++ b/domains/notifications/contracts/src/index.ts
+@@ -0,0 +1,17 @@
++/**
++ * @domain/notifications-contracts — the published language of the notifications context: the
++ * notifications.v1 gRPC contract (ts-proto NestJS output + `NOTIFICATIONS_GRPC_PACKAGE`) and the
++ * notification-created event (`NOTIFICATION_CREATED_EVENT`). Other domains and the apps depend on
++ * this package to talk to notifications; only the composition roots import
++ * @domain/notifications itself.
++ *
++ * - Generated types are re-exported flat (`Notification`, `NotificationPage`, …) and as the
++ *   version-qualified namespace `notificationsV1`, the escape hatch for a later `v2`.
++ * - Loading this barrel evaluates the generated module, which registers the protobuf
++ *   Timestamp <-> Date wrapper (see grpc/notifications.grpc-package.ts).
++ */
++export * from './events/notifications.events.js';
++export type { Empty } from './generated/google/protobuf/empty.pb.js';
++export * from './generated/notifications/v1/notifications.pb.js';
++export * as notificationsV1 from './generated/notifications/v1/notifications.pb.js';
++export * from './grpc/notifications.grpc-package.js';

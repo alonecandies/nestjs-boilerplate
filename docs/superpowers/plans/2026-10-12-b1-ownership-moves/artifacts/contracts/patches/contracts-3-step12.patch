@@ -1,0 +1,104 @@
+diff --git a/scripts/docker/assemble-image.mjs b/scripts/docker/assemble-image.mjs
+index e7a3f66..2fca99f 100644
+--- a/scripts/docker/assemble-image.mjs
++++ b/scripts/docker/assemble-image.mjs
+@@ -7,7 +7,8 @@
+ // plus the package.json of every workspace package. `--build` is the build stage (src + dist).
+ // It then:
+ //  1. computes the app's workspace closure from the `dependencies` graph (devDependencies ignored);
+-//  2. deletes every apps/*, domains/* and libs/* folder outside that closure (they carry no runtime code);
++//  2. deletes every workspace package outside that closure (they carry no runtime code), keeping the
++//     path down to a nested package that is in it (domains/identity/contracts inside domains/identity);
+ //  3. copies each closure member's compiled dist/ from the build stage;
+ //  4. fails the build when something the process needs at runtime is missing:
+ //     - a non-TS asset under src/ (.proto, .hbs, .cql, .sql, migration meta …) that is not in dist/,
+@@ -34,7 +35,6 @@ import { basename, join, relative } from 'node:path';
+ import { pathToFileURL } from 'node:url';
+ import { parseArgs } from 'node:util';
+ 
+-const WORKSPACE_DIRS = ['apps', 'domains', 'libs'];
+ const WORKSPACE_SCOPES = ['@app/', '@domain/', '@platform/'];
+ const INSTALL_ONLY = ['bun.lock', 'bunfig.toml', 'patches'];
+ // Source files swc compiles (everything else under src/ is copied verbatim by `copyFiles`).
+@@ -61,15 +61,29 @@ if (!app || !build || !out) {
+ 
+ const readJson = (file) => JSON.parse(readFileSync(file, 'utf8'));
+ 
++// Folders matched by one root `workspaces` glob such as "domains/*/contracts" (`*` = one folder).
++function expandWorkspaceGlob(pattern) {
++  let dirs = [''];
++  for (const segment of pattern.split('/')) {
++    dirs = dirs.flatMap((dir) => {
++      if (segment !== '*') return [dir ? `${dir}/${segment}` : segment];
++      if (!existsSync(join(out, dir))) return [];
++      return readdirSync(join(out, dir), { withFileTypes: true })
++        .filter((entry) => entry.isDirectory())
++        .map((entry) => (dir ? `${dir}/${entry.name}` : entry.name));
++    });
++  }
++  return dirs;
++}
++
+ /** name ("@platform/x") -> { dir: "libs/x", manifest } for every workspace package in --out. */
++const workspacePatterns = readJson(join(out, 'package.json')).workspaces ?? [];
+ const workspace = new Map();
+-for (const parent of WORKSPACE_DIRS) {
+-  for (const entry of readdirSync(join(out, parent), { withFileTypes: true })) {
+-    const manifestPath = join(out, parent, entry.name, 'package.json');
+-    if (entry.isDirectory() && existsSync(manifestPath)) {
+-      const manifest = readJson(manifestPath);
+-      workspace.set(manifest.name, { dir: `${parent}/${entry.name}`, manifest });
+-    }
++for (const dir of workspacePatterns.flatMap(expandWorkspaceGlob)) {
++  const manifestPath = join(out, dir, 'package.json');
++  if (existsSync(manifestPath)) {
++    const manifest = readJson(manifestPath);
++    workspace.set(manifest.name, { dir, manifest });
+   }
+ }
+ 
+@@ -84,7 +98,9 @@ while (pending.length > 0) {
+   if (closure.has(name)) continue;
+   const pkg = workspace.get(name);
+   if (!pkg)
+-    fail(`workspace dependency ${name} has no package.json under ${WORKSPACE_DIRS.join('/, ')}/`);
++    fail(
++      `workspace dependency ${name} matches no root workspaces glob (${workspacePatterns.join(', ')})`,
++    );
+   closure.set(name, pkg);
+   for (const dep of Object.keys(pkg.manifest.dependencies ?? {})) {
+     if (WORKSPACE_SCOPES.some((scope) => dep.startsWith(scope))) pending.push(dep);
+@@ -94,7 +110,7 @@ while (pending.length > 0) {
+ // 2. Prune everything outside the closure.
+ const kept = new Set([...closure.values()].map((pkg) => pkg.dir));
+ for (const { dir } of workspace.values()) {
+-  if (!kept.has(dir)) rmSync(join(out, dir), { recursive: true, force: true });
++  if (!kept.has(dir)) pruneWorkspaceDir(dir);
+ }
+ 
+ // 3 + 4. dist/ per closure member, asset and dependency checks.
+@@ -192,6 +208,24 @@ if (prune) {
+   );
+ }
+ 
++/**
++ * Deletes workspace folder `dir` (relative to --out), except the path down to any kept package
++ * nested inside it: pruning domains/identity must not delete a kept domains/identity/contracts.
++ */
++function pruneWorkspaceDir(dir) {
++  const nestedKept = [...kept].filter((keptDir) => keptDir.startsWith(`${dir}/`));
++  if (nestedKept.length === 0) {
++    rmSync(join(out, dir), { recursive: true, force: true });
++    return;
++  }
++  for (const entry of readdirSync(join(out, dir))) {
++    const child = `${dir}/${entry}`;
++    if (kept.has(child)) continue;
++    if (nestedKept.some((keptDir) => keptDir.startsWith(`${child}/`))) pruneWorkspaceDir(child);
++    else rmSync(join(out, child), { recursive: true, force: true });
++  }
++}
++
+ /** Relative paths of all regular files under `root` (symlinks are not followed). */
+ function listFiles(root) {
+   if (!existsSync(root)) return [];

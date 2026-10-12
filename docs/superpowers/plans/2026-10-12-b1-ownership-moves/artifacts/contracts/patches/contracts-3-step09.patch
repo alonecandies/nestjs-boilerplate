@@ -1,0 +1,108 @@
+diff --git a/apps/billing-service/package.json b/apps/billing-service/package.json
+index 915eada..7456600 100644
+--- a/apps/billing-service/package.json
++++ b/apps/billing-service/package.json
+@@ -22,6 +22,7 @@
+     "@platform/common": "workspace:*",
+     "@platform/config": "workspace:*",
+     "@platform/contracts": "workspace:*",
++    "@domain/billing-contracts": "workspace:*",
+     "@platform/database": "workspace:*",
+     "@platform/observability": "workspace:*",
+     "@platform/payments": "workspace:*",
+diff --git a/apps/gateway/package.json b/apps/gateway/package.json
+index e444903..3ce10ae 100644
+--- a/apps/gateway/package.json
++++ b/apps/gateway/package.json
+@@ -50,6 +50,8 @@
+   },
+   "devDependencies": {
+     "@platform/testing": "workspace:*",
++    "@domain/identity-contracts": "workspace:*",
++    "@domain/notifications-contracts": "workspace:*",
+     "@nestjs/testing": "catalog:",
+     "cache-manager": "catalog:",
+     "graphql-subscriptions": "catalog:"
+diff --git a/apps/identity-service/package.json b/apps/identity-service/package.json
+index 10e78c1..fa9eb90 100644
+--- a/apps/identity-service/package.json
++++ b/apps/identity-service/package.json
+@@ -22,6 +22,7 @@
+     "@platform/common": "workspace:*",
+     "@platform/config": "workspace:*",
+     "@platform/contracts": "workspace:*",
++    "@domain/identity-contracts": "workspace:*",
+     "@platform/database": "workspace:*",
+     "@domain/identity": "workspace:*",
+     "@platform/observability": "workspace:*",
+diff --git a/apps/monolith/package.json b/apps/monolith/package.json
+index d27b3a3..56b2a91 100644
+--- a/apps/monolith/package.json
++++ b/apps/monolith/package.json
+@@ -57,6 +57,7 @@
+   },
+   "devDependencies": {
+     "@platform/testing": "workspace:*",
++    "@domain/identity-contracts": "workspace:*",
+     "@nestjs/testing": "catalog:",
+     "cache-manager": "catalog:",
+     "drizzle-orm": "catalog:",
+diff --git a/apps/notifications-service/package.json b/apps/notifications-service/package.json
+index 8712afa..c9698ae 100644
+--- a/apps/notifications-service/package.json
++++ b/apps/notifications-service/package.json
+@@ -22,6 +22,7 @@
+     "@platform/common": "workspace:*",
+     "@platform/config": "workspace:*",
+     "@platform/contracts": "workspace:*",
++    "@domain/notifications-contracts": "workspace:*",
+     "@platform/mailer": "workspace:*",
+     "@domain/notifications": "workspace:*",
+     "@platform/observability": "workspace:*",
+@@ -47,6 +48,7 @@
+   },
+   "devDependencies": {
+     "@platform/testing": "workspace:*",
++    "@domain/identity-contracts": "workspace:*",
+     "@nestjs/testing": "catalog:"
+   }
+ }
+diff --git a/domains/billing/package.json b/domains/billing/package.json
+index c58adf6..7807d15 100644
+--- a/domains/billing/package.json
++++ b/domains/billing/package.json
+@@ -23,6 +23,8 @@
+     "@platform/common": "workspace:*",
+     "@platform/config": "workspace:*",
+     "@platform/contracts": "workspace:*",
++    "@domain/billing-contracts": "workspace:*",
++    "@domain/identity-contracts": "workspace:*",
+     "@platform/database": "workspace:*",
+     "@platform/graphql": "workspace:*",
+     "@domain/identity": "workspace:*",
+diff --git a/domains/identity/package.json b/domains/identity/package.json
+index 87712a6..ccb9415 100644
+--- a/domains/identity/package.json
++++ b/domains/identity/package.json
+@@ -23,6 +23,7 @@
+     "@platform/common": "workspace:*",
+     "@platform/config": "workspace:*",
+     "@platform/contracts": "workspace:*",
++    "@domain/identity-contracts": "workspace:*",
+     "@platform/database": "workspace:*",
+     "@platform/graphql": "workspace:*",
+     "@platform/redis": "workspace:*",
+diff --git a/domains/notifications/package.json b/domains/notifications/package.json
+index a6fa5c8..0a553b9 100644
+--- a/domains/notifications/package.json
++++ b/domains/notifications/package.json
+@@ -24,6 +24,9 @@
+     "@platform/common": "workspace:*",
+     "@platform/config": "workspace:*",
+     "@platform/contracts": "workspace:*",
++    "@domain/billing-contracts": "workspace:*",
++    "@domain/identity-contracts": "workspace:*",
++    "@domain/notifications-contracts": "workspace:*",
+     "@platform/graphql": "workspace:*",
+     "@platform/mailer": "workspace:*",
+     "@platform/redis": "workspace:*",

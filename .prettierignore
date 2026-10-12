@@ -16,3 +16,6 @@ bun.lock
 **/dist/
 **/coverage/
 **/generated/
+
+# implementation-plan lanes and artifacts: applied by exact text, so never reformatted
+docs/superpowers/plans/*/

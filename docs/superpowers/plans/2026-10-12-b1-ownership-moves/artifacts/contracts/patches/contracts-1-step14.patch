@@ -1,0 +1,69 @@
+diff --git a/libs/transport/README.md b/libs/transport/README.md
+index 9c4aa48..b295083 100644
+--- a/libs/transport/README.md
++++ b/libs/transport/README.md
+@@ -11,11 +11,11 @@ consumers never block a partition, and every event is a validated, versioned env
+ 
+ | Export                                                                                                                                                                               | What it is for                                                                                                                                                                                                                                                                                                                                        |
+ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+-| `createGrpcServerOptions(cfg, packages, extras?)`                                                                                                                                    | Server `GrpcOptions`: bind URL and message limits from `grpcConfig`, loader options that match ts-proto, keepalive, `max_concurrent_streams`, `max_connection_age`, `gracefulShutdown`, TLS / mutual TLS from `grpcConfig.tls`, and `grpc.health.v1` + reflection (default `grpcConfig.reflection`: off in production) via `onLoadPackageDefinition`. |
+-| `createGrpcServerStrategy(cfg, packages, extras?)` / `HealthReportingGrpcServer`                                                                                                     | The same options as a `CustomStrategy`. Health reports `SERVING` only after `listen()` and `NOT_SERVING` as soon as `close()` starts.                                                                                                                                                                                                                 |
++| `createGrpcServerOptions(cfg, specs, extras?)`                                                                                                                                    | Server `GrpcOptions`: bind URL and message limits from `grpcConfig`, loader options that match ts-proto, keepalive, `max_concurrent_streams`, `max_connection_age`, `gracefulShutdown`, TLS / mutual TLS from `grpcConfig.tls`, and `grpc.health.v1` + reflection (default `grpcConfig.reflection`: off in production) via `onLoadPackageDefinition`. |
++| `createGrpcServerStrategy(cfg, specs, extras?)` / `HealthReportingGrpcServer`                                                                                                     | The same options as a `CustomStrategy`. Health reports `SERVING` only after `listen()` and `NOT_SERVING` as soon as `close()` starts.                                                                                                                                                                                                                 |
+ | `GrpcHealthService`                                                                                                                                                                  | Status of the server (`''`) and of each fully-qualified service.                                                                                                                                                                                                                                                                                      |
+-| `GrpcClientsModule.register(packages, { client?, breaker? })`                                                                                                                        | One `ClientGrpc` per package under `GRPC_PACKAGES[name].clientToken`. It also exports `GrpcCircuitBreakers` and the `grpc` config namespace.                                                                                                                                                                                                          |
+-| `createGrpcClientOptions(cfg, name, extras?)` / `buildGrpcServiceConfig(services, { timeoutMs, maxAttempts?, retryableMethods? })`                                                   | Client options with a service config: a per-call deadline on every method, `UNAVAILABLE` retries plus retry throttling for the package's idempotent reads only (`GRPC_PACKAGES[name].idempotentMethods`), `round_robin`, keepalive, reconnect backoff, and TLS client credentials from `grpcConfig.tls`.                                              |
++| `GrpcClientsModule.register({ spec, url }, { client?, breaker? })`                                                                                                                        | The `ClientGrpc` of one `GrpcPackageSpec` under `spec.clientToken`, dialing `url`. It also exports `GrpcCircuitBreakers` and the `grpc` config namespace.                                                                                                                                                                                                          |
++| `createGrpcClientOptions(cfg, { spec, url }, extras?)` / `buildGrpcServiceConfig(services, { timeoutMs, maxAttempts?, retryableMethods? })`                                                   | Client options with a service config: a per-call deadline on every method, `UNAVAILABLE` retries plus retry throttling for the package's idempotent reads only (`spec.idempotentMethods`), `round_robin`, keepalive, reconnect backoff, and TLS client credentials from `grpcConfig.tls`.                                              |
+ | `createGrpcServerCredentials(tls)`, `createGrpcChannelCredentials(tls)`                                                                                                              | grpc-js credentials from `grpcConfig.tls` (PEM files read once); `undefined` means plaintext.                                                                                                                                                                                                                                                         |
+ | `grpcCall(source$, { timeoutMs, operation, breaker? })`                                                                                                                              | Runs one unary call: rxjs deadline (unsubscribing cancels the call), then the breaker, then maps any failure to a `DomainException`.                                                                                                                                                                                                                  |
+ | `GrpcCircuitBreakers` (`get(name)`, `states()`), `isCallerError`, `DEFAULT_GRPC_CIRCUIT_BREAKER_OPTIONS`                                                                             | One opossum 10 breaker per upstream. Caller errors (`NOT_FOUND`, `INVALID_ARGUMENT`, …) never open the circuit.                                                                                                                                                                                                                                       |
+@@ -52,7 +52,7 @@ consumers never block a partition, and every event is a validated, versioned env
+ 
+ | Export                                                     | What it is for                                                                                                                                                                                                                |
+ | ---------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+-| `connectGrpcServer(app, packages, extras?)`                | `app.connectMicroservice(createGrpcServerStrategy(...), { inheritAppConfig: true })`.                                                                                                                                         |
++| `connectGrpcServer(app, specs, extras?)`                | `app.connectMicroservice(createGrpcServerStrategy(...), { inheritAppConfig: true })`.                                                                                                                                         |
+ | `connectKafkaConsumer(app, { groupId? })`                  | `app.connectMicroservice(createKafkaServerOptions(...), { inheritAppConfig: true })`.                                                                                                                                         |
+ | `RPC_CLS_KEYS`, `correlationIdFromCls`, `requestIdFromCls` | nestjs-cls keys and readers shared by HTTP, gRPC and Kafka. `USER_ID` / `CORRELATION_ID` are `@platform/observability`'s `CLS_USER_ID` / `CLS_CORRELATION_ID`, so `RequestContextService` sees what the interceptors adopted. |
+ 
+@@ -61,7 +61,7 @@ consumers never block a partition, and every event is a validated, versioned env
+ ```ts
+ // identity-service main.ts
+ const app = await createServiceApp(AppModule);
+-connectGrpcServer(app, ['identity']); // after every app.useGlobal*()
++connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE]); // after every app.useGlobal*()
+ await app.startAllMicroservices();
+ await listen(app);
+ 
+@@ -77,12 +77,13 @@ export class UsersGrpcController implements UsersServiceController {
+   }
+ }
+ 
+-// gRPC adapter (gateway side), in a module importing GrpcClientsModule.register(['identity'])
++// gRPC adapter (gateway side), in a module importing
++// GrpcClientsModule.register({ spec: IDENTITY_GRPC_PACKAGE, url })
+ @Injectable()
+ export class UsersGrpcAdapter implements UsersPort, OnModuleInit {
+   private users!: UsersServiceClient;
+   constructor(
+-    @Inject(GRPC_PACKAGES.identity.clientToken) private readonly client: ClientGrpc,
++    @Inject(IDENTITY_GRPC_PACKAGE.clientToken) private readonly client: ClientGrpc,
+     @Inject(grpcConfig.KEY) private readonly cfg: GrpcConfig,
+     private readonly breakers: GrpcCircuitBreakers,
+     private readonly cls: ClsService,
+@@ -124,12 +125,12 @@ export class IdentityEventsConsumer {
+ ## Gotchas
+ 
+ - **Internal gRPC is unauthenticated.** The servers trust every caller (no JWT on `rpc`; `actorId` and `userId` come from the request), so whoever reaches the port can act as any user. Without `GRPC_TLS_*` the transport is also plaintext, and `NODE_ENV=production` refuses that unless `GRPC_ALLOW_INSECURE=true`. In production, use mutual TLS (or a mesh doing it) plus a NetworkPolicy that only lets the gateway reach the gRPC ports. Reflection is off in production by default.
+-- **Only idempotent reads are retried on `UNAVAILABLE`.** A replica can commit a mutation and die before answering; a replayed `RefreshTokens` would trip reuse detection and revoke every session of the user. Add a method to `GRPC_PACKAGES[name].idempotentMethods` (`@platform/contracts`) only if running it twice is harmless.
++- **Only idempotent reads are retried on `UNAVAILABLE`.** A replica can commit a mutation and die before answering; a replayed `RefreshTokens` would trip reuse detection and revoke every session of the user. Add a method to the package spec's `idempotentMethods` (in its contracts package) only if running it twice is harmless.
+ - **Transient Kafka handler failures are retried in-process, then dead-lettered.** Keep the retry budget (`DEFAULT_KAFKA_RETRY_OPTIONS`) far below the consumer `sessionTimeout` (30 s): Nest does not heartbeat while a handler runs. Once the cause is fixed, replay the dead-letter topic with `kafka-dlq-replay.mjs`.
+ - **gRPC filters must be controller-scoped.** Use `@GrpcController()`. A global RPC filter combined with `inheritAppConfig: true` makes HTTP requests hang.
+ - **Param decorators on a gRPC handler drop the default `(request, metadata, call)` injection.** Declare `@Ctx()` and `@GrpcServerCall()` explicitly, and keep them optional. Bind pipes with `@Payload(pipe)`, never with `@UsePipes`.
+ - **Optional message fields decode as `null`.** With `defaults: true`, absent message fields decode as `null`, not `undefined`, so check them with `== null`.
+-- **Timestamp ↔ Date needs the generated modules loaded.** It only works once `@platform/contracts` has been imported as values, which this package does.
++- **Timestamp ↔ Date needs the generated modules loaded.** It only works once the package's generated module has run. Every `<X>_GRPC_PACKAGE` spec value-imports its own, and transport only builds options from specs.
+ - **Kafka handlers must never throw.** A thrown error is redelivered forever. Always use `@KafkaConsumerController()` (or `@UseFilters(KafkaDeadLetterFilter)`) and keep handlers idempotent: delivery is at-least-once, and a failed dead-letter publish is redelivered.
+ - **Topics must exist before consumers start.** Auto-creation is off, so the three topics and their `.dlq` topics must exist, or `startAllMicroservices()` fails.
+ - **Call `connect*()` in the right order.** Call it after all `app.useGlobal*()` calls and before `startAllMicroservices()`. Every global enhancer must branch on `context.getType()`.

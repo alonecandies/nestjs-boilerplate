@@ -1,0 +1,208 @@
+diff --git a/libs/contracts/README.md b/libs/contracts/README.md
+index c60a0aa..9a8ba18 100644
+--- a/libs/contracts/README.md
++++ b/libs/contracts/README.md
+@@ -1,116 +1,76 @@
+ # @platform/contracts
+ 
+-The wire contracts between services, and nothing else:
++The generic half of the wire contracts. Each domain publishes its own contracts package (`domains/<x>/contracts`, `@domain/<x>-contracts`: its `.proto`, the ts-proto output, one `GrpcPackageSpec` per protobuf package and one `EventContract` per Kafka topic), built on the types below. `@platform/transport` only ever takes those values, never a package or topic name, so no platform package names a domain.
+ 
+-- **gRPC**: `.proto` definitions (`src/proto/**`), the ts-proto NestJS output generated from them (`src/generated/**`, committed), and the package registry and proto-loader options that servers and clients share.
+-- **Kafka**: topic names, the event envelope, zod payload schemas, and parse/build helpers for integration events.
+-
+-It is a leaf package: no Nest modules, no config, no workspace dependencies. Transport wiring (servers, clients, producers, DLQ filters) lives in `@platform/transport`.
++It is a leaf package: no Nest modules, no config, no workspace dependencies. It also holds the codegen tooling every contracts package shares: the buf policy (`buf.yaml`), the ts-proto template (`buf.gen.yaml`) and the ESM post-processor (`scripts/proto-esm-fix.mjs`).
+ 
+ ## Public API
+ 
+-### gRPC (`src/grpc/grpc-packages.ts`)
+-
+-| Export                       | Signature                                                                                                   | Notes                                                                                                                                     |
+-| ---------------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+-| `PROTO_DIR`                  | `string`                                                                                                    | Resolves to `<pkg>/src/proto` in dev and `<pkg>/dist/proto` after the build (swc `copyFiles`).                                            |
+-| `GRPC_PACKAGES`              | `{ identity \| notifications \| billing: { package, protoPath, services, clientToken } }` (`as const`)      | `services` come from the generated `*_SERVICE_NAME` constants, so they cannot drift from the protos.                                      |
+-| `GrpcPackageName`            | `'identity' \| 'notifications' \| 'billing'`                                                                |                                                                                                                                           |
+-| `GrpcPackageSpec`            | interface                                                                                                   | The shape of one `GRPC_PACKAGES` entry.                                                                                                   |
+-| `GRPC_PACKAGE_NAMES`         | `readonly GrpcPackageName[]`                                                                                |                                                                                                                                           |
+-| `isGrpcPackageName(v)`       | `(value: unknown) => value is GrpcPackageName`                                                              |                                                                                                                                           |
+-| `GRPC_LOADER_OPTIONS`        | `{ keepCase: false, longs: String, enums: String, defaults: true, oneofs: true, includeDirs: [PROTO_DIR] }` | Use for **both** servers and clients. Mirrors `buf.gen.yaml`.                                                                             |
+-| `GrpcLoaderOptions`          | `NonNullable<GrpcOptions['options']['loader']>`                                                             |                                                                                                                                           |
+-| `resolveGrpcPackages(names)` | `(names: readonly GrpcPackageName[]) => { packages: string[]; protoPath: string[]; services: string[] }`    | Deduplicated. `services` are fully qualified (`identity.v1.AuthService`), which is the form health, reflection and service-config expect. |
++### gRPC (`src/grpc/grpc-package-spec.ts`)
+ 
+-### Generated gRPC types (flat, plus namespaces)
++| Export                       | Signature                                                                                                  | Notes                                                                                                                                                        |
++| ---------------------------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
++| `GrpcPackageSpec`            | `{ package; protoDir; protoPath; services; clientToken; idempotentMethods }`                               | One per protobuf package, exported by its contracts package (`IDENTITY_GRPC_PACKAGE`, …). `protoDir` is the package's `src/proto` (sources) or `dist/proto`. |
++| `GRPC_LOADER_OPTIONS`        | `{ keepCase: false, longs: String, enums: String, defaults: true, oneofs: true }`                          | Use for **both** servers and clients. Mirrors `buf.gen.yaml`. `includeDirs` comes from `resolveGrpcPackages`.                                                |
++| `GrpcLoaderOptions`          | `NonNullable<GrpcOptions['options']['loader']>`                                                            |                                                                                                                                                              |
++| `resolveGrpcPackages(specs)` | `(specs: readonly GrpcPackageSpec[]) => { packages; protoPath; includeDirs; services; idempotentMethods }` | Deduplicated by `package`. `services` are fully qualified (`orders.v1.OrdersService`), the form health, reflection and service config expect.                |
++| `GrpcMethodName`             | `{ service; method }`                                                                                      | An idempotent rpc, as gRFC A6 `methodConfig[].name[]` expects it.                                                                                            |
+ 
+-Every generated symbol is re-exported flat: messages (`User`, `AuthTokens`, `UserPage`, `Notification`, `NotificationPage`, `Payment`, `CheckoutSession`, …), `<Svc>Client` / `<Svc>Controller` interfaces, `<Svc>ControllerMethods()` class decorators and `<SVC>_SERVICE_NAME` constants, for `AuthService`, `UsersService`, `NotificationsService` and `BillingService`. `type Empty` is exported too.
+-
+-The same modules are also exported as the namespaces `identityV1`, `notificationsV1` and `billingV1`. These are the escape hatch for when a `v2` package reuses message names.
++### Kafka events (`src/events/*`)
+ 
+-**Why a flat barrel:** `exportCommonSymbols=false` removes the per-file `protobufPackage` and `<PKG>_PACKAGE_NAME` constants. Those were the only names that collided. tsc fails the build if two star exports ever clash.
++| Export                                                                  | Signature                                                                                                   |
++| ----------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
++| `EventContract<TPayload>`                                               | `{ readonly topic: string; readonly payload: z.ZodType<TPayload> }`, one per topic                          |
++| `defineEventContract(topic, payload)`                                   | A frozen contract; throws at module load when `topic` breaks `<context>.<event-name>.v<major>`              |
++| `isEventContract(value)`                                                | Type guard (scripts scan module namespaces with it)                                                         |
++| `EventPayloadOf<C>`, `EventEnvelopeOf<C>`                               | Payload and envelope type of a contract                                                                     |
++| `eventEnvelopeSchemaFor(contract)`                                      | The contract's envelope schema, built once per contract object                                              |
++| `parseEventEnvelope(contract, raw)`, `safeParseEventEnvelope(...)`      | Validate a message value. `parse` throws `ZodError`                                                         |
++| `createEventEnvelope(contract, payload, meta)`                          | `meta: { id; source; correlationId?; occurredAt? }`. Stamps `type`/`version`/`occurredAt` and validates     |
++| `eventEnvelopeSchema(payload)`, `EventEnvelope<T>`, `EventEnvelopeMeta` | The envelope builder and wire type: `{ id; type; version; occurredAt; source; correlationId?; payload: T }` |
++| `EVENT_TOPIC_PATTERN`, `isEventTopic(v)`, `topicVersion(t)`             | Topic naming convention, type guard, major version parsed from the `.vN` suffix                             |
++| `deadLetterTopic(t)`, `DeadLetterTopic<T>`                              | `` `${T}.dlq` ``                                                                                            |
++| `KAFKA_HEADERS`, `KafkaHeader`                                          | `x-event-type`, `x-correlation-id`, `x-original-topic`, `x-error-message`, `x-error-type`, `x-failed-at`    |
+ 
+-### Kafka events (`src/events/*`)
++### `@platform/contracts/testing`
+ 
+-| Export                                                                           | Signature                                                                                                                                                              |
+-| -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+-| `KAFKA_TOPICS`                                                                   | `{ USER_REGISTERED: 'identity.user-registered.v1', PAYMENT_SUCCEEDED: 'billing.payment-succeeded.v1', NOTIFICATION_CREATED: 'notifications.notification-created.v1' }` |
+-| `KafkaTopic`, `DeadLetterTopic<T>`                                               | Union of topic literals, and `` `${T}.dlq` ``                                                                                                                          |
+-| `KAFKA_TOPIC_VALUES`, `DEAD_LETTER_TOPIC_VALUES`                                 | `readonly` lists, used for topic provisioning                                                                                                                          |
+-| `deadLetterTopic(t)`                                                             | `<T extends KafkaTopic>(topic: T) => DeadLetterTopic<T>`                                                                                                               |
+-| `isKafkaTopic(v)`, `topicVersion(t)`                                             | Type guard; major version parsed from the `.vN` suffix                                                                                                                 |
+-| `KAFKA_HEADERS`, `KafkaHeader`                                                   | `x-event-type`, `x-correlation-id`, `x-original-topic`, `x-error-message`, `x-error-type`, `x-failed-at`                                                               |
+-| `eventEnvelopeSchema(payload)`                                                   | `<T extends z.ZodType>(payload: T) => EventEnvelopeSchema<T>`                                                                                                          |
+-| `EventEnvelope<T>`                                                               | `{ id; type; version; occurredAt; source; correlationId?; payload: T }`                                                                                                |
+-| `userRegisteredPayload`, `paymentSucceededPayload`, `notificationCreatedPayload` | zod schemas (types: `UserRegisteredPayload`, `PaymentSucceededPayload`, `NotificationCreatedPayload`)                                                                  |
+-| `NOTIFICATION_TYPES`, `NotificationType`                                         | `'welcome' \| 'payment_receipt' \| 'digest' \| 'system'`                                                                                                               |
+-| `EVENT_PAYLOAD_SCHEMAS`, `EVENT_ENVELOPE_SCHEMAS`                                | Topic → schema. Envelope schemas are built once at load time.                                                                                                          |
+-| `EventPayload<T>`, `EventEnvelopeFor<T>`                                         | Payload and envelope type of topic `T`                                                                                                                                 |
+-| `parseEventEnvelope(topic, raw)`                                                 | `<T extends KafkaTopic>(topic: T, raw: unknown) => EventEnvelopeFor<T>`. Throws `ZodError`, or `Error` for an unregistered topic.                                      |
+-| `safeParseEventEnvelope(topic, raw)`                                             | Returns `z.ZodSafeParseResult<EventEnvelopeFor<T>>`                                                                                                                    |
+-| `createEventEnvelope(topic, payload, meta)`                                      | `meta: { id; source; correlationId?; occurredAt? }`. Stamps `type`/`version`/`occurredAt` and validates.                                                               |
++`loadGrpcPackages(specs)`, `wireRoundTrip(root, typeName, value)`, `protoFilesUnder(dir)` and `boundRpcPatterns(decorator, service)`: proto-loader semantics without a server, for the wire-format specs of the contracts packages. Never imported by production code.
+ 
+ ## Usage
+ 
+ ```ts
+-// gRPC server options (@platform/transport)
+-import { GRPC_LOADER_OPTIONS, resolveGrpcPackages } from '@platform/contracts';
+-const { packages, protoPath, services } = resolveGrpcPackages(['identity']);
+-app.connectMicroservice(
+-  {
+-    transport: Transport.GRPC,
+-    options: { url, package: packages, protoPath, loader: GRPC_LOADER_OPTIONS },
+-  },
+-  { inheritAppConfig: true },
++// A contracts package (domains/orders/contracts/src/events/orders.events.ts)
++export const orderPlacedPayload = z.object({ orderId: z.uuid(), amountTotal: z.number().int() });
++export type OrderPlacedPayload = z.infer<typeof orderPlacedPayload>;
++export const ORDER_PLACED_EVENT: EventContract<OrderPlacedPayload> = defineEventContract(
++  'orders.order-placed.v1',
++  orderPlacedPayload,
+ );
+ 
+-// gRPC controller (@domain/identity)
+-import {
+-  type GetUserRequest,
+-  type User,
+-  type UsersServiceController,
+-  UsersServiceControllerMethods,
+-} from '@platform/contracts';
+-@GrpcController()
+-@UsersServiceControllerMethods()
+-export class UsersGrpcController implements UsersServiceController {
+-  async getUser(request: GetUserRequest): Promise<User> {
+-    /* createdAt/updatedAt MUST be Date */
+-  }
+-}
+-
+-// Kafka
+-import { KAFKA_TOPICS, createEventEnvelope, parseEventEnvelope } from '@platform/contracts';
+-const envelope = createEventEnvelope(KAFKA_TOPICS.USER_REGISTERED, payload, {
++// Anywhere (producer, consumer, test)
++const envelope = createEventEnvelope(ORDER_PLACED_EVENT, payload, {
+   id: generateId(),
+-  source: 'identity-service',
++  source: 'orders-service',
+ });
+-const event = parseEventEnvelope(KAFKA_TOPICS.USER_REGISTERED, message); // event.payload is typed
++const event = parseEventEnvelope(ORDER_PLACED_EVENT, message); // event.payload is typed
+ ```
+ 
+ ## Codegen
+ 
++Every contracts package runs the shared tooling from its own folder (`bun run proto:gen` / `bun run proto:lint` at the root run them all):
++
+ ```bash
+-bun run proto:lint   # buf STANDARD, minus the two response-naming rules (see buf.yaml)
+-bun run proto:gen    # buf generate + scripts/proto-esm-fix.mjs (needs `node` on PATH)
+-buf breaking --against '.git#branch=master,subdir=libs/contracts'   # CI breaking-change gate
++buf lint --config ../../../libs/contracts/buf.yaml
++buf generate --template ../../../libs/contracts/buf.gen.yaml --config ../../../libs/contracts/buf.yaml
++node ../../../libs/contracts/scripts/proto-esm-fix.mjs src/generated
+ ```
+ 
+-After changing a `.proto`, regenerate and commit `src/generated/**`. Biome, ESLint and Prettier ignore that directory. The post-gen script rewrites `import { wrappers } from "protobufjs"`, which crashes under native ESM, into a default import. It also changes cross-file `*.pb.js` imports to `import type` (for `verbatimModuleSyntax`), and fails if ts-proto's output shape changes.
+-
+-## Env vars
+-
+-None. URLs, deadlines and message sizes live in `grpcConfig` (`@platform/config`), and Kafka settings in `kafkaConfig`.
++`buf.yaml` declares the module as `src/proto`, relative to the folder buf runs in. buf rejects module paths outside that folder, so one workspace listing every domain is impossible. The post-gen script rewrites `import { wrappers } from "protobufjs"`, which crashes under native ESM, into a default import, changes cross-file `*.pb.js` imports to `import type` (for `verbatimModuleSyntax`), and fails if ts-proto's output shape changes.
+ 
+ ## Gotchas
+ 
+-- **Timestamp ↔ Date only works if the generated modules are evaluated** before the first (de)serialisation, because ts-proto patches the shared `protobufjs` instance. Importing any value from `@platform/contracts` does this (`grpc-packages.ts` imports the generated modules for this side effect). A process that imports only types gets `{ seconds, nanos }`.
++- **Timestamp ↔ Date only works if the generated module was evaluated** before the first (de)serialisation, because ts-proto patches the shared `protobufjs` instance. Each `<X>_GRPC_PACKAGE` value-imports its generated module, and transport only builds options from specs, so every gRPC process registers it. A process that imports only types gets `{ seconds, nanos }`.
+ - Keep a single `protobufjs@7.x`, the one `@grpc/proto-loader` uses. A second copy (for example v8) silently disables the Date mapping.
+-- Server handlers must return a `Date` for Timestamp fields. An ISO string throws `object expected`.
+-- `defaults: true` decodes absent **message** fields as `null`, even though the TS type says `undefined`. Test with `== null`. A present proto3 `optional` also carries a synthetic `_field` key. Map decoded objects to DTOs instead of returning them verbatim to REST.
+-- int64 fields (`Payment.amountTotal`, `LogoutRequest.accessTokenExp`) are **decimal strings**. Kafka payloads use JSON numbers for amounts, which is safe below 2^53.
+-- `HandleStripeWebhookRequest.payload` is a `Buffer`. Pass the raw body byte-for-byte, because the signature is computed over it.
+-- The `<Svc>ControllerMethods()` decorators need `reflect-metadata` loaded by the entrypoint.
++- `defaults: true` decodes absent **message** fields as `null`, even though the TS type says `undefined`. A present proto3 `optional` also carries a synthetic `_field` key. int64 fields are **decimal strings**.
+ - Event schemas strip unknown keys (tolerant reader). Breaking payload changes need a new `.v2` topic.
+-- `docker`: the runtime image needs `libs/contracts/dist/**`, which includes `dist/proto/**`.
++- `protoPath` entries are relative to their own `protoDir`; keep them namespaced (`<context>/v1/<context>.proto`) so two packages never resolve the same relative path.
+diff --git a/libs/contracts/buf.gen.yaml b/libs/contracts/buf.gen.yaml
+index c221ce0..ae2516c 100644
+--- a/libs/contracts/buf.gen.yaml
++++ b/libs/contracts/buf.gen.yaml
+@@ -1,5 +1,8 @@
+-# ts-proto (NestJS flavour) for native ESM. Run `bun run proto:gen` (needs `node` on PATH: the plugin
+-# is a `#!/usr/bin/env node` script). The output is committed; never edit src/generated by hand.
++# Shared ts-proto (NestJS flavour) template for native ESM. Every domains/<x>/contracts package (and
++# the @platform/transport test fixture) runs it from its own folder, so `src/proto` and
++# `src/generated` below are that package's. Run `bun run proto:gen` at the root (needs `node` on
++# PATH: the plugin is a `#!/usr/bin/env node` script). The output is committed; never edit
++# src/generated by hand.
+ #
+ # These options are mirrored by GRPC_LOADER_OPTIONS (src/grpc/grpc-package-spec.ts). Change both together:
+ #   snakeToCamel (default) <-> keepCase: false
+@@ -9,10 +12,8 @@
+ version: v2
+ clean: true
+ plugins:
+-  # Resolved from PATH: `bun run` puts every ancestor node_modules/.bin on it, and the hoisted
+-  # linker installs the plugin only in the ROOT node_modules/.bin (not libs/contracts/node_modules).
+   # Resolved through PATH: `bun run` prepends the ROOT node_modules/.bin, which is where the
+-  # hoisted linker puts every bin (there is no libs/contracts/node_modules).
++  # hoisted linker puts every bin (no package has its own node_modules).
+   - local: protoc-gen-ts_proto
+     out: src/generated
+     # ts-proto must see every file in one invocation (cross-file imports, well-known types).
+diff --git a/libs/contracts/buf.yaml b/libs/contracts/buf.yaml
+index 3370ee1..065a91b 100644
+--- a/libs/contracts/buf.yaml
++++ b/libs/contracts/buf.yaml
+@@ -1,5 +1,8 @@
+-# buf v2 workspace for the gRPC contracts. Protos live under src/ so swc `copyFiles` ships them to
+-# dist/proto (PROTO_DIR resolves to <pkg>/src/proto in dev and <pkg>/dist/proto in prod).
++# Shared buf policy of every domains/<x>/contracts package (and of the @platform/transport test
++# fixture). Each package runs buf from its own folder with
++# `--config ../../../libs/contracts/buf.yaml`, so `src/proto` below is THAT package's proto root:
++# buf rejects module paths outside the folder it runs in, so one workspace listing every domain is
++# impossible. Protos live under src/ so swc `copyFiles` ships them to dist/proto.
+ version: v2
+ modules:
+   - path: src/proto

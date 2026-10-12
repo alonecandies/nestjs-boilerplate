@@ -1,0 +1,219 @@
+diff --git a/domains/billing/src/billing-grpc.module.ts b/domains/billing/src/billing-grpc.module.ts
+index 0977d4d..cfc0d29 100644
+--- a/domains/billing/src/billing-grpc.module.ts
++++ b/domains/billing/src/billing-grpc.module.ts
+@@ -4,7 +4,7 @@ import { BillingGrpcController } from './presentation/grpc/billing-grpc.controll
+ 
+ /**
+  * billing-service: `billing.v1.BillingService` over the core. Host it with
+- * `connectGrpcServer(app, ['billing'])` (after every `app.useGlobal*()`).
++ * `connectGrpcServer(app, [BILLING_GRPC_PACKAGE])` (after every `app.useGlobal*()`).
+  */
+ @Module({
+   imports: [BillingCoreModule],
+diff --git a/domains/billing/src/infrastructure/adapters/grpc/billing-grpc.adapter.ts b/domains/billing/src/infrastructure/adapters/grpc/billing-grpc.adapter.ts
+index d5e0b16..2405d1d 100644
+--- a/domains/billing/src/infrastructure/adapters/grpc/billing-grpc.adapter.ts
++++ b/domains/billing/src/infrastructure/adapters/grpc/billing-grpc.adapter.ts
+@@ -3,11 +3,11 @@ import { Inject, Injectable, type OnModuleInit, Optional } from '@nestjs/common'
+ import type { ClientGrpc } from '@nestjs/microservices';
+ import { type GrpcConfig, grpcConfig } from '@platform/config';
+ import {
++  BILLING_GRPC_PACKAGE,
+   BILLING_SERVICE_NAME,
+   type BillingServiceClient,
+   type CheckoutSession,
+   type CreateCheckoutSessionRequest,
+-  GRPC_PACKAGES,
+   type HandleStripeWebhookRequest,
+   type HandleStripeWebhookResponse,
+   type ListPaymentsRequest,
+@@ -59,7 +59,7 @@ export class BillingGrpcAdapter implements BillingPort, OnModuleInit {
+   private client: BillingServiceClient;
+ 
+   constructor(
+-    @Inject(GRPC_PACKAGES.billing.clientToken) private readonly grpc: ClientGrpc,
++    @Inject(BILLING_GRPC_PACKAGE.clientToken) private readonly grpc: ClientGrpc,
+     @Inject(grpcConfig.KEY) private readonly config: GrpcConfig,
+     private readonly breakers: GrpcCircuitBreakers,
+     @Optional() private readonly cls?: ClsService,
+diff --git a/domains/billing/src/presentation/grpc/billing-grpc.roundtrip.spec.ts b/domains/billing/src/presentation/grpc/billing-grpc.roundtrip.spec.ts
+index c6c8cdd..4844ff9 100644
+--- a/domains/billing/src/presentation/grpc/billing-grpc.roundtrip.spec.ts
++++ b/domains/billing/src/presentation/grpc/billing-grpc.roundtrip.spec.ts
+@@ -5,6 +5,7 @@ import { CommandBus, QueryBus } from '@nestjs/cqrs';
+ import { Test, type TestingModule } from '@nestjs/testing';
+ import { DomainValidationException, generateId } from '@platform/common';
+ import { AppConfigModule, grpcConfig } from '@platform/config';
++import { BILLING_GRPC_PACKAGE } from '@platform/contracts';
+ import { createGrpcServerStrategy } from '@platform/transport';
+ import { ClsModule } from 'nestjs-cls';
+ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+@@ -67,7 +68,7 @@ describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () =
+     vi.stubEnv('GRPC_DEADLINE_MS', '3000');
+     server = await NestFactory.createMicroservice(BillingServiceTestModule, {
+       ...createGrpcServerStrategy(grpcConfig.parse({ GRPC_URL: `127.0.0.1:${grpcPort}` }), [
+-        'billing',
++        BILLING_GRPC_PACKAGE,
+       ]),
+       logger: false,
+     });
+diff --git a/domains/identity/src/identity-grpc.module.ts b/domains/identity/src/identity-grpc.module.ts
+index 2608e05..d32292b 100644
+--- a/domains/identity/src/identity-grpc.module.ts
++++ b/domains/identity/src/identity-grpc.module.ts
+@@ -5,7 +5,7 @@ import { UsersGrpcController } from './presentation/grpc/users-grpc.controller.j
+ 
+ /**
+  * identity-service: exposes `identity.v1.AuthService` + `identity.v1.UsersService` over gRPC
+- * (`connectGrpcServer(app, ['identity'])` in main.ts). No HTTP API.
++ * (`connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE])` in main.ts). No HTTP API.
+  */
+ @Module({
+   imports: [IdentityCoreModule],
+diff --git a/domains/identity/src/infrastructure/adapters/grpc/auth-grpc.adapter.ts b/domains/identity/src/infrastructure/adapters/grpc/auth-grpc.adapter.ts
+index bc6688b..1c23ccd 100644
+--- a/domains/identity/src/infrastructure/adapters/grpc/auth-grpc.adapter.ts
++++ b/domains/identity/src/infrastructure/adapters/grpc/auth-grpc.adapter.ts
+@@ -4,7 +4,7 @@ import {
+   AUTH_SERVICE_NAME,
+   type AuthServiceClient,
+   type AuthTokens,
+-  GRPC_PACKAGES,
++  IDENTITY_GRPC_PACKAGE,
+   type LoginRequest,
+   type LogoutRequest,
+   type RefreshTokensRequest,
+@@ -22,7 +22,7 @@ export class AuthGrpcAdapter implements AuthPort, OnModuleInit {
+   private auth: AuthServiceClient;
+ 
+   constructor(
+-    @Inject(GRPC_PACKAGES.identity.clientToken) private readonly client: ClientGrpc,
++    @Inject(IDENTITY_GRPC_PACKAGE.clientToken) private readonly client: ClientGrpc,
+     private readonly caller: IdentityGrpcCaller,
+   ) {}
+ 
+diff --git a/domains/identity/src/infrastructure/adapters/grpc/users-grpc.adapter.ts b/domains/identity/src/infrastructure/adapters/grpc/users-grpc.adapter.ts
+index a0fea3b..8b6bc23 100644
+--- a/domains/identity/src/infrastructure/adapters/grpc/users-grpc.adapter.ts
++++ b/domains/identity/src/infrastructure/adapters/grpc/users-grpc.adapter.ts
+@@ -1,7 +1,7 @@
+ import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
+ import type { ClientGrpc } from '@nestjs/microservices';
+ import {
+-  GRPC_PACKAGES,
++  IDENTITY_GRPC_PACKAGE,
+   type ListUsersRequest,
+   type UpdateUserRolesRequest,
+   USERS_SERVICE_NAME,
+@@ -21,7 +21,7 @@ export class UsersGrpcAdapter implements UsersPort, OnModuleInit {
+   private users: UsersServiceClient;
+ 
+   constructor(
+-    @Inject(GRPC_PACKAGES.identity.clientToken) private readonly client: ClientGrpc,
++    @Inject(IDENTITY_GRPC_PACKAGE.clientToken) private readonly client: ClientGrpc,
+     private readonly caller: IdentityGrpcCaller,
+   ) {}
+ 
+diff --git a/domains/identity/src/presentation/grpc/identity-grpc.roundtrip.spec.ts b/domains/identity/src/presentation/grpc/identity-grpc.roundtrip.spec.ts
+index 76de500..bcae818 100644
+--- a/domains/identity/src/presentation/grpc/identity-grpc.roundtrip.spec.ts
++++ b/domains/identity/src/presentation/grpc/identity-grpc.roundtrip.spec.ts
+@@ -10,6 +10,7 @@ import {
+   UnauthenticatedException,
+ } from '@platform/common';
+ import { AppConfigModule, grpcConfig } from '@platform/config';
++import { IDENTITY_GRPC_PACKAGE } from '@platform/contracts';
+ import { AppCacheService } from '@platform/redis';
+ import { createGrpcServerStrategy } from '@platform/transport';
+ import { ClsModule } from 'nestjs-cls';
+@@ -77,7 +78,7 @@ describe('identity over gRPC (forRemote adapters ↔ gRPC controllers)', () => {
+     vi.stubEnv('GRPC_DEADLINE_MS', '3000');
+     const cfg = grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}` });
+     server = await NestFactory.createMicroservice(IdentityServiceTestModule, {
+-      ...createGrpcServerStrategy(cfg, ['identity']),
++      ...createGrpcServerStrategy(cfg, [IDENTITY_GRPC_PACKAGE]),
+       logger: false,
+     });
+     await server.listen();
+diff --git a/domains/notifications/src/infrastructure/adapters/grpc/notifications-grpc.adapter.ts b/domains/notifications/src/infrastructure/adapters/grpc/notifications-grpc.adapter.ts
+index 68c9a44..3368004 100644
+--- a/domains/notifications/src/infrastructure/adapters/grpc/notifications-grpc.adapter.ts
++++ b/domains/notifications/src/infrastructure/adapters/grpc/notifications-grpc.adapter.ts
+@@ -3,9 +3,9 @@ import { Inject, Injectable, type OnModuleInit, Optional } from '@nestjs/common'
+ import type { ClientGrpc } from '@nestjs/microservices';
+ import { type GrpcConfig, grpcConfig } from '@platform/config';
+ import {
+-  GRPC_PACKAGES,
+   type ListNotificationsRequest,
+   type MarkNotificationReadRequest,
++  NOTIFICATIONS_GRPC_PACKAGE,
+   NOTIFICATIONS_SERVICE_NAME,
+   type NotificationPage,
+   type NotificationsServiceClient,
+@@ -38,7 +38,7 @@ export class NotificationsGrpcAdapter implements NotificationsPort, OnModuleInit
+   private service!: NotificationsServiceClient;
+ 
+   constructor(
+-    @Inject(GRPC_PACKAGES.notifications.clientToken) private readonly client: ClientGrpc,
++    @Inject(NOTIFICATIONS_GRPC_PACKAGE.clientToken) private readonly client: ClientGrpc,
+     @Inject(grpcConfig.KEY) private readonly cfg: GrpcConfig,
+     private readonly breakers: GrpcCircuitBreakers,
+     @Optional() private readonly cls?: ClsService,
+@@ -70,7 +70,7 @@ export class NotificationsGrpcAdapter implements NotificationsPort, OnModuleInit
+   private call<T>(method: string, source: Observable<T>): Promise<T> {
+     return grpcCall(source, {
+       timeoutMs: this.cfg.deadlineMs,
+-      operation: `${GRPC_PACKAGES.notifications.package}.${NOTIFICATIONS_SERVICE_NAME}/${method}`,
++      operation: `${NOTIFICATIONS_GRPC_PACKAGE.package}.${NOTIFICATIONS_SERVICE_NAME}/${method}`,
+       breaker: this.breakers.get(UPSTREAM),
+     });
+   }
+diff --git a/domains/notifications/src/notifications-grpc.module.ts b/domains/notifications/src/notifications-grpc.module.ts
+index 54955e0..f7dc180 100644
+--- a/domains/notifications/src/notifications-grpc.module.ts
++++ b/domains/notifications/src/notifications-grpc.module.ts
+@@ -4,7 +4,7 @@ import { NotificationsGrpcController } from './presentation/grpc/notifications-g
+ 
+ /**
+  * `notifications.v1.NotificationsService` over gRPC (notifications-service). The app connects the
+- * server with `connectGrpcServer(app, ['notifications'])`.
++ * server with `connectGrpcServer(app, [NOTIFICATIONS_GRPC_PACKAGE])`.
+  */
+ @Module({
+   imports: [NotificationsCoreModule],
+diff --git a/domains/notifications/src/presentation/grpc/notifications-grpc.roundtrip.spec.ts b/domains/notifications/src/presentation/grpc/notifications-grpc.roundtrip.spec.ts
+index ed19864..d5eb15a 100644
+--- a/domains/notifications/src/presentation/grpc/notifications-grpc.roundtrip.spec.ts
++++ b/domains/notifications/src/presentation/grpc/notifications-grpc.roundtrip.spec.ts
+@@ -5,6 +5,7 @@ import { CommandBus, QueryBus } from '@nestjs/cqrs';
+ import { Test, type TestingModule } from '@nestjs/testing';
+ import { DomainValidationException, generateId } from '@platform/common';
+ import { AppConfigModule, grpcConfig } from '@platform/config';
++import { NOTIFICATIONS_GRPC_PACKAGE } from '@platform/contracts';
+ import { createGrpcServerStrategy, GrpcClientsModule } from '@platform/transport';
+ import { ClsModule } from 'nestjs-cls';
+ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+@@ -59,14 +60,20 @@ describe('notifications over gRPC (NotificationsGrpcAdapter ↔ NotificationsGrp
+     vi.stubEnv('GRPC_DEADLINE_MS', '3000');
+     server = await NestFactory.createMicroservice(NotificationsServiceTestModule, {
+       ...createGrpcServerStrategy(grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}` }), [
+-        'notifications',
++        NOTIFICATIONS_GRPC_PACKAGE,
+       ]),
+       logger: false,
+     });
+     await server.listen();
+ 
+     gateway = await Test.createTestingModule({
+-      imports: [AppConfigModule.forRoot(), GrpcClientsModule.register(['notifications'])],
++      imports: [
++        AppConfigModule.forRoot(),
++        GrpcClientsModule.register({
++          spec: NOTIFICATIONS_GRPC_PACKAGE,
++          url: `127.0.0.1:${port}`,
++        }),
++      ],
+       providers: [NotificationsGrpcAdapter],
+     }).compile();
+     gateway.useLogger(false);

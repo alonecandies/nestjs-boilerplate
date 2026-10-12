@@ -1,0 +1,340 @@
+diff --git a/README.md b/README.md
+index f794fe1..7c7e35d 100644
+--- a/README.md
++++ b/README.md
+@@ -40,9 +40,9 @@ Every requested capability, where it lives and where to see it in use. Paths are
+ | Redis                                                       | `libs/redis` (client factory, cache, throttler storage, distributed locks, BullMQ, Socket.IO adapter)                                                                                                                                                                                                                                                                                                                  | `libs/redis/src/lock/with-lock.decorator.ts`, `libs/redis/src/throttler`                                                                                                   |
+ | Drizzle ORM                                                 | `libs/database/src/drizzle`, `drizzle-kit` (`db:generate`, `db:studio`), `@nestjs-cls/transactional` adapter                                                                                                                                                                                                                                                                                                           | `domains/identity/src/infrastructure/persistence`; `bun run db:generate`                                                                                                   |
+ | Apollo                                                      | `@nestjs/apollo` + `@apollo/server` in `libs/graphql/src/apollo-config.factory.ts`                                                                                                                                                                                                                                                                                                                                     | Apollo Sandbox at `http://localhost:3000/graphql` (non-production)                                                                                                         |
+-| Kafka                                                       | `libs/transport/src/kafka` (producer, consumer decorator, retry, dead-letter + replay), `libs/contracts/src/events` (topics, zod envelope)                                                                                                                                                                                                                                                                             | consumers in `domains/notifications/src/presentation/messaging`; relays such as `domains/identity/src/application/event-handlers/user-registered.relay.ts`                 |
++| Kafka                                                       | `libs/transport/src/kafka` (producer, consumer decorator, retry, dead-letter + replay), `libs/contracts/src/events` (zod envelope, `EventContract`), `domains/*/contracts/src/events` (topics, payloads)                                                                                                                                                                                                               | consumers in `domains/notifications/src/presentation/messaging`; relays such as `domains/identity/src/application/event-handlers/user-registered.relay.ts`                 |
+ | CQRS                                                        | `@nestjs/cqrs`; `application/commands`, `application/queries`, `application/sagas` in each domain                                                                                                                                                                                                                                                                                                                      | `domains/identity/src/application/commands/register-user`, `domains/notifications/src/application/sagas/notifications.sagas.ts`                                            |
+-| gRPC                                                        | `libs/transport/src/grpc` (server/client options, deadlines, retries, circuit breaker, health, reflection, TLS), `libs/contracts/src/proto` (+ `ts-proto` output in `generated/`)                                                                                                                                                                                                                                      | `domains/*/src/presentation/grpc`; `bun run proto:gen`                                                                                                                     |
++| gRPC                                                        | `libs/transport/src/grpc` (server/client options, deadlines, retries, circuit breaker, health, reflection, TLS), `domains/*/contracts/src/proto` (+ `ts-proto` output in `generated/`)                                                                                                                                                                                                                                 | `domains/*/src/presentation/grpc`; `bun run proto:gen`                                                                                                                     |
+ | WebSocket (Socket.IO)                                       | `domains/notifications/src/presentation/ws/notifications.gateway.ts`, `libs/redis/src/socket-io` (Redis adapter)                                                                                                                                                                                                                                                                                                       | [Socket.IO example](#socketio)                                                                                                                                             |
+ | REST                                                        | `domains/*/src/presentation/http/*.controller.ts`, `libs/bootstrap/src/http/create-http-app.ts` (Fastify, URI versioning `/v1`)                                                                                                                                                                                                                                                                                        | [REST example](#rest)                                                                                                                                                      |
+ | API Gateway                                                 | `apps/gateway` (REST/GraphQL/WS edge, ports wired to gRPC clients with `XApiModule.forRemote()`)                                                                                                                                                                                                                                                                                                                       | `bun run dev:microservices`; [apps/gateway/README.md](apps/gateway/README.md)                                                                                              |
+@@ -222,7 +222,7 @@ picks the adapters:
+ | Monolith      | `apps/monolith` imports every `XCoreModule` + `XApiModule.forLocal()`                               | the in-process `CommandBus` / `QueryBus`                                                       | still used for integration events (same contracts)                                                                                           |
+ | Microservices | `apps/gateway` imports `XApiModule.forRemote()`; each service imports `XCoreModule` + `XGrpcModule` | gRPC clients (deadlines, retries, circuit breaker) to `identity/notifications/billing-service` | identity and billing publish; notifications consumes them and publishes `notification-created`; the gateway consumes that to push to sockets |
+ 
+-Both adapters return the same `@platform/contracts` (ts-proto) types, so the REST, GraphQL and WebSocket API is identical in
++Both adapters return the same `@domain/<x>-contracts` (ts-proto) types, so the REST, GraphQL and WebSocket API is identical in
+ both topologies. Switching is a deployment choice:
+ 
+ | Run                   | Host (watch mode)                                                         | Containers                                               |
+@@ -381,7 +381,7 @@ Every infra port can be moved with a `*_HOST_PORT` variable (compose-only sectio
+ | `release`                                                            | `lerna version --conventional-commits` (bump + changelog + tag, no push)                   |
+ | `clean`                                                              | every package's `clean` (rimraf `dist`, `coverage`) + Nx/ESLint caches                     |
+ | `graph`                                                              | Nx project graph                                                                           |
+-| `proto:gen`                                                          | regenerate the ts-proto types in `libs/contracts/src/generated`                            |
++| `proto:gen`                                                          | regenerate the ts-proto types in `domains/*/contracts/src/generated`                       |
+ | `db:generate`                                                        | generate a Drizzle migration from the schema (`drizzle-kit generate`)                      |
+ | `db:migrate`                                                         | apply the Drizzle migrations (root `.env` `DATABASE_URL`)                                  |
+ | `db:studio`                                                          | Drizzle Studio                                                                             |
+diff --git a/docs/API.md b/docs/API.md
+index 8da82e5..cd47cb3 100644
+--- a/docs/API.md
++++ b/docs/API.md
+@@ -586,7 +586,7 @@ if (!ack.ok) console.error(ack.error.code); // e.g. NOTIFICATION_NOT_FOUND, VALI
+ ## gRPC
+ 
+ gRPC is the internal API between the gateway and the services. It is not a public API. The contracts live in
+-`libs/contracts/src/proto/<context>/v1/*.proto`. TypeScript types and controller decorators are generated with ts-proto
++`domains/<context>/contracts/src/proto/<context>/v1/*.proto`. TypeScript types and controller decorators are generated with ts-proto
+ (`bun run proto:gen`). `google.protobuf.Timestamp` maps to `Date`, which is why `protobufjs` is pinned to 7.x.
+ 
+ ```mermaid
+@@ -695,8 +695,8 @@ gateway reports that as 422.
+ ## Kafka
+ 
+ Kafka carries integration events between bounded contexts. It is used in both topologies: the monolith produces and
+-consumes its own events. Topic names follow `<context>.<event-name>.v<major>` and are defined in `KAFKA_TOPICS`
+-(`@platform/contracts`). A breaking payload change ships as a new `.v2` topic, consumed alongside the old one. Additive
++consumes its own events. Topic names follow `<context>.<event-name>.v<major>` and are defined once, as an `EventContract`
++in the producer's `@domain/<context>-contracts`. A breaking payload change ships as a new `.v2` topic, consumed alongside the old one. Additive
+ changes stay on the same topic, because readers ignore fields they do not know: zod strips unknown keys instead of
+ rejecting them.
+ 
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE.md
+index 018ec2c..501a402 100644
+--- a/docs/ARCHITECTURE.md
++++ b/docs/ARCHITECTURE.md
+@@ -45,7 +45,7 @@ Three top-level folders, one dependency direction: `apps/*` (`@app/*`, the deplo
+ | `apps/billing-service`                                                                                                            | gRPC `billing.v1.BillingService`; Stripe Checkout + webhooks; Postgres ledger; produces `billing.payment-succeeded.v1`  |
+ | `domains/identity`, `domains/notifications`, `domains/billing`                                                                    | Bounded contexts: hexagonal + CQRS (sections 3–6)                                                                       |
+ | `domains/files`                                                                                                                   | Edge-only context (object storage, presigned URLs). A plain application service, no CQRS, no service of its own         |
+-| `libs/contracts`                                                                                                                  | `.proto` files + ts-proto output, gRPC package specs, Kafka topics, envelope and payload zod schemas                    |
++| `libs/contracts`                                                                                                                  | Generic contract plumbing: `GrpcPackageSpec`, `EventContract`, the zod envelope, the buf policy                         |
+ | `libs/transport`                                                                                                                  | gRPC clients/servers, status mapping, circuit breakers, Kafka producer/consumer plumbing, dead-lettering                |
+ | `libs/common`                                                                                                                     | `DomainException` hierarchy, problem+json, global pipes/filter/timeout interceptor, middlewares, utilities              |
+ | `libs/auth`                                                                                                                       | JWT + RBAC guards, `TokenService`, `PasswordHasher`, access-token denylist                                              |
+@@ -88,7 +88,7 @@ There are two kinds of ports. Both are **abstract classes** (usable as DI tokens
+ | Presentation-facing  | `AuthPort`, `UsersPort` (identity), `NotificationsPort`, `BillingPort`                                                                                                      | `XApiModule.forLocal()` / `.forRemote()` | `*LocalAdapter` (CQRS buses) or `*GrpcAdapter` (gRPC client) |
+ | Application-internal | `UsersRepository`, `SessionsRepository`, `TransactionRunner`, `NotificationsRepository`, `NotificationRecipientsRepository`, `PaymentsRepository`, `StripeEventsRepository` | `XCoreModule`                            | Drizzle (Postgres) or Cassandra repositories                 |
+ 
+-Presentation-facing ports speak `@platform/contracts` types (generated by ts-proto from `libs/contracts/src/proto/**`), so a local adapter and a gRPC adapter return identical shapes, and both throw the same `DomainException`s: error codes survive the gRPC hop through trailers (section 9).
++Presentation-facing ports speak contracts-package types (`@domain/<x>-contracts`, generated by ts-proto from `domains/<x>/contracts/src/proto/**`), so a local adapter and a gRPC adapter return identical shapes, and both throw the same `DomainException`s: error codes survive the gRPC hop through trailers (section 9).
+ 
+ ```ts
+ // domains/identity/src/identity-api.module.ts (abridged)
+@@ -188,7 +188,7 @@ export class GetUserByIdQuery extends Query<User> { … }
+ | Building block  | Role                                                                                                                                                                                   | Examples                                                                                                               |
+ | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+ | Command handler | One write use case. Loads/creates an aggregate, persists it, then `commit()`s its domain events                                                                                        | `RegisterUserHandler`, `LoginHandler`, `HandleStripeWebhookHandler`, `CreateNotificationHandler`, `WelcomeUserHandler` |
+-| Query handler   | Read use case, returns a `@platform/contracts` shape                                                                                                                                   | `GetUserByIdHandler`, `GetUsersByIdsHandler` (feeds the GraphQL `users` DataLoader), `ListPaymentsHandler`             |
++| Query handler   | Read use case, returns a contracts-package (ts-proto) shape                                                                                                                            | `GetUserByIdHandler`, `GetUsersByIdsHandler` (feeds the GraphQL `users` DataLoader), `ListPaymentsHandler`             |
+ | Domain event    | Fact raised by an aggregate (`AggregateRoot.apply`), published on `commit()`                                                                                                           | `UserRegisteredEvent`, `UserRolesChangedEvent`, `PaymentSucceededEvent`, `NotificationCreatedEvent`                    |
+ | Event handler   | In-process reaction to a domain event                                                                                                                                                  | `UserRolesChangedAuditHandler`                                                                                         |
+ | **Relay**       | Event handler that turns a domain event into a Kafka integration event                                                                                                                 | `UserRegisteredRelay` → `identity.user-registered.v1`, `PaymentSucceededRelay` → `billing.payment-succeeded.v1`        |
+@@ -215,7 +215,7 @@ user.commit(); // → UserRegisteredEvent → UserRegisteredRelay → Kafka
+ 
+ ## 7. Integration events and the Kafka envelope
+ 
+-Topics are named `<context>.<event-name>.v<major>` and declared once in `KAFKA_TOPICS` (`libs/contracts/src/events/topics.ts`). Each has a dead-letter twin `<topic>.dlq`.
++Topics are named `<context>.<event-name>.v<major>` and declared once, as an `EventContract` (`<EVENT>_EVENT`: topic + payload schema) in the producer's `domains/<x>/contracts/src/events`. Each has a dead-letter twin `<topic>.dlq`.
+ 
+ | Topic                                   | Producer (relay / handler)                                     | Key     | Consumers                                                                 |
+ | --------------------------------------- | -------------------------------------------------------------- | ------- | ------------------------------------------------------------------------- |
+@@ -252,7 +252,7 @@ Keying by user id keeps one user's events ordered on one partition.
+ | `occurredAt`    | ISO-8601 UTC time of the fact                                                                                                                                               |
+ | `source`        | Producing service (`SERVICE_NAME`)                                                                                                                                          |
+ | `correlationId` | From the originating request (nestjs-cls), for cross-service tracing                                                                                                        |
+-| `payload`       | Topic-specific, zod schema in `libs/contracts/src/events/*.events.ts`                                                                                                       |
++| `payload`       | Topic-specific, zod schema in `domains/<x>/contracts/src/events/*.events.ts`                                                                                                |
+ 
+ Record headers: `x-event-type` and `x-correlation-id` (tools can route and trace without parsing JSON).
+ 
+@@ -538,7 +538,7 @@ Other structural decisions:
+ - **ESM only, Node 24 runtime.** Bun 1.4.3 is the package manager only (never the runtime), with `linker = "hoisted"` in `bunfig.toml`: NestJS packages declare each other as cyclic optional peers, and the isolated linker produced duplicate `@nestjs/core` copies. Biome's `noUndeclaredDependencies` keeps every package honest about what it imports.
+ - **Workspace libs need no build in dev.** `exports["@repo/source"]` points at `src/*.ts` (typecheck, tests, dev), `default` at `dist/*.js` (production). Builds are SWC per package, orchestrated by Lerna/Nx. See [DEVELOPMENT.md](DEVELOPMENT.md) and [RELEASING.md](RELEASING.md).
+ - **One codebase, two topologies** (section 1) instead of separate repos: the monolith is the default deployment; a context becomes a service by switching its `XApiModule` binding.
+-- **Abstract classes as ports** so DI needs no string tokens, and `@platform/contracts` types on every port so both adapters are interchangeable.
++- **Abstract classes as ports** so DI needs no string tokens, and contracts-package types on every port so both adapters are interchangeable.
+ - **Publish after commit** for integration events, with idempotent consumers and DLQs (sections 6–7). Simple, but at-most-once on a crash between commit and publish.
+ - **Edge authentication.** The gateway verifies JWTs and the denylist locally and forwards the caller in gRPC metadata.
+ - **`UV_THREADPOOL_SIZE` must stay ≤ the container CPU quota.** Argon2 hashing runs on the libuv threadpool. Measured: 16 threads on a 2-CPU cap took p95 from 36 ms to 304 ms. See [PERFORMANCE.md](PERFORMANCE.md) and [CONFIGURATION.md](CONFIGURATION.md).
+diff --git a/docs/DEVELOPMENT.md b/docs/DEVELOPMENT.md
+index f540449..6b2d910 100644
+--- a/docs/DEVELOPMENT.md
++++ b/docs/DEVELOPMENT.md
+@@ -270,8 +270,8 @@ This continues the `orders` example: the context moves into its own `orders-serv
+ 
+ ```mermaid
+ flowchart LR
+-  P[proto in libs/contracts] --> G[bun run proto:gen]
+-  G --> R[GRPC_PACKAGES + grpc config]
++  P[proto in domains/orders/contracts] --> G[bun run proto:gen]
++  G --> R[ORDERS_GRPC_PACKAGE + client URL]
+   R --> S[OrdersGrpcModule + controller]
+   S --> A[apps/orders-service]
+   R --> C[OrdersGrpcAdapter + forRemote]
+@@ -279,34 +279,35 @@ flowchart LR
+   A --> D[compose service + CI image matrix]
+ ```
+ 
+-**1. Contract.** Write `libs/contracts/src/proto/orders/v1/orders.proto` (`package orders.v1; service OrdersService { … }`). Timestamps use `google.protobuf.Timestamp`, and int64 fields arrive as decimal strings. Then:
++**1. Contract.** Create the contracts package `domains/orders/contracts` (`@domain/orders-contracts`; copy `domains/billing/contracts`) and write `src/proto/orders/v1/orders.proto` (`package orders.v1; service OrdersService { … }`). Timestamps use `google.protobuf.Timestamp`, and int64 fields arrive as decimal strings. Then:
+ 
+ ```bash
+-bun run --filter @platform/contracts proto:lint   # buf lint (STANDARD minus two response-naming rules)
+-bun run proto:gen                            # buf generate + scripts/proto-esm-fix.mjs (needs `node` on PATH)
++bun run proto:lint   # buf lint of every contracts package (STANDARD minus two response-naming rules)
++bun run proto:gen    # buf generate + libs/contracts/scripts/proto-esm-fix.mjs (needs `node` on PATH)
+ ```
+ 
+-Commit `libs/contracts/src/generated/**`. CI regenerates it and fails on any diff. Re-export it from `libs/contracts/src/index.ts` in both forms, flat and as a namespace (in case a later `v2` reuses message names):
++Commit `domains/orders/contracts/src/generated/**`. CI regenerates it and fails on any diff. Re-export it from `domains/orders/contracts/src/index.ts` in both forms, flat and as a namespace (in case a later `v2` reuses message names):
+ 
+ ```ts
+ export * from './generated/orders/v1/orders.pb.js';
+ export * as ordersV1 from './generated/orders/v1/orders.pb.js';
+ ```
+ 
+-**2. Register the package** in `GRPC_PACKAGES` (`libs/contracts/src/grpc/grpc-packages.ts`). Take the service name from the generated constant so it cannot drift from the proto:
++**2. Export the package spec** `ORDERS_GRPC_PACKAGE` from `domains/orders/contracts/src/grpc/orders.grpc-package.ts` (and the barrel). Value-import the service name from the generated module, so it cannot drift from the proto and the Timestamp ↔ Date wrapper is always registered:
+ 
+ ```ts
+-orders: {
++export const ORDERS_GRPC_PACKAGE: GrpcPackageSpec = {
+   package: 'orders.v1',
++  protoDir: join(import.meta.dirname, '..', 'proto'),
+   protoPath: ['orders/v1/orders.proto'],
+   services: [ORDERS_SERVICE_NAME],
+   clientToken: 'ORDERS_GRPC_CLIENT',
+   // Only methods that are safe to run twice: these are retried on UNAVAILABLE.
+   idempotentMethods: { [ORDERS_SERVICE_NAME]: ['GetOrder', 'ListOrders'] },
+-},
++};
+ ```
+ 
+-**3. Client target.** In `libs/config/src/namespaces/grpc.config.ts`, add `ORDERS_GRPC_URL: zStr('localhost:50054')` to the schema and `orders: env.ORDERS_GRPC_URL` to the `clients` map. `createGrpcClientOptions` reads `cfg.clients[name]`. Document it in the root `.env.example` and in `apps/gateway/.env.example`.
++**3. Client target.** In `libs/config/src/namespaces/grpc.config.ts`, add `ORDERS_GRPC_URL: zStr('localhost:50054')` to the schema and `orders: env.ORDERS_GRPC_URL` to the `clients` map. `forRemote()` passes it as the `url` of `GrpcClientsModule.register({ spec, url })`. Document it in the root `.env.example` and in `apps/gateway/.env.example`.
+ 
+ **4. Server side, in the lib.** Add `OrdersGrpcController` under `presentation/grpc/` and `OrdersGrpcModule` (imports `OrdersCoreModule` and declares the controller):
+ 
+@@ -323,11 +324,12 @@ export class OrdersGrpcController implements OrdersServiceController {
+ }
+ ```
+ 
+-**5. Client side, in the lib.** Add `OrdersGrpcAdapter implements OrdersPort` under `infrastructure/adapters/grpc/`. Base it on `BillingGrpcAdapter`: inject `GRPC_PACKAGES.orders.clientToken`, `grpcConfig.KEY` and `GrpcCircuitBreakers`, and wrap every call in `grpcCall(…, { timeoutMs, operation, breaker })`. proto-loader decodes absent message fields as `null`, so normalise them the way `normalizePayment` does. Then add the remote binding:
++**5. Client side, in the lib.** Add `OrdersGrpcAdapter implements OrdersPort` under `infrastructure/adapters/grpc/`. Base it on `BillingGrpcAdapter`: inject `ORDERS_GRPC_PACKAGE.clientToken`, `grpcConfig.KEY` and `GrpcCircuitBreakers`, and wrap every call in `grpcCall(…, { timeoutMs, operation, breaker })`. proto-loader decodes absent message fields as `null`, so normalise them the way `normalizePayment` does. Then add the remote binding:
+ 
+ ```ts
+ static forRemote(): DynamicModule {
+-  return { module: OrdersApiModule, imports: [GrpcClientsModule.register(['orders'])],
++  const target = { spec: ORDERS_GRPC_PACKAGE, url: grpcConfig.parse().clients.orders };
++  return { module: OrdersApiModule, imports: [GrpcClientsModule.register(target)],
+     controllers: [OrdersController], providers: [OrdersResolver, { provide: OrdersPort, useClass: OrdersGrpcAdapter }], exports: [OrdersPort] };
+ }
+ ```
+@@ -338,7 +340,7 @@ static forRemote(): DynamicModule {
+ - `.env.example`: `SERVICE_NAME=orders-service`, `PORT=3004`, `GRPC_URL=0.0.0.0:50054`, `KAFKA_GROUP_ID=orders-service`, `DATABASE_RUN_MIGRATIONS=true`.
+ - `src/instrument.ts`: `startTracing({ serviceName: 'orders-service' })`.
+ - `src/app.module.ts`: the global modules the core needs (`AppConfigModule.forRoot()`, `ConfigModule.forFeature(grpcConfig)`, `ObservabilityModule.forRoot({ healthContributors })`, `CqrsModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: ordersSchema })`, `RedisModule.forRootAsync()`, `KafkaProducerModule.forRootAsync()`), then `OrdersGrpcModule` and `provideCommonEnhancersAsync(…)`.
+-- `src/main.ts`: `connectGrpcServer(app, ['orders'])` after `createServiceApp(AppModule)` and before `app.startAllMicroservices()` and `listen(app)`.
++- `src/main.ts`: `connectGrpcServer(app, [ORDERS_GRPC_PACKAGE])` after `createServiceApp(AppModule)` and before `app.startAllMicroservices()` and `listen(app)`.
+ 
+ Add root scripts by copying `dev:billing` (`"dev:orders": "bun run setup:env && bun run --filter @app/orders-service dev"`), and append the service to `dev:microservices`.
+ 
+@@ -458,14 +460,12 @@ Integration events use topics named `<context>.<event>.v<major>`, plus a `.dlq`
+ 
+ Broker auto-creation is **off**, locally as in production. Adding a topic touches the contracts and the provisioning file:
+ 
+-| Where                                           | What                                                                                                                                                         |
+-| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+-| `libs/contracts/src/events/topics.ts`           | Add the name to `KAFKA_TOPICS`. The `.dlq` names are derived automatically.                                                                                  |
+-| `libs/contracts/src/events/<context>.events.ts` | The zod payload schema (a tolerant reader: unknown keys are stripped).                                                                                       |
+-| `libs/contracts/src/events/event-registry.ts`   | Register the schema in `EVENT_PAYLOAD_SCHEMAS` **and** `EVENT_ENVELOPE_SCHEMAS`.                                                                             |
+-| `docker/kafka/topics.txt`                       | `name:partitions:replication-factor[:config=value]` for the topic **and** its `.dlq`. The one-shot `kafka-init` service creates them on `docker compose up`. |
++| Where                                                        | What                                                                                                                                                                       |
++| ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
++| `domains/<context>/contracts/src/events/<context>.events.ts` | The zod payload schema (a tolerant reader: unknown keys are stripped) and its contract: `defineEventContract('<context>.<event>.v1', schema)`. The `.dlq` name is derived. |
++| `docker/kafka/topics.txt`                                    | `name:partitions:replication-factor[:config=value]` for the topic **and** its `.dlq`. The one-shot `kafka-init` service creates them on `docker compose up`.               |
+ 
+-Check the provisioning file against the contracts with `bun run build && node scripts/docker/check-kafka-topics.mjs`. The script imports the built `@platform/contracts`, and CI runs it. After editing `topics.txt`, re-run `bun run docker:infra` so `kafka-init` creates the new topic idempotently.
++Check the provisioning file against the contracts with `bun run build && node scripts/docker/check-kafka-topics.mjs`. The script imports every built `domains/*/contracts` package, and CI runs it. After editing `topics.txt`, re-run `bun run docker:infra` so `kafka-init` creates the new topic idempotently.
+ 
+ Producing and consuming:
+ 
+@@ -484,7 +484,7 @@ Producing and consuming:
+ | `TS1484: 'X' is a type and must be imported using a type-only import`                    | The opposite case: an interface or type alias imported as a value under `verbatimModuleSyntax`. `bun run lint:fix` repairs it.                                                                                                           |
+ | `ReferenceError: Cannot access 'X' before initialization`                                | An ESM import cycle reached by decorator metadata. Break the cycle, or use `forwardRef(() => X)` + `WrapperType<X>`.                                                                                                                     |
+ | `Cannot find module …/dist/index.js` when starting an app                                | The process ran without `--conditions=@repo/source`, for example the `start` script or a bare `node`, and libs are not built. Use `bun run dev`, or run `bun run build` first.                                                           |
+-| gRPC Timestamps arrive as `{ seconds, nanos }`                                           | The process imported only _types_ from `@platform/contracts`, or a second `protobufjs` copy exists. Import any value from `@platform/contracts` (gRPC options do), and keep the single `protobufjs@7` from the root `overrides`.         |
++| gRPC Timestamps arrive as `{ seconds, nanos }`                                           | The process imported only _types_ from a contracts package, or a second `protobufjs` copy exists. Import any value from it (every `<X>_GRPC_PACKAGE` does), and keep the single `protobufjs@7` from the root `overrides`.                |
+ | gRPC server error `object expected` on a Timestamp field                                 | The handler returned an ISO string. Return a `Date`.                                                                                                                                                                                     |
+ | `instanceof` fails across packages, or `ClientsModule` is registered twice               | Two copies of a `@nestjs/*` package. Keep `linker = "hoisted"` in `bunfig.toml` and do not add per-package `node_modules`.                                                                                                               |
+ | A Kafka consumer fails at boot with an unknown topic, or "coordinator is loading" errors | The topic is missing from `docker/kafka/topics.txt`, or infra was started without the init job. Run `bun run docker:infra`. A few "coordinator is loading" warnings on a fresh broker are normal.                                        |
+@@ -492,7 +492,7 @@ Producing and consuming:
+ | Cassandra: `NoHostAvailableError`, or every query fails                                  | `CASSANDRA_LOCAL_DC` must equal the node's data center (`datacenter1` in compose). Otherwise the driver ignores the node. Cassandra also needs about a minute on first start.                                                            |
+ | Boot hangs about 2 min, then fails on a CQL migration                                    | A crashed instance left a claim in `applying`. Run the `DELETE` printed in the log, then restart.                                                                                                                                        |
+ | `bun run proto:gen` fails with `env: node: No such file or directory`                    | `protoc-gen-ts_proto` is a `#!/usr/bin/env node` script. Put Node 24 on `PATH` (`nvm use`).                                                                                                                                              |
+-| CI "Generated artefacts drift" fails                                                     | A `.proto` or `*.schema.ts` changed without a regenerated output. Run `bun run proto:gen` / `bun run db:generate` and commit `libs/contracts/src/generated` / `libs/database/src/migrations`.                                            |
++| CI "Generated artefacts drift" fails                                                     | A `.proto` or `*.schema.ts` changed without a regenerated output. Run `bun run proto:gen` / `bun run db:generate` and commit `domains/*/contracts/src/generated` / `libs/database/src/migrations`.                                       |
+ | CI "Config drift" fails                                                                  | A config schema reads a variable that the root `.env.example` does not list, or `topics.txt` and the contracts disagree. Run `node scripts/check-env-example.mjs` (and the topics check after a build).                                  |
+ | Latency rises sharply under load in a container (Argon2 login, uploads)                  | `UV_THREADPOOL_SIZE` is above the container's CPU quota. Measured: 16 threads on a 2-CPU cap raised p95 from 36 ms to 304 ms. Keep it ≤ the CPUs the process gets (default 4). See [PERFORMANCE.md](PERFORMANCE.md).                     |
+ | Stripe checkout or webhook returns errors locally                                        | `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` are placeholders. Set test keys, then forward webhooks with `stripe listen --forward-to localhost:3000/v1/billing/webhooks/stripe`.                                                          |
+diff --git a/docs/DOCKER.md b/docs/DOCKER.md
+index b59ea58..78caf7a 100644
+--- a/docs/DOCKER.md
++++ b/docs/DOCKER.md
+@@ -195,8 +195,8 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
+ 
+ ## Bootstrap jobs & migrations
+ 
+-- **Kafka topics** ([`docker/kafka/topics.txt`](../docker/kafka/topics.txt)) = `@platform/contracts` `KAFKA_TOPIC_VALUES` +
+-  `DEAD_LETTER_TOPIC_VALUES` (3 topics × 6 partitions + 3 `.dlq` × 1). Broker auto-creation is **off**, as in
++- **Kafka topics** ([`docker/kafka/topics.txt`](../docker/kafka/topics.txt)) = the topic of every `<EVENT>_EVENT` contract in
++  `domains/*/contracts` + its `.dlq` twin (3 topics × 6 partitions + 3 `.dlq` × 1). Broker auto-creation is **off**, as in
+   production: a missing topic fails loudly at consumer start instead of being created by a typo.
+   `node scripts/docker/check-kafka-topics.mjs` (after `bun run build`) fails when the file drifts from the contracts.
+ - **Cassandra**: `cassandra-init` creates `CREATE KEYSPACE IF NOT EXISTS <CASSANDRA_KEYSPACE>` with
+@@ -429,7 +429,7 @@ Runs on pushes to `master` and on pull requests. Test layout and the integration
+ 
+ - **verify**: Node 24 (`.nvmrc`) + Bun 1.4.3, `bun install --frozen-lockfile`, `bun run check` (Biome, ESLint,
+   Prettier, tsc), `bun run test`, `bun run build`, generated-artefact drift (`proto:gen` + `buf lint` + `db:generate`,
+-  then a clean `git diff`/`git status` of `libs/contracts/src/generated` and `libs/database/src/migrations`),
++  then a clean `git diff`/`git status` of `domains/*/contracts/src/generated` and `libs/database/src/migrations`),
+   commitlint over the PR's commits (pull requests only), then the config drift checks (`.env.example`, Kafka topics).
+ - **integration**: `bun run test:int` (`INTEGRATION=1`, every `<package>:int` project): Postgres from testcontainers,
+   Redis from a job service container (`REDIS_URL=redis://localhost:6379`).
+diff --git a/docs/PERFORMANCE.md b/docs/PERFORMANCE.md
+index 3d48f41..94d8528 100644
+--- a/docs/PERFORMANCE.md
++++ b/docs/PERFORMANCE.md
+@@ -23,7 +23,7 @@ Desktop at 4 CPU / 4 GB (see [DOCKER.md](DOCKER.md)). How to see these effects i
+ | GraphQL   | Guard once per operation, no field enhancers       | —                                                                                     | on                          | `libs/auth/src/guards/jwt-auth.guard.ts`                               |
+ | GraphQL   | Complexity limit                                   | `GRAPHQL_MAX_COMPLEXITY`                                                              | 250                         | `libs/graphql/src/plugins/complexity.plugin.ts`                        |
+ | gRPC      | Deadline on every call                             | `GRPC_DEADLINE_MS`                                                                    | 5000                        | `libs/transport/src/grpc/grpc-client.options.ts`                       |
+-| gRPC      | Retries for idempotent reads only, circuit breaker | `GRPC_PACKAGES[x].idempotentMethods` (code), breaker options (code)                   | 3 attempts; 50 % / 10 calls | `libs/contracts/src/grpc/grpc-packages.ts`, `grpc-circuit-breakers.ts` |
++| gRPC      | Retries for idempotent reads only, circuit breaker | `<X>_GRPC_PACKAGE.idempotentMethods` (code), breaker options (code)                   | 3 attempts; 50 % / 10 calls | `domains/*/contracts/src/grpc/*.grpc-*.ts`, `grpc-circuit-breakers.ts` |
+ | gRPC      | Keepalive, connection age, stream cap              | `GRPC_KEEPALIVE` (code), `GRPC_MAX_MESSAGE_BYTES`                                     | 30 s ping; 5 min age; 4 MiB | `libs/transport/src/grpc/grpc.constants.ts`                            |
+ | Kafka     | Idempotent producer, GZIP                          | —                                                                                     | on                          | `libs/transport/src/kafka/kafka.options.ts`                            |
+ | Kafka     | Partitions consumed concurrently                   | `KAFKA_CONSUMER_CONCURRENCY`                                                          | 3                           | same                                                                   |
+@@ -313,7 +313,7 @@ sequenceDiagram
+ | Mechanism                 | Setting                                                                                                                                                                                                             | Why                                                                                                                                                                                                      |
+ | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+ | Deadline on every call    | `GRPC_DEADLINE_MS` (5000), in the service config **and** as an rxjs timeout whose unsubscribe cancels the call                                                                                                      | Without one a hung upstream pins sockets, memory and the client's request forever.                                                                                                                       |
+-| Retries                   | `UNAVAILABLE` only, `maxAttempts` 3 (grpc-js caps at 5), backoff 0.1 s → 1 s ×2, **only** for `GRPC_PACKAGES[name].idempotentMethods`: `GetUser`, `GetUsersByIds`, `ListUsers`, `ListNotifications`, `ListPayments` | A replica can commit a mutation and die before answering; a replayed `RefreshTokens` would trip reuse detection and revoke every session of the user. Add a method only if running it twice is harmless. |
++| Retries                   | `UNAVAILABLE` only, `maxAttempts` 3 (grpc-js caps at 5), backoff 0.1 s → 1 s ×2, **only** for each package spec's `idempotentMethods`: `GetUser`, `GetUsersByIds`, `ListUsers`, `ListNotifications`, `ListPayments` | A replica can commit a mutation and die before answering; a replayed `RefreshTokens` would trip reuse detection and revoke every session of the user. Add a method only if running it twice is harmless. |
+ | Retry throttling          | `retryThrottling { maxTokens: 10, tokenRatio: 0.1 }`                                                                                                                                                                | Stops retrying when most calls fail, so an outage is not amplified.                                                                                                                                      |
+ | Circuit breaker (opossum) | per upstream: opens at 50 % failures over ≥ 10 calls in a 10 s window, half-opens after 5 s; opossum's own timeout off                                                                                              | Fails fast while an upstream is down instead of queueing calls into deadlines. Caller errors (`NOT_FOUND`, `INVALID_ARGUMENT`, …) never open it.                                                         |
+ | Load balancing            | `round_robin` over every address the target resolves to                                                                                                                                                             | Spreads calls over replicas (`docker compose up --scale identity-service=3` works).                                                                                                                      |
+diff --git a/docs/RELEASING.md b/docs/RELEASING.md
+index add899f..91bcb03 100644
+--- a/docs/RELEASING.md
++++ b/docs/RELEASING.md
+@@ -132,7 +132,7 @@ The repository has no `CHANGELOG.md` files yet. The first release creates them.
+ 
+ **Database releases.** Ship Drizzle migrations as a release job before rolling out the new app version (`DATABASE_RUN_MIGRATIONS=false` in production, then `dist/migrate.js` from the same image). Cassandra CQL migrations run at service boot and are LWT-claimed. See [DEVELOPMENT.md](DEVELOPMENT.md#database-migrations-postgres--drizzle).
+ 
+-**Contract changes.** A breaking change to a gRPC proto or a Kafka payload needs a new version (`orders.v2` package, `.v2` topic), served side by side with v1 until every consumer has moved. `libs/contracts/README.md` documents `buf breaking --against '.git#branch=master,subdir=libs/contracts'` for checking protos. The CI workflow does **not** run it yet. Run it by hand before releasing a proto change.
++**Contract changes.** A breaking change to a gRPC proto or a Kafka payload needs a new version (`orders.v2` package, `.v2` topic), served side by side with v1 until every consumer has moved. Each `domains/<x>/contracts/README.md` documents `buf breaking` against that package's proto root for checking protos. The CI workflow does **not** run it yet. Run it by hand before releasing a proto change.
+ 
+ Related root scripts: `bun run build:affected` (`lerna run build --since origin/master`), `bun run graph` (Nx project graph) and `bun run clean` (every package's `clean`, plus the Nx cache).
+ 
+@@ -144,7 +144,7 @@ The `verify` and `integration` jobs install with `bun install --frozen-lockfile`
+ 
+ | Job                                       | Steps                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+ | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+-| **verify** (lint, typecheck, test, build) | 1. `bun run check` (biome ci, eslint `--max-warnings=0`, prettier `--check`, tsc) 2. `bun run test` (unit + e2e) 3. `bun run build` 4. **generated artefacts drift**: `bun run proto:gen`, `buf lint`, `bun run db:generate`, then `git diff --exit-code` plus an untracked-file check on `libs/contracts/src/generated` and `libs/database/src/migrations` 5. **commitlint** over the PR range (`--from base.sha --to head.sha`, PRs only) 6. **config drift**: `node scripts/check-env-example.mjs` and `node scripts/docker/check-kafka-topics.mjs` |
++| **verify** (lint, typecheck, test, build) | 1. `bun run check` (biome ci, eslint `--max-warnings=0`, prettier `--check`, tsc) 2. `bun run test` (unit + e2e) 3. `bun run build` 4. **generated artefacts drift**: `bun run proto:gen`, `buf lint`, `bun run db:generate`, then `git diff --exit-code` plus an untracked check on `domains/*/contracts/src/generated` and `libs/database/src/migrations` 5. **commitlint** over the PR range (`--from base.sha --to head.sha`, PRs only) 6. **config drift**: `node scripts/check-env-example.mjs` and `node scripts/docker/check-kafka-topics.mjs` |
+ | **integration**                           | `bun run test:int` (`INTEGRATION=1`, every `<pkg>:int` Vitest project). Postgres comes from testcontainers, and Redis from a `redis:8.10.2-alpine3.23` service container.                                                                                                                                                                                                                                                                                                                                                                              |
+ | **image** (matrix)                        | Builds the `runtime` target for `gateway`, `monolith`, `identity-service`, `notifications-service` and `billing-service` with `APP=<app>` and `VCS_REF=<sha>`. Images are loaded and inspected, never pushed. Each app has its own GitHub Actions build cache scope.                                                                                                                                                                                                                                                                                   |
+ | **compose**                               | `scripts/docker/validate-compose.sh` (`docker compose config` for every profile combination), then `scripts/docker/check-infra.sh`, which boots the infra and asserts topics, keyspace, buckets, extensions and host ports, then tears it down.                                                                                                                                                                                                                                                                                                        |
+@@ -153,7 +153,7 @@ Before you push, run the same gate locally:
+ 
+ ```bash
+ bun run check && bun run test && bun run build
+-bun run proto:gen && bun run db:generate && git status --porcelain -- libs/contracts/src/generated libs/database/src/migrations
++bun run proto:gen && bun run db:generate && git status --porcelain -- domains/*/contracts/src/generated libs/database/src/migrations
+ node scripts/check-env-example.mjs && node scripts/docker/check-kafka-topics.mjs
+ INTEGRATION=1 bun run test:int     # needs Docker (testcontainers) and REDIS_URL
+ ```
+diff --git a/domains/billing/README.md b/domains/billing/README.md
+index e527af8..7d89450 100644
+--- a/domains/billing/README.md
++++ b/domains/billing/README.md
+@@ -27,7 +27,7 @@ src/
+ | `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule(['billing'])` | gateway          |
+ 
+ The REST controller and GraphQL resolver are the same classes in both topologies; they only know
+-`BillingPort`. Both adapters return the `@platform/contracts` `billing.v1` shapes.
++`BillingPort`. Both adapters return the `@domain/billing-contracts` `billing.v1` shapes.
+ 
+ ```ts
+ // billing-service (HTTP :3003 for /health + /metrics, gRPC :50053)
+diff --git a/domains/identity/README.md b/domains/identity/README.md
+index d7c20d1..2c2492f 100644
+--- a/domains/identity/README.md
++++ b/domains/identity/README.md
+@@ -15,7 +15,7 @@ src/
+ │   ├── commands/           RegisterUser, Login, RefreshSession, Logout, UpdateUserRoles, PurgeExpiredSessions
+ │   ├── queries/            GetUserById, GetUsersByIds, ListUsers
+ │   ├── event-handlers/     UserRegisteredRelay (→ Kafka), UserRolesChangedAuditHandler
+-│   ├── ports/              AuthPort, UsersPort (abstract classes, @platform/contracts types)
++│   ├── ports/              AuthPort, UsersPort (abstract classes, @domain/identity-contracts types)
+ │   ├── persistence/        UsersRepository, SessionsRepository, TransactionRunner (abstractions)
+ │   ├── services/           SessionTokensService (open session + issue the token pair)
+ │   └── mappers/            contract/record/request mappers

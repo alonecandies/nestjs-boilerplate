@@ -1,0 +1,215 @@
+diff --git a/apps/billing-service/src/main.ts b/apps/billing-service/src/main.ts
+index 2f60d24..2dfb85e 100644
+--- a/apps/billing-service/src/main.ts
++++ b/apps/billing-service/src/main.ts
+@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
+ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+ import { createServiceApp, listen } from '@platform/bootstrap';
+ import { withTimeout } from '@platform/common';
++import { BILLING_GRPC_PACKAGE } from '@platform/contracts';
+ import { flushLogs } from '@platform/observability';
+ import { connectGrpcServer } from '@platform/transport';
+ import { AppModule } from './app.module.js';
+@@ -21,7 +22,7 @@ try {
+   // commits) → Postgres/Redis/Kafka closed → exit 0, bounded by SHUTDOWN_TIMEOUT_MS.
+   app = await createServiceApp(AppModule);
+   // After every global enhancer is known (inheritAppConfig) and before startAllMicroservices.
+-  connectGrpcServer(app, ['billing']);
++  connectGrpcServer(app, [BILLING_GRPC_PACKAGE]);
+   await app.startAllMicroservices();
+   // Last: the HTTP port (readiness probes) only opens once gRPC accepts calls.
+   await listen(app);
+diff --git a/apps/billing-service/test/app.e2e-spec.ts b/apps/billing-service/test/app.e2e-spec.ts
+index f232f97..8fa44d8 100644
+--- a/apps/billing-service/test/app.e2e-spec.ts
++++ b/apps/billing-service/test/app.e2e-spec.ts
+@@ -5,7 +5,11 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+ import { Test } from '@nestjs/testing';
+ import { DomainValidationException, ExternalServiceException, generateId } from '@platform/common';
+ import { type GrpcConfig, grpcConfig } from '@platform/config';
+-import type { BillingServiceClient, PaymentList } from '@platform/contracts';
++import {
++  BILLING_GRPC_PACKAGE,
++  type BillingServiceClient,
++  type PaymentList,
++} from '@platform/contracts';
+ import { DRIZZLE } from '@platform/database';
+ import { REDIS_CLIENT } from '@platform/redis';
+ import { InMemoryRedis } from '@platform/redis/testing';
+@@ -149,9 +153,12 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
+       .useValue(new InMemoryRedis().asRedis())
+       .overrideProvider(KafkaProducer)
+       .useValue(new FakeKafkaProducer({ source: 'billing-service' }));
+-    app = await startServiceTestApp(builder, { grpc: ['billing'] });
++    app = await startServiceTestApp(builder, { grpc: [BILLING_GRPC_PACKAGE] });
+ 
+-    client = new ClientGrpcProxy(createGrpcClientOptions(grpcConfig.parse(), 'billing').options);
++    client = new ClientGrpcProxy(
++      createGrpcClientOptions(grpcConfig.parse(), { spec: BILLING_GRPC_PACKAGE, url: grpcUrl })
++        .options,
++    );
+     billing = client.getService<BillingServiceClient>('BillingService');
+   }, 60_000);
+ 
+diff --git a/apps/billing-service/test/support/service-test-app.ts b/apps/billing-service/test/support/service-test-app.ts
+index a871544..b1239fb 100644
+--- a/apps/billing-service/test/support/service-test-app.ts
++++ b/apps/billing-service/test/support/service-test-app.ts
+@@ -3,13 +3,13 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
+ import type { TestingModuleBuilder } from '@nestjs/testing';
+ import { buildFastifyOptions, configureHttpApp } from '@platform/bootstrap';
+ import { appConfig } from '@platform/config';
+-import type { GrpcPackageName } from '@platform/contracts';
++import type { GrpcPackageSpec } from '@platform/contracts';
+ import { createFastifyTestApp } from '@platform/testing';
+ import { connectGrpcServer } from '@platform/transport';
+ 
+ export interface ServiceTestAppOptions {
+   /** gRPC packages served on `GRPC_URL` (like `connectGrpcServer` in main.ts). */
+-  grpc: readonly GrpcPackageName[];
++  grpc: readonly GrpcPackageSpec[];
+   /**
+    * In-process replacement for `connectKafkaConsumer` (no broker): connected with the same
+    * `inheritAppConfig: true`, so consumers see exactly the enhancers they get in production.
+diff --git a/apps/identity-service/src/main.ts b/apps/identity-service/src/main.ts
+index efe3999..3a052ee 100644
+--- a/apps/identity-service/src/main.ts
++++ b/apps/identity-service/src/main.ts
+@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
+ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+ import { createServiceApp, listen } from '@platform/bootstrap';
+ import { withTimeout } from '@platform/common';
++import { IDENTITY_GRPC_PACKAGE } from '@platform/contracts';
+ import { flushLogs } from '@platform/observability';
+ import { connectGrpcServer } from '@platform/transport';
+ import { AppModule } from './app.module.js';
+@@ -20,7 +21,7 @@ try {
+   // SHUTDOWN_TIMEOUT_MS.
+   app = await createServiceApp(AppModule);
+   // After every global enhancer is known (inheritAppConfig) and before startAllMicroservices.
+-  connectGrpcServer(app, ['identity']);
++  connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE]);
+   await app.startAllMicroservices();
+   // Last: the HTTP port (readiness probes) only opens once gRPC accepts calls.
+   await listen(app);
+diff --git a/apps/identity-service/test/app.e2e-spec.ts b/apps/identity-service/test/app.e2e-spec.ts
+index a9f529d..410c817 100644
+--- a/apps/identity-service/test/app.e2e-spec.ts
++++ b/apps/identity-service/test/app.e2e-spec.ts
+@@ -10,7 +10,11 @@ import {
+   UnauthenticatedException,
+ } from '@platform/common';
+ import { type GrpcConfig, grpcConfig } from '@platform/config';
+-import type { AuthServiceClient, UsersServiceClient } from '@platform/contracts';
++import {
++  type AuthServiceClient,
++  IDENTITY_GRPC_PACKAGE,
++  type UsersServiceClient,
++} from '@platform/contracts';
+ import { DRIZZLE } from '@platform/database';
+ import { REDIS_CLIENT } from '@platform/redis';
+ import { InMemoryRedis } from '@platform/redis/testing';
+@@ -96,9 +100,12 @@ describe('identity-service (real AppModule, fakes at the network edges)', () =>
+       .useValue(new InMemoryRedis().asRedis())
+       .overrideProvider(KafkaProducer)
+       .useValue(new FakeKafkaProducer({ source: 'identity-service' }));
+-    app = await startServiceTestApp(builder, { grpc: ['identity'] });
++    app = await startServiceTestApp(builder, { grpc: [IDENTITY_GRPC_PACKAGE] });
+ 
+-    client = new ClientGrpcProxy(createGrpcClientOptions(grpcConfig.parse(), 'identity').options);
++    client = new ClientGrpcProxy(
++      createGrpcClientOptions(grpcConfig.parse(), { spec: IDENTITY_GRPC_PACKAGE, url: grpcUrl })
++        .options,
++    );
+     usersClient = client.getService<UsersServiceClient>('UsersService');
+     authClient = client.getService<AuthServiceClient>('AuthService');
+   }, 60_000);
+diff --git a/apps/identity-service/test/support/service-test-app.ts b/apps/identity-service/test/support/service-test-app.ts
+index a871544..b1239fb 100644
+--- a/apps/identity-service/test/support/service-test-app.ts
++++ b/apps/identity-service/test/support/service-test-app.ts
+@@ -3,13 +3,13 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
+ import type { TestingModuleBuilder } from '@nestjs/testing';
+ import { buildFastifyOptions, configureHttpApp } from '@platform/bootstrap';
+ import { appConfig } from '@platform/config';
+-import type { GrpcPackageName } from '@platform/contracts';
++import type { GrpcPackageSpec } from '@platform/contracts';
+ import { createFastifyTestApp } from '@platform/testing';
+ import { connectGrpcServer } from '@platform/transport';
+ 
+ export interface ServiceTestAppOptions {
+   /** gRPC packages served on `GRPC_URL` (like `connectGrpcServer` in main.ts). */
+-  grpc: readonly GrpcPackageName[];
++  grpc: readonly GrpcPackageSpec[];
+   /**
+    * In-process replacement for `connectKafkaConsumer` (no broker): connected with the same
+    * `inheritAppConfig: true`, so consumers see exactly the enhancers they get in production.
+diff --git a/apps/notifications-service/src/main.ts b/apps/notifications-service/src/main.ts
+index 61be8d1..c53722f 100644
+--- a/apps/notifications-service/src/main.ts
++++ b/apps/notifications-service/src/main.ts
+@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
+ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
+ import { createServiceApp, listen } from '@platform/bootstrap';
+ import { withTimeout } from '@platform/common';
++import { NOTIFICATIONS_GRPC_PACKAGE } from '@platform/contracts';
+ import { flushLogs } from '@platform/observability';
+ import { connectGrpcServer, connectKafkaConsumer } from '@platform/transport';
+ import { AppModule } from './app.module.js';
+@@ -23,7 +24,7 @@ try {
+   app = await createServiceApp(AppModule);
+   // Both transports after every global enhancer is known (inheritAppConfig), before
+   // startAllMicroservices. The topics (and their .dlq) must exist: auto-creation is off.
+-  connectGrpcServer(app, ['notifications']);
++  connectGrpcServer(app, [NOTIFICATIONS_GRPC_PACKAGE]);
+   connectKafkaConsumer(app, { groupId: NOTIFICATIONS_CONSUMER_GROUP });
+   await app.startAllMicroservices();
+   // Last: the HTTP port (readiness probes) only opens once gRPC and the consumer are up.
+diff --git a/apps/notifications-service/test/app.e2e-spec.ts b/apps/notifications-service/test/app.e2e-spec.ts
+index 47ade37..e906aa8 100644
+--- a/apps/notifications-service/test/app.e2e-spec.ts
++++ b/apps/notifications-service/test/app.e2e-spec.ts
+@@ -9,6 +9,7 @@ import { type GrpcConfig, grpcConfig } from '@platform/config';
+ import {
+   createEventEnvelope,
+   KAFKA_TOPICS,
++  NOTIFICATIONS_GRPC_PACKAGE,
+   type NotificationPage,
+   type NotificationsServiceClient,
+ } from '@platform/contracts';
+@@ -132,10 +133,13 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
+       // A plain value is not a @Processor: BullMQ's explorer starts no Worker (it would dial Redis).
+       .overrideProvider(MailProcessor)
+       .useValue({});
+-    app = await startServiceTestApp(builder, { grpc: ['notifications'], kafka });
++    app = await startServiceTestApp(builder, { grpc: [NOTIFICATIONS_GRPC_PACKAGE], kafka });
+ 
+     client = new ClientGrpcProxy(
+-      createGrpcClientOptions(grpcConfig.parse(), 'notifications').options,
++      createGrpcClientOptions(grpcConfig.parse(), {
++        spec: NOTIFICATIONS_GRPC_PACKAGE,
++        url: grpcUrl,
++      }).options,
+     );
+     notifications = client.getService<NotificationsServiceClient>('NotificationsService');
+   }, 60_000);
+diff --git a/apps/notifications-service/test/support/service-test-app.ts b/apps/notifications-service/test/support/service-test-app.ts
+index a871544..b1239fb 100644
+--- a/apps/notifications-service/test/support/service-test-app.ts
++++ b/apps/notifications-service/test/support/service-test-app.ts
+@@ -3,13 +3,13 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
+ import type { TestingModuleBuilder } from '@nestjs/testing';
+ import { buildFastifyOptions, configureHttpApp } from '@platform/bootstrap';
+ import { appConfig } from '@platform/config';
+-import type { GrpcPackageName } from '@platform/contracts';
++import type { GrpcPackageSpec } from '@platform/contracts';
+ import { createFastifyTestApp } from '@platform/testing';
+ import { connectGrpcServer } from '@platform/transport';
+ 
+ export interface ServiceTestAppOptions {
+   /** gRPC packages served on `GRPC_URL` (like `connectGrpcServer` in main.ts). */
+-  grpc: readonly GrpcPackageName[];
++  grpc: readonly GrpcPackageSpec[];
+   /**
+    * In-process replacement for `connectKafkaConsumer` (no broker): connected with the same
+    * `inheritAppConfig: true`, so consumers see exactly the enhancers they get in production.

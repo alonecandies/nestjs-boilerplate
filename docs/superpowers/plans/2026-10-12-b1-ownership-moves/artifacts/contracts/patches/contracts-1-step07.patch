@@ -1,0 +1,600 @@
+diff --git a/libs/transport/src/grpc/grpc-clients.module.spec.ts b/libs/transport/src/grpc/grpc-clients.module.spec.ts
+index 055af27..fc6dbd6 100644
+--- a/libs/transport/src/grpc/grpc-clients.module.spec.ts
++++ b/libs/transport/src/grpc/grpc-clients.module.spec.ts
+@@ -2,17 +2,22 @@ import { type INestApplicationContext, Logger, Module } from '@nestjs/common';
+ import { NestFactory } from '@nestjs/core';
+ import { ClientGrpcProxy } from '@nestjs/microservices';
+ import { AppConfigModule, type GrpcConfig, grpcConfig } from '@platform/config';
+-import { GRPC_PACKAGES } from '@platform/contracts';
+ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
++import {
++  ECHO_GRPC_PACKAGE,
++  FIXTURE_GRPC_PACKAGE,
++} from '../../test/fixtures/fixture.grpc-package.js';
+ import { GrpcCircuitBreakers } from './grpc-circuit-breakers.js';
+ import { GrpcClientsModule } from './grpc-clients.module.js';
+ 
+ @Module({
+   imports: [
+     AppConfigModule.forRoot(),
+-    GrpcClientsModule.register(['identity', 'billing', 'identity'], {
+-      breaker: { resetTimeout: 1_000 },
+-    }),
++    GrpcClientsModule.register(
++      { spec: FIXTURE_GRPC_PACKAGE, url: '127.0.0.1:1' },
++      { breaker: { resetTimeout: 1_000 } },
++    ),
++    GrpcClientsModule.register({ spec: ECHO_GRPC_PACKAGE, url: '127.0.0.1:2' }),
+   ],
+ })
+ class TestRootModule {}
+@@ -29,17 +34,18 @@ describe('GrpcClientsModule.register (DI wiring, no server)', () => {
+     await app?.close();
+   });
+ 
+-  it('registers one lazily-connecting ClientGrpc per package under its client token', () => {
+-    const identity = app.get<ClientGrpcProxy>(GRPC_PACKAGES.identity.clientToken);
+-    const billing = app.get<ClientGrpcProxy>(GRPC_PACKAGES.billing.clientToken);
+-    expect(identity).toBeInstanceOf(ClientGrpcProxy);
+-    expect(billing).toBeInstanceOf(ClientGrpcProxy);
+-    expect(identity).not.toBe(billing);
+-    expect(() => app.get(GRPC_PACKAGES.notifications.clientToken)).toThrow();
+-    // Service stubs resolve from the proto without any network traffic.
+-    expect(typeof identity.getService<{ getUser: unknown }>('UsersService').getUser).toBe(
++  it('registers one lazily-connecting ClientGrpc per registration under its client token', () => {
++    const fixture = app.get<ClientGrpcProxy>(FIXTURE_GRPC_PACKAGE.clientToken);
++    const echo = app.get<ClientGrpcProxy>(ECHO_GRPC_PACKAGE.clientToken);
++    expect(fixture).toBeInstanceOf(ClientGrpcProxy);
++    expect(echo).toBeInstanceOf(ClientGrpcProxy);
++    expect(fixture).not.toBe(echo);
++    expect(() => app.get('UNREGISTERED_GRPC_CLIENT')).toThrow();
++    // Service stubs resolve from each package's own proto root without any network traffic.
++    expect(typeof fixture.getService<{ getUser: unknown }>('UsersService').getUser).toBe(
+       'function',
+     );
++    expect(typeof echo.getService<{ echo: unknown }>('EchoService').echo).toBe('function');
+   });
+ 
+   it('exports the breaker registry and the grpc config namespace', () => {
+diff --git a/libs/transport/src/grpc/grpc-options.spec.ts b/libs/transport/src/grpc/grpc-options.spec.ts
+index 76c0483..3540d92 100644
+--- a/libs/transport/src/grpc/grpc-options.spec.ts
++++ b/libs/transport/src/grpc/grpc-options.spec.ts
+@@ -2,11 +2,14 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+ import { tmpdir } from 'node:os';
+ import { join } from 'node:path';
+ import { credentials, ServerCredentials } from '@grpc/grpc-js';
+-import type { PackageDefinition } from '@grpc/proto-loader';
++import { loadSync, type PackageDefinition } from '@grpc/proto-loader';
+ import { ServerGrpc, Transport } from '@nestjs/microservices';
+ import { grpcConfig } from '@platform/config';
+-import { PROTO_DIR } from '@platform/contracts';
+ import { afterAll, describe, expect, it, vi } from 'vitest';
++import {
++  ECHO_GRPC_PACKAGE,
++  FIXTURE_GRPC_PACKAGE,
++} from '../../test/fixtures/fixture.grpc-package.js';
+ import { buildGrpcServiceConfig, createGrpcClientOptions } from './grpc-client.options.js';
+ import { GrpcHealthService, type HealthServer } from './grpc-health.js';
+ import {
+@@ -17,11 +20,13 @@ import {
+ 
+ const cfg = grpcConfig.parse({
+   GRPC_URL: '0.0.0.0:6000',
+-  IDENTITY_GRPC_URL: 'dns:///identity:50051',
+   GRPC_DEADLINE_MS: '2500',
+   GRPC_MAX_MESSAGE_BYTES: '2097152',
+ });
+ 
++/** The test-local package, dialed like a headless Kubernetes service. */
++const FIXTURE = { spec: FIXTURE_GRPC_PACKAGE, url: 'dns:///fixture:50051' };
++
+ interface MethodConfig {
+   name: { service: string; method?: string }[];
+   timeout: { seconds: number; nanos: number };
+@@ -49,15 +54,15 @@ function serviceConfigOf(options: { channelOptions?: Record<string, unknown> }):
+   };
+ }
+ 
+-const READ = { service: 'identity.v1.UsersService', method: 'GetUser' };
++const READ = { service: 'fixture.v1.UsersService', method: 'GetUser' };
+ 
+ describe('buildGrpcServiceConfig', () => {
+   it('sets a real deadline on every method, round_robin and retry throttling', () => {
+-    const config = buildGrpcServiceConfig(['identity.v1.AuthService'], { timeoutMs: 1500 });
++    const config = buildGrpcServiceConfig(['echo.v1.EchoService'], { timeoutMs: 1500 });
+     expect(config.loadBalancingConfig).toEqual([{ round_robin: {} }]);
+     const [method, ...rest] = config.methodConfig as MethodConfig[];
+     expect(rest).toEqual([]);
+-    expect(method?.name).toEqual([{ service: 'identity.v1.AuthService' }]);
++    expect(method?.name).toEqual([{ service: 'echo.v1.EchoService' }]);
+     // Object form: grpc-js 1.14 misparses fractional strings such as '1.5s'.
+     expect(method?.timeout).toEqual({ seconds: 1, nanos: 500_000_000 });
+     // No retryable methods given: nothing is retried.
+@@ -66,7 +71,7 @@ describe('buildGrpcServiceConfig', () => {
+   });
+ 
+   it('retries UNAVAILABLE only for the retryable methods of the configured services', () => {
+-    const config = buildGrpcServiceConfig(['identity.v1.UsersService'], {
++    const config = buildGrpcServiceConfig(['fixture.v1.UsersService'], {
+       timeoutMs: 1500,
+       retryableMethods: [READ, { service: 'other.v1.Unknown', method: 'Get' }],
+     });
+@@ -99,19 +104,19 @@ describe('buildGrpcServiceConfig', () => {
+ });
+ 
+ describe('createGrpcClientOptions', () => {
+-  it('targets the configured url with the shared loader, limits, keepalive and service config', () => {
+-    const { transport, options } = createGrpcClientOptions(cfg, 'identity');
++  it('dials the target url with the shared loader, limits, keepalive and service config', () => {
++    const { transport, options } = createGrpcClientOptions(cfg, FIXTURE);
+     expect(transport).toBe(Transport.GRPC);
+     expect(options).toMatchObject({
+-      url: 'dns:///identity:50051',
+-      package: ['identity.v1'],
+-      protoPath: ['identity/v1/identity.proto'],
++      url: 'dns:///fixture:50051',
++      package: ['fixture.v1'],
++      protoPath: ['fixture/v1/fixture.proto'],
+       loader: {
+         keepCase: false,
+         longs: String,
+         enums: String,
+         defaults: true,
+-        includeDirs: [PROTO_DIR],
++        includeDirs: [FIXTURE_GRPC_PACKAGE.protoDir],
+       },
+       maxSendMessageLength: 2_097_152,
+       maxReceiveMessageLength: 2_097_152,
+@@ -121,49 +126,31 @@ describe('createGrpcClientOptions', () => {
+     expect(channel['grpc.enable_retries']).toBe(1);
+     expect(channel['grpc.service_config_disable_resolver']).toBe(1);
+     const { methodConfig } = serviceConfigOf(options);
+-    const auth = configFor(methodConfig, 'identity.v1.AuthService', 'Login');
+-    expect(auth.name).toEqual([
+-      { service: 'identity.v1.AuthService' },
+-      { service: 'identity.v1.UsersService' },
+-    ]);
+-    expect(auth.timeout).toEqual({ seconds: 2, nanos: 500_000_000 });
++    const write = configFor(methodConfig, 'fixture.v1.UsersService', 'UpdateUserRoles');
++    expect(write.name).toEqual([{ service: 'fixture.v1.UsersService' }]);
++    expect(write.timeout).toEqual({ seconds: 2, nanos: 500_000_000 });
+   });
+ 
+-  it.each([
+-    ['identity', 'identity.v1.AuthService', 'Register'],
+-    ['identity', 'identity.v1.AuthService', 'Login'],
+-    ['identity', 'identity.v1.AuthService', 'RefreshTokens'],
+-    ['identity', 'identity.v1.AuthService', 'Logout'],
+-    ['identity', 'identity.v1.UsersService', 'UpdateUserRoles'],
+-    ['notifications', 'notifications.v1.NotificationsService', 'MarkNotificationRead'],
+-    ['billing', 'billing.v1.BillingService', 'CreateCheckoutSession'],
+-    ['billing', 'billing.v1.BillingService', 'HandleStripeWebhook'],
+-  ] as const)(
+-    'never retries the %s mutation %s/%s (a replay would repeat its side effect)',
+-    (name, service, method) => {
+-      const { methodConfig } = serviceConfigOf(createGrpcClientOptions(cfg, name).options);
+-      const entry = configFor(methodConfig, service, method);
+-      expect(entry.retryPolicy).toBeUndefined();
+-      expect(entry.timeout).toEqual({ seconds: 2, nanos: 500_000_000 });
++  it('never retries a mutation (a replay would repeat its side effect)', () => {
++    const { methodConfig } = serviceConfigOf(createGrpcClientOptions(cfg, FIXTURE).options);
++    const entry = configFor(methodConfig, 'fixture.v1.UsersService', 'UpdateUserRoles');
++    expect(entry.retryPolicy).toBeUndefined();
++    expect(entry.timeout).toEqual({ seconds: 2, nanos: 500_000_000 });
++  });
++
++  it.each(['GetUser', 'GetUsersByIds', 'ListUsers'])(
++    'retries UNAVAILABLE for the read %s',
++    (method) => {
++      const { methodConfig } = serviceConfigOf(createGrpcClientOptions(cfg, FIXTURE).options);
++      expect(configFor(methodConfig, 'fixture.v1.UsersService', method)).toMatchObject({
++        timeout: { seconds: 2, nanos: 500_000_000 },
++        retryPolicy: { maxAttempts: 3, retryableStatusCodes: ['UNAVAILABLE'] },
++      });
+     },
+   );
+ 
+-  it.each([
+-    ['identity', 'identity.v1.UsersService', 'GetUser'],
+-    ['identity', 'identity.v1.UsersService', 'GetUsersByIds'],
+-    ['identity', 'identity.v1.UsersService', 'ListUsers'],
+-    ['notifications', 'notifications.v1.NotificationsService', 'ListNotifications'],
+-    ['billing', 'billing.v1.BillingService', 'ListPayments'],
+-  ] as const)('retries UNAVAILABLE for the %s read %s/%s', (name, service, method) => {
+-    const { methodConfig } = serviceConfigOf(createGrpcClientOptions(cfg, name).options);
+-    expect(configFor(methodConfig, service, method)).toMatchObject({
+-      timeout: { seconds: 2, nanos: 500_000_000 },
+-      retryPolicy: { maxAttempts: 3, retryableStatusCodes: ['UNAVAILABLE'] },
+-    });
+-  });
+-
+   it('accepts per-registration deadline and channel overrides', () => {
+-    const { options } = createGrpcClientOptions(cfg, 'billing', {
++    const { options } = createGrpcClientOptions(cfg, FIXTURE, {
+       deadlineMs: 800,
+       channelOptions: { 'grpc.max_reconnect_backoff_ms': 2_000 },
+     });
+@@ -175,28 +162,41 @@ describe('createGrpcClientOptions', () => {
+ 
+ describe('createGrpcServerOptions', () => {
+   it('binds every requested package with graceful shutdown and keepalive', () => {
+-    const { options } = createGrpcServerOptions(cfg, ['identity', 'billing', 'identity']);
++    const { options } = createGrpcServerOptions(cfg, [
++      FIXTURE_GRPC_PACKAGE,
++      ECHO_GRPC_PACKAGE,
++      FIXTURE_GRPC_PACKAGE,
++    ]);
+     expect(options).toMatchObject({
+       url: '0.0.0.0:6000',
+-      package: ['identity.v1', 'billing.v1'],
+-      protoPath: ['identity/v1/identity.proto', 'billing/v1/billing.proto'],
++      package: ['fixture.v1', 'echo.v1'],
++      protoPath: ['fixture/v1/fixture.proto', 'echo/v1/echo.proto'],
++      loader: { includeDirs: [FIXTURE_GRPC_PACKAGE.protoDir, ECHO_GRPC_PACKAGE.protoDir] },
+       gracefulShutdown: true,
+       keepalive: { keepalivePermitWithoutCalls: 1, http2MinPingIntervalWithoutDataMs: 10_000 },
+       channelOptions: { 'grpc.max_concurrent_streams': 1000 },
+     });
+   });
+ 
++  it('loads protos that live in different contracts packages (one include dir each)', () => {
++    const { options } = createGrpcServerOptions(cfg, [FIXTURE_GRPC_PACKAGE, ECHO_GRPC_PACKAGE]);
++    const definition = loadSync(options.protoPath ?? [], options.loader);
++    expect(Object.keys(definition)).toEqual(
++      expect.arrayContaining(['fixture.v1.UsersService', 'echo.v1.EchoService']),
++    );
++  });
++
+   it('returns fresh channel options each time (ServerGrpc mutates them)', () => {
+-    const a = createGrpcServerOptions(cfg, ['identity']).options.channelOptions;
+-    const b = createGrpcServerOptions(cfg, ['identity']).options.channelOptions;
++    const a = createGrpcServerOptions(cfg, [FIXTURE_GRPC_PACKAGE]).options.channelOptions;
++    const b = createGrpcServerOptions(cfg, [FIXTURE_GRPC_PACKAGE]).options.channelOptions;
+     expect(a).not.toBe(b);
+   });
+ 
+   it('attaches health and reflection to the grpc-js server', () => {
+-    const health = new GrpcHealthService(['identity.v1.UsersService'], 'SERVING');
++    const health = new GrpcHealthService(['fixture.v1.UsersService'], 'SERVING');
+     const addService = vi.fn();
+     const extra = vi.fn();
+-    const { options } = createGrpcServerOptions(cfg, ['identity'], {
++    const { options } = createGrpcServerOptions(cfg, [FIXTURE_GRPC_PACKAGE], {
+       health,
+       onLoadPackageDefinition: extra,
+     });
+@@ -217,7 +217,7 @@ describe('createGrpcServerOptions', () => {
+ 
+   it('can disable reflection', () => {
+     const addService = vi.fn();
+-    const { options } = createGrpcServerOptions(cfg, ['identity'], { reflection: false });
++    const { options } = createGrpcServerOptions(cfg, [FIXTURE_GRPC_PACKAGE], { reflection: false });
+     options.onLoadPackageDefinition?.({}, { addService });
+     expect(addService).toHaveBeenCalledTimes(1);
+   });
+@@ -225,7 +225,7 @@ describe('createGrpcServerOptions', () => {
+   it('turns reflection off by default in production', () => {
+     const production = grpcConfig.parse({ NODE_ENV: 'production', GRPC_ALLOW_INSECURE: 'true' });
+     const addService = vi.fn();
+-    createGrpcServerOptions(production, ['identity']).options.onLoadPackageDefinition?.(
++    createGrpcServerOptions(production, [FIXTURE_GRPC_PACKAGE]).options.onLoadPackageDefinition?.(
+       {},
+       { addService },
+     );
+@@ -237,7 +237,7 @@ describe('createGrpcServerOptions', () => {
+       GRPC_REFLECTION: 'true',
+     });
+     const withReflection = vi.fn();
+-    createGrpcServerOptions(optedIn, ['identity']).options.onLoadPackageDefinition?.(
++    createGrpcServerOptions(optedIn, [FIXTURE_GRPC_PACKAGE]).options.onLoadPackageDefinition?.(
+       {},
+       { addService: withReflection },
+     );
+@@ -245,8 +245,10 @@ describe('createGrpcServerOptions', () => {
+   });
+ 
+   it('binds plaintext (no credentials) without TLS config', () => {
+-    expect(createGrpcServerOptions(cfg, ['identity']).options).not.toHaveProperty('credentials');
+-    expect(createGrpcClientOptions(cfg, 'identity').options).not.toHaveProperty('credentials');
++    expect(createGrpcServerOptions(cfg, [FIXTURE_GRPC_PACKAGE]).options).not.toHaveProperty(
++      'credentials',
++    );
++    expect(createGrpcClientOptions(cfg, FIXTURE).options).not.toHaveProperty('credentials');
+   });
+ });
+ 
+@@ -270,7 +272,7 @@ describe('gRPC TLS', () => {
+     const sentinel = ServerCredentials.createInsecure();
+     const createSsl = vi.spyOn(ServerCredentials, 'createSsl').mockReturnValue(sentinel);
+ 
+-    const { options } = createGrpcServerOptions(tlsCfg, ['identity']);
++    const { options } = createGrpcServerOptions(tlsCfg, [FIXTURE_GRPC_PACKAGE]);
+ 
+     expect(options.credentials).toBe(sentinel);
+     expect(createSsl).toHaveBeenCalledWith(
+@@ -290,7 +292,7 @@ describe('gRPC TLS', () => {
+     const sentinel = credentials.createInsecure();
+     const createSsl = vi.spyOn(credentials, 'createSsl').mockReturnValue(sentinel);
+ 
+-    const { options } = createGrpcClientOptions(tlsCfg, 'billing');
++    const { options } = createGrpcClientOptions(tlsCfg, FIXTURE);
+ 
+     expect(options.credentials).toBe(sentinel);
+     expect(createSsl).toHaveBeenCalledWith(
+@@ -304,19 +306,19 @@ describe('gRPC TLS', () => {
+ 
+ describe('createGrpcServerStrategy / HealthReportingGrpcServer', () => {
+   it('builds a ServerGrpc that keeps the gRPC transport id, NOT_SERVING until it listens', () => {
+-    const { strategy } = createGrpcServerStrategy(cfg, ['notifications']);
++    const { strategy } = createGrpcServerStrategy(cfg, [FIXTURE_GRPC_PACKAGE]);
+     expect(strategy).toBeInstanceOf(HealthReportingGrpcServer);
+     expect(strategy).toBeInstanceOf(ServerGrpc);
+     expect((strategy as HealthReportingGrpcServer).transportId).toBe(Transport.GRPC);
+     const { health } = strategy as HealthReportingGrpcServer;
+     expect(health.status).toBe('NOT_SERVING');
+-    expect(health.services).toEqual(['notifications.v1.NotificationsService']);
++    expect(health.services).toEqual(['fixture.v1.UsersService']);
+   });
+ 
+   it('switches health to NOT_SERVING when closing', async () => {
+     const health = new GrpcHealthService(['s'], 'SERVING');
+     const server = new HealthReportingGrpcServer(
+-      createGrpcServerOptions(cfg, ['identity']).options,
++      createGrpcServerOptions(cfg, [FIXTURE_GRPC_PACKAGE]).options,
+       health,
+     );
+     await server.close();
+diff --git a/libs/transport/src/grpc/grpc-retry.spec.ts b/libs/transport/src/grpc/grpc-retry.spec.ts
+index 34824a9..d7862e3 100644
+--- a/libs/transport/src/grpc/grpc-retry.spec.ts
++++ b/libs/transport/src/grpc/grpc-retry.spec.ts
+@@ -4,21 +4,22 @@ import { NestFactory } from '@nestjs/core';
+ import { ClientGrpcProxy } from '@nestjs/microservices';
+ import { generateId, ServiceUnavailableException } from '@platform/common';
+ import { type GrpcConfig, grpcConfig } from '@platform/config';
+-import type {
+-  GetUserRequest,
+-  GetUsersByIdsRequest,
+-  ListUsersRequest,
+-  UpdateUserRolesRequest,
+-  User,
+-  UserList,
+-  UserPage,
+-  UsersServiceClient,
+-  UsersServiceController,
+-} from '@platform/contracts';
+-import { UsersServiceControllerMethods } from '@platform/contracts';
+ import { ClsModule } from 'nestjs-cls';
+ import { lastValueFrom } from 'rxjs';
+ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
++import {
++  FIXTURE_GRPC_PACKAGE,
++  type GetUserRequest,
++  type GetUsersByIdsRequest,
++  type ListUsersRequest,
++  type UpdateUserRolesRequest,
++  type User,
++  type UserList,
++  type UserPage,
++  type UsersServiceClient,
++  type UsersServiceController,
++  UsersServiceControllerMethods,
++} from '../../test/fixtures/fixture.grpc-package.js';
+ import { createGrpcClientOptions } from './grpc-client.options.js';
+ import { GrpcController } from './grpc-controller.decorator.js';
+ import { createGrpcServerStrategy } from './grpc-server.options.js';
+@@ -89,19 +90,17 @@ describe('gRPC client retry policy (in-process server)', () => {
+ 
+   /** A fresh channel per case: retry throttling state is per channel. */
+   function usersClient(): UsersServiceClient {
+-    client = new ClientGrpcProxy(createGrpcClientOptions(cfg, 'identity').options);
++    client = new ClientGrpcProxy(
++      createGrpcClientOptions(cfg, { spec: FIXTURE_GRPC_PACKAGE, url: cfg.url }).options,
++    );
+     return client.getService<UsersServiceClient>('UsersService');
+   }
+ 
+   beforeAll(async () => {
+     const port = await freePort();
+-    cfg = grpcConfig.parse({
+-      GRPC_URL: `127.0.0.1:${port}`,
+-      IDENTITY_GRPC_URL: `127.0.0.1:${port}`,
+-      GRPC_DEADLINE_MS: '3000',
+-    });
++    cfg = grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}`, GRPC_DEADLINE_MS: '3000' });
+     app = await NestFactory.createMicroservice(FlakyGrpcModule, {
+-      ...createGrpcServerStrategy(cfg, ['identity']),
++      ...createGrpcServerStrategy(cfg, [FIXTURE_GRPC_PACKAGE]),
+       logger: false,
+     });
+     await app.listen();
+diff --git a/libs/transport/src/grpc/grpc-roundtrip.spec.ts b/libs/transport/src/grpc/grpc-roundtrip.spec.ts
+index 44baa57..ba216c2 100644
+--- a/libs/transport/src/grpc/grpc-roundtrip.spec.ts
++++ b/libs/transport/src/grpc/grpc-roundtrip.spec.ts
+@@ -17,22 +17,23 @@ import {
+   generateId,
+ } from '@platform/common';
+ import { type GrpcConfig, grpcConfig } from '@platform/config';
+-import type {
+-  GetUserRequest,
+-  GetUsersByIdsRequest,
+-  ListUsersRequest,
+-  UpdateUserRolesRequest,
+-  User,
+-  UserList,
+-  UserPage,
+-  UsersServiceClient,
+-  UsersServiceController,
+-} from '@platform/contracts';
+-import { UsersServiceControllerMethods } from '@platform/contracts';
+ import { protoPath as healthProtoPath } from 'grpc-health-check';
+ import { ClsModule, ClsService } from 'nestjs-cls';
+ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+ import { z } from 'zod';
++import {
++  FIXTURE_GRPC_PACKAGE,
++  type GetUserRequest,
++  type GetUsersByIdsRequest,
++  type ListUsersRequest,
++  type UpdateUserRolesRequest,
++  type User,
++  type UserList,
++  type UserPage,
++  type UsersServiceClient,
++  type UsersServiceController,
++  UsersServiceControllerMethods,
++} from '../../test/fixtures/fixture.grpc-package.js';
+ import { RPC_CLS_KEYS } from '../context/transport-context.js';
+ import { grpcCall } from './grpc-call.js';
+ import { GrpcCircuitBreakers } from './grpc-circuit-breakers.js';
+@@ -152,23 +153,21 @@ describe('gRPC round trip (in-process server + ClientGrpc)', () => {
+   const call = <T>(source: Parameters<typeof grpcCall<T>>[0]): Promise<T> =>
+     grpcCall(source, {
+       timeoutMs: 3_000,
+-      operation: 'identity.UsersService',
+-      breaker: breakers.get('identity'),
++      operation: 'fixture.UsersService',
++      breaker: breakers.get('fixture'),
+     });
+ 
+   beforeAll(async () => {
+     const port = await freePort();
+-    cfg = grpcConfig.parse({
+-      GRPC_URL: `127.0.0.1:${port}`,
+-      IDENTITY_GRPC_URL: `127.0.0.1:${port}`,
+-      GRPC_DEADLINE_MS: '3000',
+-    });
++    cfg = grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}`, GRPC_DEADLINE_MS: '3000' });
+     app = await NestFactory.createMicroservice(TestGrpcModule, {
+-      ...createGrpcServerStrategy(cfg, ['identity']),
++      ...createGrpcServerStrategy(cfg, [FIXTURE_GRPC_PACKAGE]),
+       logger: false,
+     });
+     await app.listen();
+-    client = new ClientGrpcProxy(createGrpcClientOptions(cfg, 'identity').options);
++    client = new ClientGrpcProxy(
++      createGrpcClientOptions(cfg, { spec: FIXTURE_GRPC_PACKAGE, url: cfg.url }).options,
++    );
+     users = client.getService<UsersServiceClient>('UsersService');
+   });
+ 
+@@ -253,11 +252,11 @@ describe('gRPC round trip (in-process server + ClientGrpc)', () => {
+   });
+ 
+   it('reports SERVING through grpc.health.v1 once listening', async () => {
+-    await expect(checkHealth(cfg.url, 'identity.v1.UsersService')).resolves.toBe('SERVING');
++    await expect(checkHealth(cfg.url, 'fixture.v1.UsersService')).resolves.toBe('SERVING');
+     await expect(checkHealth(cfg.url, '')).resolves.toBe('SERVING');
+   });
+ 
+   it('did not open the circuit for caller errors', () => {
+-    expect(breakers.states()['identity']).toBe('closed');
++    expect(breakers.states()['fixture']).toBe('closed');
+   });
+ });
+diff --git a/libs/transport/src/grpc/grpc-tls.spec.ts b/libs/transport/src/grpc/grpc-tls.spec.ts
+index 76e1fd6..ac63d80 100644
+--- a/libs/transport/src/grpc/grpc-tls.spec.ts
++++ b/libs/transport/src/grpc/grpc-tls.spec.ts
+@@ -9,21 +9,22 @@ import { NestFactory } from '@nestjs/core';
+ import { ClientGrpcProxy } from '@nestjs/microservices';
+ import { generateId } from '@platform/common';
+ import { type GrpcConfig, grpcConfig } from '@platform/config';
+-import type {
+-  GetUserRequest,
+-  GetUsersByIdsRequest,
+-  ListUsersRequest,
+-  UpdateUserRolesRequest,
+-  User,
+-  UserList,
+-  UserPage,
+-  UsersServiceClient,
+-  UsersServiceController,
+-} from '@platform/contracts';
+-import { UsersServiceControllerMethods } from '@platform/contracts';
+ import { ClsModule } from 'nestjs-cls';
+ import { lastValueFrom } from 'rxjs';
+ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
++import {
++  FIXTURE_GRPC_PACKAGE,
++  type GetUserRequest,
++  type GetUsersByIdsRequest,
++  type ListUsersRequest,
++  type UpdateUserRolesRequest,
++  type User,
++  type UserList,
++  type UserPage,
++  type UsersServiceClient,
++  type UsersServiceController,
++  UsersServiceControllerMethods,
++} from '../../test/fixtures/fixture.grpc-package.js';
+ import { createGrpcClientOptions } from './grpc-client.options.js';
+ import { GrpcController } from './grpc-controller.decorator.js';
+ import { createGrpcServerStrategy } from './grpc-server.options.js';
+@@ -155,13 +156,14 @@ describe.skipIf(!hasOpenssl())('gRPC mutual TLS (in-process server)', () => {
+     grpcConfig.parse({
+       NODE_ENV: 'test',
+       GRPC_URL: `127.0.0.1:${port}`,
+-      IDENTITY_GRPC_URL: `localhost:${port}`,
+       GRPC_DEADLINE_MS: '3000',
+       ...env,
+     });
+ 
+   function getUser(cfg: GrpcConfig, override?: ChannelCredentials): Promise<User> {
+-    const options = createGrpcClientOptions(cfg, 'identity', { maxAttempts: 1 }).options;
++    // `localhost` (not the IP): the throwaway server certificate is issued for that name.
++    const target = { spec: FIXTURE_GRPC_PACKAGE, url: `localhost:${port}` };
++    const options = createGrpcClientOptions(cfg, target, { maxAttempts: 1 }).options;
+     const client = new ClientGrpcProxy(
+       override === undefined ? options : { ...options, credentials: override },
+     );
+@@ -180,7 +182,7 @@ describe.skipIf(!hasOpenssl())('gRPC mutual TLS (in-process server)', () => {
+       GRPC_TLS_KEY_PATH: files.key,
+     });
+     app = await NestFactory.createMicroservice(TlsGrpcModule, {
+-      ...createGrpcServerStrategy(serverCfg, ['identity']),
++      ...createGrpcServerStrategy(serverCfg, [FIXTURE_GRPC_PACKAGE]),
+       logger: false,
+     });
+     await app.listen();
+diff --git a/libs/transport/src/hybrid/connect-microservices.spec.ts b/libs/transport/src/hybrid/connect-microservices.spec.ts
+index 0a1e64f..e15583d 100644
+--- a/libs/transport/src/hybrid/connect-microservices.spec.ts
++++ b/libs/transport/src/hybrid/connect-microservices.spec.ts
+@@ -10,6 +10,7 @@ import { NestFactory } from '@nestjs/core';
+ import { Transport } from '@nestjs/microservices';
+ import { grpcConfig, kafkaConfig } from '@platform/config';
+ import { afterEach, describe, expect, it, vi } from 'vitest';
++import { FIXTURE_GRPC_PACKAGE } from '../../test/fixtures/fixture.grpc-package.js';
+ import { HealthReportingGrpcServer } from '../grpc/grpc-server.options.js';
+ import { connectGrpcServer, connectKafkaConsumer } from './connect-microservices.js';
+ 
+@@ -44,22 +45,19 @@ describe('connectGrpcServer', () => {
+     const cfg = grpcConfig.parse({ GRPC_URL: '0.0.0.0:7001' });
+     const { app, connect } = fakeApp({ [grpcConfig.namespace]: cfg });
+ 
+-    connectGrpcServer(app, ['identity']);
++    connectGrpcServer(app, [FIXTURE_GRPC_PACKAGE]);
+ 
+     expect(connect).toHaveBeenCalledTimes(1);
+     const [options, hybrid] = connect.mock.calls[0] ?? [];
+     expect(hybrid).toEqual({ inheritAppConfig: true });
+     const { strategy } = options as { strategy: HealthReportingGrpcServer };
+     expect(strategy).toBeInstanceOf(HealthReportingGrpcServer);
+-    expect(strategy.health.services).toEqual([
+-      'identity.v1.AuthService',
+-      'identity.v1.UsersService',
+-    ]);
++    expect(strategy.health.services).toEqual(['fixture.v1.UsersService']);
+   });
+ 
+   it('falls back to parsing the environment when no module loaded the namespace', () => {
+     const { app, connect, missed } = fakeApp({});
+-    expect(() => connectGrpcServer(app, ['billing'])).not.toThrow();
++    expect(() => connectGrpcServer(app, [FIXTURE_GRPC_PACKAGE])).not.toThrow();
+     expect(connect).toHaveBeenCalledTimes(1);
+     // The namespace token itself is never probed (a miss is what Nest logs at ERROR).
+     expect(missed).toEqual([]);
