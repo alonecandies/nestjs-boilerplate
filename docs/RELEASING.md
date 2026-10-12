@@ -52,7 +52,7 @@ You can still type messages by hand with `git commit -m`. The hook validates the
 
 1. **Every workspace package**, via `@commitlint/config-workspace-scopes`, with the scope prefix (`@app/`, `@domain/`, `@platform/`) removed:
    - apps: `gateway`, `monolith`, `identity-service`, `notifications-service`, `billing-service`
-   - libs: `auth`, `billing`, `bootstrap`, `cassandra`, `common`, `config`, `contracts`, `database`, `files`, `graphql`, `identity`, `mailer`, `notifications`, `observability`, `payments`, `redis`, `storage`, `testing`, `transport`
+   - libs: `auth`, `billing`, `bootstrap`, `cassandra`, `common`, `config`, `contracts`, `database`, `files`, `graphql`, `identity`, `mailer`, `notifications`, `observability`, `redis`, `storage`, `testing`, `transport`
 2. **Extra scopes** (`EXTRA_SCOPES`): `deps`, `deps-dev`, `release`, `docker`, `ci`, `config`, `repo`, `tooling`, `docs`.
 
 Other rules:

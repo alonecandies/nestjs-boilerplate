@@ -4,10 +4,10 @@ import { CommandHandler, EventPublisher, type ICommandHandler } from '@nestjs/cq
 import { isUuid } from '@platform/common';
 import { Transactional } from '@platform/database';
 import { InjectMetric } from '@platform/observability';
-import { StripeService } from '@platform/payments';
 import type Stripe from 'stripe';
 import { PAID_WITHOUT_CURRENCY_METRIC } from '../../../billing.constants.js';
 import { normalizeCurrency, type Payment } from '../../../domain/payment.aggregate.js';
+import { StripeService } from '../../../infrastructure/stripe/stripe.service.js';
 import { PaymentsRepository } from '../../repositories/payments.repository.js';
 import { StripeEventsRepository } from '../../repositories/stripe-events.repository.js';
 import { HandleStripeWebhookCommand } from './handle-stripe-webhook.command.js';

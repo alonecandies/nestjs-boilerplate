@@ -1,7 +1,13 @@
-/** Stable error codes of the billing context (`DomainException.code`, surfaced to clients). */
+/**
+ * Stable error codes of the billing context (`DomainException.code`, surfaced to clients),
+ * including its Stripe adapter's. Part of the public API: never rename a value.
+ */
 export const BillingErrorCode = {
   PAYMENT_NOT_FOUND: 'PAYMENT_NOT_FOUND',
-  /** Same `Idempotency-Key` replayed with a different price/quantity. */
+  /**
+   * Same `Idempotency-Key` replayed with a different price/quantity, or Stripe refusing a reused
+   * idempotency key (`StripeIdempotencyError`).
+   */
   IDEMPOTENCY_KEY_REUSED: 'IDEMPOTENCY_KEY_REUSED',
   /** Optimistic-lock failure: the payment changed between load and save (retry the request). */
   PAYMENT_CONCURRENTLY_MODIFIED: 'PAYMENT_CONCURRENTLY_MODIFIED',
@@ -10,6 +16,18 @@ export const BillingErrorCode = {
   /** Stripe created a session without a hosted URL (non-hosted ui_mode). */
   CHECKOUT_URL_MISSING: 'CHECKOUT_URL_MISSING',
   INVALID_PAYMENT: 'INVALID_PAYMENT',
+  /** Missing, forged or stale (> `STRIPE_WEBHOOK_TOLERANCE_SEC`) `Stripe-Signature`. */
+  INVALID_WEBHOOK_SIGNATURE: 'INVALID_WEBHOOK_SIGNATURE',
+  /** Correctly signed webhook body that is not a JSON event. */
+  INVALID_WEBHOOK_PAYLOAD: 'INVALID_WEBHOOK_PAYLOAD',
+  /** `StripeInvalidRequestError` (e.g. an unknown price). */
+  PAYMENT_REQUEST_INVALID: 'PAYMENT_REQUEST_INVALID',
+  /** `StripeCardError` (`details.declineCode`). */
+  PAYMENT_DECLINED: 'PAYMENT_DECLINED',
+  /** `StripeRateLimitError`. */
+  PAYMENT_PROVIDER_RATE_LIMITED: 'PAYMENT_PROVIDER_RATE_LIMITED',
+  /** Any other Stripe failure (authentication, API, connection). */
+  PAYMENT_PROVIDER_ERROR: 'PAYMENT_PROVIDER_ERROR',
 } as const;
 export type BillingErrorCode = (typeof BillingErrorCode)[keyof typeof BillingErrorCode];
 

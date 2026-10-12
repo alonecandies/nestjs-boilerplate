@@ -12,19 +12,19 @@ src/
   domain/          Payment aggregate (status machine), PaymentSucceededEvent, errors, PaymentStatus
   application/     commands (CreateCheckoutSession, HandleStripeWebhook), query (ListPayments),
                    PaymentSucceededRelay (→ Kafka), BillingPort, repository abstractions, mapper
-  infrastructure/  billing.schema.ts (Drizzle), Drizzle repositories, local + gRPC port adapters
+  infrastructure/  billing.schema.ts (Drizzle), Drizzle repositories, local + gRPC port adapters, the Stripe adapter (stripe/)
   presentation/    REST BillingController, GraphQL BillingResolver, gRPC BillingGrpcController
   billing-core.module.ts · billing-grpc.module.ts · billing-api.module.ts
 ```
 
 ## Modules and wiring
 
-| Module                         | Contents                                                                                                        | Used by          |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `BillingCoreModule`            | CQRS handlers, `PaymentSucceededRelay`, Drizzle repositories                                                    | (via the others) |
-| `BillingGrpcModule`            | `BillingCoreModule` + `BillingGrpcController` (`billing.v1.BillingService`)                                     | billing-service  |
-| `BillingApiModule.forLocal()`  | `BillingController` + `BillingResolver` + `BillingPort → BillingLocalAdapter` + `BillingCoreModule`             | monolith         |
-| `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule(['billing'])` | gateway          |
+| Module                         | Contents                                                                                                         | Used by          |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `BillingCoreModule`            | CQRS handlers, `PaymentSucceededRelay`, Drizzle repositories, the Stripe adapter (`StripeModule.forRootAsync()`) | (via the others) |
+| `BillingGrpcModule`            | `BillingCoreModule` + `BillingGrpcController` (`billing.v1.BillingService`)                                      | billing-service  |
+| `BillingApiModule.forLocal()`  | `BillingController` + `BillingResolver` + `BillingPort → BillingLocalAdapter` + `BillingCoreModule`              | monolith         |
+| `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule(['billing'])`  | gateway          |
 
 The REST controller and GraphQL resolver are the same classes in both topologies; they only know
 `BillingPort`. Both adapters return the `@domain/billing-contracts` `billing.v1` shapes.
@@ -41,7 +41,6 @@ The REST controller and GraphQL resolver are the same classes in both topologies
     DatabaseModule.forRootAsync({ schema: billingSchema }),
     RedisModule.forRootAsync(),
     KafkaProducerModule.forRootAsync(),
-    StripeModule.forRootAsync(),
     BillingGrpcModule,
   ],
 })
@@ -49,7 +48,7 @@ export class AppModule {}
 // main.ts: createServiceApp(AppModule) → connectGrpcServer(app, [BILLING_GRPC_PACKAGE]) → startAllMicroservices → listen
 
 // monolith: CqrsModule.forRoot(), DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema } }),
-//           KafkaProducerModule, StripeModule, AuthModule, AppThrottlerModule, AppGraphqlModule,
+//           KafkaProducerModule, AuthModule, AppThrottlerModule, AppGraphqlModule,
 //           IdentityApiModule.forLocal(), BillingApiModule.forLocal(), …
 // gateway:  AuthModule, AppThrottlerModule, AppGraphqlModule, IdentityApiModule.forRemote(), BillingApiModule.forRemote(), …
 // both:     createHttpApp(AppModule, { rawBody: true }) — the Stripe webhook verifies the raw bytes.
@@ -66,8 +65,9 @@ What the edge (monolith / gateway) must provide:
 - An HTTP app created with `rawBody: true` (`req.rawBody` for `application/json`).
 - `nestjs-cls` (from `ObservabilityModule`) is used by the gRPC adapter to propagate request/correlation ids.
 
-`BillingCoreModule` expects the global `CqrsModule.forRoot()`, `DatabaseModule` (DRIZZLE + `@Transactional()`),
-`StripeModule` and `KafkaProducerModule`; it loads the `stripe` config namespace itself.
+`BillingCoreModule` expects the global `CqrsModule.forRoot()`, `DatabaseModule` (DRIZZLE + `@Transactional()`)
+and `KafkaProducerModule`. It imports its own Stripe adapter (`StripeModule.forRootAsync()`, below) and loads the
+`stripe` config namespace itself, so no app imports Stripe.
 
 ## API
 
@@ -82,7 +82,7 @@ What the edge (monolith / gateway) must provide:
 Errors are RFC 9457 `application/problem+json`: 400 (validation, `errors[]`), 401, 403, 409
 (`IDEMPOTENCY_KEY_REUSED`, `PAYMENT_CONCURRENTLY_MODIFIED`), 422 (`INVALID_WEBHOOK_SIGNATURE`,
 `INVALID_WEBHOOK_PAYLOAD`, `INVALID_CURSOR`), 502 (`PAYMENT_PROVIDER_ERROR`, `CHECKOUT_URL_MISSING`). Responses are enforced by
-`StandardSchemaSerializerInterceptor` (unknown fields are stripped) and documented in OpenAPI from the same zod schemas.
+`StandardSchemaSerializerInterceptor` (unknown fields are stripped) and documented in OpenAPI from the same zod schemas. Every billing code, the Stripe adapter's included, is a `BillingErrorCode` value.
 
 ### GraphQL
 
@@ -151,6 +151,49 @@ errors to gRPC statuses and `x-error-code` trailers, and `BillingGrpcAdapter` ma
 | `billing.payment-succeeded.v1` | `userId` | `{ paymentId, userId, stripeCheckoutSessionId, amountTotal, currency, paidAt }`; envelope id = domain event id |
 
 Billing consumes no topic.
+
+## Stripe adapter (`infrastructure/stripe`)
+
+One process-wide Stripe client, a small typed facade (`StripeService`) for idempotent Checkout Sessions and
+webhook signature verification, and a mapper that turns Stripe SDK errors into `DomainException`s, so the
+handlers never see `Stripe.errors.*`. (It used to be the `@platform/payments` package.)
+
+| Export                                                          | Kind              | Purpose                                                                                                      |
+| --------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------ |
+| `StripeModule.forRootAsync(): DynamicModule`                    | module            | `STRIPE_CLIENT` + `StripeService` from the `stripe` namespace. Imported by `BillingCoreModule` (not global). |
+| `StripeService`                                                 | provider          | `createCheckoutSession(input, idempotencyKey?)`, `constructWebhookEvent(payload, signature)`, `client`.      |
+| `createStripeClient(cfg: StripeConfig): Stripe`                 | function          | Builds the SDK client (used by the module and by tests).                                                     |
+| `STRIPE_CLIENT` / `InjectStripe()`                              | token / decorator | Raw `Stripe` instance for calls the facade doesn't wrap.                                                     |
+| `StripeCheckoutSessionInput`                                    | type              | `{ customerEmail, priceId, quantity, successUrl, cancelUrl, clientReferenceId, metadata }`.                  |
+| `toPaymentDomainException(error): DomainException \| undefined` | function          | Stripe SDK error → `DomainException` (`undefined` for non-Stripe values).                                    |
+| `STRIPE_WEBHOOK_TOLERANCE_SEC` (300), `STRIPE_APP_INFO`         | constants         | Replay window for webhook timestamps; app info sent to Stripe.                                               |
+
+| Stripe error                | DomainException                                               | `BillingErrorCode`              |
+| --------------------------- | ------------------------------------------------------------- | ------------------------------- |
+| `StripeIdempotencyError`    | `DomainConflictException` (409)                               | `IDEMPOTENCY_KEY_REUSED`        |
+| `StripeCardError`           | `BusinessRuleViolationException` (422, `details.declineCode`) | `PAYMENT_DECLINED`              |
+| `StripeInvalidRequestError` | `DomainValidationException` (422, issue at `param`)           | `PAYMENT_REQUEST_INVALID`       |
+| `StripeRateLimitError`      | `ServiceUnavailableException` (503)                           | `PAYMENT_PROVIDER_RATE_LIMITED` |
+| anything else from Stripe   | `ExternalServiceException` (502, generic message)             | `PAYMENT_PROVIDER_ERROR`        |
+
+`details.stripeRequestId` is attached when Stripe returned one. Webhook verification fails with 422
+`INVALID_WEBHOOK_SIGNATURE` (missing, forged or stale signature) or `INVALID_WEBHOOK_PAYLOAD` (signed but not JSON).
+
+**Environment.** The adapter reads the `stripe` config namespace: `STRIPE_SECRET_KEY` (must start `sk_`/`rk_`),
+`STRIPE_WEBHOOK_SECRET` (must start `whsec_`; both dev placeholders are rejected when `NODE_ENV=production`),
+`STRIPE_MAX_NETWORK_RETRIES` (2) and `STRIPE_TIMEOUT_MS` (20000). `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` are read
+by `CreateCheckoutSessionHandler`, not by the adapter.
+
+- The webhook needs the **raw request body**: the signature covers the exact bytes. Create the app with
+  `rawBody: true` and pass `req.rawBody`; re-serialised JSON never verifies (a test covers this).
+- The webhook route must be `@Public()` and skip throttling. Reply 2xx fast and make processing idempotent by
+  `event.id`: Stripe retries, and may deliver duplicates or deliver out of order.
+- `apiVersion` is left out on purpose: the SDK types it as its pinned literal, so the API version moves with SDK
+  upgrades. Pin the webhook endpoint in the dashboard to the same version.
+- `constructWebhookEvent` is synchronous on purpose (node:crypto HMAC is the cheapest path).
+- The SDK keeps connections alive and retries 409/429/5xx/network errors, adding idempotency keys to retried
+  POSTs; the handlers still pass their own business key (`checkout-<paymentId>`).
+- Tests sign payloads with `Stripe.webhooks.generateTestHeaderString({ payload, secret, timestamp? })`.
 
 ## Flows
 
@@ -226,6 +269,7 @@ through `TransactionHost` and join the active transaction.
   adapter (null normalisation, metadata, error mapping), gRPC controller (bus mapping, zod payload schemas).
 - Drizzle repositories: real Drizzle SQL generation on a recording postgres.js fake (ON CONFLICT targets,
   `FOR UPDATE`, optimistic lock, prepared list statements).
+- `infrastructure/stripe/*.spec.ts` — the Stripe adapter: SDK error mapping, signature verification (valid, forged, stale, re-serialised, missing, not JSON), Checkout params and idempotency key, module wiring and the invalid-key boot failure.
 - `billing.controller.spec.ts` — Fastify app with the real `AuthModule` guards (tokens from `TokenService`):
   401/403, 400 validation (body, query, `Idempotency-Key`), serialisation, raw-body webhook, OpenAPI document.
 - `billing.resolver.spec.ts` — Apollo on Fastify: payments (owner as `userId`; billing defines no `user` field), RBAC, input validation.

@@ -13,7 +13,6 @@ import {
   keysetPage,
   TransactionHost,
 } from '@platform/database';
-import { createStripeClient, StripeService } from '@platform/payments';
 import { getTableColumns } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { cloneDeep, isEmpty } from 'lodash-es';
@@ -31,6 +30,8 @@ import { PaymentConcurrentlyModifiedException } from '../src/domain/billing.erro
 import { Payment, type PaymentSnapshot } from '../src/domain/payment.aggregate.js';
 import { payments } from '../src/infrastructure/persistence/billing.schema.js';
 import { toPaymentRow } from '../src/infrastructure/persistence/payment-row.mapper.js';
+import { createStripeClient } from '../src/infrastructure/stripe/stripe.module.js';
+import { StripeService } from '../src/infrastructure/stripe/stripe.service.js';
 
 export const TEST_WEBHOOK_SECRET = 'whsec_billing_unit_test_secret';
 export const testStripeConfig = stripeConfig.parse({

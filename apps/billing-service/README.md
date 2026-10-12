@@ -17,18 +17,17 @@ root.
 
 ## Composition (`src/app.module.ts`)
 
-| Module                                                                   | Why                                                                                                                |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `AppConfigModule.forRoot()` + `ConfigModule.forFeature(grpcConfig)`      | `app`/`observability` + the gRPC bind namespace, validated at boot                                                 |
-| `ObservabilityModule.forRoot({ healthContributors: [postgres, redis] })` | pino JSON logs, request context, `/metrics`, `/health/*`; Kafka is not a readiness dependency (best-effort events) |
-| `CqrsModule.forRoot()`                                                   | command/query buses, `EventPublisher` (events published after COMMIT)                                              |
-| `ScheduleModule.forRoot()`                                               | runs `PurgeStripeEventsCron` (hourly `stripe_events` retention, one replica via `@WithLock`)                       |
-| `DatabaseModule.forRootAsync({ schema: billingSchema })`                 | Drizzle + postgres.js pool, the transactional CLS plugin behind `@Transactional()`, migrations                     |
-| `RedisModule.forRootAsync()`                                             | readiness + the distributed lock of `PurgeStripeEventsCron`                                                        |
-| `KafkaProducerModule.forRootAsync()`                                     | idempotent producer for `PaymentSucceededRelay`                                                                    |
-| `StripeModule.forRootAsync()`                                            | Stripe client (retries, timeout) + webhook signature verification                                                  |
-| `BillingGrpcModule`                                                      | `BillingCoreModule` + `BillingGrpcController`                                                                      |
-| `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`            | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC too                                  |
+| Module                                                                   | Why                                                                                                                               |
+| ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `AppConfigModule.forRoot()` + `ConfigModule.forFeature(grpcConfig)`      | `app`/`observability` + the gRPC bind namespace, validated at boot                                                                |
+| `ObservabilityModule.forRoot({ healthContributors: [postgres, redis] })` | pino JSON logs, request context, `/metrics`, `/health/*`; Kafka is not a readiness dependency (best-effort events)                |
+| `CqrsModule.forRoot()`                                                   | command/query buses, `EventPublisher` (events published after COMMIT)                                                             |
+| `ScheduleModule.forRoot()`                                               | runs `PurgeStripeEventsCron` (hourly `stripe_events` retention, one replica via `@WithLock`)                                      |
+| `DatabaseModule.forRootAsync({ schema: billingSchema })`                 | Drizzle + postgres.js pool, the transactional CLS plugin behind `@Transactional()`, migrations                                    |
+| `RedisModule.forRootAsync()`                                             | readiness + the distributed lock of `PurgeStripeEventsCron`                                                                       |
+| `KafkaProducerModule.forRootAsync()`                                     | idempotent producer for `PaymentSucceededRelay`                                                                                   |
+| `BillingGrpcModule`                                                      | `BillingCoreModule` (with its Stripe adapter: client, retries, timeout, webhook signature verification) + `BillingGrpcController` |
+| `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`            | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC too                                                 |
 
 `main.ts`: `createServiceApp(AppModule)` → `connectGrpcServer(app, [BILLING_GRPC_PACKAGE])` →
 `startAllMicroservices()` → `listen(app)`.

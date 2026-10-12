@@ -88,7 +88,7 @@ Errors are RFC 9457 `application/problem+json` (`type`, `title`, `status`, `deta
 
 - `src/app.module.ts` — import order is deliberate: config → observability → CQRS/schedule →
   data stores → Redis/cache → `AuthModule` **before** `AppThrottlerModule` (global guards run in
-  registration order; the throttler tracks by user) → queue/mailer/Kafka/Stripe/storage →
+  registration order; the throttler tracks by user) → queue/mailer/Kafka/storage →
   GraphQL + Redis PubSub → the domain modules. The `Api` modules import their `Core` module; never
   import a Core module a second time. Root providers: `provideCommonEnhancersAsync` (both
   validation pipes, the problem+json filter, the handler timeout); root middleware:

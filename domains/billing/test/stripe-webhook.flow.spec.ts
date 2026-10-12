@@ -11,7 +11,6 @@ import { AuthModule } from '@platform/auth';
 import { provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { makeCounterProvider } from '@platform/observability';
-import { StripeService } from '@platform/payments';
 import { createFastifyTestApp } from '@platform/testing';
 import { FakeKafkaProducer, KafkaProducer } from '@platform/transport';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -23,6 +22,7 @@ import { StripeEventsRepository } from '../src/application/repositories/stripe-e
 import { PAID_WITHOUT_CURRENCY_METRIC } from '../src/billing.constants.js';
 import { PaymentStatus } from '../src/domain/payment-status.enum.js';
 import { BillingLocalAdapter } from '../src/infrastructure/adapters/local/billing-local.adapter.js';
+import { StripeService } from '../src/infrastructure/stripe/stripe.service.js';
 import { BillingController } from '../src/presentation/http/billing.controller.js';
 import { FakeRedisModule } from './billing-http-test.utils.js';
 import {

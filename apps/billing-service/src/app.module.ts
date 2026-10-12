@@ -7,7 +7,6 @@ import { CorrelationIdMiddleware, provideCommonEnhancersAsync } from '@platform/
 import { type AppConfig, AppConfigModule, appConfig, grpcConfig } from '@platform/config';
 import { DatabaseHealthIndicator, DatabaseModule } from '@platform/database';
 import { ObservabilityModule } from '@platform/observability';
-import { StripeModule } from '@platform/payments';
 import { RedisHealthIndicator, RedisModule } from '@platform/redis';
 import { KafkaProducerModule } from '@platform/transport';
 
@@ -37,8 +36,7 @@ import { KafkaProducerModule } from '@platform/transport';
     DatabaseModule.forRootAsync({ schema: billingSchema }),
     RedisModule.forRootAsync(),
     KafkaProducerModule.forRootAsync(),
-    // The Stripe client (secret key, retries, timeout) + webhook signature verification.
-    StripeModule.forRootAsync(),
+    // The core (handlers, repositories, its own Stripe adapter) + billing.v1.BillingService.
     BillingGrpcModule,
   ],
   providers: [

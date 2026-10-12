@@ -31,7 +31,6 @@
     "@platform/mailer": "workspace:*",
     "@domain/notifications": "workspace:*",
     "@platform/observability": "workspace:*",
-    "@platform/payments": "workspace:*",
     "@platform/redis": "workspace:*",
     "@platform/storage": "workspace:*",
     "@platform/transport": "workspace:*",

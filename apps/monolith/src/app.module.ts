@@ -22,7 +22,6 @@ import { DatabaseHealthIndicator, DatabaseModule } from '@platform/database';
 import { AppGraphqlModule, GraphqlPubSubModule } from '@platform/graphql';
 import { AppMailerModule } from '@platform/mailer';
 import { ObservabilityModule } from '@platform/observability';
-import { StripeModule } from '@platform/payments';
 import {
   AppCacheModule,
   AppQueueModule,
@@ -79,7 +78,6 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
     AppQueueModule.forRootAsync(),
     AppMailerModule.forRootAsync({ templateDirs: [NOTIFICATIONS_MAIL_TEMPLATES_DIR] }),
     KafkaProducerModule.forRootAsync(),
-    StripeModule.forRootAsync(),
     StorageModule.forRootAsync(),
 
     // GraphQL (Apollo on Fastify) + Redis PubSub for subscriptions across replicas.

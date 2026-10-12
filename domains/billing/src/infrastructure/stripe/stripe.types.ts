@@ -1,5 +1,5 @@
 /** Input of `StripeService.createCheckoutSession` (one-off payment for a single price). */
-export interface CreateCheckoutSessionInput {
+export interface StripeCheckoutSessionInput {
   /** Pre-fills the Checkout email field and receives Stripe's receipt. */
   customerEmail: string;
   /** Stripe Price id (`price_…`). */

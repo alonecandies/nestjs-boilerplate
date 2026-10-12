@@ -21,15 +21,15 @@ export function createStripeClient(cfg: StripeConfig): Stripe {
 }
 
 /**
- * Global Stripe integration: `STRIPE_CLIENT` (raw SDK, `@InjectStripe()`) + `StripeService`.
- * Import once in the process that talks to Stripe (billing-service / monolith).
+ * Billing's Stripe adapter: `STRIPE_CLIENT` (raw SDK, `@InjectStripe()`) + `StripeService`.
+ * Imported by `BillingCoreModule` only (its handlers are the one consumer), so no app imports it
+ * and it is not global.
  */
 @Module({})
 export class StripeModule {
   static forRootAsync(): DynamicModule {
     return {
       module: StripeModule,
-      global: true,
       imports: [ConfigModule.forFeature(stripeConfig)],
       providers: [
         {

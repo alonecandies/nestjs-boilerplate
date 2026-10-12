@@ -13,6 +13,7 @@ import { PAID_WITHOUT_CURRENCY_METRIC } from './billing.constants.js';
 import { DrizzlePaymentsRepository } from './infrastructure/persistence/drizzle-payments.repository.js';
 import { DrizzleStripeEventsRepository } from './infrastructure/persistence/drizzle-stripe-events.repository.js';
 import { PurgeStripeEventsCron } from './infrastructure/scheduling/purge-stripe-events.cron.js';
+import { StripeModule } from './infrastructure/stripe/stripe.module.js';
 
 /**
  * The billing core: CQRS handlers, the Kafka relay and the Drizzle repositories. Imported by the
@@ -21,12 +22,12 @@ import { PurgeStripeEventsCron } from './infrastructure/scheduling/purge-stripe-
  *
  * Expects these global app-level modules: `AppConfigModule`, `CqrsModule.forRoot()`,
  * `DatabaseModule.forRootAsync({ schema: billingSchema })` (DRIZZLE + `@Transactional()`),
- * `StripeModule.forRootAsync()`, `KafkaProducerModule.forRootAsync()`, `RedisModule.forRootAsync()`
- * (the purge cron's distributed lock) and — for the cron to be scheduled —
- * `ScheduleModule.forRoot()`.
+ * `KafkaProducerModule.forRootAsync()`, `RedisModule.forRootAsync()` (the purge cron's
+ * distributed lock) and — for the cron to be scheduled — `ScheduleModule.forRoot()`. It imports
+ * its own Stripe adapter (`StripeModule.forRootAsync()`), so no app imports Stripe.
  */
 @Module({
-  imports: [ConfigModule.forFeature(stripeConfig)],
+  imports: [ConfigModule.forFeature(stripeConfig), StripeModule.forRootAsync()],
   providers: [
     CreateCheckoutSessionHandler,
     HandleStripeWebhookHandler,

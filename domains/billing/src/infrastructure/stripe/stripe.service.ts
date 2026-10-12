@@ -2,9 +2,10 @@ import { Inject, Injectable } from '@nestjs/common';
 import { DomainValidationException } from '@platform/common';
 import { type StripeConfig, stripeConfig } from '@platform/config';
 import Stripe from 'stripe';
+import { BillingErrorCode } from '../../billing.constants.js';
 import { InjectStripe, STRIPE_WEBHOOK_TOLERANCE_SEC } from './stripe.constants.js';
-import { PaymentErrorCode, toPaymentDomainException } from './stripe.errors.js';
-import type { CreateCheckoutSessionInput } from './stripe.types.js';
+import { toPaymentDomainException } from './stripe.errors.js';
+import type { StripeCheckoutSessionInput } from './stripe.types.js';
 
 /**
  * Thin, typed facade over the Stripe SDK used by the billing domain. It owns the two concerns
@@ -24,7 +25,7 @@ export class StripeService {
    * instead of creating a second one (Stripe keeps keys for 24h).
    */
   async createCheckoutSession(
-    input: CreateCheckoutSessionInput,
+    input: StripeCheckoutSessionInput,
     idempotencyKey?: string,
   ): Promise<Stripe.Checkout.Session> {
     const params: Stripe.Checkout.SessionCreateParams = {
@@ -59,7 +60,7 @@ export class StripeService {
   constructWebhookEvent(payload: Buffer, signature: string | undefined): Stripe.Event {
     if (!signature) {
       throw new DomainValidationException('Missing webhook signature', {
-        code: PaymentErrorCode.INVALID_WEBHOOK_SIGNATURE,
+        code: BillingErrorCode.INVALID_WEBHOOK_SIGNATURE,
       });
     }
     try {
@@ -72,13 +73,13 @@ export class StripeService {
     } catch (error) {
       if (error instanceof Stripe.errors.StripeSignatureVerificationError) {
         throw new DomainValidationException('Invalid webhook signature', {
-          code: PaymentErrorCode.INVALID_WEBHOOK_SIGNATURE,
+          code: BillingErrorCode.INVALID_WEBHOOK_SIGNATURE,
           cause: error,
         });
       }
       if (error instanceof SyntaxError) {
         throw new DomainValidationException('Invalid webhook payload', {
-          code: PaymentErrorCode.INVALID_WEBHOOK_PAYLOAD,
+          code: BillingErrorCode.INVALID_WEBHOOK_PAYLOAD,
           cause: error,
         });
       }

@@ -5,7 +5,6 @@ import {
   generateId,
   isUuidV7,
 } from '@platform/common';
-import type { StripeService } from '@platform/payments';
 import { createMock, type Mocked } from '@platform/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -19,6 +18,7 @@ import {
   IdempotencyKeyReusedException,
 } from '../../../domain/billing.errors.js';
 import { PaymentStatus } from '../../../domain/payment-status.enum.js';
+import type { StripeService } from '../../../infrastructure/stripe/stripe.service.js';
 import { CreateCheckoutSessionCommand } from './create-checkout-session.command.js';
 import {
   CreateCheckoutSessionHandler,

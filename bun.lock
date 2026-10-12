@@ -63,7 +63,6 @@
         "@platform/contracts": "workspace:*",
         "@platform/database": "workspace:*",
         "@platform/observability": "workspace:*",
-        "@platform/payments": "workspace:*",
         "@platform/redis": "workspace:*",
         "@platform/transport": "workspace:*",
         "class-transformer": "catalog:",
@@ -194,7 +193,6 @@
         "@platform/graphql": "workspace:*",
         "@platform/mailer": "workspace:*",
         "@platform/observability": "workspace:*",
-        "@platform/payments": "workspace:*",
         "@platform/redis": "workspace:*",
         "@platform/storage": "workspace:*",
         "@platform/transport": "workspace:*",
@@ -277,7 +275,6 @@
         "@platform/database": "workspace:*",
         "@platform/graphql": "workspace:*",
         "@platform/observability": "workspace:*",
-        "@platform/payments": "workspace:*",
         "@platform/redis": "workspace:*",
         "@platform/transport": "workspace:*",
         "class-validator": "catalog:",
@@ -689,18 +686,6 @@
         "@types/lodash-es": "catalog:",
         "fastify": "catalog:",
         "pino-pretty": "catalog:",
-      },
-    },
-    "libs/payments": {
-      "name": "@platform/payments",
-      "version": "0.0.0",
-      "dependencies": {
-        "@nestjs/common": "catalog:",
-        "@nestjs/config": "catalog:",
-        "@nestjs/core": "catalog:",
-        "@platform/common": "workspace:*",
-        "@platform/config": "workspace:*",
-        "stripe": "catalog:",
       },
     },
     "libs/redis": {
@@ -1849,8 +1834,6 @@
     "@platform/mailer": ["@platform/mailer@workspace:libs/mailer"],
 
     "@platform/observability": ["@platform/observability@workspace:libs/observability"],
-
-    "@platform/payments": ["@platform/payments@workspace:libs/payments"],
 
     "@platform/redis": ["@platform/redis@workspace:libs/redis"],
 

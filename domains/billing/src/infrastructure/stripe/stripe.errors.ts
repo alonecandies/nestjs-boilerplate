@@ -7,18 +7,7 @@ import {
   ServiceUnavailableException,
 } from '@platform/common';
 import Stripe from 'stripe';
-
-/** Stable error codes emitted by `@platform/payments` (part of the public API — never rename). */
-export const PaymentErrorCode = {
-  INVALID_WEBHOOK_SIGNATURE: 'INVALID_WEBHOOK_SIGNATURE',
-  INVALID_WEBHOOK_PAYLOAD: 'INVALID_WEBHOOK_PAYLOAD',
-  PAYMENT_REQUEST_INVALID: 'PAYMENT_REQUEST_INVALID',
-  PAYMENT_DECLINED: 'PAYMENT_DECLINED',
-  IDEMPOTENCY_KEY_REUSED: 'IDEMPOTENCY_KEY_REUSED',
-  PAYMENT_PROVIDER_RATE_LIMITED: 'PAYMENT_PROVIDER_RATE_LIMITED',
-  PAYMENT_PROVIDER_ERROR: 'PAYMENT_PROVIDER_ERROR',
-} as const;
-export type PaymentErrorCode = (typeof PaymentErrorCode)[keyof typeof PaymentErrorCode];
+import { BillingErrorCode } from '../../billing.constants.js';
 
 /**
  * Translates a Stripe SDK error into the platform's `DomainException` vocabulary so billing code
@@ -34,21 +23,21 @@ export function toPaymentDomainException(error: unknown): DomainException | unde
 
   if (error instanceof Stripe.errors.StripeIdempotencyError) {
     return new DomainConflictException('The idempotency key was already used for another request', {
-      code: PaymentErrorCode.IDEMPOTENCY_KEY_REUSED,
+      code: BillingErrorCode.IDEMPOTENCY_KEY_REUSED,
       cause: error,
       details,
     });
   }
   if (error instanceof Stripe.errors.StripeCardError) {
     return new BusinessRuleViolationException(error.message, {
-      code: PaymentErrorCode.PAYMENT_DECLINED,
+      code: BillingErrorCode.PAYMENT_DECLINED,
       cause: error,
       details: { ...details, declineCode: error.decline_code },
     });
   }
   if (error instanceof Stripe.errors.StripeInvalidRequestError) {
     return new DomainValidationException(error.message, {
-      code: PaymentErrorCode.PAYMENT_REQUEST_INVALID,
+      code: BillingErrorCode.PAYMENT_REQUEST_INVALID,
       cause: error,
       details,
       issues: [
@@ -62,14 +51,14 @@ export function toPaymentDomainException(error: unknown): DomainException | unde
   }
   if (error instanceof Stripe.errors.StripeRateLimitError) {
     return new ServiceUnavailableException('The payment provider is busy, please retry shortly', {
-      code: PaymentErrorCode.PAYMENT_PROVIDER_RATE_LIMITED,
+      code: BillingErrorCode.PAYMENT_PROVIDER_RATE_LIMITED,
       cause: error,
       details,
     });
   }
   // Authentication/permission (our misconfiguration), API and connection errors: upstream failure.
   return new ExternalServiceException('The payment provider request failed', {
-    code: PaymentErrorCode.PAYMENT_PROVIDER_ERROR,
+    code: BillingErrorCode.PAYMENT_PROVIDER_ERROR,
     cause: error,
     details,
   });

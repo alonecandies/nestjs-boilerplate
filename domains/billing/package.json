@@ -27,7 +27,6 @@
     "@platform/database": "workspace:*",
     "@platform/graphql": "workspace:*",
     "@platform/observability": "workspace:*",
-    "@platform/payments": "workspace:*",
     "@platform/redis": "workspace:*",
     "@platform/transport": "workspace:*",
     "@grpc/grpc-js": "catalog:",

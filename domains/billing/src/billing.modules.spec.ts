@@ -3,14 +3,9 @@ import { CqrsModule, QueryBus } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
 import { AppConfigModule } from '@platform/config';
 import { DRIZZLE, TransactionHost } from '@platform/database';
-import { StripeService } from '@platform/payments';
 import { FakeKafkaProducer, KafkaProducer } from '@platform/transport';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  createRecordingDrizzle,
-  createTestStripeService,
-  installTestTransactionHost,
-} from '../test/billing-test.utils.js';
+import { createRecordingDrizzle, installTestTransactionHost } from '../test/billing-test.utils.js';
 import { BillingPort } from './application/ports/billing.port.js';
 import { ListPaymentsQuery } from './application/queries/list-payments/list-payments.query.js';
 import { PaymentsRepository } from './application/repositories/payments.repository.js';
@@ -18,9 +13,14 @@ import { BillingApiModule } from './billing-api.module.js';
 import { BillingGrpcModule } from './billing-grpc.module.js';
 import { BillingGrpcAdapter } from './infrastructure/adapters/grpc/billing-grpc.adapter.js';
 import { BillingLocalAdapter } from './infrastructure/adapters/local/billing-local.adapter.js';
+import { StripeService } from './infrastructure/stripe/stripe.service.js';
 import { BillingGrpcController } from './presentation/grpc/billing-grpc.controller.js';
 
-/** What the apps' global infrastructure modules provide, faked (no Postgres, Kafka, Stripe). */
+/**
+ * What the apps' global infrastructure modules provide, faked (no Postgres, no Kafka). No Stripe:
+ * BillingCoreModule brings its own adapter (a real client from the dev placeholder key, which
+ * opens no connection until a call).
+ */
 function fakeInfrastructure() {
   const recording = createRecordingDrizzle();
   const { host } = installTestTransactionHost(undefined, recording.db);
@@ -30,10 +30,9 @@ function fakeInfrastructure() {
     providers: [
       { provide: DRIZZLE, useValue: recording.db },
       { provide: TransactionHost, useValue: host },
-      { provide: StripeService, useValue: createTestStripeService() },
       { provide: KafkaProducer, useValue: new FakeKafkaProducer() },
     ],
-    exports: [DRIZZLE, TransactionHost, StripeService, KafkaProducer],
+    exports: [DRIZZLE, TransactionHost, KafkaProducer],
   })
   class FakeInfrastructureModule {}
 
@@ -56,6 +55,8 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
     context = await moduleRef.init();
 
     expect(context.get(BillingGrpcController)).toBeInstanceOf(BillingGrpcController);
+    // The Stripe adapter comes with the core, not from an app-level module.
+    expect(context.get(StripeService, { strict: false })).toBeInstanceOf(StripeService);
     await expect(
       context.get(QueryBus).execute(new ListPaymentsQuery({ limit: 3 })),
     ).resolves.toEqual({

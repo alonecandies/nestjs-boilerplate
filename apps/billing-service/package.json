@@ -25,7 +25,6 @@
     "@domain/billing-contracts": "workspace:*",
     "@platform/database": "workspace:*",
     "@platform/observability": "workspace:*",
-    "@platform/payments": "workspace:*",
     "@platform/redis": "workspace:*",
     "@platform/transport": "workspace:*",
     "@fastify/static": "catalog:",

@@ -3,13 +3,13 @@ import { Inject, Logger } from '@nestjs/common';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { DomainConflictException, generateId } from '@platform/common';
 import { type StripeConfig, stripeConfig } from '@platform/config';
-import { StripeService } from '@platform/payments';
 import type Stripe from 'stripe';
 import {
   CheckoutUrlMissingException,
   IdempotencyKeyReusedException,
 } from '../../../domain/billing.errors.js';
 import { Payment } from '../../../domain/payment.aggregate.js';
+import { StripeService } from '../../../infrastructure/stripe/stripe.service.js';
 import { PaymentsRepository } from '../../repositories/payments.repository.js';
 import { CreateCheckoutSessionCommand } from './create-checkout-session.command.js';
 
