@@ -1,13 +1,19 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
+import { MAIL_PARTIALS_DIR, MAIL_TEMPLATE_HELPERS } from '@platform/mailer';
 import Handlebars from 'handlebars';
-import { beforeAll, describe, expect, it } from 'vitest';
-import { MAIL_TEMPLATE_HELPERS } from './mail-template.helpers.js';
-import { MAIL_PARTIALS_DIR, MAIL_TEMPLATES, MAIL_TEMPLATES_DIR } from './mailer.constants.js';
+import { beforeAll, describe, expect, expectTypeOf, it } from 'vitest';
+import {
+  NOTIFICATIONS_MAIL_TEMPLATES,
+  type NotificationsMailContextMap,
+  type NotificationsMailTemplate,
+} from '../../application/mail/notifications-mail.js';
+import { NOTIFICATIONS_MAIL_TEMPLATES_DIR } from './notifications-mail-templates.js';
 
 /**
  * Compiles the .hbs files with an isolated Handlebars environment, using the same compile options
- * (strict), helpers and partial names as the mailer's HandlebarsAdapter.
+ * (strict), helpers and shared layout partials (`@platform/mailer`) as the mailer's
+ * HandlebarsAdapter.
  */
 function createRenderer(): (template: string, context: Record<string, unknown>) => string {
   const hbs = Handlebars.create();
@@ -20,9 +26,10 @@ function createRenderer(): (template: string, context: Record<string, unknown>) 
   return (template, context) => {
     let fn = compiled.get(template);
     if (fn === undefined) {
-      fn = hbs.compile(readFileSync(join(MAIL_TEMPLATES_DIR, `${template}.hbs`), 'utf8'), {
-        strict: true,
-      });
+      fn = hbs.compile(
+        readFileSync(join(NOTIFICATIONS_MAIL_TEMPLATES_DIR, `${template}.hbs`), 'utf8'),
+        { strict: true },
+      );
       compiled.set(template, fn);
     }
     return fn(context);
@@ -31,7 +38,7 @@ function createRenderer(): (template: string, context: Record<string, unknown>) 
 
 const base = { appName: 'Acme', year: 2026 };
 
-describe('mail templates', () => {
+describe('notifications mail templates', () => {
   let render: ReturnType<typeof createRenderer>;
 
   beforeAll(() => {
@@ -39,29 +46,36 @@ describe('mail templates', () => {
   });
 
   it('ships exactly the declared templates', () => {
-    const files = readdirSync(MAIL_TEMPLATES_DIR)
+    const files = readdirSync(NOTIFICATIONS_MAIL_TEMPLATES_DIR)
       .filter((f) => f.endsWith('.hbs'))
       .map((f) => basename(f, '.hbs'))
       .sort();
 
-    expect(files).toEqual([...MAIL_TEMPLATES].sort());
+    expect(files).toEqual([...NOTIFICATIONS_MAIL_TEMPLATES].sort());
   });
 
-  it.each(MAIL_TEMPLATES)('%s renders a complete HTML document with header and footer', (name) => {
-    const html = render(name, {
-      ...base,
-      displayName: 'Jane',
-      paymentId: 'pay_1',
-      amount: '$19.99',
-      paidAt: '2026-09-29',
-      unreadCount: 0,
-      items: [],
-    });
-
-    expect(html).toMatch(/^<!doctype html>/);
-    expect(html).toContain('</html>');
-    expect(html).toContain('&copy; 2026 Acme');
+  it('declares a context type for every template', () => {
+    expectTypeOf<keyof NotificationsMailContextMap>().toEqualTypeOf<NotificationsMailTemplate>();
   });
+
+  it.each(NOTIFICATIONS_MAIL_TEMPLATES)(
+    '%s renders a complete HTML document with header and footer',
+    (name) => {
+      const html = render(name, {
+        ...base,
+        displayName: 'Jane',
+        paymentId: 'pay_1',
+        amount: '$19.99',
+        paidAt: '2026-09-29',
+        unreadCount: 0,
+        items: [],
+      });
+
+      expect(html).toMatch(/^<!doctype html>/);
+      expect(html).toContain('</html>');
+      expect(html).toContain('&copy; 2026 Acme');
+    },
+  );
 
   it('welcome: greets the user and escapes HTML in variables', () => {
     const html = render('welcome', { ...base, displayName: '<script>alert(1)</script>' });

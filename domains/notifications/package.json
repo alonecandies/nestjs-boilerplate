@@ -57,6 +57,7 @@
   "devDependencies": {
     "@platform/testing": "workspace:*",
     "@nestjs/testing": "catalog:",
-    "@types/lodash-es": "catalog:"
+    "@types/lodash-es": "catalog:",
+    "handlebars": "catalog:"
   }
 }

@@ -1,8 +1,9 @@
 import type { Notification } from '@domain/notifications-contracts';
 import { Logger } from '@nestjs/common';
 import { CommandBus, CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
-import { defineMail, formatMoney, MailService } from '@platform/mailer';
+import { formatMoney, MailService } from '@platform/mailer';
 import { toUpper } from 'lodash-es';
+import { defineNotificationsMail } from '../../mail/notifications-mail.js';
 import { NotificationRecipientsRepository } from '../../ports/notification-recipients.repository.js';
 import { CreateNotificationCommand } from '../create-notification/create-notification.command.js';
 import { SendPaymentReceiptCommand } from './send-payment-receipt.command.js';
@@ -39,7 +40,7 @@ export class SendPaymentReceiptHandler implements ICommandHandler<SendPaymentRec
 
     if (recipient) {
       await this.mail.enqueue(
-        defineMail({
+        defineNotificationsMail({
           to: recipient.email,
           subject: `Your receipt (${amount})`,
           template: 'payment-receipt',

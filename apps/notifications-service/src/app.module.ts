@@ -1,4 +1,5 @@
 import {
+  NOTIFICATIONS_MAIL_TEMPLATES_DIR,
   NotificationsGrpcModule,
   NotificationsMessagingModule,
   notificationsCassandraMigrations,
@@ -41,9 +42,13 @@ import { KafkaHealthIndicator, KafkaProducerModule } from '@platform/transport';
     // The digest's distributed lock.
     RedisModule.forRootAsync(),
     // BullMQ connection for the `mail` queue; AppMailerModule registers the queue, MailService
-    // and the MailProcessor worker (this service delivers mail).
+    // and the MailProcessor worker (this service delivers mail, rendering the notifications
+    // templates).
     AppQueueModule.forRootAsync(),
-    AppMailerModule.forRootAsync({ worker: true }),
+    AppMailerModule.forRootAsync({
+      templateDirs: [NOTIFICATIONS_MAIL_TEMPLATES_DIR],
+      worker: true,
+    }),
     KafkaProducerModule.forRootAsync(),
     NotificationsGrpcModule,
     NotificationsMessagingModule,

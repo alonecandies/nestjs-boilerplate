@@ -1,7 +1,8 @@
 import type { Notification } from '@domain/notifications-contracts';
 import { CommandBus, CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
-import { defineMail, MailService } from '@platform/mailer';
+import { MailService } from '@platform/mailer';
 import { trim } from 'lodash-es';
+import { defineNotificationsMail } from '../../mail/notifications-mail.js';
 import { NotificationRecipientsRepository } from '../../ports/notification-recipients.repository.js';
 import { CreateNotificationCommand } from '../create-notification/create-notification.command.js';
 import { WelcomeUserCommand } from './welcome-user.command.js';
@@ -35,7 +36,7 @@ export class WelcomeUserHandler implements ICommandHandler<WelcomeUserCommand> {
     );
 
     await this.mail.enqueue(
-      defineMail({
+      defineNotificationsMail({
         to: email,
         subject: WELCOME_MAIL_SUBJECT,
         template: 'welcome',

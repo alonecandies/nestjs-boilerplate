@@ -1,7 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { mapWithConcurrency } from '@platform/common';
-import { defineMail, MailService } from '@platform/mailer';
+import { MailService } from '@platform/mailer';
 import { countBy, filter, take } from 'lodash-es';
 import {
   DIGEST_CONCURRENCY,
@@ -10,6 +10,7 @@ import {
   DIGEST_RECIPIENTS_PAGE_SIZE,
   DIGEST_SCAN_PER_USER,
 } from '../../../notifications.constants.js';
+import { defineNotificationsMail } from '../../mail/notifications-mail.js';
 import {
   type NotificationRecipient,
   NotificationRecipientsRepository,
@@ -72,7 +73,7 @@ export class SendDailyDigestHandler implements ICommandHandler<SendDailyDigestCo
       const unread = filter(recent, (notification) => !notification.read);
       if (unread.length === 0) return 'skipped';
       await this.mail.enqueue(
-        defineMail({
+        defineNotificationsMail({
           to: recipient.email,
           subject: `You have ${unread.length} unread notification${unread.length === 1 ? '' : 's'}`,
           template: 'daily-digest',

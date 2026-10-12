@@ -1,19 +1,21 @@
-import type { MailTemplate } from './mailer.constants.js';
-
-/** A templated mail. Rendered with Handlebars (`strict`), so misspelled variables fail loudly. */
-export interface MailMessage {
+/**
+ * A templated mail. Rendered with Handlebars (`strict`), so misspelled variables fail loudly.
+ * `TTemplate` narrows the template name for typed builders (`defineMail`); `MailService` takes any.
+ */
+export interface MailMessage<TTemplate extends string = string> {
   /** Recipient address. */
   to: string;
   subject: string;
-  template: MailTemplate;
+  /** File name (without `.hbs`) of a template in one of the registered template dirs. */
+  template: TTemplate;
   /**
-   * Template variables. `appName` and `year` are filled in by default. See `WelcomeMailContext`,
-   * `PaymentReceiptMailContext` and `DailyDigestMailContext` for what each template reads.
+   * Template variables. `appName` and `year` are filled in by default (`BaseMailContext`); the
+   * domain that owns the template declares what else it reads.
    */
   context: Record<string, unknown>;
   /**
    * Deduplicates `enqueue()`: the same key within the retention window (24h) sends one mail.
-   * Derive it from the business event, e.g. `welcome-${userId}` or `receipt-${paymentId}`.
+   * Derive it from the business event, e.g. `order-confirmed-${orderId}`.
    */
   idempotencyKey?: string;
 }
@@ -31,39 +33,11 @@ export interface BaseMailContext {
   appUrl?: string;
 }
 
-/** `welcome.hbs` */
-export interface WelcomeMailContext extends BaseMailContext {
-  displayName: string;
-}
-
-/** `payment-receipt.hbs` */
-export interface PaymentReceiptMailContext extends BaseMailContext {
-  displayName?: string;
-  paymentId: string;
-  /** Pre-formatted amount incl. currency, e.g. `formatMoney(1999, 'usd')` → `$19.99`. */
-  amount: string;
-  /** ISO-8601 or pre-formatted date. */
-  paidAt: string;
-  description?: string;
-}
-
-/** One line of `daily-digest.hbs`. */
-export interface DigestItem {
-  title: string;
-  body: string;
-  createdAt: string;
-}
-
-/** `daily-digest.hbs` */
-export interface DailyDigestMailContext extends BaseMailContext {
-  displayName?: string;
-  unreadCount: number;
-  items: DigestItem[];
-}
-
-/** Template → context type, for callers that want compile-time checked contexts. */
-export interface MailTemplateContextMap {
-  welcome: WelcomeMailContext;
-  'payment-receipt': PaymentReceiptMailContext;
-  'daily-digest': DailyDigestMailContext;
+/**
+ * A `MailMessage` whose `context` is checked against `TContextMap[TTemplate]`, where `TContextMap`
+ * is one domain's template → context map (see `defineMail`).
+ */
+export interface TypedMailMessage<TContextMap, TTemplate extends keyof TContextMap & string>
+  extends Omit<MailMessage<TTemplate>, 'context'> {
+  context: TContextMap[TTemplate];
 }

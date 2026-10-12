@@ -2,6 +2,7 @@ import { BillingApiModule, billingSchema } from '@domain/billing';
 import { FilesModule } from '@domain/files';
 import { IdentityApiModule, identitySchema } from '@domain/identity';
 import {
+  NOTIFICATIONS_MAIL_TEMPLATES_DIR,
   NotificationsApiModule,
   NotificationsMessagingModule,
   notificationsCassandraMigrations,
@@ -74,7 +75,7 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
 
     // Async work and external services.
     AppQueueModule.forRootAsync(),
-    AppMailerModule.forRootAsync(),
+    AppMailerModule.forRootAsync({ templateDirs: [NOTIFICATIONS_MAIL_TEMPLATES_DIR] }),
     KafkaProducerModule.forRootAsync(),
     StripeModule.forRootAsync(),
     StorageModule.forRootAsync(),

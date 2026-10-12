@@ -7,14 +7,14 @@ import { isPermanentMailError } from './mail.errors.js';
 import { MailService } from './mail.service.js';
 import type { MailJobData } from './mail.types.js';
 import { createThrottledErrorLog } from './mail.util.js';
-import { DEFAULT_MAIL_CONCURRENCY, MAIL_QUEUE, type MailTemplate } from './mailer.constants.js';
+import { DEFAULT_MAIL_CONCURRENCY, MAIL_QUEUE } from './mailer.constants.js';
 
-type MailJob = Job<MailJobData, void, MailTemplate>;
+type MailJob = Job<MailJobData, void, string>;
 
 /**
  * BullMQ worker for the `mail` queue. Register it only in processes that should deliver mail
- * (`AppMailerModule.forRootAsync({ worker: true })`, e.g. notifications-service). Producers can
- * enqueue from anywhere.
+ * (`AppMailerModule.forRootAsync({ templateDirs, worker: true })`). Producers can enqueue from
+ * anywhere.
  */
 @Processor(MAIL_QUEUE, { concurrency: DEFAULT_MAIL_CONCURRENCY })
 export class MailProcessor extends WorkerHost implements OnApplicationBootstrap {

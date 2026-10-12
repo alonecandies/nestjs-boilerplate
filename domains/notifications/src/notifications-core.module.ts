@@ -31,7 +31,8 @@ export const NOTIFICATIONS_QUERY_HANDLERS: Provider[] = [ListNotificationsHandle
  *
  * Expects these app-level (global) modules: `CqrsModule.forRoot()`, `CassandraModule.forRootAsync(
  * { migrations: [notificationsCassandraMigrations] })`, `KafkaProducerModule.forRootAsync()`,
- * `AppQueueModule.forRootAsync()` + `AppMailerModule.forRootAsync()` (MailService),
+ * `AppQueueModule.forRootAsync()` + `AppMailerModule.forRootAsync({ templateDirs:
+ * [NOTIFICATIONS_MAIL_TEMPLATES_DIR] })` (MailService; the worker renders these templates),
  * `RedisModule.forRootAsync()` (the digest's distributed lock) and `ScheduleModule.forRoot()`.
  */
 @Module({

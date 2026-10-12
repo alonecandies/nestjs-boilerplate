@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from 'vitest';
 import { MailProcessor } from './mail.processor.js';
 import type { MailService } from './mail.service.js';
 import type { MailJobData } from './mail.types.js';
-import type { MailTemplate } from './mailer.constants.js';
 
 const cfg = mailConfig.parse({ MAIL_QUEUE_CONCURRENCY: '12' });
 
@@ -24,7 +23,7 @@ function job(overrides: Partial<{ attemptsMade: number; attempts: number }> = {}
     data: { to: 'jane@example.com', subject: 'Hi', template: 'welcome', context: {} },
     attemptsMade: overrides.attemptsMade ?? 1,
     opts: { attempts: overrides.attempts ?? 7 },
-  } as unknown as Job<MailJobData, void, MailTemplate>;
+  } as unknown as Job<MailJobData, void, string>;
 }
 
 describe('MailProcessor', () => {

@@ -442,6 +442,7 @@
         "@nestjs/testing": "catalog:",
         "@platform/testing": "workspace:*",
         "@types/lodash-es": "catalog:",
+        "handlebars": "catalog:",
       },
     },
     "domains/notifications/contracts": {

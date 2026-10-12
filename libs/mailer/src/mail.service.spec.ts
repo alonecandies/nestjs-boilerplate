@@ -5,20 +5,21 @@ import { MailerModule, MailerService } from '@nestjs-modules/mailer';
 import { mailConfig } from '@platform/config';
 import type { Queue } from 'bullmq';
 import { describe, expect, it, vi } from 'vitest';
+import { FIXTURE_TEMPLATE_DIRS } from '../test/fixtures/template-dirs.js';
 import { MailService } from './mail.service.js';
 import type { MailJobData } from './mail.types.js';
-import { MAIL_JOB_OPTIONS, type MailTemplate } from './mailer.constants.js';
+import { MAIL_JOB_OPTIONS } from './mailer.constants.js';
 import { createMailerOptions } from './mailer-options.factory.js';
 
 const cfg = mailConfig.parse({ MAIL_FROM: '"Acme" <no-reply@acme.test>' });
 
-function createQueue(): Queue<MailJobData, void, MailTemplate> & {
+function createQueue(): Queue<MailJobData, void, string> & {
   add: ReturnType<typeof vi.fn>;
 } {
   const add = vi.fn(async (_name: string, _data: MailJobData, opts?: { jobId?: string }) => ({
     id: opts?.jobId ?? 'auto-1',
   }));
-  return { add, on: vi.fn() } as unknown as Queue<MailJobData, void, MailTemplate> & {
+  return { add, on: vi.fn() } as unknown as Queue<MailJobData, void, string> & {
     add: ReturnType<typeof vi.fn>;
   };
 }
@@ -106,12 +107,15 @@ describe('MailService.sendNow', () => {
     });
   });
 
-  it('renders the real template through MailerService + HandlebarsAdapter (JSON transport)', async () => {
+  it('renders templates from every registered dir with the shared partials (JSON transport)', async () => {
     @Module({
       imports: [
         MailerModule.forRootAsync({
           imports: [],
-          useFactory: () => ({ ...createMailerOptions(cfg), transport: { jsonTransport: true } }),
+          useFactory: () => ({
+            ...createMailerOptions(cfg, FIXTURE_TEMPLATE_DIRS),
+            transport: { jsonTransport: true },
+          }),
         }),
       ],
     })
@@ -120,24 +124,34 @@ describe('MailService.sendNow', () => {
     try {
       const mailer = app.get(MailerService);
       const send = vi.spyOn(mailer, 'sendMail');
+      const service = new MailService(createQueue(), mailer, cfg);
+      const sent = async (
+        call: number,
+      ): Promise<{ from: unknown; subject: string; html: string }> => {
+        const info = (await send.mock.results[call]?.value) as { message: string };
+        return JSON.parse(info.message) as { from: unknown; subject: string; html: string };
+      };
 
-      await new MailService(createQueue(), mailer, cfg).sendNow({
+      await service.sendNow({
         to: 'jane@example.com',
-        subject: 'Your receipt',
-        template: 'payment-receipt',
-        context: { paymentId: 'pay_1', amount: '$19.99', paidAt: '2026-09-29' },
+        subject: 'Hello',
+        template: 'greeting',
+        context: { name: 'Jane' },
+      });
+      await service.sendNow({
+        to: 'jane@example.com',
+        subject: 'Goodbye',
+        template: 'farewell',
+        context: { name: 'Jane' },
       });
 
-      const info = (await send.mock.results[0]?.value) as { message: string };
-      const message = JSON.parse(info.message) as {
-        from: { address: string; name: string };
-        subject: string;
-        html: string;
-      };
-      expect(message.from).toEqual({ address: 'no-reply@acme.test', name: 'Acme' });
-      expect(message.subject).toBe('Your receipt');
-      expect(message.html).toContain('We received your payment of $19.99.');
-      expect(message.html).toContain(`&copy; ${new Date().getUTCFullYear()} Acme`);
+      const greeting = await sent(0);
+      const farewell = await sent(1);
+      expect(greeting.from).toEqual({ address: 'no-reply@acme.test', name: 'Acme' });
+      expect(greeting.html).toContain('Hello Jane!');
+      expect(farewell.subject).toBe('Goodbye');
+      expect(farewell.html).toContain('Goodbye Jane.');
+      expect(farewell.html).toContain(`&copy; ${new Date().getUTCFullYear()} Acme`);
     } finally {
       await app.close();
     }
@@ -149,7 +163,7 @@ describe('MailService queue errors', () => {
     const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     const { add } = createQueue();
     const queue = Object.assign(new EventEmitter(), { add }) as unknown as EventEmitter &
-      Queue<MailJobData, void, MailTemplate>;
+      Queue<MailJobData, void, string>;
 
     // No lifecycle hook is called: the listener must exist as soon as the provider is created,
     // because a queue whose Redis is down at boot errors before any onModuleInit runs.

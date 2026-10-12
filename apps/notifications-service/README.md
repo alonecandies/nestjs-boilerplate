@@ -23,17 +23,17 @@ only the composition root.
 
 ## Composition (`src/app.module.ts`)
 
-| Module                                                                             | Why                                                                                     |
-| ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `AppConfigModule.forRoot()` + `ConfigModule.forFeature(grpcConfig)`                | `app`/`observability` + the gRPC bind namespace, validated at boot                      |
-| `ObservabilityModule.forRoot({ healthContributors: [cassandra, redis, kafka] })`   | pino JSON logs, request context, `/metrics`, `/health/*`                                |
-| `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`                                 | buses + `NotificationsSagas`; `DailyDigestCron`                                         |
-| `CassandraModule.forRootAsync({ migrations: [notificationsCassandraMigrations] })` | keyspace + CQL migrations at boot (LWT-claimed), prepared statements, driver paging     |
-| `RedisModule.forRootAsync()`                                                       | the digest's distributed lock                                                           |
-| `AppQueueModule.forRootAsync()`, `AppMailerModule.forRootAsync({ worker: true })`  | BullMQ connection, `mail` queue, `MailService`, the `MailProcessor` worker (SMTP pool)  |
-| `KafkaProducerModule.forRootAsync()`                                               | idempotent producer for `notification-created`                                          |
-| `NotificationsGrpcModule`, `NotificationsMessagingModule`                          | `NotificationsCoreModule` (shared, one instance) + gRPC controller + Kafka consumers    |
-| `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`                      | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC/Kafka too |
+| Module                                                                                                                              | Why                                                                                                                          |
+| ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `AppConfigModule.forRoot()` + `ConfigModule.forFeature(grpcConfig)`                                                                 | `app`/`observability` + the gRPC bind namespace, validated at boot                                                           |
+| `ObservabilityModule.forRoot({ healthContributors: [cassandra, redis, kafka] })`                                                    | pino JSON logs, request context, `/metrics`, `/health/*`                                                                     |
+| `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`                                                                                  | buses + `NotificationsSagas`; `DailyDigestCron`                                                                              |
+| `CassandraModule.forRootAsync({ migrations: [notificationsCassandraMigrations] })`                                                  | keyspace + CQL migrations at boot (LWT-claimed), prepared statements, driver paging                                          |
+| `RedisModule.forRootAsync()`                                                                                                        | the digest's distributed lock                                                                                                |
+| `AppQueueModule.forRootAsync()`, `AppMailerModule.forRootAsync({ templateDirs: [NOTIFICATIONS_MAIL_TEMPLATES_DIR], worker: true })` | BullMQ connection, `mail` queue, `MailService`, the `MailProcessor` worker (SMTP pool) rendering the notifications templates |
+| `KafkaProducerModule.forRootAsync()`                                                                                                | idempotent producer for `notification-created`                                                                               |
+| `NotificationsGrpcModule`, `NotificationsMessagingModule`                                                                           | `NotificationsCoreModule` (shared, one instance) + gRPC controller + Kafka consumers                                         |
+| `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`                                                                       | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC/Kafka too                                      |
 
 `main.ts`: `createServiceApp(AppModule)` → `connectGrpcServer(app, [NOTIFICATIONS_GRPC_PACKAGE])` +
 `connectKafkaConsumer(app, { groupId: NOTIFICATIONS_CONSUMER_GROUP })` → `startAllMicroservices()`

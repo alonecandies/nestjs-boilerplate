@@ -5,7 +5,7 @@ import { type MailConfig, mailConfig } from '@platform/config';
 import { Queue } from 'bullmq';
 import type { MailJobData, MailMessage } from './mail.types.js';
 import { createThrottledErrorLog, defaultMailContext, toMailJobId } from './mail.util.js';
-import { MAIL_JOB_OPTIONS, MAIL_QUEUE, type MailTemplate } from './mailer.constants.js';
+import { MAIL_JOB_OPTIONS, MAIL_QUEUE } from './mailer.constants.js';
 
 /** Result of `enqueue`: the BullMQ job id (the idempotency key when one was given). */
 export interface EnqueuedMail {
@@ -30,7 +30,7 @@ export class MailService {
    * still being created, long before any `onModuleInit` hook runs.
    */
   constructor(
-    @InjectQueue(MAIL_QUEUE) private readonly queue: Queue<MailJobData, void, MailTemplate>,
+    @InjectQueue(MAIL_QUEUE) private readonly queue: Queue<MailJobData, void, string>,
     private readonly mailer: MailerService,
     @Inject(mailConfig.KEY) private readonly cfg: MailConfig,
   ) {

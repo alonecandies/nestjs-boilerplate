@@ -13,6 +13,7 @@ export * from './application/commands/publish-notification-created/publish-notif
 export * from './application/commands/send-daily-digest/send-daily-digest.command.js';
 export * from './application/commands/send-payment-receipt/send-payment-receipt.command.js';
 export * from './application/commands/welcome-user/welcome-user.command.js';
+export * from './application/mail/notifications-mail.js';
 export * from './application/mappers/notification.mapper.js';
 export * from './application/ports/notification-recipients.repository.js';
 export * from './application/ports/notifications.port.js';
@@ -25,6 +26,7 @@ export * from './domain/notification.types.js';
 export * from './domain/notification-id.js';
 export * from './infrastructure/adapters/grpc/notifications-grpc.adapter.js';
 export * from './infrastructure/adapters/local/notifications-local.adapter.js';
+export * from './infrastructure/mail/notifications-mail-templates.js';
 export * from './infrastructure/persistence/notifications-cassandra.migrations.js';
 export * from './notifications.constants.js';
 export * from './notifications-api.module.js';

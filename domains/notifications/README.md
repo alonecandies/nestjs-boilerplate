@@ -45,7 +45,7 @@ imports: ([
   CassandraModule.forRootAsync({ migrations: [notificationsCassandraMigrations] }),
   RedisModule.forRootAsync(), // digest lock (@WithLock)
   AppQueueModule.forRootAsync(),
-  AppMailerModule.forRootAsync(), // MailService + MailProcessor (worker)
+  AppMailerModule.forRootAsync({ templateDirs: [NOTIFICATIONS_MAIL_TEMPLATES_DIR] }), // MailService + MailProcessor (worker)
   KafkaProducerModule.forRootAsync(), // notification-created events
   NotificationsGrpcModule,
   NotificationsMessagingModule,
@@ -75,7 +75,10 @@ globals, with `NotificationsApiModule.forLocal()` + `NotificationsMessagingModul
 
 Global modules the lib expects:
 
-- Core: `CqrsModule`, `CassandraModule` (with the migrations), `KafkaProducerModule`, `AppQueueModule` + `AppMailerModule`, `RedisModule`, `ScheduleModule`.
+- Core: `CqrsModule`, `CassandraModule` (with the migrations), `KafkaProducerModule`, `AppQueueModule` + `AppMailerModule` (`templateDirs` must include `NOTIFICATIONS_MAIL_TEMPLATES_DIR`), `RedisModule`, `ScheduleModule`.
+- Mail: `application/mail/notifications-mail.ts` declares the templates and their contexts
+  (`defineNotificationsMail`). The `.hbs` files live in `infrastructure/mail/templates/`
+  (`NOTIFICATIONS_MAIL_TEMPLATES_DIR`) and render with `@platform/mailer`'s layout partials.
 - Api: `AuthModule` (global guards, `TokenService`, `AccessTokenDenylist`), `AppThrottlerModule` (`WsThrottlerGuard` on the gateway), `AppGraphqlModule` + `GraphqlPubSubModule`, a socket.io adapter, and a connected Kafka consumer for the push. `forRemote()` also needs nestjs-cls (from `ObservabilityModule`) to propagate request ids.
 
 Kafka topics that must exist (auto-creation is off): `identity.user-registered.v1`,
@@ -242,10 +245,11 @@ capped.
 
 ## Tests
 
-`bunx vitest run --project notifications`: 26 files and 128 tests. None need infrastructure.
+`bunx vitest run --project notifications` needs no infrastructure.
 
 - Domain: aggregate invariants and events, deterministic ids. Mapper round-trips, validated against the registered Kafka envelope schema.
 - Every command/query handler (`*.handler.spec.ts`) with mocked repositories, buses, mail and `FakeKafkaProducer`. The saga (`ofType` mapping).
+- Mail templates (`infrastructure/mail/notifications-mail-templates.spec.ts`): every declared template ships, has a context type and renders with the shared layout partials in strict mode, with HTML escaping.
 - Repositories against a mocked `cassandra-driver` client (CQL, prepare/idempotent flags, paging, LWT result). Migrations parsed with `@platform/cassandra`'s loader.
 - Local adapter (buses). gRPC adapter (null normalisation, NOT_FOUND trailers → `EntityNotFoundException`, sanitised 503). Cron (schedule metadata, lock won/lost, failure).
 - REST and GraphQL through a Fastify test app: real `AuthModule` (real tokens), common enhancers and Apollo, with a **fake port**. The specs cover 200/204, 400 validation (zod and class-validator), 401, 403 and 404 problem details, the schema SDL, and the subscription filter, resolve and iterator.

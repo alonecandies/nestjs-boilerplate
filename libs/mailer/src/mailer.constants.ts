@@ -4,16 +4,14 @@ import type { JobsOptions } from 'bullmq';
 /** BullMQ queue carrying outbound mail (`bull:mail:*` keys). */
 export const MAIL_QUEUE = 'mail';
 
-/** Every template shipped in `templates/` (file name without `.hbs`). */
-export const MAIL_TEMPLATES = ['welcome', 'payment-receipt', 'daily-digest'] as const;
-export type MailTemplate = (typeof MAIL_TEMPLATES)[number];
-
 /**
- * Template locations, resolved next to this module. SWC `copyFiles` mirrors `src/templates/**` into
- * `dist/templates/**`, so the same expression works from sources (dev/tests) and from the build.
+ * The shared layout partials (`header`, `footer`, `button`), resolved next to this module. SWC
+ * `copyFiles` mirrors `src/templates/partials/**` into `dist/templates/partials/**`, so the same
+ * expression works from sources (dev/tests) and from the build. The mail templates belong to the
+ * domains that send them: apps register their folders with `AppMailerModule.forRootAsync({
+ * templateDirs })`.
  */
-export const MAIL_TEMPLATES_DIR = join(import.meta.dirname, 'templates');
-export const MAIL_PARTIALS_DIR = join(MAIL_TEMPLATES_DIR, 'partials');
+export const MAIL_PARTIALS_DIR = join(import.meta.dirname, 'templates', 'partials');
 
 /** Used in the default template context when `MAIL_FROM` has no display name. */
 export const DEFAULT_MAIL_APP_NAME = 'NestJS Boilerplate';

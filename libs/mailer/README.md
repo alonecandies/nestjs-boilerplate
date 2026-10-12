@@ -7,49 +7,65 @@ keys make redelivered events safe.
 
 ## Public API
 
-| Export                                                                                                                                                                                                 | Kind          | Purpose                                                                                                                                                                                           |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `AppMailerModule.forRootAsync(options?: { worker?: boolean })`                                                                                                                                         | global module | `MailerModule` (SMTP + Handlebars), `BullModule.registerQueue({ name: 'mail' })`, `MailService`, and `MailProcessor` unless `worker: false`.                                                      |
-| `MailService`                                                                                                                                                                                          | provider      | `enqueue(mail: MailMessage): Promise<EnqueuedMail>` (job id = idempotency key), `sendNow(mail: MailMessage \| MailJobData): Promise<void>` (render + send in-process, no retry).                  |
-| `MailProcessor`                                                                                                                                                                                        | BullMQ worker | `@Processor('mail')`. Applies `MAIL_QUEUE_CONCURRENCY` at bootstrap, marks permanent failures `UnrecoverableError`, and logs retries (warn) and final failures (error) with the recipient masked. |
-| `MailMessage`                                                                                                                                                                                          | type          | `{ to, subject, template: MailTemplate, context: Record<string, unknown>, idempotencyKey? }`                                                                                                      |
-| `MailJobData`, `EnqueuedMail`                                                                                                                                                                          | types         | Job payload (`MailMessage` without the key); `{ jobId }`.                                                                                                                                         |
-| `WelcomeMailContext`, `PaymentReceiptMailContext`, `DailyDigestMailContext`, `DigestItem`, `BaseMailContext`, `MailTemplateContextMap`                                                                 | types         | What each template reads.                                                                                                                                                                         |
-| `defineMail<T>(mail)`                                                                                                                                                                                  | function      | Builds a `MailMessage` whose context is type-checked against template `T`.                                                                                                                        |
-| `formatMoney(amountMinor, currency, locale = 'en-US')`                                                                                                                                                 | function      | Minor units → localized string with the right decimals (`1999, 'usd'` → `$19.99`).                                                                                                                |
-| `toMailJobId(key)`, `mailFromName(from)`, `defaultMailContext(from, now?)`                                                                                                                             | functions     | BullMQ-safe job ids; the `MAIL_FROM` display name; `{ appName, year }`.                                                                                                                           |
-| `isPermanentMailError(error)`                                                                                                                                                                          | function      | Handlebars errors, SMTP 5xx, `EENVELOPE`/`ENOENT`/`EMESSAGE` → `true`.                                                                                                                            |
-| `createMailerOptions(cfg)`, `registerMailPartials(dir?)`, `SMTP_TIMEOUTS`, `MAIL_SEND_TIMEOUT_MS`                                                                                                      | factory       | `MailerOptions` from the `mail` config namespace.                                                                                                                                                 |
-| `MAIL_QUEUE` (`'mail'`), `MAIL_TEMPLATES`, `MailTemplate`, `MAIL_TEMPLATES_DIR`, `MAIL_PARTIALS_DIR`, `MAIL_JOB_OPTIONS`, `DEFAULT_MAIL_CONCURRENCY`, `DEFAULT_MAIL_APP_NAME`, `MAIL_TEMPLATE_HELPERS` | constants     |                                                                                                                                                                                                   |
+| Export                                                                                                                                                  | Kind          | Purpose                                                                                                                                                                                                                   |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AppMailerModule.forRootAsync({ templateDirs, worker? })`                                                                                               | global module | `MailerModule` (SMTP + Handlebars over the given template folders), `BullModule.registerQueue({ name: 'mail' })`, `MailService`, and `MailProcessor` unless `worker: false`. A worker needs at least one template folder. |
+| `MailService`                                                                                                                                           | provider      | `enqueue(mail: MailMessage): Promise<EnqueuedMail>` (job id = idempotency key), `sendNow(mail: MailMessage \| MailJobData): Promise<void>` (render + send in-process, no retry).                                          |
+| `MailProcessor`                                                                                                                                         | BullMQ worker | `@Processor('mail')`. Applies `MAIL_QUEUE_CONCURRENCY` at bootstrap, marks permanent failures `UnrecoverableError`, and logs retries (warn) and final failures (error) with the recipient masked.                         |
+| `MailMessage<TTemplate extends string = string>`                                                                                                        | type          | `{ to, subject, template: TTemplate, context: Record<string, unknown>, idempotencyKey? }`                                                                                                                                 |
+| `MailJobData`, `EnqueuedMail`                                                                                                                           | types         | Job payload (`MailMessage` without the key); `{ jobId }`.                                                                                                                                                                 |
+| `BaseMailContext`, `TypedMailMessage<TContextMap, TTemplate>`                                                                                           | types         | Variables every template gets (`appName`, `year`, `appUrl`); a mail whose context is checked against a domain's template map.                                                                                             |
+| `defineMail<TContextMap>()`                                                                                                                             | function      | Returns a `MailMessage` builder that type-checks `context` against `TContextMap[template]`. Each domain binds its own.                                                                                                    |
+| `formatMoney(amountMinor, currency, locale = 'en-US')`                                                                                                  | function      | Minor units → localized string with the right decimals (`1999, 'usd'` → `$19.99`).                                                                                                                                        |
+| `toMailJobId(key)`, `mailFromName(from)`, `defaultMailContext(from, now?)`                                                                              | functions     | BullMQ-safe job ids; the `MAIL_FROM` display name; `{ appName, year }`.                                                                                                                                                   |
+| `isPermanentMailError(error)`                                                                                                                           | function      | Handlebars errors, SMTP 5xx, `EENVELOPE`/`ENOENT`/`EMESSAGE` → `true`.                                                                                                                                                    |
+| `createMailerOptions(cfg, templateDirs = [])`, `listMailTemplates(templateDirs)`, `registerMailPartials(dir?)`, `SMTP_TIMEOUTS`, `MAIL_SEND_TIMEOUT_MS` | factory       | `MailerOptions` from the `mail` namespace and the template folders; the template names (fails on a missing folder or a duplicate name).                                                                                   |
+| `MAIL_QUEUE` (`'mail'`), `MAIL_PARTIALS_DIR`, `MAIL_JOB_OPTIONS`, `DEFAULT_MAIL_CONCURRENCY`, `DEFAULT_MAIL_APP_NAME`, `MAIL_TEMPLATE_HELPERS`          | constants     |                                                                                                                                                                                                                           |
 
-Templates (`src/templates`, copied to `dist/templates` by SWC `copyFiles`):
+## Templates
 
-| Template          | Required context                                     | Optional context                       |
-| ----------------- | ---------------------------------------------------- | -------------------------------------- |
-| `welcome`         | `displayName`                                        | `appUrl`                               |
-| `payment-receipt` | `paymentId`, `amount` (pre-formatted), `paidAt`      | `displayName`, `description`, `appUrl` |
-| `daily-digest`    | `unreadCount`, `items: { title, body, createdAt }[]` | `displayName`, `appUrl`                |
+This package ships no mail templates, only the layout partials (`src/templates/partials`, copied to `dist` by SWC `copyFiles`): `header` (`title`, `preheader`), `footer` and `button` (`url`, `label`). Helpers: `concat`, `plural`. Every template gets `appName` (the display name of `MAIL_FROM`) and `year`; callers can override both.
 
-Every template also gets `appName` (the display name of `MAIL_FROM`) and `year`. Callers can
-override both. Partials: `header` (`title`, `preheader`), `footer`, `button` (`url`, `label`).
-Helpers: `concat`, `plural`.
+Each domain that sends mail owns its templates and their context types:
+
+- a folder of `*.hbs` files next to its code, exported as `<DOMAIN>_MAIL_TEMPLATES_DIR`;
+- a template → context map;
+- a builder bound with `defineMail<TheMap>()`.
+
+The app that renders those mails registers the folder. Names are looked up in the registered folders in order. A missing folder or a name defined by two folders fails at boot.
 
 ## Usage
 
 ```ts
-// notifications-service / monolith (they deliver mail)
-imports: [AppQueueModule.forRootAsync(), AppMailerModule.forRootAsync()];
+// the domain (e.g. @domain/orders)
+export const ORDERS_MAIL_TEMPLATES_DIR = join(import.meta.dirname, 'templates'); // order-confirmed.hbs
+export interface OrdersMailContextMap {
+  'order-confirmed': BaseMailContext & { orderId: string; total: string };
+}
+export const defineOrdersMail = defineMail<OrdersMailContextMap>();
+
+// a process that delivers mail registers the folder of every domain it renders
+imports: [
+  AppQueueModule.forRootAsync(),
+  AppMailerModule.forRootAsync({ templateDirs: [ORDERS_MAIL_TEMPLATES_DIR] }),
+];
 // an edge process that only enqueues
-imports: [AppQueueModule.forRootAsync(), AppMailerModule.forRootAsync({ worker: false })];
+imports: [
+  AppQueueModule.forRootAsync(),
+  AppMailerModule.forRootAsync({ templateDirs: [], worker: false }),
+];
 
 // Kafka consumer: redelivery-safe
 await this.mail.enqueue(
-  defineMail({
+  defineOrdersMail({
     to: event.payload.email,
-    subject: 'Welcome!',
-    template: 'welcome',
-    context: { displayName: event.payload.displayName },
-    idempotencyKey: `welcome-${event.payload.userId}`,
+    subject: 'Order confirmed',
+    template: 'order-confirmed',
+    context: {
+      orderId: event.payload.orderId,
+      total: formatMoney(event.payload.totalMinor, 'usd'),
+    },
+    idempotencyKey: `order-confirmed-${event.payload.orderId}`,
   }),
 );
 ```
@@ -86,3 +102,12 @@ await this.mail.enqueue(
   `<style>` blocks.
 - SMTP timeouts are lowered from nodemailer's defaults (2 min connect, 10 min idle socket), so a
   stuck server can't pin worker slots.
+- **A template name that no registered folder defines** makes `sendMail` reject with
+  `TypeError: Cannot destructure property 'templateName' of 'precompile(...)' as it is undefined.`
+  (`@nestjs-modules/mailer` 2.3.7 reports the failed file read through a callback, then
+  destructures what `precompile` returned). `isPermanentMailError` does not treat that `TypeError`
+  as permanent, so BullMQ retries the job until its attempts run out. The underlying `ENOENT` also
+  surfaces as an unhandled rejection, which the apps' `installProcessHandlers` logs as fatal before
+  exiting the process. Nothing hangs or times out. Boot already fails on a missing folder or a
+  duplicate name. Build mails with the owning domain's `defineMail` builder so names are
+  type-checked.

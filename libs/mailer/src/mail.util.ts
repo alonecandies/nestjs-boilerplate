@@ -1,8 +1,8 @@
 import type { Logger } from '@nestjs/common';
 import { sha256Hex } from '@platform/common';
 import { throttle, trim } from 'lodash-es';
-import type { BaseMailContext, MailMessage, MailTemplateContextMap } from './mail.types.js';
-import { DEFAULT_MAIL_APP_NAME, type MailTemplate } from './mailer.constants.js';
+import type { BaseMailContext, MailMessage, TypedMailMessage } from './mail.types.js';
+import { DEFAULT_MAIL_APP_NAME } from './mailer.constants.js';
 
 // BullMQ rejects custom job ids containing ':' (they collide with its key layout) and ids that
 // are integer strings (they collide with auto-generated ids).
@@ -38,7 +38,7 @@ export function defaultMailContext(
 const moneyFormats = new Map<string, Intl.NumberFormat>();
 
 /**
- * Formats an amount in minor units (Stripe/`PaymentSucceededPayload.amountTotal`), e.g.
+ * Formats an amount in minor units (cents for USD), e.g.
  * `formatMoney(1999, 'usd')` → `$19.99` and `formatMoney(500, 'jpy')` → `¥500`. The number of
  * decimals comes from the currency. Formatters are cached, because building an `Intl` formatter
  * is expensive compared to using one.
@@ -55,19 +55,24 @@ export function formatMoney(amountMinor: number, currency: string, locale = 'en-
   return format.format(amountMinor / 10 ** digits);
 }
 
+/** Shallow copy typed as the plain record a `MailMessage` carries. */
+const toContextRecord = (context: object): Record<string, unknown> => ({ ...context });
+
 /**
- * Builds a `MailMessage` whose `context` is type-checked against the template
- * (`MailTemplateContextMap`). This is optional sugar: `MailService` accepts any `MailMessage`.
+ * Returns a `MailMessage` builder for one domain's templates. `context` is type-checked against the
+ * template the mail names, through the domain's template → context map. Bind it once per domain,
+ * e.g. `export const defineOrdersMail = defineMail<OrdersMailContextMap>();`. Optional sugar:
+ * `MailService` accepts any `MailMessage`.
  */
-export function defineMail<T extends MailTemplate>(mail: {
-  to: string;
-  subject: string;
-  template: T;
-  context: MailTemplateContextMap[T];
-  idempotencyKey?: string;
-}): MailMessage {
-  const { context, ...rest } = mail;
-  return { ...rest, context: { ...context } };
+export function defineMail<TContextMap extends Record<keyof TContextMap, object>>(): <
+  TTemplate extends keyof TContextMap & string,
+>(
+  mail: TypedMailMessage<TContextMap, TTemplate>,
+) => MailMessage<TTemplate> {
+  return (mail) => {
+    const { context, ...rest } = mail;
+    return { ...rest, context: toContextRecord(context) };
+  };
 }
 
 /** Minimum gap between two logged BullMQ connection errors (same as the ioredis clients). */

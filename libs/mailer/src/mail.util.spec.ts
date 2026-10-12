@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { isPermanentMailError } from './mail.errors.js';
 import {
   defaultMailContext,
@@ -47,23 +47,39 @@ describe('formatMoney', () => {
   });
 });
 
+/** A domain's template → context map, test-local (platform specs name no domain). */
+interface FixtureMailContextMap {
+  greeting: { name: string };
+  reminder: { dueAt: string; items: string[] };
+}
+
+const defineFixtureMail = defineMail<FixtureMailContextMap>();
+
 describe('defineMail', () => {
-  it('builds a MailMessage from a typed context', () => {
-    const mail = defineMail({
+  it('builds a MailMessage from a context typed by the domain template map', () => {
+    const mail = defineFixtureMail({
       to: 'a@b.c',
-      subject: 'Digest',
-      template: 'daily-digest',
-      context: { unreadCount: 0, items: [] },
-      idempotencyKey: 'digest-u1-2026-09-29',
+      subject: 'Reminder',
+      template: 'reminder',
+      context: { dueAt: '2026-10-12', items: [] },
+      idempotencyKey: 'reminder-u1-2026-10-12',
     });
 
     expect(mail).toEqual({
       to: 'a@b.c',
-      subject: 'Digest',
-      template: 'daily-digest',
-      context: { unreadCount: 0, items: [] },
-      idempotencyKey: 'digest-u1-2026-09-29',
+      subject: 'Reminder',
+      template: 'reminder',
+      context: { dueAt: '2026-10-12', items: [] },
+      idempotencyKey: 'reminder-u1-2026-10-12',
     });
+    expectTypeOf(mail.template).toEqualTypeOf<'reminder'>();
+  });
+
+  it('types the context by the template it names', () => {
+    expectTypeOf(defineFixtureMail<'greeting'>)
+      .parameter(0)
+      .toHaveProperty('context')
+      .toEqualTypeOf<{ name: string }>();
   });
 });
 
