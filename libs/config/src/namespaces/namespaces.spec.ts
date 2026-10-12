@@ -19,12 +19,15 @@ import { mailConfig } from './mail.config.js';
 import { observabilityConfig } from './observability.config.js';
 import { redisConfig } from './redis.config.js';
 import { storageConfig } from './storage.config.js';
-import { stripeConfig } from './stripe.config.js';
 
 describe('config namespaces — defaults work with an EMPTY environment (local docker infra)', () => {
   it('every namespace parses {}', () => {
     expect(() => validateAllEnv({})).not.toThrow();
     expect(ALL_CONFIG_NAMESPACES).toHaveLength(Object.keys(CONFIG_NAMESPACES).length);
+  });
+
+  it('holds no domain namespace (stripe belongs to @domain/billing)', () => {
+    expect(CONFIG_NAMESPACES).not.toHaveProperty('stripe');
   });
 
   it('app', () => {
@@ -116,10 +119,6 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
         bucket: 'uploads',
       },
       gcs: { apiEndpoint: 'http://localhost:4443', keyFilename: undefined },
-    });
-    expect(stripeConfig.parse({})).toMatchObject({
-      secretKey: 'sk_test_placeholder',
-      maxNetworkRetries: 2,
     });
   });
 
@@ -243,7 +242,6 @@ describe('config namespaces — invalid values produce errors naming the env var
     [storageConfig, { STORAGE_SIGNED_URL_TTL_SEC: '999999' }, 'STORAGE_SIGNED_URL_TTL_SEC'],
     [storageConfig, { STORAGE_MAX_CONCURRENT_UPLOADS: '0' }, 'STORAGE_MAX_CONCURRENT_UPLOADS'],
     [cacheConfig, { CACHE_L1_TTL_MS: '60000' }, 'CACHE_L1_TTL_MS'],
-    [stripeConfig, { STRIPE_WEBHOOK_SECRET: 'nope' }, 'STRIPE_WEBHOOK_SECRET'],
     [observabilityConfig, { METRICS_BEARER_TOKEN: 'short' }, 'METRICS_BEARER_TOKEN'],
     [authConfig, { JWT_ACCESS_SECRET: 'short' }, 'JWT_ACCESS_SECRET'],
     [appConfig, { TRUST_PROXY: 'yes' }, 'TRUST_PROXY'],

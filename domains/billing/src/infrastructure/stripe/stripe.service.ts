@@ -1,8 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { DomainValidationException } from '@platform/common';
-import { type StripeConfig, stripeConfig } from '@platform/config';
 import Stripe from 'stripe';
 import { BillingErrorCode } from '../../billing.constants.js';
+import { type StripeConfig, stripeConfig } from './stripe.config.js';
 import { InjectStripe, STRIPE_WEBHOOK_TOLERANCE_SEC } from './stripe.constants.js';
 import { toPaymentDomainException } from './stripe.errors.js';
 import type { StripeCheckoutSessionInput } from './stripe.types.js';

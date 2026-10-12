@@ -4,7 +4,6 @@
  * a real StripeService with a test webhook secret and signed webhook builders.
  */
 import { type CursorPage, generateId } from '@platform/common';
-import { stripeConfig } from '@platform/config';
 import {
   type DrizzleDB,
   type DrizzleTransactionalAdapter,
@@ -30,6 +29,7 @@ import { PaymentConcurrentlyModifiedException } from '../src/domain/billing.erro
 import { Payment, type PaymentSnapshot } from '../src/domain/payment.aggregate.js';
 import { payments } from '../src/infrastructure/persistence/billing.schema.js';
 import { toPaymentRow } from '../src/infrastructure/persistence/payment-row.mapper.js';
+import { stripeConfig } from '../src/infrastructure/stripe/stripe.config.js';
 import { createStripeClient } from '../src/infrastructure/stripe/stripe.module.js';
 import { StripeService } from '../src/infrastructure/stripe/stripe.service.js';
 

@@ -252,7 +252,7 @@ through `TransactionHost` and join the active transaction.
 
 ## Configuration
 
-`stripe` namespace: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`
+`stripe` namespace (`src/infrastructure/stripe/stripe.config.ts`, owned by billing; production rejects the dev placeholders, the compose fallbacks and local redirect URLs): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`
 (redirect URLs are never taken from REST clients: no open redirect), `STRIPE_MAX_NETWORK_RETRIES`,
 `STRIPE_TIMEOUT_MS`. Gateway: `BILLING_GRPC_URL`, `GRPC_DEADLINE_MS`.
 

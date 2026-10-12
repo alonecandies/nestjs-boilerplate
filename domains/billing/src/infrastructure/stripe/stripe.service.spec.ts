@@ -1,7 +1,7 @@
 import { DomainValidationException, ExternalServiceException } from '@platform/common';
-import { stripeConfig } from '@platform/config';
 import Stripe from 'stripe';
 import { describe, expect, it, vi } from 'vitest';
+import { stripeConfig } from './stripe.config.js';
 import { createStripeClient } from './stripe.module.js';
 import { StripeService } from './stripe.service.js';
 

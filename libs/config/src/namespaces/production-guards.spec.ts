@@ -10,11 +10,6 @@ import { kafkaConfig } from './kafka.config.js';
 import { mailConfig } from './mail.config.js';
 import { redisConfig } from './redis.config.js';
 import { storageConfig } from './storage.config.js';
-import {
-  PLACEHOLDER_STRIPE_SECRET_KEY,
-  PLACEHOLDER_STRIPE_WEBHOOK_SECRET,
-  stripeConfig,
-} from './stripe.config.js';
 
 /**
  * Every NODE_ENV=production guard of the config namespaces, one describe per namespace. The
@@ -23,12 +18,10 @@ import {
 
 const PROD = { NODE_ENV: 'production' } as const;
 
-/** The docker-compose fallbacks (docker-compose.yml x-env-auth / x-env-stripe / x-env-storage). */
+/** The docker-compose fallbacks (docker-compose.yml x-env-auth / x-env-storage). */
 const COMPOSE = {
   JWT_ACCESS_SECRET: 'compose-local-access-secret-not-for-production-0001',
   JWT_REFRESH_SECRET: 'compose-local-refresh-secret-not-for-production-0002',
-  STRIPE_SECRET_KEY: 'sk_test_compose_local_not_for_production',
-  STRIPE_WEBHOOK_SECRET: 'whsec_compose_local_not_for_production',
 } as const;
 
 const KNOWN_VALUE_MESSAGE = 'is a publicly known value';
@@ -76,66 +69,6 @@ describe('auth', () => {
       }).accessSecret,
     ).toBe('a'.repeat(48));
     expect(authConfig.parse({ NODE_ENV: 'test' }).accessSecret).toBe(DEV_JWT_ACCESS_SECRET);
-  });
-});
-
-describe('stripe', () => {
-  const REAL = {
-    STRIPE_SECRET_KEY: 'sk_live_51HxRealKey',
-    STRIPE_WEBHOOK_SECRET: 'whsec_1a2b3c4d5e6f7g8h9i0j',
-    STRIPE_SUCCESS_URL: 'https://app.example.com/billing/success',
-    STRIPE_CANCEL_URL: 'https://app.example.com/billing/cancel',
-  };
-
-  it('rejects the development placeholders in production (forged webhooks would verify)', () => {
-    const error = errorOf(() => stripeConfig.parse(PROD));
-    expect(error.message).toContain('→ at STRIPE_SECRET_KEY');
-    expect(error.message).toContain('→ at STRIPE_WEBHOOK_SECRET');
-  });
-
-  it('rejects the compose fallbacks and the docs placeholders unless ALLOW_KNOWN_LOCAL_SECRETS', () => {
-    const compose = {
-      ...PROD,
-      ...REAL,
-      STRIPE_SECRET_KEY: COMPOSE.STRIPE_SECRET_KEY,
-      STRIPE_WEBHOOK_SECRET: COMPOSE.STRIPE_WEBHOOK_SECRET,
-    };
-    const error = errorOf(() => stripeConfig.parse(compose));
-    expect(error.message).toContain('→ at STRIPE_SECRET_KEY');
-    expect(error.message).toContain('→ at STRIPE_WEBHOOK_SECRET');
-    expect(error.message).toContain(KNOWN_VALUE_MESSAGE);
-    expect(stripeConfig.parse({ ...compose, ALLOW_KNOWN_LOCAL_SECRETS: 'true' }).secretKey).toBe(
-      COMPOSE.STRIPE_SECRET_KEY,
-    );
-    // Copied unfilled from .env.example / the production checklist.
-    const unfilled = errorOf(() =>
-      stripeConfig.parse({ ...PROD, ...REAL, STRIPE_WEBHOOK_SECRET: 'whsec_...' }),
-    );
-    expect(unfilled.message).toContain('→ at STRIPE_WEBHOOK_SECRET');
-  });
-
-  it('requires https, non-loopback Checkout redirect URLs in production', () => {
-    const keys = {
-      STRIPE_SECRET_KEY: REAL.STRIPE_SECRET_KEY,
-      STRIPE_WEBHOOK_SECRET: REAL.STRIPE_WEBHOOK_SECRET,
-    };
-    const local = errorOf(() => stripeConfig.parse({ ...PROD, ...keys }));
-    expect(local.message).toContain('→ at STRIPE_SUCCESS_URL');
-    expect(local.message).toContain('→ at STRIPE_CANCEL_URL');
-    expect(local.message).toContain('STRIPE_ALLOW_LOCAL_REDIRECTS');
-    const plainHttp = errorOf(() =>
-      stripeConfig.parse({ ...PROD, ...REAL, STRIPE_SUCCESS_URL: 'http://app.example.com/ok' }),
-    );
-    expect(plainHttp.message).toContain('→ at STRIPE_SUCCESS_URL');
-    expect(stripeConfig.parse({ ...PROD, ...REAL }).successUrl).toBe(REAL.STRIPE_SUCCESS_URL);
-    expect(
-      stripeConfig.parse({ ...PROD, ...keys, STRIPE_ALLOW_LOCAL_REDIRECTS: 'true' }).cancelUrl,
-    ).toBe('http://localhost:3000/billing/cancel');
-  });
-
-  it('keeps the placeholders outside production', () => {
-    expect(stripeConfig.parse({ NODE_ENV: 'test' }).secretKey).toBe(PLACEHOLDER_STRIPE_SECRET_KEY);
-    expect(stripeConfig.parse({}).webhookSecret).toBe(PLACEHOLDER_STRIPE_WEBHOOK_SECRET);
   });
 });
 

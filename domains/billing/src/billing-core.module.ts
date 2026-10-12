@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { stripeConfig } from '@platform/config';
 import { makeCounterProvider } from '@platform/observability';
 import { CreateCheckoutSessionHandler } from './application/commands/create-checkout-session/create-checkout-session.handler.js';
 import { HandleStripeWebhookHandler } from './application/commands/handle-stripe-webhook/handle-stripe-webhook.handler.js';
@@ -13,6 +12,7 @@ import { PAID_WITHOUT_CURRENCY_METRIC } from './billing.constants.js';
 import { DrizzlePaymentsRepository } from './infrastructure/persistence/drizzle-payments.repository.js';
 import { DrizzleStripeEventsRepository } from './infrastructure/persistence/drizzle-stripe-events.repository.js';
 import { PurgeStripeEventsCron } from './infrastructure/scheduling/purge-stripe-events.cron.js';
+import { stripeConfig } from './infrastructure/stripe/stripe.config.js';
 import { StripeModule } from './infrastructure/stripe/stripe.module.js';
 
 /**

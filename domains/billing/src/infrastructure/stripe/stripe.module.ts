@@ -1,7 +1,7 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { type StripeConfig, stripeConfig } from '@platform/config';
 import Stripe from 'stripe';
+import { type StripeConfig, stripeConfig } from './stripe.config.js';
 import { STRIPE_APP_INFO, STRIPE_CLIENT } from './stripe.constants.js';
 import { StripeService } from './stripe.service.js';
 

@@ -38,6 +38,7 @@ export {
   stripeEvents,
 } from './infrastructure/persistence/billing.schema.js';
 // Stripe adapter (imported by BillingCoreModule; public for custom wiring / tests)
+export * from './infrastructure/stripe/stripe.config.js';
 export * from './infrastructure/stripe/stripe.constants.js';
 export * from './infrastructure/stripe/stripe.errors.js';
 export * from './infrastructure/stripe/stripe.module.js';

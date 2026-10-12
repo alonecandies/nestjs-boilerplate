@@ -365,7 +365,7 @@ usage in [API.md](API.md)
 
 ### `stripe` — Checkout + webhooks
 
-[`stripe.config.ts`](../libs/config/src/namespaces/stripe.config.ts) · monolith, billing-service
+[`stripe.config.ts`](../domains/billing/src/infrastructure/stripe/stripe.config.ts) (owned by billing) · monolith, billing-service
 
 | Variable                       | Default                                 | Description                                                                                                                                                            |
 | ------------------------------ | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

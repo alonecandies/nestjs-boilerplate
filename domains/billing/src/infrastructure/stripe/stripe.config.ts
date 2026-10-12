@@ -1,12 +1,16 @@
 import type { ConfigType } from '@nestjs/config';
-import { z } from 'zod';
-import { defineConfigNamespace } from '../define-config-namespace.js';
-import { zBool, zInt, zNodeEnv, zStr, zUrl } from '../env/env.helpers.js';
 import {
   addKnownLocalSecretIssue,
+  defineConfigNamespace,
   isKnownLocalSecret,
   isPublicHttpsUrl,
-} from '../env/production-guards.js';
+  zBool,
+  zInt,
+  zNodeEnv,
+  zStr,
+  zUrl,
+} from '@platform/config';
+import { z } from 'zod';
 
 /** Development-only defaults so `bun run dev` works with zero `.env`. Rejected in production. */
 export const PLACEHOLDER_STRIPE_SECRET_KEY = 'sk_test_placeholder';

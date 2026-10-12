@@ -16,7 +16,6 @@ import {
 } from './namespaces/observability.config.js';
 import { type RedisConfig, redisConfig } from './namespaces/redis.config.js';
 import { type StorageConfig, storageConfig } from './namespaces/storage.config.js';
-import { type StripeConfig, stripeConfig } from './namespaces/stripe.config.js';
 import { type ThrottleConfig, throttleConfig } from './namespaces/throttle.config.js';
 
 /** Every namespace keyed by name — the single registry for docs, tests and `validateAllEnv`. */
@@ -34,7 +33,6 @@ export const CONFIG_NAMESPACES = {
   graphql: graphqlConfig,
   mail: mailConfig,
   storage: storageConfig,
-  stripe: stripeConfig,
 } as const;
 
 export type ConfigNamespaceName = keyof typeof CONFIG_NAMESPACES;
@@ -56,7 +54,6 @@ export interface AllConfig {
   graphql: GraphqlConfig;
   mail: MailConfig;
   storage: StorageConfig;
-  stripe: StripeConfig;
 }
 
 /**
