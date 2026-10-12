@@ -25,6 +25,7 @@ export * from './domain/notification.errors.js';
 export * from './domain/notification.types.js';
 export * from './domain/notification-id.js';
 export * from './infrastructure/adapters/grpc/notifications-grpc.adapter.js';
+export * from './infrastructure/adapters/grpc/notifications-grpc-client.config.js';
 export * from './infrastructure/adapters/local/notifications-local.adapter.js';
 export * from './infrastructure/mail/notifications-mail-templates.js';
 export * from './infrastructure/persistence/notifications-cassandra.migrations.js';

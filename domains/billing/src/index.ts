@@ -27,6 +27,7 @@ export * from './domain/payment.aggregate.js';
 export * from './domain/payment-status.enum.js';
 // Infrastructure (adapters are public for custom wiring / tests)
 export * from './infrastructure/adapters/grpc/billing-grpc.adapter.js';
+export * from './infrastructure/adapters/grpc/billing-grpc-client.config.js';
 export * from './infrastructure/adapters/local/billing-local.adapter.js';
 export {
   type BillingSchema,

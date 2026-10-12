@@ -64,6 +64,8 @@ export {
   IdentityCoreModule,
 } from './identity-core.module.js';
 export { IdentityGrpcModule } from './identity-grpc.module.js';
+// Infrastructure: where the gateway dials identity-service (IdentityApiModule.forRemote()).
+export * from './infrastructure/adapters/grpc/identity-grpc-client.config.js';
 // Infrastructure: the Drizzle schema for DatabaseModule / drizzle-kit.
 export {
   type IdentitySchema,
