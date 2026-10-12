@@ -124,12 +124,14 @@ error lines.
 
 These paths are replaced with `[REDACTED]` before a line is written (`LOG_REDACT_PATHS`):
 `req.headers.authorization`, `req.headers.cookie`, `req.headers["x-api-key"]`,
-`req.headers["stripe-signature"]`, `res.headers["set-cookie"]`, top-level `password`, `token`,
-`accessToken`, `refreshToken`, and one level deep `*.password`, `*.passwordHash`, `*.token`,
-`*.accessToken`, `*.refreshToken`, `*.secret`, `*.apiKey`. Headers are listed even though the
-serializers already drop them, so a future serializer change cannot leak credentials. Keep the
-list short: every wildcard costs time on every log line. Never log a request body wholesale. gRPC/Kafka
-payloads are not logged (`includePayload: false`).
+`res.headers["set-cookie"]`, top-level `password`, `token`, `accessToken`, `refreshToken`, and one
+level deep `*.password`, `*.passwordHash`, `*.token`, `*.accessToken`, `*.refreshToken`, `*.secret`,
+`*.apiKey`. Domains add their own paths through the app composition: the monolith and the gateway
+pass billing's `BILLING_LOG_REDACT_PATHS` (`req.headers["stripe-signature"]`) to
+`ObservabilityModule.forRoot({ redactPaths })`. Headers are listed even though the serializers
+already drop them, so a future serializer change cannot leak credentials. Keep the list short: every
+wildcard costs time on every log line. Never log a request body wholesale. gRPC/Kafka payloads are
+not logged (`includePayload: false`).
 
 ### Output and pretty printing
 

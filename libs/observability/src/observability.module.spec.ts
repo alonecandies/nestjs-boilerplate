@@ -3,12 +3,14 @@ import { NestFactory } from '@nestjs/core';
 import { type HealthIndicatorResult, HealthIndicatorService } from '@nestjs/terminus';
 import { AppConfigModule } from '@platform/config';
 import { TraceService } from 'nestjs-otel';
-import { Logger, PinoLogger } from 'nestjs-pino';
+import { Logger, PARAMS_PROVIDER_TOKEN, type Params, PinoLogger } from 'nestjs-pino';
+import type { Options as PinoHttpOptions } from 'pino-http';
 import { register } from 'prom-client';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContextService } from './context/request-context.service.js';
 import { HealthContributor } from './health/health-contributor.js';
 import { HealthContributorRegistry } from './health/health-contributor.registry.js';
+import { LOG_REDACT_PATHS } from './logging/logger-params.js';
 import { HTTP_REQUEST_DURATION_SECONDS } from './metrics/metrics.constants.js';
 import { MetricsController } from './metrics/metrics.controller.js';
 import { ObservabilityModule } from './observability.module.js';
@@ -36,7 +38,11 @@ describe('ObservabilityModule', () => {
     @Module({
       imports: [
         AppConfigModule.forRoot(),
-        ObservabilityModule.forRoot({ observe: false, healthContributors: [QueueContributor] }),
+        ObservabilityModule.forRoot({
+          observe: false,
+          healthContributors: [QueueContributor],
+          redactPaths: ['req.headers["x-webhook-signature"]'],
+        }),
       ],
     })
     class AppModule {}
@@ -61,6 +67,15 @@ describe('ObservabilityModule', () => {
   it('resolves the configured health contributors', () => {
     const keys = app.get(HealthContributorRegistry).contributors.map(({ key }) => key);
     expect(keys).toEqual(['queue']);
+  });
+
+  it('hands the app-supplied redact paths to the pino logger', () => {
+    const { pinoHttp } = app.get<Params>(PARAMS_PROVIDER_TOKEN);
+
+    expect((pinoHttp as PinoHttpOptions).redact).toEqual({
+      paths: [...LOG_REDACT_PATHS, 'req.headers["x-webhook-signature"]'],
+      censor: '[REDACTED]',
+    });
   });
 
   it('registers the metrics controller, the latency histogram and default metrics', async () => {

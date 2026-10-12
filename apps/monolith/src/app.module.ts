@@ -1,4 +1,4 @@
-import { BillingApiModule, billingSchema } from '@domain/billing';
+import { BILLING_LOG_REDACT_PATHS, BillingApiModule, billingSchema } from '@domain/billing';
 import { FilesModule } from '@domain/files';
 import { IdentityApiModule, identitySchema } from '@domain/identity';
 import {
@@ -58,6 +58,7 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
     // REST/GraphQL API out of rotation.
     ObservabilityModule.forRoot({
       healthContributors: [DatabaseHealthIndicator, CassandraHealthIndicator, RedisHealthIndicator],
+      redactPaths: BILLING_LOG_REDACT_PATHS,
     }),
     CqrsModule.forRoot(),
     ScheduleModule.forRoot(),

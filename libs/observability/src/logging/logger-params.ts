@@ -13,15 +13,16 @@ import { requestIdOf, resolveRpcRequestId } from './request-id.js';
 import { rpcErrorObject, rpcLogLevel } from './rpc-error-logging.js';
 
 /**
- * Log paths masked with `[REDACTED]`. Headers are listed although our serializers drop them, so a
- * future serializer change can't leak credentials; `*.x` covers one level of nesting
- * (`{ body: { password } }`). Keep the list short: every wildcard costs on every log line.
+ * Log paths masked with `[REDACTED]` in every process. Headers are listed although our serializers
+ * drop them, so a future serializer change can't leak credentials; `*.x` covers one level of
+ * nesting (`{ body: { password } }`). Keep the list short: every wildcard costs on every log line.
+ * Domain-specific paths (a webhook signature header, …) are appended by the app composition:
+ * `ObservabilityModule.forRoot({ redactPaths })`.
  */
 export const LOG_REDACT_PATHS: readonly string[] = [
   'req.headers.authorization',
   'req.headers.cookie',
   'req.headers["x-api-key"]',
-  'req.headers["stripe-signature"]',
   'res.headers["set-cookie"]',
   'password',
   'token',
@@ -96,6 +97,8 @@ export interface LoggerParamsOptions {
    * buffer, and they log too rarely for buffering to matter.
    */
   sync?: boolean;
+  /** Extra paths to mask, appended to `LOG_REDACT_PATHS` (contributed by the app's domains). */
+  redactPaths?: readonly string[];
 }
 
 /**
@@ -119,7 +122,7 @@ export function buildLoggerParams(
     level: observability.logLevel,
     base: { service: app.serviceName, pid: process.pid, hostname: hostname() },
     mixin: traceContextMixin,
-    redact: { paths: [...LOG_REDACT_PATHS], censor: '[REDACTED]' },
+    redact: { paths: [...LOG_REDACT_PATHS, ...(options.redactPaths ?? [])], censor: '[REDACTED]' },
     // Slim request/response objects: no headers (PII, cost), no query string (may carry tokens).
     serializers: {
       req: (req: SerializedRequestLike) => ({

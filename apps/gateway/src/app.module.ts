@@ -1,4 +1,4 @@
-import { BillingApiModule } from '@domain/billing';
+import { BILLING_LOG_REDACT_PATHS, BillingApiModule } from '@domain/billing';
 import { FilesModule } from '@domain/files';
 import { IdentityApiModule } from '@domain/identity';
 import { NotificationsApiModule } from '@domain/notifications';
@@ -39,7 +39,10 @@ import { StorageModule } from '@platform/storage';
 @Module({
   imports: [
     AppConfigModule.forRoot(),
-    ObservabilityModule.forRoot({ healthContributors: [RedisHealthIndicator] }),
+    ObservabilityModule.forRoot({
+      healthContributors: [RedisHealthIndicator],
+      redactPaths: BILLING_LOG_REDACT_PATHS,
+    }),
     RedisModule.forRootAsync(),
     AppCacheModule.forRootAsync(),
 

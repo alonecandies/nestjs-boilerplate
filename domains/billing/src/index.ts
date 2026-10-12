@@ -19,6 +19,7 @@ export * from './billing.constants.js';
 export * from './billing-api.module.js';
 export * from './billing-core.module.js';
 export * from './billing-grpc.module.js';
+export * from './billing-log-redaction.js';
 // Domain
 export * from './domain/billing.errors.js';
 export * from './domain/events/payment-succeeded.event.js';

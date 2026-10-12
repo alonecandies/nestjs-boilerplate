@@ -313,12 +313,14 @@ are sanitised before they reach the client.
 
 pino redacts these paths to `[REDACTED]` (`LOG_REDACT_PATHS`,
 `libs/observability/src/logging/logger-params.ts`): `req.headers.authorization`, `req.headers.cookie`,
-`req.headers["x-api-key"]`, `req.headers["stripe-signature"]`, `res.headers["set-cookie"]`, and
-`password`, `token`, `accessToken`, `refreshToken` at the top level plus `*.password`,
-`*.passwordHash`, `*.token`, `*.accessToken`, `*.refreshToken`, `*.secret`, `*.apiKey` one level
-down. Don't log request bodies or whole DTOs, and add paths here if you introduce new secret fields.
-Postgres query logging (`DATABASE_LOG_QUERIES`) prints parameters only outside production; Redis URLs
-are logged with credentials removed.
+`req.headers["x-api-key"]`, `res.headers["set-cookie"]`, and `password`, `token`, `accessToken`,
+`refreshToken` at the top level plus `*.password`, `*.passwordHash`, `*.token`, `*.accessToken`,
+`*.refreshToken`, `*.secret`, `*.apiKey` one level down. Domains add their own paths through the app
+composition: the monolith and the gateway pass billing's `BILLING_LOG_REDACT_PATHS`
+(`req.headers["stripe-signature"]`) to `ObservabilityModule.forRoot({ redactPaths })`. Don't log
+request bodies or whole DTOs, and add paths here (or to the owning domain's list) if you introduce
+new secret fields. Postgres query logging (`DATABASE_LOG_QUERIES`) prints parameters only outside
+production; Redis URLs are logged with credentials removed.
 
 ## Ops endpoints (`/metrics`, `/docs`, health)
 

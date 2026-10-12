@@ -37,6 +37,18 @@ describe('buildLoggerParams', () => {
     expect(autoLogging.ignore({ url: '/v1/users?x=1' })).toBe(false);
   });
 
+  it('appends the app-supplied redact paths after the platform list', () => {
+    const params = buildLoggerParams(observabilityConfig.parse(env), appConfig.parse(env), {
+      sync: true,
+      redactPaths: ['req.headers["x-webhook-signature"]'],
+    });
+
+    expect((params.pinoHttp as PinoHttpOptions).redact).toEqual({
+      paths: [...LOG_REDACT_PATHS, 'req.headers["x-webhook-signature"]'],
+      censor: '[REDACTED]',
+    });
+  });
+
   it('serializes requests without headers or query string', () => {
     const serializers = pinoHttpOptions().serializers as Record<
       string,
