@@ -4,21 +4,22 @@ import { NestFactory } from '@nestjs/core';
 import { ClientGrpcProxy } from '@nestjs/microservices';
 import { generateId, ServiceUnavailableException } from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
-import type {
-  GetUserRequest,
-  GetUsersByIdsRequest,
-  ListUsersRequest,
-  UpdateUserRolesRequest,
-  User,
-  UserList,
-  UserPage,
-  UsersServiceClient,
-  UsersServiceController,
-} from '@platform/contracts';
-import { UsersServiceControllerMethods } from '@platform/contracts';
 import { ClsModule } from 'nestjs-cls';
 import { lastValueFrom } from 'rxjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  FIXTURE_GRPC_PACKAGE,
+  type GetUserRequest,
+  type GetUsersByIdsRequest,
+  type ListUsersRequest,
+  type UpdateUserRolesRequest,
+  type User,
+  type UserList,
+  type UserPage,
+  type UsersServiceClient,
+  type UsersServiceController,
+  UsersServiceControllerMethods,
+} from '../../test/fixtures/fixture.grpc-package.js';
 import { createGrpcClientOptions } from './grpc-client.options.js';
 import { GrpcController } from './grpc-controller.decorator.js';
 import { createGrpcServerStrategy } from './grpc-server.options.js';
@@ -89,19 +90,17 @@ describe('gRPC client retry policy (in-process server)', () => {
 
   /** A fresh channel per case: retry throttling state is per channel. */
   function usersClient(): UsersServiceClient {
-    client = new ClientGrpcProxy(createGrpcClientOptions(cfg, 'identity').options);
+    client = new ClientGrpcProxy(
+      createGrpcClientOptions(cfg, { spec: FIXTURE_GRPC_PACKAGE, url: cfg.url }).options,
+    );
     return client.getService<UsersServiceClient>('UsersService');
   }
 
   beforeAll(async () => {
     const port = await freePort();
-    cfg = grpcConfig.parse({
-      GRPC_URL: `127.0.0.1:${port}`,
-      IDENTITY_GRPC_URL: `127.0.0.1:${port}`,
-      GRPC_DEADLINE_MS: '3000',
-    });
+    cfg = grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}`, GRPC_DEADLINE_MS: '3000' });
     app = await NestFactory.createMicroservice(FlakyGrpcModule, {
-      ...createGrpcServerStrategy(cfg, ['identity']),
+      ...createGrpcServerStrategy(cfg, [FIXTURE_GRPC_PACKAGE]),
       logger: false,
     });
     await app.listen();

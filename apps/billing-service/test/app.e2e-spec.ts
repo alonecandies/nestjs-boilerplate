@@ -5,7 +5,11 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { DomainValidationException, ExternalServiceException, generateId } from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
-import type { BillingServiceClient, PaymentList } from '@platform/contracts';
+import {
+  BILLING_GRPC_PACKAGE,
+  type BillingServiceClient,
+  type PaymentList,
+} from '@platform/contracts';
 import { DRIZZLE } from '@platform/database';
 import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
@@ -149,9 +153,12 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
       .useValue(new InMemoryRedis().asRedis())
       .overrideProvider(KafkaProducer)
       .useValue(new FakeKafkaProducer({ source: 'billing-service' }));
-    app = await startServiceTestApp(builder, { grpc: ['billing'] });
+    app = await startServiceTestApp(builder, { grpc: [BILLING_GRPC_PACKAGE] });
 
-    client = new ClientGrpcProxy(createGrpcClientOptions(grpcConfig.parse(), 'billing').options);
+    client = new ClientGrpcProxy(
+      createGrpcClientOptions(grpcConfig.parse(), { spec: BILLING_GRPC_PACKAGE, url: grpcUrl })
+        .options,
+    );
     billing = client.getService<BillingServiceClient>('BillingService');
   }, 60_000);
 

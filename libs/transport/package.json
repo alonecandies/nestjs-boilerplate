@@ -16,7 +16,8 @@
     "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --config ../../vitest.config.ts --project transport",
-    "clean": "rimraf dist coverage"
+    "clean": "rimraf dist coverage",
+    "proto:gen": "cd test/fixtures && buf generate --template ../../../contracts/buf.gen.yaml --config ../../../contracts/buf.yaml && node ../../../contracts/scripts/proto-esm-fix.mjs src/generated"
   },
   "dependencies": {
     "@platform/common": "workspace:*",
@@ -41,7 +42,10 @@
     "zod": "catalog:"
   },
   "devDependencies": {
+    "@bufbuild/buf": "catalog:",
     "@types/lodash-es": "catalog:",
-    "@types/opossum": "catalog:"
+    "@types/opossum": "catalog:",
+    "protobufjs": "catalog:",
+    "ts-proto": "catalog:"
   }
 }

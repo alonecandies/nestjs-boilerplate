@@ -4,7 +4,7 @@ import { NotificationsGrpcController } from './presentation/grpc/notifications-g
 
 /**
  * `notifications.v1.NotificationsService` over gRPC (notifications-service). The app connects the
- * server with `connectGrpcServer(app, ['notifications'])`.
+ * server with `connectGrpcServer(app, [NOTIFICATIONS_GRPC_PACKAGE])`.
  */
 @Module({
   imports: [NotificationsCoreModule],

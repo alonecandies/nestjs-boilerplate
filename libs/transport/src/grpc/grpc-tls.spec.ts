@@ -9,21 +9,22 @@ import { NestFactory } from '@nestjs/core';
 import { ClientGrpcProxy } from '@nestjs/microservices';
 import { generateId } from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
-import type {
-  GetUserRequest,
-  GetUsersByIdsRequest,
-  ListUsersRequest,
-  UpdateUserRolesRequest,
-  User,
-  UserList,
-  UserPage,
-  UsersServiceClient,
-  UsersServiceController,
-} from '@platform/contracts';
-import { UsersServiceControllerMethods } from '@platform/contracts';
 import { ClsModule } from 'nestjs-cls';
 import { lastValueFrom } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import {
+  FIXTURE_GRPC_PACKAGE,
+  type GetUserRequest,
+  type GetUsersByIdsRequest,
+  type ListUsersRequest,
+  type UpdateUserRolesRequest,
+  type User,
+  type UserList,
+  type UserPage,
+  type UsersServiceClient,
+  type UsersServiceController,
+  UsersServiceControllerMethods,
+} from '../../test/fixtures/fixture.grpc-package.js';
 import { createGrpcClientOptions } from './grpc-client.options.js';
 import { GrpcController } from './grpc-controller.decorator.js';
 import { createGrpcServerStrategy } from './grpc-server.options.js';
@@ -155,13 +156,14 @@ describe.skipIf(!hasOpenssl())('gRPC mutual TLS (in-process server)', () => {
     grpcConfig.parse({
       NODE_ENV: 'test',
       GRPC_URL: `127.0.0.1:${port}`,
-      IDENTITY_GRPC_URL: `localhost:${port}`,
       GRPC_DEADLINE_MS: '3000',
       ...env,
     });
 
   function getUser(cfg: GrpcConfig, override?: ChannelCredentials): Promise<User> {
-    const options = createGrpcClientOptions(cfg, 'identity', { maxAttempts: 1 }).options;
+    // `localhost` (not the IP): the throwaway server certificate is issued for that name.
+    const target = { spec: FIXTURE_GRPC_PACKAGE, url: `localhost:${port}` };
+    const options = createGrpcClientOptions(cfg, target, { maxAttempts: 1 }).options;
     const client = new ClientGrpcProxy(
       override === undefined ? options : { ...options, credentials: override },
     );
@@ -180,7 +182,7 @@ describe.skipIf(!hasOpenssl())('gRPC mutual TLS (in-process server)', () => {
       GRPC_TLS_KEY_PATH: files.key,
     });
     app = await NestFactory.createMicroservice(TlsGrpcModule, {
-      ...createGrpcServerStrategy(serverCfg, ['identity']),
+      ...createGrpcServerStrategy(serverCfg, [FIXTURE_GRPC_PACKAGE]),
       logger: false,
     });
     await app.listen();

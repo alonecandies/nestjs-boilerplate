@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { createServiceApp, listen } from '@platform/bootstrap';
 import { withTimeout } from '@platform/common';
+import { NOTIFICATIONS_GRPC_PACKAGE } from '@platform/contracts';
 import { flushLogs } from '@platform/observability';
 import { connectGrpcServer, connectKafkaConsumer } from '@platform/transport';
 import { AppModule } from './app.module.js';
@@ -23,7 +24,7 @@ try {
   app = await createServiceApp(AppModule);
   // Both transports after every global enhancer is known (inheritAppConfig), before
   // startAllMicroservices. The topics (and their .dlq) must exist: auto-creation is off.
-  connectGrpcServer(app, ['notifications']);
+  connectGrpcServer(app, [NOTIFICATIONS_GRPC_PACKAGE]);
   connectKafkaConsumer(app, { groupId: NOTIFICATIONS_CONSUMER_GROUP });
   await app.startAllMicroservices();
   // Last: the HTTP port (readiness probes) only opens once gRPC and the consumer are up.

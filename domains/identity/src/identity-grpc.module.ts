@@ -5,7 +5,7 @@ import { UsersGrpcController } from './presentation/grpc/users-grpc.controller.j
 
 /**
  * identity-service: exposes `identity.v1.AuthService` + `identity.v1.UsersService` over gRPC
- * (`connectGrpcServer(app, ['identity'])` in main.ts). No HTTP API.
+ * (`connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE])` in main.ts). No HTTP API.
  */
 @Module({
   imports: [IdentityCoreModule],

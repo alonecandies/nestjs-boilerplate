@@ -10,7 +10,7 @@
  * - The same modules are ALSO exported as version-qualified namespaces (`identityV1.User`), the
  *   escape hatch once a `v2` package with the same message names is introduced.
  * - Loading this barrel evaluates the generated modules, which registers the protobuf
- *   Timestamp <-> Date wrapper (see grpc/grpc-packages.ts).
+ *   Timestamp <-> Date wrapper (see grpc/identity.grpc-package.ts).
  */
 
 export * from './events/billing.events.js';
@@ -27,4 +27,7 @@ export * from './generated/identity/v1/identity.pb.js';
 export * as identityV1 from './generated/identity/v1/identity.pb.js';
 export * from './generated/notifications/v1/notifications.pb.js';
 export * as notificationsV1 from './generated/notifications/v1/notifications.pb.js';
-export * from './grpc/grpc-packages.js';
+export * from './grpc/billing.grpc-package.js';
+export * from './grpc/grpc-package-spec.js';
+export * from './grpc/identity.grpc-package.js';
+export * from './grpc/notifications.grpc-package.js';

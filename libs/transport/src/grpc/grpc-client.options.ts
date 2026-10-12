@@ -3,14 +3,21 @@ import { type GrpcOptions, Transport } from '@nestjs/microservices';
 import type { GrpcConfig } from '@platform/config';
 import {
   GRPC_LOADER_OPTIONS,
-  GRPC_PACKAGES,
   type GrpcMethodName,
-  type GrpcPackageName,
+  type GrpcPackageSpec,
   resolveGrpcPackages,
 } from '@platform/contracts';
 import { clamp } from 'lodash-es';
 import { GRPC_KEEPALIVE } from './grpc.constants.js';
 import { createGrpcChannelCredentials } from './grpc-tls.js';
+
+/** The package a client calls and where it dials it. */
+export interface GrpcClientTarget {
+  /** The package's spec, exported by the owning domain's contracts package. */
+  readonly spec: GrpcPackageSpec;
+  /** grpc-js target: `host:port`, `dns:///svc.ns.svc.cluster.local:50051`, … */
+  readonly url: string;
+}
 
 /** Per-client tuning for `createGrpcClientOptions` / `GrpcClientsModule.register`. */
 export interface GrpcClientOptionsExtras {
@@ -18,7 +25,7 @@ export interface GrpcClientOptionsExtras {
   deadlineMs?: number;
   /**
    * Total attempts (including the first) on `UNAVAILABLE`, for the package's idempotent methods
-   * only (`GRPC_PACKAGES[name].idempotentMethods`). Default 3; `1` disables retries.
+   * only (`spec.idempotentMethods`). Default 3; `1` disables retries.
    */
   maxAttempts?: number;
   /** Raw `grpc.*` channel options, merged over the defaults. */
@@ -89,18 +96,18 @@ export function buildGrpcServiceConfig(
 }
 
 /**
- * Client `GrpcOptions` for one package: target from `grpcConfig.clients[name]`, the same
- * proto-loader options as the server, message limits, keepalive (detects dead connections behind
- * NATs and load balancers), and the service config above. Resolver-supplied (DNS TXT) service
- * configs are disabled, so the config in code is the only one that applies. With
- * `grpcConfig.tls` the channel uses TLS and presents this process's certificate (mutual TLS).
+ * Client `GrpcOptions` for one package: dials `target.url` with the same proto-loader options as
+ * the server, message limits, keepalive (detects dead connections behind NATs and load
+ * balancers), and the service config above. Resolver-supplied (DNS TXT) service configs are
+ * disabled, so the config in code is the only one that applies. With `grpcConfig.tls` the channel
+ * uses TLS and presents this process's certificate (mutual TLS).
  */
 export function createGrpcClientOptions(
   cfg: GrpcConfig,
-  name: GrpcPackageName,
+  target: GrpcClientTarget,
   extras: GrpcClientOptionsExtras = {},
 ): GrpcOptions {
-  const resolved = resolveGrpcPackages([name]);
+  const resolved = resolveGrpcPackages([target.spec]);
   const serviceConfig = buildGrpcServiceConfig(resolved.services, {
     timeoutMs: extras.deadlineMs ?? cfg.deadlineMs,
     retryableMethods: resolved.idempotentMethods,
@@ -110,11 +117,11 @@ export function createGrpcClientOptions(
   return {
     transport: Transport.GRPC,
     options: {
-      url: cfg.clients[name],
+      url: target.url,
       ...(credentials === undefined ? {} : { credentials }),
       package: resolved.packages,
-      protoPath: [...GRPC_PACKAGES[name].protoPath],
-      loader: { ...GRPC_LOADER_OPTIONS, includeDirs: [...GRPC_LOADER_OPTIONS.includeDirs] },
+      protoPath: resolved.protoPath,
+      loader: { ...GRPC_LOADER_OPTIONS, includeDirs: resolved.includeDirs },
       maxSendMessageLength: cfg.maxMessageBytes,
       maxReceiveMessageLength: cfg.maxMessageBytes,
       keepalive: {

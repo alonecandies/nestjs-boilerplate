@@ -17,22 +17,23 @@ import {
   generateId,
 } from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
-import type {
-  GetUserRequest,
-  GetUsersByIdsRequest,
-  ListUsersRequest,
-  UpdateUserRolesRequest,
-  User,
-  UserList,
-  UserPage,
-  UsersServiceClient,
-  UsersServiceController,
-} from '@platform/contracts';
-import { UsersServiceControllerMethods } from '@platform/contracts';
 import { protoPath as healthProtoPath } from 'grpc-health-check';
 import { ClsModule, ClsService } from 'nestjs-cls';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import {
+  FIXTURE_GRPC_PACKAGE,
+  type GetUserRequest,
+  type GetUsersByIdsRequest,
+  type ListUsersRequest,
+  type UpdateUserRolesRequest,
+  type User,
+  type UserList,
+  type UserPage,
+  type UsersServiceClient,
+  type UsersServiceController,
+  UsersServiceControllerMethods,
+} from '../../test/fixtures/fixture.grpc-package.js';
 import { RPC_CLS_KEYS } from '../context/transport-context.js';
 import { grpcCall } from './grpc-call.js';
 import { GrpcCircuitBreakers } from './grpc-circuit-breakers.js';
@@ -152,23 +153,21 @@ describe('gRPC round trip (in-process server + ClientGrpc)', () => {
   const call = <T>(source: Parameters<typeof grpcCall<T>>[0]): Promise<T> =>
     grpcCall(source, {
       timeoutMs: 3_000,
-      operation: 'identity.UsersService',
-      breaker: breakers.get('identity'),
+      operation: 'fixture.UsersService',
+      breaker: breakers.get('fixture'),
     });
 
   beforeAll(async () => {
     const port = await freePort();
-    cfg = grpcConfig.parse({
-      GRPC_URL: `127.0.0.1:${port}`,
-      IDENTITY_GRPC_URL: `127.0.0.1:${port}`,
-      GRPC_DEADLINE_MS: '3000',
-    });
+    cfg = grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}`, GRPC_DEADLINE_MS: '3000' });
     app = await NestFactory.createMicroservice(TestGrpcModule, {
-      ...createGrpcServerStrategy(cfg, ['identity']),
+      ...createGrpcServerStrategy(cfg, [FIXTURE_GRPC_PACKAGE]),
       logger: false,
     });
     await app.listen();
-    client = new ClientGrpcProxy(createGrpcClientOptions(cfg, 'identity').options);
+    client = new ClientGrpcProxy(
+      createGrpcClientOptions(cfg, { spec: FIXTURE_GRPC_PACKAGE, url: cfg.url }).options,
+    );
     users = client.getService<UsersServiceClient>('UsersService');
   });
 
@@ -253,11 +252,11 @@ describe('gRPC round trip (in-process server + ClientGrpc)', () => {
   });
 
   it('reports SERVING through grpc.health.v1 once listening', async () => {
-    await expect(checkHealth(cfg.url, 'identity.v1.UsersService')).resolves.toBe('SERVING');
+    await expect(checkHealth(cfg.url, 'fixture.v1.UsersService')).resolves.toBe('SERVING');
     await expect(checkHealth(cfg.url, '')).resolves.toBe('SERVING');
   });
 
   it('did not open the circuit for caller errors', () => {
-    expect(breakers.states()['identity']).toBe('closed');
+    expect(breakers.states()['fixture']).toBe('closed');
   });
 });

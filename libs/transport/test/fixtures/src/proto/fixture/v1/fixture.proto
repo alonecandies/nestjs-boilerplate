@@ -1,0 +1,52 @@
+syntax = "proto3";
+
+// Test-only package for the @platform/transport specs, generated with the same ts-proto template
+// as the domain contracts packages. Reads are idempotent (retried on UNAVAILABLE); UpdateUserRoles
+// is a mutation (never retried).
+package fixture.v1;
+
+import "google/protobuf/timestamp.proto";
+
+service UsersService {
+  rpc GetUser(GetUserRequest) returns (User);
+  rpc GetUsersByIds(GetUsersByIdsRequest) returns (UserList);
+  rpc ListUsers(ListUsersRequest) returns (UserPage);
+  rpc UpdateUserRoles(UpdateUserRolesRequest) returns (User);
+}
+
+message User {
+  string id = 1;
+  string email = 2;
+  string display_name = 3;
+  repeated string roles = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+message GetUserRequest {
+  string id = 1;
+}
+
+message GetUsersByIdsRequest {
+  repeated string ids = 1;
+}
+
+message UserList {
+  repeated User users = 1;
+}
+
+message ListUsersRequest {
+  int32 limit = 1;
+  optional string cursor = 2;
+}
+
+message UserPage {
+  repeated User items = 1;
+  optional string next_cursor = 2;
+}
+
+message UpdateUserRolesRequest {
+  string id = 1;
+  repeated string roles = 2;
+  string actor_id = 3;
+}

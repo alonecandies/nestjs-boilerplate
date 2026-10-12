@@ -1,0 +1,76 @@
+import { existsSync, readdirSync } from 'node:fs';
+import { isAbsolute, join } from 'node:path';
+import protobufjs from 'protobufjs';
+import {
+  GRPC_LOADER_OPTIONS,
+  type GrpcPackageSpec,
+  resolveGrpcPackages,
+} from '../grpc/grpc-package-spec.js';
+
+/** Nest's PATTERN_METADATA key (not exported from the @nestjs/microservices root). */
+const PATTERN_METADATA = 'microservices:pattern';
+
+/**
+ * Loads `specs` exactly like @grpc/proto-loader (`addIncludePathResolver` over every `protoDir`,
+ * then `loadSync` with GRPC_LOADER_OPTIONS), on the protobufjs instance the generated code
+ * patches: specs exercise the real wire path without a server.
+ */
+export function loadGrpcPackages(specs: readonly GrpcPackageSpec[]): protobufjs.Root {
+  const { protoPath, includeDirs } = resolveGrpcPackages(specs);
+  const root = new protobufjs.Root();
+  const originalResolvePath = root.resolvePath.bind(root);
+  root.resolvePath = (origin, target) => {
+    if (isAbsolute(target)) return target;
+    for (const dir of includeDirs) {
+      const candidate = join(dir, target);
+      if (existsSync(candidate)) return candidate;
+    }
+    return originalResolvePath(origin, target);
+  };
+  root.loadSync(protoPath, GRPC_LOADER_OPTIONS);
+  root.resolveAll();
+  return root;
+}
+
+/** Encodes `value` as `typeName`, decodes it, and converts it back like proto-loader does. */
+export function wireRoundTrip(
+  root: protobufjs.Root,
+  typeName: string,
+  value: object,
+): Record<string, unknown> {
+  const type = root.lookupType(typeName);
+  const bytes = type.encode(type.fromObject(value)).finish();
+  return type.toObject(type.decode(bytes), GRPC_LOADER_OPTIONS);
+}
+
+/** Every `.proto` file under `dir`, relative and `/`-separated, sorted. */
+export function protoFilesUnder(dir: string): string[] {
+  return readdirSync(dir, { recursive: true, encoding: 'utf8' })
+    .filter((file) => file.endsWith('.proto'))
+    .map((file) => file.split('\\').join('/'))
+    .sort();
+}
+
+/**
+ * Applies a generated `<Svc>ControllerMethods()` decorator to a stub class with one method per rpc
+ * of `service`, and returns the Nest pattern each method received, in rpc order.
+ */
+export function boundRpcPatterns(
+  decorator: () => ClassDecorator,
+  service: protobufjs.Service,
+): unknown[] {
+  const rpcNames = service.methodsArray.map(
+    (method) => method.name.charAt(0).toLowerCase() + method.name.slice(1),
+  );
+  class Controller {}
+  for (const name of rpcNames) {
+    Object.defineProperty(Controller.prototype, name, {
+      value: () => undefined,
+      writable: true,
+      configurable: true,
+    });
+  }
+  decorator()(Controller);
+  const prototype = Controller.prototype as Record<string, object>;
+  return rpcNames.map((name) => Reflect.getMetadata(PATTERN_METADATA, prototype[name] as object));
+}

@@ -1,7 +1,7 @@
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import type { ClientGrpc } from '@nestjs/microservices';
 import {
-  GRPC_PACKAGES,
+  IDENTITY_GRPC_PACKAGE,
   type ListUsersRequest,
   type UpdateUserRolesRequest,
   USERS_SERVICE_NAME,
@@ -21,7 +21,7 @@ export class UsersGrpcAdapter implements UsersPort, OnModuleInit {
   private users: UsersServiceClient;
 
   constructor(
-    @Inject(GRPC_PACKAGES.identity.clientToken) private readonly client: ClientGrpc,
+    @Inject(IDENTITY_GRPC_PACKAGE.clientToken) private readonly client: ClientGrpc,
     private readonly caller: IdentityGrpcCaller,
   ) {}
 

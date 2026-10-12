@@ -3,6 +3,7 @@ import { Logger } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { createServiceApp, listen } from '@platform/bootstrap';
 import { withTimeout } from '@platform/common';
+import { BILLING_GRPC_PACKAGE } from '@platform/contracts';
 import { flushLogs } from '@platform/observability';
 import { connectGrpcServer } from '@platform/transport';
 import { AppModule } from './app.module.js';
@@ -21,7 +22,7 @@ try {
   // commits) → Postgres/Redis/Kafka closed → exit 0, bounded by SHUTDOWN_TIMEOUT_MS.
   app = await createServiceApp(AppModule);
   // After every global enhancer is known (inheritAppConfig) and before startAllMicroservices.
-  connectGrpcServer(app, ['billing']);
+  connectGrpcServer(app, [BILLING_GRPC_PACKAGE]);
   await app.startAllMicroservices();
   // Last: the HTTP port (readiness probes) only opens once gRPC accepts calls.
   await listen(app);

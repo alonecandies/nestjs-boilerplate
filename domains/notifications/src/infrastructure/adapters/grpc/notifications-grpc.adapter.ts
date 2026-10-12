@@ -3,9 +3,9 @@ import { Inject, Injectable, type OnModuleInit, Optional } from '@nestjs/common'
 import type { ClientGrpc } from '@nestjs/microservices';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
 import {
-  GRPC_PACKAGES,
   type ListNotificationsRequest,
   type MarkNotificationReadRequest,
+  NOTIFICATIONS_GRPC_PACKAGE,
   NOTIFICATIONS_SERVICE_NAME,
   type NotificationPage,
   type NotificationsServiceClient,
@@ -38,7 +38,7 @@ export class NotificationsGrpcAdapter implements NotificationsPort, OnModuleInit
   private service!: NotificationsServiceClient;
 
   constructor(
-    @Inject(GRPC_PACKAGES.notifications.clientToken) private readonly client: ClientGrpc,
+    @Inject(NOTIFICATIONS_GRPC_PACKAGE.clientToken) private readonly client: ClientGrpc,
     @Inject(grpcConfig.KEY) private readonly cfg: GrpcConfig,
     private readonly breakers: GrpcCircuitBreakers,
     @Optional() private readonly cls?: ClsService,
@@ -70,7 +70,7 @@ export class NotificationsGrpcAdapter implements NotificationsPort, OnModuleInit
   private call<T>(method: string, source: Observable<T>): Promise<T> {
     return grpcCall(source, {
       timeoutMs: this.cfg.deadlineMs,
-      operation: `${GRPC_PACKAGES.notifications.package}.${NOTIFICATIONS_SERVICE_NAME}/${method}`,
+      operation: `${NOTIFICATIONS_GRPC_PACKAGE.package}.${NOTIFICATIONS_SERVICE_NAME}/${method}`,
       breaker: this.breakers.get(UPSTREAM),
     });
   }

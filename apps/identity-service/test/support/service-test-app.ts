@@ -3,13 +3,13 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import type { TestingModuleBuilder } from '@nestjs/testing';
 import { buildFastifyOptions, configureHttpApp } from '@platform/bootstrap';
 import { appConfig } from '@platform/config';
-import type { GrpcPackageName } from '@platform/contracts';
+import type { GrpcPackageSpec } from '@platform/contracts';
 import { createFastifyTestApp } from '@platform/testing';
 import { connectGrpcServer } from '@platform/transport';
 
 export interface ServiceTestAppOptions {
   /** gRPC packages served on `GRPC_URL` (like `connectGrpcServer` in main.ts). */
-  grpc: readonly GrpcPackageName[];
+  grpc: readonly GrpcPackageSpec[];
   /**
    * In-process replacement for `connectKafkaConsumer` (no broker): connected with the same
    * `inheritAppConfig: true`, so consumers see exactly the enhancers they get in production.

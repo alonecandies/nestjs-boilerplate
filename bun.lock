@@ -723,8 +723,11 @@
         "zod": "catalog:",
       },
       "devDependencies": {
+        "@bufbuild/buf": "catalog:",
         "@types/lodash-es": "catalog:",
         "@types/opossum": "catalog:",
+        "protobufjs": "catalog:",
+        "ts-proto": "catalog:",
       },
     },
   },

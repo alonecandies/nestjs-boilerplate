@@ -4,7 +4,7 @@ import { BillingGrpcController } from './presentation/grpc/billing-grpc.controll
 
 /**
  * billing-service: `billing.v1.BillingService` over the core. Host it with
- * `connectGrpcServer(app, ['billing'])` (after every `app.useGlobal*()`).
+ * `connectGrpcServer(app, [BILLING_GRPC_PACKAGE])` (after every `app.useGlobal*()`).
  */
 @Module({
   imports: [BillingCoreModule],

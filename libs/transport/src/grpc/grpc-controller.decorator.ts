@@ -19,7 +19,8 @@ import { GrpcContextInterceptor } from './grpc-context.interceptor.js';
  * - `deferInitialization: true` runs lifecycle hooks twice.
  * (nest-distributed §7.3)
  *
- * Combine it with the generated `XServiceControllerMethods()` decorator from `@platform/contracts`.
+ * Combine it with the generated `XServiceControllerMethods()` decorator from the owning domain's
+ * contracts package (`@domain/<x>-contracts`).
  */
 export const GrpcController = (): ClassDecorator =>
   applyDecorators(

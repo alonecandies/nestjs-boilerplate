@@ -9,6 +9,7 @@ import { type GrpcConfig, grpcConfig } from '@platform/config';
 import {
   createEventEnvelope,
   KAFKA_TOPICS,
+  NOTIFICATIONS_GRPC_PACKAGE,
   type NotificationPage,
   type NotificationsServiceClient,
 } from '@platform/contracts';
@@ -132,10 +133,13 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
       // A plain value is not a @Processor: BullMQ's explorer starts no Worker (it would dial Redis).
       .overrideProvider(MailProcessor)
       .useValue({});
-    app = await startServiceTestApp(builder, { grpc: ['notifications'], kafka });
+    app = await startServiceTestApp(builder, { grpc: [NOTIFICATIONS_GRPC_PACKAGE], kafka });
 
     client = new ClientGrpcProxy(
-      createGrpcClientOptions(grpcConfig.parse(), 'notifications').options,
+      createGrpcClientOptions(grpcConfig.parse(), {
+        spec: NOTIFICATIONS_GRPC_PACKAGE,
+        url: grpcUrl,
+      }).options,
     );
     notifications = client.getService<NotificationsServiceClient>('NotificationsService');
   }, 60_000);

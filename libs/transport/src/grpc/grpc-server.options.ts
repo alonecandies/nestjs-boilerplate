@@ -10,7 +10,7 @@ import {
 import type { GrpcConfig } from '@platform/config';
 import {
   GRPC_LOADER_OPTIONS,
-  type GrpcPackageName,
+  type GrpcPackageSpec,
   resolveGrpcPackages,
 } from '@platform/contracts';
 import { GRPC_KEEPALIVE } from './grpc.constants.js';
@@ -66,7 +66,7 @@ function isHealthServer(value: unknown): value is HealthServer {
  */
 export function createGrpcServerOptions(
   cfg: GrpcConfig,
-  packages: readonly GrpcPackageName[],
+  packages: readonly GrpcPackageSpec[],
   extras: GrpcServerOptionsExtras = {},
 ): GrpcOptions {
   const resolved = resolveGrpcPackages(packages);
@@ -80,7 +80,7 @@ export function createGrpcServerOptions(
       ...(credentials === undefined ? {} : { credentials }),
       package: resolved.packages,
       protoPath: resolved.protoPath,
-      loader: { ...GRPC_LOADER_OPTIONS, includeDirs: [...GRPC_LOADER_OPTIONS.includeDirs] },
+      loader: { ...GRPC_LOADER_OPTIONS, includeDirs: resolved.includeDirs },
       maxSendMessageLength: cfg.maxMessageBytes,
       maxReceiveMessageLength: cfg.maxMessageBytes,
       keepalive: { ...GRPC_KEEPALIVE },
@@ -135,7 +135,7 @@ export class HealthReportingGrpcServer extends ServerGrpc {
  */
 export function createGrpcServerStrategy(
   cfg: GrpcConfig,
-  packages: readonly GrpcPackageName[],
+  packages: readonly GrpcPackageSpec[],
   extras: GrpcServerOptionsExtras = {},
 ): CustomStrategy {
   const health =

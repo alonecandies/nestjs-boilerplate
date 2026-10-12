@@ -3,11 +3,11 @@ import { Inject, Injectable, type OnModuleInit, Optional } from '@nestjs/common'
 import type { ClientGrpc } from '@nestjs/microservices';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
 import {
+  BILLING_GRPC_PACKAGE,
   BILLING_SERVICE_NAME,
   type BillingServiceClient,
   type CheckoutSession,
   type CreateCheckoutSessionRequest,
-  GRPC_PACKAGES,
   type HandleStripeWebhookRequest,
   type HandleStripeWebhookResponse,
   type ListPaymentsRequest,
@@ -59,7 +59,7 @@ export class BillingGrpcAdapter implements BillingPort, OnModuleInit {
   private client: BillingServiceClient;
 
   constructor(
-    @Inject(GRPC_PACKAGES.billing.clientToken) private readonly grpc: ClientGrpc,
+    @Inject(BILLING_GRPC_PACKAGE.clientToken) private readonly grpc: ClientGrpc,
     @Inject(grpcConfig.KEY) private readonly config: GrpcConfig,
     private readonly breakers: GrpcCircuitBreakers,
     @Optional() private readonly cls?: ClsService,

@@ -4,7 +4,7 @@ import {
   AUTH_SERVICE_NAME,
   type AuthServiceClient,
   type AuthTokens,
-  GRPC_PACKAGES,
+  IDENTITY_GRPC_PACKAGE,
   type LoginRequest,
   type LogoutRequest,
   type RefreshTokensRequest,
@@ -22,7 +22,7 @@ export class AuthGrpcAdapter implements AuthPort, OnModuleInit {
   private auth: AuthServiceClient;
 
   constructor(
-    @Inject(GRPC_PACKAGES.identity.clientToken) private readonly client: ClientGrpc,
+    @Inject(IDENTITY_GRPC_PACKAGE.clientToken) private readonly client: ClientGrpc,
     private readonly caller: IdentityGrpcCaller,
   ) {}
 

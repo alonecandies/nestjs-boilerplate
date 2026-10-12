@@ -1,4 +1,6 @@
 import { type DynamicModule, Module, type Provider } from '@nestjs/common';
+import { grpcConfig } from '@platform/config';
+import { IDENTITY_GRPC_PACKAGE } from '@platform/contracts';
 import { GraphqlLoadersModule } from '@platform/graphql';
 import { GrpcClientsModule, type GrpcClientsModuleOptions } from '@platform/transport';
 import { AuthPort } from './application/ports/auth.port.js';
@@ -34,7 +36,8 @@ const PORT_EXPORTS = [AuthPort, UsersPort];
  * DataLoader. Presentation depends only on `AuthPort` / `UsersPort`; the binding decides the
  * topology:
  * - `forLocal()` (monolith): ports → CommandBus/QueryBus, imports `IdentityCoreModule`.
- * - `forRemote()` (gateway): ports → gRPC clients of identity-service (deadline + breaker).
+ * - `forRemote()` (gateway): ports → gRPC clients of identity-service (deadline + breaker). The
+ *   client URL (`IDENTITY_GRPC_URL`) is read when `forRemote()` is called.
  *
  * Expects the app-level global modules: `AuthModule` (guards, TokenService), `AppCacheModule`
  * (`AppCacheService` for `user:{id}`), `AppThrottlerModule` (`@AuthThrottle`) and
@@ -57,9 +60,10 @@ export class IdentityApiModule {
   }
 
   static forRemote(options: GrpcClientsModuleOptions = {}): DynamicModule {
+    const target = { spec: IDENTITY_GRPC_PACKAGE, url: grpcConfig.parse().clients.identity };
     return {
       module: IdentityApiModule,
-      imports: [GrpcClientsModule.register(['identity'], options), GraphqlLoadersModule],
+      imports: [GrpcClientsModule.register(target, options), GraphqlLoadersModule],
       controllers: CONTROLLERS,
       providers: [
         ...PRESENTATION,

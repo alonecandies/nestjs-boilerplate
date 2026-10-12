@@ -10,7 +10,11 @@ import {
   UnauthenticatedException,
 } from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
-import type { AuthServiceClient, UsersServiceClient } from '@platform/contracts';
+import {
+  type AuthServiceClient,
+  IDENTITY_GRPC_PACKAGE,
+  type UsersServiceClient,
+} from '@platform/contracts';
 import { DRIZZLE } from '@platform/database';
 import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
@@ -96,9 +100,12 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
       .useValue(new InMemoryRedis().asRedis())
       .overrideProvider(KafkaProducer)
       .useValue(new FakeKafkaProducer({ source: 'identity-service' }));
-    app = await startServiceTestApp(builder, { grpc: ['identity'] });
+    app = await startServiceTestApp(builder, { grpc: [IDENTITY_GRPC_PACKAGE] });
 
-    client = new ClientGrpcProxy(createGrpcClientOptions(grpcConfig.parse(), 'identity').options);
+    client = new ClientGrpcProxy(
+      createGrpcClientOptions(grpcConfig.parse(), { spec: IDENTITY_GRPC_PACKAGE, url: grpcUrl })
+        .options,
+    );
     usersClient = client.getService<UsersServiceClient>('UsersService');
     authClient = client.getService<AuthServiceClient>('AuthService');
   }, 60_000);

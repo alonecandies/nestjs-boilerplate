@@ -2,11 +2,13 @@ import { type DynamicModule, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ClientsModule, type GrpcOptions } from '@nestjs/microservices';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
-import { GRPC_PACKAGES, type GrpcPackageName } from '@platform/contracts';
-import { uniq } from 'lodash-es';
 import { GRPC_CIRCUIT_BREAKER_OPTIONS } from './grpc.constants.js';
 import { type GrpcCircuitBreakerOptions, GrpcCircuitBreakers } from './grpc-circuit-breakers.js';
-import { createGrpcClientOptions, type GrpcClientOptionsExtras } from './grpc-client.options.js';
+import {
+  createGrpcClientOptions,
+  type GrpcClientOptionsExtras,
+  type GrpcClientTarget,
+} from './grpc-client.options.js';
 
 export interface GrpcClientsModuleOptions {
   /** Deadline, retry and channel tuning applied to every client of this registration. */
@@ -16,9 +18,9 @@ export interface GrpcClientsModuleOptions {
 }
 
 /**
- * Registers one `ClientGrpc` per package under `GRPC_PACKAGES[name].clientToken`
- * (`@Inject(GRPC_PACKAGES.identity.clientToken) client: ClientGrpc`). Clients are configured from
- * `grpcConfig`. Exports:
+ * Registers the `ClientGrpc` of one package under `spec.clientToken`
+ * (`@Inject(ORDERS_GRPC_PACKAGE.clientToken) client: ClientGrpc`), dialing `url`. Deadline, TLS,
+ * message limits and keepalive come from `grpcConfig`. Exports:
  * - the clients (closed automatically on application shutdown),
  * - `GrpcCircuitBreakers`,
  * - the `grpcConfig` namespace, so adapters can inject `grpcConfig.KEY` for `deadlineMs`.
@@ -27,20 +29,17 @@ export interface GrpcClientsModuleOptions {
  */
 @Module({})
 export class GrpcClientsModule {
-  static register(
-    packages: readonly GrpcPackageName[],
-    options: GrpcClientsModuleOptions = {},
-  ): DynamicModule {
+  static register(target: GrpcClientTarget, options: GrpcClientsModuleOptions = {}): DynamicModule {
     const configModule = ConfigModule.forFeature(grpcConfig);
-    const clients = ClientsModule.registerAsync(
-      uniq(packages).map((name) => ({
-        name: GRPC_PACKAGES[name].clientToken,
+    const clients = ClientsModule.registerAsync([
+      {
+        name: target.spec.clientToken,
         imports: [configModule],
         inject: [grpcConfig.KEY],
         useFactory: (cfg: GrpcConfig): GrpcOptions =>
-          createGrpcClientOptions(cfg, name, options.client),
-      })),
-    );
+          createGrpcClientOptions(cfg, target, options.client),
+      },
+    ]);
     return {
       module: GrpcClientsModule,
       imports: [configModule, clients],

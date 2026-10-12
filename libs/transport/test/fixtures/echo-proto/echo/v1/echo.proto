@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+// Second test-only package, in its own proto root: proves transport hands every package's
+// `protoDir` to proto-loader. Never generated (no TypeScript uses it).
+package echo.v1;
+
+service EchoService {
+  rpc Echo(EchoRequest) returns (EchoReply);
+}
+
+message EchoRequest {
+  string text = 1;
+}
+
+message EchoReply {
+  string text = 1;
+}

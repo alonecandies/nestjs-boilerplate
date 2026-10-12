@@ -5,6 +5,7 @@ import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { DomainValidationException, generateId } from '@platform/common';
 import { AppConfigModule, grpcConfig } from '@platform/config';
+import { BILLING_GRPC_PACKAGE } from '@platform/contracts';
 import { createGrpcServerStrategy } from '@platform/transport';
 import { ClsModule } from 'nestjs-cls';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -67,7 +68,7 @@ describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () =
     vi.stubEnv('GRPC_DEADLINE_MS', '3000');
     server = await NestFactory.createMicroservice(BillingServiceTestModule, {
       ...createGrpcServerStrategy(grpcConfig.parse({ GRPC_URL: `127.0.0.1:${grpcPort}` }), [
-        'billing',
+        BILLING_GRPC_PACKAGE,
       ]),
       logger: false,
     });

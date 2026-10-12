@@ -10,6 +10,7 @@ import { NestFactory } from '@nestjs/core';
 import { Transport } from '@nestjs/microservices';
 import { grpcConfig, kafkaConfig } from '@platform/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { FIXTURE_GRPC_PACKAGE } from '../../test/fixtures/fixture.grpc-package.js';
 import { HealthReportingGrpcServer } from '../grpc/grpc-server.options.js';
 import { connectGrpcServer, connectKafkaConsumer } from './connect-microservices.js';
 
@@ -44,22 +45,19 @@ describe('connectGrpcServer', () => {
     const cfg = grpcConfig.parse({ GRPC_URL: '0.0.0.0:7001' });
     const { app, connect } = fakeApp({ [grpcConfig.namespace]: cfg });
 
-    connectGrpcServer(app, ['identity']);
+    connectGrpcServer(app, [FIXTURE_GRPC_PACKAGE]);
 
     expect(connect).toHaveBeenCalledTimes(1);
     const [options, hybrid] = connect.mock.calls[0] ?? [];
     expect(hybrid).toEqual({ inheritAppConfig: true });
     const { strategy } = options as { strategy: HealthReportingGrpcServer };
     expect(strategy).toBeInstanceOf(HealthReportingGrpcServer);
-    expect(strategy.health.services).toEqual([
-      'identity.v1.AuthService',
-      'identity.v1.UsersService',
-    ]);
+    expect(strategy.health.services).toEqual(['fixture.v1.UsersService']);
   });
 
   it('falls back to parsing the environment when no module loaded the namespace', () => {
     const { app, connect, missed } = fakeApp({});
-    expect(() => connectGrpcServer(app, ['billing'])).not.toThrow();
+    expect(() => connectGrpcServer(app, [FIXTURE_GRPC_PACKAGE])).not.toThrow();
     expect(connect).toHaveBeenCalledTimes(1);
     // The namespace token itself is never probed (a miss is what Nest logs at ERROR).
     expect(missed).toEqual([]);

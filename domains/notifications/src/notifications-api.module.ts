@@ -1,4 +1,6 @@
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
+import { grpcConfig } from '@platform/config';
+import { NOTIFICATIONS_GRPC_PACKAGE } from '@platform/contracts';
 import { GrpcClientsModule } from '@platform/transport';
 import { NotificationsPort } from './application/ports/notifications.port.js';
 import { NotificationsGrpcAdapter } from './infrastructure/adapters/grpc/notifications-grpc.adapter.js';
@@ -20,7 +22,8 @@ const PROVIDERS: Provider[] = [NotificationsResolver, NotificationsGateway];
  * GraphQL subscriptions.
  *
  * - `forLocal()` (monolith): the port runs on the CQRS buses of `NotificationsCoreModule`.
- * - `forRemote()` (gateway): the port calls notifications-service over gRPC.
+ * - `forRemote()` (gateway): the port calls notifications-service over gRPC. The client URL
+ *   (`NOTIFICATIONS_GRPC_URL`) is read when `forRemote()` is called.
  *
  * Expects (global): `AuthModule` (guards, TokenService, denylist), `AppThrottlerModule`
  * (WsThrottlerGuard), `AppGraphqlModule` + `GraphqlPubSubModule`, a socket.io adapter
@@ -42,9 +45,13 @@ export class NotificationsApiModule {
   }
 
   static forRemote(): DynamicModule {
+    const target = {
+      spec: NOTIFICATIONS_GRPC_PACKAGE,
+      url: grpcConfig.parse().clients.notifications,
+    };
     return {
       module: NotificationsApiModule,
-      imports: [GrpcClientsModule.register(['notifications'])],
+      imports: [GrpcClientsModule.register(target)],
       controllers: CONTROLLERS,
       providers: [...PROVIDERS, { provide: NotificationsPort, useClass: NotificationsGrpcAdapter }],
       exports: [NotificationsPort],

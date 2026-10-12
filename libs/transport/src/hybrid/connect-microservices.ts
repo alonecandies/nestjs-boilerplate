@@ -2,7 +2,7 @@ import type { INestApplication, INestApplicationContext, INestMicroservice } fro
 import { ConfigService } from '@nestjs/config';
 import type { CustomStrategy, KafkaOptions } from '@nestjs/microservices';
 import { type GrpcConfig, grpcConfig, type KafkaConfig, kafkaConfig } from '@platform/config';
-import type { GrpcPackageName } from '@platform/contracts';
+import type { GrpcPackageSpec } from '@platform/contracts';
 import {
   createGrpcServerStrategy,
   type GrpcServerOptionsExtras,
@@ -52,7 +52,7 @@ function resolveConfig<T extends object>(
  */
 export function connectGrpcServer(
   app: INestApplication,
-  packages: readonly GrpcPackageName[],
+  packages: readonly GrpcPackageSpec[],
   extras: GrpcServerOptionsExtras = {},
 ): INestMicroservice {
   const cfg = resolveConfig<GrpcConfig>(app, grpcConfig);

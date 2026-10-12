@@ -151,7 +151,7 @@
     "release": "lerna version --conventional-commits --yes --no-push",
     "clean": "lerna run clean && rimraf node_modules/.cache .nx",
     "graph": "nx graph",
-    "proto:gen": "bun run --filter @platform/contracts proto:gen",
+    "proto:gen": "bun run --filter @platform/contracts --filter @platform/transport proto:gen",
     "db:generate": "bun run --filter @platform/database db:generate",
     "db:migrate": "bun run --filter @platform/database db:migrate:dev",
     "db:studio": "bun run --filter @platform/database db:studio",

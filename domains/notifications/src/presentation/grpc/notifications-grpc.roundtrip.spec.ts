@@ -5,6 +5,7 @@ import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { DomainValidationException, generateId } from '@platform/common';
 import { AppConfigModule, grpcConfig } from '@platform/config';
+import { NOTIFICATIONS_GRPC_PACKAGE } from '@platform/contracts';
 import { createGrpcServerStrategy, GrpcClientsModule } from '@platform/transport';
 import { ClsModule } from 'nestjs-cls';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -59,14 +60,20 @@ describe('notifications over gRPC (NotificationsGrpcAdapter ↔ NotificationsGrp
     vi.stubEnv('GRPC_DEADLINE_MS', '3000');
     server = await NestFactory.createMicroservice(NotificationsServiceTestModule, {
       ...createGrpcServerStrategy(grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}` }), [
-        'notifications',
+        NOTIFICATIONS_GRPC_PACKAGE,
       ]),
       logger: false,
     });
     await server.listen();
 
     gateway = await Test.createTestingModule({
-      imports: [AppConfigModule.forRoot(), GrpcClientsModule.register(['notifications'])],
+      imports: [
+        AppConfigModule.forRoot(),
+        GrpcClientsModule.register({
+          spec: NOTIFICATIONS_GRPC_PACKAGE,
+          url: `127.0.0.1:${port}`,
+        }),
+      ],
       providers: [NotificationsGrpcAdapter],
     }).compile();
     gateway.useLogger(false);

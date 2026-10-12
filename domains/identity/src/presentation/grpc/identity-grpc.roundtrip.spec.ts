@@ -10,6 +10,7 @@ import {
   UnauthenticatedException,
 } from '@platform/common';
 import { AppConfigModule, grpcConfig } from '@platform/config';
+import { IDENTITY_GRPC_PACKAGE } from '@platform/contracts';
 import { AppCacheService } from '@platform/redis';
 import { createGrpcServerStrategy } from '@platform/transport';
 import { ClsModule } from 'nestjs-cls';
@@ -77,7 +78,7 @@ describe('identity over gRPC (forRemote adapters ↔ gRPC controllers)', () => {
     vi.stubEnv('GRPC_DEADLINE_MS', '3000');
     const cfg = grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}` });
     server = await NestFactory.createMicroservice(IdentityServiceTestModule, {
-      ...createGrpcServerStrategy(cfg, ['identity']),
+      ...createGrpcServerStrategy(cfg, [IDENTITY_GRPC_PACKAGE]),
       logger: false,
     });
     await server.listen();
