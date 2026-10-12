@@ -2,13 +2,17 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LoggerService } from '@nestjs/common';
+import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import postgres from 'postgres';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeSql } from '../../test/fake-sql.js';
-import { MIGRATIONS_ADVISORY_LOCK_ID } from './migrations.constants.js';
-import { DEFAULT_MIGRATIONS_FOLDER, runMigrations } from './run-migrations.js';
+import type { DatabaseMigrationSet } from '../database.types.js';
+import { MIGRATIONS_ADVISORY_LOCK_ID, MIGRATIONS_TABLE } from './migrations.constants.js';
+import { runMigrations } from './run-migrations.js';
 
 vi.mock('postgres', () => ({ default: vi.fn() }));
+// drizzle's migrator itself is exercised by database.int-spec.ts; here only its calls matter.
+vi.mock('drizzle-orm/postgres-js/migrator', () => ({ migrate: vi.fn(async () => undefined) }));
 
 const URL = 'postgres://app:app@localhost:5432/app';
 const silentLogger = (): LoggerService => ({
@@ -28,16 +32,24 @@ describe('runMigrations', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it('defaults to the package migrations folder (src in dev, dist after build)', () => {
-    expect(DEFAULT_MIGRATIONS_FOLDER.replaceAll('\\', '/')).toMatch(
-      /libs\/database\/src\/migrations$/,
-    );
-  });
+  /** A set whose folder holds a journal listing `tags`, or no journal at all for `null`. */
+  const migrationSet = (name: string, tags: string[] | null): DatabaseMigrationSet => {
+    const folder = join(dir, name);
+    mkdirSync(join(folder, 'meta'), { recursive: true });
+    if (tags !== null) {
+      writeFileSync(
+        join(folder, 'meta', '_journal.json'),
+        JSON.stringify({ entries: tags.map((tag) => ({ tag })) }),
+      );
+    }
+    return { name, folder, migrationsSchema: name, migrationsTable: MIGRATIONS_TABLE };
+  };
 
-  it('skips (without connecting) when no drizzle journal exists yet', async () => {
+  it('skips (without connecting) when no set has a drizzle journal yet', async () => {
     const logger = silentLogger();
-    await expect(runMigrations(URL, { migrationsFolder: dir, logger })).resolves.toEqual({
-      folder: dir,
+    const empty = migrationSet('empty', null);
+    await expect(runMigrations(URL, { migrations: [empty], logger })).resolves.toEqual({
+      sets: [{ name: 'empty', folder: empty.folder, total: 0, applied: 0 }],
       total: 0,
       applied: 0,
     });
@@ -45,20 +57,80 @@ describe('runMigrations', () => {
     expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining('_journal.json missing'));
   });
 
-  it('rejects a malformed journal', async () => {
-    mkdirSync(join(dir, 'meta'));
-    writeFileSync(join(dir, 'meta', '_journal.json'), JSON.stringify({ entries: 'nope' }));
+  it('rejects a malformed journal before connecting', async () => {
+    const broken = migrationSet('broken', null);
+    writeFileSync(
+      join(broken.folder, 'meta', '_journal.json'),
+      JSON.stringify({ entries: 'nope' }),
+    );
     await expect(
-      runMigrations(URL, { migrationsFolder: dir, logger: silentLogger() }),
+      runMigrations(URL, { migrations: [broken], logger: silentLogger() }),
     ).rejects.toThrow(/Invalid drizzle migration journal/);
+    expect(postgres).not.toHaveBeenCalled();
+  });
+
+  it('applies the sets in array order on ONE session, under ONE lock, and sums the summary', async () => {
+    const identity = migrationSet('identity', ['0000_init']);
+    const pending = migrationSet('pending', null);
+    const billing = migrationSet('billing', ['0000_init', '0001_more']);
+    const appliedBySchema = new Map<string, number>();
+    const events: string[] = [];
+    vi.mocked(migrate).mockImplementation(async (_db, config) => {
+      const schema = config.migrationsSchema ?? '';
+      events.push(`migrate ${schema}`);
+      appliedBySchema.set(schema, schema === 'billing' ? 2 : 1);
+    });
+    const sql = createFakeSql((query, values) => {
+      if (query.includes('pg_try_advisory_lock')) {
+        events.push('lock');
+        return [{ locked: true }];
+      }
+      if (query.includes('pg_advisory_unlock')) {
+        events.push('unlock');
+        return [];
+      }
+      if (query.includes('to_regclass')) return [{ exists: true }];
+      if (query.startsWith('select count(*)')) {
+        const [schema] = values as [{ identifier: string }];
+        return [{ count: appliedBySchema.get(schema.identifier) ?? 0 }];
+      }
+      return [];
+    });
+    vi.mocked(postgres).mockReturnValue(sql as never);
+
+    const summary = await runMigrations(URL, {
+      migrations: [identity, pending, billing],
+      logger: silentLogger(),
+    });
+
+    expect(events).toEqual(['lock', 'migrate identity', 'migrate billing', 'unlock']);
+    expect(vi.mocked(migrate).mock.calls.map(([, config]) => config)).toEqual([
+      {
+        migrationsFolder: identity.folder,
+        migrationsSchema: 'identity',
+        migrationsTable: MIGRATIONS_TABLE,
+      },
+      {
+        migrationsFolder: billing.folder,
+        migrationsSchema: 'billing',
+        migrationsTable: MIGRATIONS_TABLE,
+      },
+    ]);
+    expect(summary).toEqual({
+      sets: [
+        { name: 'identity', folder: identity.folder, total: 1, applied: 1 },
+        { name: 'pending', folder: pending.folder, total: 0, applied: 0 },
+        { name: 'billing', folder: billing.folder, total: 2, applied: 2 },
+      ],
+      total: 3,
+      applied: 3,
+    });
+    expect(postgres).toHaveBeenCalledTimes(1);
+    expect(sql.end).toHaveBeenCalledWith({ timeout: 5 });
   });
 
   it('waits for the advisory lock, then gives up with a clear error and closes the client', async () => {
-    mkdirSync(join(dir, 'meta'));
-    writeFileSync(
-      join(dir, 'meta', '_journal.json'),
-      JSON.stringify({ entries: [{ tag: '0000_x' }] }),
-    );
+    const set = migrationSet('x', ['0000_x']);
     const lockValues: unknown[][] = [];
     const sql = createFakeSql((query, values) => {
       if (query.includes('pg_try_advisory_lock')) {
@@ -72,7 +144,7 @@ describe('runMigrations', () => {
 
     await expect(
       runMigrations(URL, {
-        migrationsFolder: dir,
+        migrations: [set],
         logger,
         lockTimeoutMs: 30,
         lockPollIntervalMs: 5,
@@ -92,6 +164,7 @@ describe('runMigrations', () => {
     expect(lockValues.length).toBeGreaterThan(1);
     expect(lockValues[0]).toEqual([MIGRATIONS_ADVISORY_LOCK_ID]);
     expect(logger.log).toHaveBeenCalledTimes(1); // "waiting" logged once, not per poll
+    expect(migrate).not.toHaveBeenCalled();
     expect(sql.queries.some((q) => q.includes('pg_advisory_unlock'))).toBe(false);
     expect(sql.end).toHaveBeenCalledWith({ timeout: 5 });
   });

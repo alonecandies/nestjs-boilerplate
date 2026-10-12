@@ -4,24 +4,18 @@ import { Logger, type LoggerService } from '@nestjs/common';
 import { sleep } from '@platform/common';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
-import { noop } from 'lodash-es';
+import { noop, sumBy } from 'lodash-es';
 import postgres, { type Sql } from 'postgres';
 import { z } from 'zod';
-import {
-  MIGRATIONS_ADVISORY_LOCK_ID,
-  MIGRATIONS_SCHEMA,
-  MIGRATIONS_TABLE,
-} from './migrations.constants.js';
-
-/**
- * drizzle-kit output folder (`src/migrations` in dev, `dist/migrations` after the build — SWC
- * `copyFiles` copies the .sql files and `meta/_journal.json`).
- */
-export const DEFAULT_MIGRATIONS_FOLDER = join(import.meta.dirname, '..', 'migrations');
+import type { DatabaseMigrationSet } from '../database.types.js';
+import { MIGRATIONS_ADVISORY_LOCK_ID } from './migrations.constants.js';
 
 export interface RunMigrationsOptions {
-  /** Folder containing drizzle-kit output (`meta/_journal.json` + `NNNN_*.sql`). */
-  migrationsFolder?: string;
+  /**
+   * The sets to apply, in this order, exactly as given. `DatabaseModule` and `runMigrationsCli`
+   * pass `withPlatformMigrations(appSets)`, so the platform set comes first.
+   */
+  migrations: readonly DatabaseMigrationSet[];
   logger?: LoggerService;
   /** `application_name` prefix of the migration session (shown in `pg_stat_activity`). */
   applicationName?: string;
@@ -31,11 +25,20 @@ export interface RunMigrationsOptions {
   lockPollIntervalMs?: number;
 }
 
-export interface MigrationRunSummary {
+export interface MigrationSetSummary {
+  name: string;
   folder: string;
-  /** Migrations listed in the journal. */
+  /** Migrations listed in the set's journal (0 when the folder has no journal yet). */
   total: number;
-  /** Applied by THIS run — 0 when the schema was already current (e.g. another replica won). */
+  /** Applied by THIS run — 0 when the set was already current (e.g. another replica won). */
+  applied: number;
+}
+
+export interface MigrationRunSummary {
+  /** One entry per set, in the order they were applied. */
+  sets: MigrationSetSummary[];
+  /** Sums over `sets`. */
+  total: number;
   applied: number;
 }
 
@@ -79,35 +82,81 @@ async function acquireMigrationLock(
   }
 }
 
-async function countAppliedMigrations(sql: Sql): Promise<number> {
+/** Rows in the set's own bookkeeping table (0 before its first run). */
+async function countAppliedMigrations(sql: Sql, set: DatabaseMigrationSet): Promise<number> {
   const [table] = await sql<{ exists: boolean }[]>`
-    select to_regclass(${`${MIGRATIONS_SCHEMA}.${MIGRATIONS_TABLE}`}) is not null as exists`;
+    select to_regclass(${`${set.migrationsSchema}.${set.migrationsTable}`}) is not null as exists`;
   if (table?.exists !== true) return 0;
   const [row] = await sql<{ count: number }[]>`
-    select count(*)::int as count from ${sql(MIGRATIONS_SCHEMA)}.${sql(MIGRATIONS_TABLE)}`;
+    select count(*)::int as count from ${sql(set.migrationsSchema)}.${sql(set.migrationsTable)}`;
   return row?.count ?? 0;
 }
 
+async function applySet(
+  sql: Sql,
+  set: DatabaseMigrationSet,
+  total: number,
+  logger: LoggerService,
+): Promise<MigrationSetSummary> {
+  const before = await countAppliedMigrations(sql, set);
+  await migrate(drizzle({ client: sql }), {
+    migrationsFolder: set.folder,
+    migrationsSchema: set.migrationsSchema,
+    migrationsTable: set.migrationsTable,
+  });
+  const applied = Math.max(0, (await countAppliedMigrations(sql, set)) - before);
+  logger.log(
+    applied > 0
+      ? `${set.name}: applied ${applied} migration(s); ${total} in total`
+      : `${set.name}: schema is up to date (${total} migrations)`,
+  );
+  return { name: set.name, folder: set.folder, total, applied };
+}
+
+const summarize = (sets: MigrationSetSummary[]): MigrationRunSummary => ({
+  sets,
+  total: sumBy(sets, 'total'),
+  applied: sumBy(sets, 'applied'),
+});
+
 /**
- * Applies pending drizzle-kit migrations, safely under concurrency:
- * - a dedicated `max: 1` client so the session-level advisory lock and `migrate()` share ONE
+ * Applies the pending drizzle-kit migrations of several sets, in order, safely under concurrency:
+ * - ONE advisory lock around every set, so processes sharing a database (identity-service and
+ *   billing-service) migrate one after the other;
+ * - a dedicated `max: 1` client so the session-level lock and every `migrate()` share ONE
  *   connection (`max_lifetime: null` — a recycled socket would silently drop the lock);
  * - `statement_timeout: 0` for this session only: DDL / backfills may legitimately run long;
- * - drizzle runs all pending migrations in a single transaction (all-or-nothing), which also
- *   means `CREATE INDEX CONCURRENTLY` cannot be used in these migrations.
+ * - each set writes its own bookkeeping table: drizzle applies only files newer than the LAST row
+ *   of that table, so a shared table would skip the files of the set with older timestamps;
+ * - drizzle runs a set's pending migrations in one transaction (all-or-nothing per set), so
+ *   `CREATE INDEX CONCURRENTLY` cannot be used; a set that already ran stays applied when a later
+ *   set fails.
  *
- * A folder without `meta/_journal.json` (no migrations generated yet) is skipped with a warning.
+ * Every journal is read before connecting (a malformed one fails the run up front). A set whose
+ * folder has no `meta/_journal.json` yet is skipped with a warning; when no set has one, nothing
+ * connects.
  */
 export async function runMigrations(
   url: string,
-  options: RunMigrationsOptions = {},
+  options: RunMigrationsOptions,
 ): Promise<MigrationRunSummary> {
-  const folder = options.migrationsFolder ?? DEFAULT_MIGRATIONS_FOLDER;
   const logger = options.logger ?? new Logger('DatabaseMigrations');
-  const total = readJournalSize(folder);
-  if (total === null) {
-    logger.warn(`No drizzle migrations in ${folder} (meta/_journal.json missing) — skipping`);
-    return { folder, total: 0, applied: 0 };
+  const plan = options.migrations.map((set) => ({ set, total: readJournalSize(set.folder) }));
+  const skipped = (set: DatabaseMigrationSet): MigrationSetSummary => ({
+    name: set.name,
+    folder: set.folder,
+    total: 0,
+    applied: 0,
+  });
+  for (const { set, total } of plan) {
+    if (total === null) {
+      logger.warn(
+        `No drizzle migrations for "${set.name}" in ${set.folder} (meta/_journal.json missing) — skipping`,
+      );
+    }
+  }
+  if (plan.every(({ total }) => total === null)) {
+    return summarize(plan.map(({ set }) => skipped(set)));
   }
 
   const sql = postgres(url, {
@@ -131,19 +180,11 @@ export async function runMigrations(
       logger,
     );
     locked = true;
-    const before = await countAppliedMigrations(sql);
-    await migrate(drizzle({ client: sql }), {
-      migrationsFolder: folder,
-      migrationsSchema: MIGRATIONS_SCHEMA,
-      migrationsTable: MIGRATIONS_TABLE,
-    });
-    const applied = Math.max(0, (await countAppliedMigrations(sql)) - before);
-    logger.log(
-      applied > 0
-        ? `Applied ${applied} migration(s); ${total} in total`
-        : `Database schema is up to date (${total} migrations)`,
-    );
-    return { folder, total, applied };
+    const results: MigrationSetSummary[] = [];
+    for (const { set, total } of plan) {
+      results.push(total === null ? skipped(set) : await applySet(sql, set, total, logger));
+    }
+    return summarize(results);
   } finally {
     if (locked) await sql`select pg_advisory_unlock(${MIGRATIONS_ADVISORY_LOCK_ID})`.catch(noop);
     await sql.end({ timeout: 5 });

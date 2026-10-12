@@ -13,15 +13,17 @@ import postgres from 'postgres';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeSql, type FakeSql, type FakeSqlHandler } from '../test/fake-sql.js';
 import { DatabaseModule } from './database.module.js';
-import type { DatabaseModuleOptions } from './database.types.js';
+import type { DatabaseMigrationSet, DatabaseModuleOptions } from './database.types.js';
 import { DRIZZLE } from './drizzle/drizzle.constants.js';
 import type { DrizzleDB, DrizzleTransactionalAdapter } from './drizzle/drizzle.types.js';
 import { DatabaseHealthIndicator } from './health/database.health.js';
+import { MIGRATIONS_TABLE } from './migrator/migrations.constants.js';
 import { runMigrations } from './migrator/run-migrations.js';
+import { platformMigrations } from './platform/platform.migrations.js';
 
 vi.mock('postgres', () => ({ default: vi.fn() }));
 vi.mock('./migrator/run-migrations.js', () => ({
-  runMigrations: vi.fn(async () => ({ folder: '/m', total: 0, applied: 0 })),
+  runMigrations: vi.fn(async () => ({ sets: [], total: 0, applied: 0 })),
 }));
 // HealthContributor is an abstract marker class; mocking the barrel keeps this unit test free of
 // observability's module graph (pino, prom-client, OpenTelemetry).
@@ -30,6 +32,16 @@ vi.mock('@platform/observability', () => ({ HealthContributor: class HealthContr
 const items = pgTable('items', { id: uuid().primaryKey(), name: text().notNull() });
 const schema = { items };
 type Adapter = DrizzleTransactionalAdapter<typeof schema>;
+const itemsMigrations: DatabaseMigrationSet = {
+  name: 'items',
+  folder: '/migrations/items',
+  migrationsSchema: 'items',
+  migrationsTable: MIGRATIONS_TABLE,
+};
+/** `migrations` defaults to none (the platform set alone) in these tests. */
+type BootOptions = Omit<DatabaseModuleOptions<typeof schema>, 'migrations'> & {
+  migrations?: readonly DatabaseMigrationSet[];
+};
 
 const ID_1 = '0199a1b2-0000-7000-8000-000000000001';
 const ID_2 = '0199a1b2-0000-7000-8000-000000000002';
@@ -58,7 +70,7 @@ class ProxyUser {
 }
 
 async function boot(
-  options: DatabaseModuleOptions<typeof schema>,
+  options: BootOptions,
   providers: Provider[] = [],
   { clsRoot = true }: { clsRoot?: boolean } = {},
 ): Promise<INestApplicationContext> {
@@ -67,7 +79,7 @@ async function boot(
       AppConfigModule.forRoot(),
       // Mounted by ObservabilityModule in the apps; DatabaseModule only registers its plugin.
       ...(clsRoot ? [ClsModule.forRoot({ global: true })] : []),
-      DatabaseModule.forRootAsync(options),
+      DatabaseModule.forRootAsync({ migrations: [], ...options }),
     ],
     providers,
   })
@@ -98,7 +110,7 @@ describe('DatabaseModule', () => {
 
   describe('forRootAsync() definition', () => {
     it('is global and exports DRIZZLE + the health contributor', () => {
-      const mod = DatabaseModule.forRootAsync({ schema });
+      const mod = DatabaseModule.forRootAsync({ schema, migrations: [] });
       expect(mod).toMatchObject({ module: DatabaseModule, global: true });
       expect(mod.exports).toEqual([DRIZZLE, DatabaseHealthIndicator]);
     });
@@ -106,10 +118,20 @@ describe('DatabaseModule', () => {
     it('registers the transactional CLS plugin unless disabled', () => {
       const isCls = (imported: unknown): boolean =>
         (imported as { module?: unknown }).module === ClsModule;
-      expect(DatabaseModule.forRootAsync({ schema }).imports?.some(isCls)).toBe(true);
+      expect(DatabaseModule.forRootAsync({ schema, migrations: [] }).imports?.some(isCls)).toBe(
+        true,
+      );
       expect(
-        DatabaseModule.forRootAsync({ schema, transactional: false }).imports?.some(isCls),
+        DatabaseModule.forRootAsync({ schema, migrations: [], transactional: false }).imports?.some(
+          isCls,
+        ),
       ).toBe(false);
+    });
+
+    it('rejects colliding migration sets when the module is defined', () => {
+      expect(() =>
+        DatabaseModule.forRootAsync({ schema, migrations: [platformMigrations] }),
+      ).toThrow(/"platform" is listed twice/);
     });
   });
 
@@ -136,11 +158,14 @@ describe('DatabaseModule', () => {
       expect(runMigrations).not.toHaveBeenCalled(); // DATABASE_RUN_MIGRATIONS defaults to false
     });
 
-    it('runs migrations BEFORE opening the pool when enabled by option', async () => {
-      app = await boot({ schema, runMigrations: true, migrationsFolder: '/custom' });
+    it('runs the platform set, then the given sets, BEFORE opening the pool', async () => {
+      app = await boot({ schema, runMigrations: true, migrations: [itemsMigrations] });
       expect(runMigrations).toHaveBeenCalledWith(
         'postgres://app:app@localhost:5432/app',
-        expect.objectContaining({ applicationName: 'app', migrationsFolder: '/custom' }),
+        expect.objectContaining({
+          applicationName: 'app',
+          migrations: [platformMigrations, itemsMigrations],
+        }),
       );
       const [migrateOrder] = vi.mocked(runMigrations).mock.invocationCallOrder;
       const [poolOrder] = vi.mocked(postgres).mock.invocationCallOrder;
@@ -151,9 +176,13 @@ describe('DatabaseModule', () => {
       vi.stubEnv('DATABASE_RUN_MIGRATIONS', 'true');
       vi.stubEnv('SERVICE_NAME', 'identity-service');
       app = await boot({ schema });
+      // No domain sets: the platform set still runs.
       expect(runMigrations).toHaveBeenCalledWith(
         expect.any(String),
-        expect.objectContaining({ applicationName: 'identity-service' }),
+        expect.objectContaining({
+          applicationName: 'identity-service',
+          migrations: [platformMigrations],
+        }),
       );
       await app.close();
       vi.mocked(runMigrations).mockClear();

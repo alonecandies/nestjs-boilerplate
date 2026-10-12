@@ -30,8 +30,12 @@ export interface DatabaseModuleOptions<TSchema extends DrizzleSchema = DrizzleSc
    * Merge several domains' schemas in the monolith: `{ ...identitySchema, ...billingSchema }`.
    */
   schema: TSchema;
-  /** drizzle-kit output folder to apply on boot. Default: this package's `migrations` folder. */
-  migrationsFolder?: string;
+  /**
+   * The domain migration sets this process owns, in order. Applied after `platformMigrations`
+   * (always first, never listed here) under one advisory lock when `runMigrations` /
+   * DATABASE_RUN_MIGRATIONS is on. Omitted: the platform set alone.
+   */
+  migrations?: readonly DatabaseMigrationSet[];
   /** Overrides `DATABASE_RUN_MIGRATIONS`. */
   runMigrations?: boolean;
   /**
