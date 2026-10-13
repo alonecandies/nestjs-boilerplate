@@ -1,5 +1,6 @@
 import { parseEventEnvelope, topicVersion } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import {
   NOTIFICATION_CREATED_EVENT,
   NOTIFICATION_TYPES,
@@ -25,6 +26,17 @@ const envelope = (value: unknown) => ({
   payload: value,
 });
 
+/** The issue paths of the `ZodError` that `parseEventEnvelope` throws for `value` (fails otherwise). */
+const rejectedPaths = (value: unknown): PropertyKey[][] => {
+  try {
+    parseEventEnvelope(NOTIFICATION_CREATED_EVENT, envelope(value));
+  } catch (error) {
+    expect(error).toBeInstanceOf(z.ZodError);
+    return (error as z.ZodError).issues.map((issue) => issue.path);
+  }
+  throw new Error('expected parseEventEnvelope to throw a ZodError');
+};
+
 describe('NOTIFICATION_CREATED_EVENT', () => {
   it('keeps its wire name (consumer offsets and docker/kafka/topics.txt depend on it)', () => {
     expect(NOTIFICATION_CREATED_EVENT.topic).toBe('notifications.notification-created.v1');
@@ -39,8 +51,6 @@ describe('NOTIFICATION_CREATED_EVENT', () => {
   });
 
   it('rejects an unknown notification type', () => {
-    expect(() =>
-      parseEventEnvelope(NOTIFICATION_CREATED_EVENT, envelope({ ...payload, type: 'marketing' })),
-    ).toThrow();
+    expect(rejectedPaths({ ...payload, type: 'marketing' })).toEqual([['payload', 'type']]);
   });
 });

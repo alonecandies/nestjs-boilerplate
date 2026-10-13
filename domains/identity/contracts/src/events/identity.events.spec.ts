@@ -1,5 +1,6 @@
 import { parseEventEnvelope, topicVersion } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { USER_REGISTERED_EVENT, type UserRegisteredPayload } from '../index.js';
 
 const payload: UserRegisteredPayload = {
@@ -18,6 +19,17 @@ const envelope = (value: unknown) => ({
   payload: value,
 });
 
+/** The issue paths of the `ZodError` that `parseEventEnvelope` throws for `value` (fails otherwise). */
+const rejectedPaths = (value: unknown): PropertyKey[][] => {
+  try {
+    parseEventEnvelope(USER_REGISTERED_EVENT, envelope(value));
+  } catch (error) {
+    expect(error).toBeInstanceOf(z.ZodError);
+    return (error as z.ZodError).issues.map((issue) => issue.path);
+  }
+  throw new Error('expected parseEventEnvelope to throw a ZodError');
+};
+
 describe('USER_REGISTERED_EVENT', () => {
   it('keeps its wire name (consumer offsets and docker/kafka/topics.txt depend on it)', () => {
     expect(USER_REGISTERED_EVENT.topic).toBe('identity.user-registered.v1');
@@ -29,11 +41,7 @@ describe('USER_REGISTERED_EVENT', () => {
   });
 
   it('rejects a payload that is not an email or not a uuid', () => {
-    expect(() =>
-      parseEventEnvelope(USER_REGISTERED_EVENT, envelope({ ...payload, email: 'nope' })),
-    ).toThrow();
-    expect(() =>
-      parseEventEnvelope(USER_REGISTERED_EVENT, envelope({ ...payload, userId: 'u1' })),
-    ).toThrow();
+    expect(rejectedPaths({ ...payload, email: 'nope' })).toEqual([['payload', 'email']]);
+    expect(rejectedPaths({ ...payload, userId: 'u1' })).toEqual([['payload', 'userId']]);
   });
 });

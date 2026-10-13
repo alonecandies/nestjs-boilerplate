@@ -23,6 +23,12 @@ describe('filesConfig (the files namespace: upload limits)', () => {
     ).toEqual({ maxUploadBytes: 1024, maxConcurrentUploads: 2 });
   });
 
+  it('treats a blank value as unset: the default applies', () => {
+    expect(
+      filesConfig.parse({ STORAGE_MAX_UPLOAD_BYTES: '', STORAGE_MAX_CONCURRENT_UPLOADS: '  ' }),
+    ).toEqual({ maxUploadBytes: 26_214_400, maxConcurrentUploads: 4 });
+  });
+
   it.each([
     ['STORAGE_MAX_UPLOAD_BYTES', '0'],
     ['STORAGE_MAX_UPLOAD_BYTES', '1.5'],

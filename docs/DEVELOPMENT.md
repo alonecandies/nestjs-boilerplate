@@ -53,7 +53,7 @@ bun run dev                 # monolith on http://localhost:3000
 
 **Why the per-app files matter.** Without them every app would bind HTTP `3000` and gRPC `0.0.0.0:50051`, and the services would not apply migrations. Every root `dev*` script runs `setup:env` first. If you start an app another way, for example `bun run dev` inside `apps/<app>`, run `bun run setup:env` once.
 
-**Adding a variable.** Add it to its owner's namespace schema: a platform variable to `libs/config/src/namespaces/*.config.ts`, a domain-owned one to the domain's `domains/<x>/src/**/*.config.ts` (each `*-service` app that loads that namespace passes it to `validateAllEnv(env, [...])` in its `test/env-example.spec.ts`). Then document it in the root `.env.example` (as `KEY=` or `# KEY=`), which lists the variables of both. `node scripts/check-env-example.mjs` reads the schema sources (no build needed) and fails when the two drift; `--list` shows which file declares each variable. CI runs it. All variables are listed in [CONFIGURATION.md](CONFIGURATION.md).
+**Adding a variable.** Add it to its owner's namespace schema: a platform variable to `libs/config/src/namespaces/*.config.ts`, a domain-owned one to the domain's `domains/<x>/src/**/*.config.ts` (each app that loads that namespace passes it to `validateAllEnv(env, [...])` in its `test/env-example.spec.ts`). Then document it in the root `.env.example` (as `KEY=` or `# KEY=`), which lists the variables of both. `node scripts/check-env-example.mjs` reads the schema sources (no build needed) and fails when the two drift; `--list` shows which file declares each variable. CI runs it. All variables are listed in [CONFIGURATION.md](CONFIGURATION.md).
 
 Compose reads the root `.env` only for `${VAR}` interpolation. Containers get their environment from `docker-compose.yml`. See [DOCKER.md](DOCKER.md).
 
@@ -284,7 +284,7 @@ export class OrdersApiModule {
 
 - Load it with `ConfigModule.forFeature(ordersConfig)` in the module that injects it, and inject it with `@Inject(ordersConfig.KEY)`.
 - Document every variable in the root `.env.example`. `node scripts/check-env-example.mjs` reads `libs/config/src/namespaces` and every `domains/*/src/**/*.config.ts`, and fails on an undocumented or unknown variable.
-- A service's `test/env-example.spec.ts` passes the domain namespaces it loads: `validateAllEnv(env, [ordersConfig])`.
+- Every app that loads the namespace passes it to `validateAllEnv` in its `test/env-example.spec.ts`: add `ordersConfig` to the monolith's list (`apps/monolith/test/env-example.spec.ts`), and a service passes `validateAllEnv(env, [ordersConfig])`.
 - `@platform/config` registers platform namespaces only: a domain namespace is always loaded and validated explicitly, as above.
 - Add a row to the "Which app loads which namespace" table in [CONFIGURATION.md](CONFIGURATION.md#which-app-loads-which-namespace).
 

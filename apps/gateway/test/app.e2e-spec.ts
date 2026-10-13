@@ -9,7 +9,14 @@ await vi.hoisted(async () => {
   Object.assign(process.env, GATEWAY_E2E_ENV);
 });
 
-import { BILLING_LOG_REDACT_PATHS, BillingGrpcAdapter, BillingPort } from '@domain/billing';
+import {
+  BILLING_LOG_REDACT_PATHS,
+  BillingGrpcAdapter,
+  BillingPort,
+  stripeConfig,
+} from '@domain/billing';
+import { passwordConfig, refreshTokenConfig } from '@domain/identity';
+import { ConfigService } from '@nestjs/config';
 import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
 import { PARAMS_PROVIDER_TOKEN, type Params } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -55,6 +62,14 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
 
   it('binds the ports to gRPC adapters (billing is not faked here)', () => {
     expect(e2e.app.get(BillingPort, { strict: false })).toBeInstanceOf(BillingGrpcAdapter);
+  });
+
+  it('never loads the refreshToken, password or stripe namespaces (least privilege: no issuing secrets at the edge)', () => {
+    const config = e2e.app.get(ConfigService);
+    for (const namespace of [refreshTokenConfig, passwordConfig, stripeConfig]) {
+      expect(config.get(namespace.namespace), namespace.namespace).toBeUndefined();
+      expect(() => e2e.app.get(namespace.KEY, { strict: false }), namespace.namespace).toThrow();
+    }
   });
 
   it('composes billing’s log redaction paths into the logger (the Stripe-Signature header is never logged)', () => {

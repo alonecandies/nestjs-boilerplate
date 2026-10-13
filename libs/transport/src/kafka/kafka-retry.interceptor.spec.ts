@@ -1,4 +1,4 @@
-import type { CallHandler, ExecutionContext } from '@nestjs/common';
+import { type CallHandler, type ExecutionContext, Logger } from '@nestjs/common';
 import { KafkaContext, KafkaRetriableException } from '@nestjs/microservices';
 import { DomainValidationException, ServiceUnavailableException } from '@platform/common';
 import { defer, lastValueFrom } from 'rxjs';
@@ -43,25 +43,42 @@ function flakyHandler(errors: Error[]): { next: CallHandler; attempts: () => num
 
 const fast = new KafkaRetryInterceptor({ minDelayMs: 1, maxDelayMs: 2 });
 
+/** The WARN line logged before retry `attempt` of the 4 (any backoff delay). */
+const retryWarning = (attempt: number, cause: string) =>
+  expect.stringMatching(
+    new RegExp(
+      `^Retrying fixture\\.user-registered\\.v1\\[0\\]@7 in \\d+ ms \\(attempt ${attempt}/4\\) after ${cause}$`,
+    ),
+  );
+
 describe('KafkaRetryInterceptor', () => {
   it('retries a transient failure and succeeds without reaching the filter', async () => {
     const { next, attempts } = flakyHandler([
       new Error('connect ECONNREFUSED'),
       new Error('again'),
     ]);
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     await expect(
       lastValueFrom(fast.intercept(executionContext('rpc', kafkaContext()), next)),
     ).resolves.toBe('ok');
     expect(attempts()).toBe(3);
+    expect(warn.mock.calls).toEqual([
+      [retryWarning(2, 'Error: connect ECONNREFUSED')],
+      [retryWarning(3, 'Error: again')],
+    ]);
   });
 
   it('gives up after the configured attempts and surfaces the last error (then dead-lettered)', async () => {
     const transient = new ServiceUnavailableException('cassandra down');
     const { next, attempts } = flakyHandler(Array.from({ length: 10 }, () => transient));
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     await expect(
       lastValueFrom(fast.intercept(executionContext('rpc', kafkaContext()), next)),
     ).rejects.toBe(transient);
     expect(attempts()).toBe(DEFAULT_KAFKA_RETRY_OPTIONS.attempts);
+    expect(warn.mock.calls).toEqual(
+      [2, 3, 4].map((attempt) => [retryWarning(attempt, 'SERVICE_UNAVAILABLE: cassandra down')]),
+    );
   });
 
   it.each([

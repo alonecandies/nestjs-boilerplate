@@ -80,8 +80,8 @@ export {
   users,
   usersRelations,
 } from './infrastructure/persistence/identity.schema.js';
-// Infrastructure: identity's security services and their config namespaces (identity-service's
-// env-example spec validates these namespaces too).
+// Infrastructure: identity's security services and their config namespaces (the identity-service
+// and monolith env-example specs validate these namespaces too).
 export { type PasswordConfig, passwordConfig } from './infrastructure/security/password.config.js';
 export { PasswordHasher } from './infrastructure/security/password-hasher.service.js';
 export {

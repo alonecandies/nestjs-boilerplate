@@ -1,6 +1,7 @@
+import { Logger } from '@nestjs/common';
 import type { AccessTokenDenylist } from '@platform/auth';
 import { UnauthenticatedException } from '@platform/common';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { mockOf } from '../../../../test/mocks.js';
 import type { TokenIssuer } from '../../../infrastructure/security/token-issuer.service.js';
 import type { SessionsRepository } from '../../persistence/sessions.repository.js';
@@ -46,9 +47,14 @@ describe('LogoutHandler', () => {
   });
 
   it('without a refresh token: signs out of every session', async () => {
+    const debug = vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
     await handler.execute(new LogoutCommand('u-1', 'jti-1', 1_900_000_000));
     expect(denylist.deny).toHaveBeenCalledOnce();
     expect(sessions.revokeAllForUser).toHaveBeenCalledWith('u-1', expect.any(Date));
+    expect(debug).toHaveBeenCalledExactlyOnceWith(
+      { userId: 'u-1', revoked: 2 },
+      'Signed out of every session',
+    );
   });
 
   it("is lenient: a garbage or someone else's refresh token revokes nothing and does not fail", async () => {

@@ -112,7 +112,7 @@ Errors are RFC 9457 `application/problem+json` (`type`, `title`, `status`, `deta
 ## Tests
 
 ```bash
-bunx vitest run --project monolith         # unit (src/**/*.spec.ts)
+bunx vitest run --project monolith         # unit (src/**/*.spec.ts, test/env-example.spec.ts)
 bunx vitest run --project monolith:e2e     # e2e (test/*.e2e-spec.ts) — no Docker needed
 ```
 
@@ -123,3 +123,7 @@ identity repositories → in-memory (the real handlers, argon2 and JWTs run), `C
 the BullMQ `mail` queue (+ no worker), `CACHE_MANAGER` (L1 only), `KafkaProducer` →
 `FakeKafkaProducer`, `GRAPHQL_PUB_SUB` → in-process PubSub, `StorageService` → in-memory. See
 `test/support/`.
+
+`test/env-example.spec.ts` validates `.env.example` against every config namespace the monolith
+loads (the platform ones plus billing's `stripe`, identity's `password` and `refreshToken`, `files`
+and `monolith`) and pins the port, the consumer group and the boot-time migrations.

@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import type { CommandBus } from '@nestjs/cqrs';
 import { CronExpression } from '@nestjs/schedule';
 import { redisConfig } from '@platform/config';
@@ -33,8 +34,10 @@ describe('PurgeExpiredSessionsCron', () => {
       name: 'identity.purge-expired-sessions',
     });
 
+    const log = vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
     await cron.run();
 
+    expect(log).toHaveBeenCalledExactlyOnceWith({ deleted: 3 }, 'Expired sessions purged');
     expect(using).toHaveBeenCalledWith(
       ['test:lock:identity:purge-sessions'],
       60_000,
@@ -46,12 +49,22 @@ describe('PurgeExpiredSessionsCron', () => {
 
   it('skips the run when another replica holds the lock', async () => {
     using.mockRejectedValueOnce(new Error('lock unavailable'));
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     await expect(cron.run()).resolves.toBeUndefined();
     expect(commandBus.execute).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining('"identity:purge-sessions" could not be acquired (lock unavailable)'),
+    );
   });
 
   it('never lets a failed purge escape into the scheduler', async () => {
-    commandBus.execute.mockRejectedValue(new Error('db down'));
+    const failure = new Error('db down');
+    commandBus.execute.mockRejectedValue(failure);
+    const error = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
     await expect(cron.run()).resolves.toBeUndefined();
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      { err: failure },
+      'Purging expired sessions failed',
+    );
   });
 });

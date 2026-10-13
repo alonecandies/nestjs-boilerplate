@@ -107,7 +107,7 @@ Errors are RFC 9457 `application/problem+json`; every response carries `x-reques
 ## Tests
 
 ```bash
-bunx vitest run --project gateway          # unit (src/**/*.spec.ts)
+bunx vitest run --project gateway          # unit (src/**/*.spec.ts, test/env-example.spec.ts)
 bunx vitest run --project gateway:e2e      # e2e (test/*.e2e-spec.ts) — no Docker needed
 ```
 
@@ -118,4 +118,9 @@ DomainExceptions as the gRPC adapters. Billing keeps its real gRPC adapter, poin
 upstream, to assert the 503 mapping; `test/payment-user.e2e-spec.ts` binds `BillingPort` to a stub
 instead (`createGatewayE2eApp({ billing })`) to prove `Payment.user` over the remote ports.
 `REDIS_CLIENT` → `InMemoryRedis`, `CACHE_MANAGER` → L1 only, `GRAPHQL_PUB_SUB` → in-process PubSub,
-`StorageService` → in-memory.
+`StorageService` → in-memory. `test/app.e2e-spec.ts` also asserts that the gateway never loads the
+`refreshToken`, `password` or `stripe` namespaces.
+
+`test/env-example.spec.ts` validates `.env.example` against every config namespace the gateway
+loads (the platform ones plus the three upstream targets, `files` and `gateway`) and pins the port,
+the push consumer group and the upstream targets.

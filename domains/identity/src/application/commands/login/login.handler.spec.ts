@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { Logger } from '@nestjs/common';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeAuthTokens, makeUserSnapshot } from '../../../../test/fixtures.js';
 import { mockOf } from '../../../../test/mocks.js';
 import { InvalidCredentialsException } from '../../../domain/identity.errors.js';
@@ -74,7 +75,13 @@ describe('LoginHandler', () => {
       expect.any(Date),
     );
 
-    users.updatePasswordHash.mockRejectedValue(new Error('db down'));
+    const failure = new Error('db down');
+    users.updatePasswordHash.mockRejectedValue(failure);
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
     await expect(handler.execute(new LoginCommand('ada@example.com', 'pw'))).resolves.toBe(tokens);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      { err: failure, userId: stored.id },
+      'Password re-hash failed',
+    );
   });
 });

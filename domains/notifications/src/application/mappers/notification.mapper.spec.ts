@@ -44,7 +44,7 @@ describe('notification mapper', () => {
     });
   });
 
-  it('builds a Kafka payload that validates against the registered envelope schema', () => {
+  it("builds a Kafka payload that validates against NOTIFICATION_CREATED_EVENT's envelope schema", () => {
     const props = makeNotificationProps();
     const payload = toNotificationCreatedPayload(props);
     expect(payload.createdAt).toBe(props.createdAt.toISOString());

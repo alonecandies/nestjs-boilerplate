@@ -26,9 +26,9 @@ flowchart TB
 | Integration | `*.int-spec.ts`                                          | Postgres 18 (testcontainers) or Redis                                                                                                               | nothing                                                                                         | no, `INTEGRATION=1` only |
 
 Every app has an e2e spec: `monolith`, `gateway`, `identity-service`, `notifications-service`,
-`billing-service`. The services also have `test/env-example.spec.ts`, which checks that the app's
-`.env.example` passes every config namespace the service loads and does not reuse another service's
-ports.
+`billing-service`. Every app also has `test/env-example.spec.ts`, which checks that the app's
+`.env.example` passes every config namespace the app loads and pins its ports (the services do not
+reuse each other's ports).
 
 The rule for e2e tests: **fake only at the network edge**. Swap the client or port that would open a
 socket, and keep repositories, CQRS handlers, enhancers and serialization real. For example,

@@ -1,5 +1,6 @@
 import { parseEventEnvelope, topicVersion } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import { PAYMENT_SUCCEEDED_EVENT, type PaymentSucceededPayload } from '../index.js';
 
 const payload: PaymentSucceededPayload = {
@@ -20,6 +21,17 @@ const envelope = (value: unknown) => ({
   payload: value,
 });
 
+/** The issue paths of the `ZodError` that `parseEventEnvelope` throws for `value` (fails otherwise). */
+const rejectedPaths = (value: unknown): PropertyKey[][] => {
+  try {
+    parseEventEnvelope(PAYMENT_SUCCEEDED_EVENT, envelope(value));
+  } catch (error) {
+    expect(error).toBeInstanceOf(z.ZodError);
+    return (error as z.ZodError).issues.map((issue) => issue.path);
+  }
+  throw new Error('expected parseEventEnvelope to throw a ZodError');
+};
+
 describe('PAYMENT_SUCCEEDED_EVENT', () => {
   it('keeps its wire name (consumer offsets and docker/kafka/topics.txt depend on it)', () => {
     expect(PAYMENT_SUCCEEDED_EVENT.topic).toBe('billing.payment-succeeded.v1');
@@ -31,12 +43,10 @@ describe('PAYMENT_SUCCEEDED_EVENT', () => {
   });
 
   it.each([
-    ['a fractional amount', { amountTotal: 10.5 }],
-    ['a negative amount', { amountTotal: -1 }],
-    ['a currency that is not ISO 4217', { currency: 'dollars' }],
-  ])('rejects %s', (_label, change) => {
-    expect(() =>
-      parseEventEnvelope(PAYMENT_SUCCEEDED_EVENT, envelope({ ...payload, ...change })),
-    ).toThrow();
+    ['a fractional amount', { amountTotal: 10.5 }, 'amountTotal'],
+    ['a negative amount', { amountTotal: -1 }, 'amountTotal'],
+    ['a currency that is not ISO 4217', { currency: 'dollars' }, 'currency'],
+  ])('rejects %s', (_label, change, field) => {
+    expect(rejectedPaths({ ...payload, ...change })).toEqual([['payload', field]]);
   });
 });

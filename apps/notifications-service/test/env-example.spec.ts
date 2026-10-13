@@ -7,7 +7,8 @@ import { NOTIFICATIONS_CONSUMER_GROUP } from '../src/notifications-service.const
 
 /**
  * `.env.example` is what `bun run setup:env` copies to `.env`: it must stay valid for every config
- * namespace and keep this service off the ports of the other services (gateway 3000, identity
+ * namespace this service loads (the platform ones; notifications-service loads no domain-owned
+ * namespace) and keep this service off the ports of the other services (gateway 3000, identity
  * 3001/50051, billing 3003/50053) so `bun run dev:microservices` works out of the box.
  */
 describe('notifications-service .env.example', () => {

@@ -1,6 +1,7 @@
+import { Logger } from '@nestjs/common';
 import { AuthErrorCode, type RefreshTokenClaims } from '@platform/auth';
 import { generateId, sha256Hex, UnauthenticatedException } from '@platform/common';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   makeAuthTokens,
   makeUserRecord,
@@ -47,7 +48,7 @@ describe('RefreshSessionHandler', () => {
   });
   const tokens = makeAuthTokens();
 
-  let tokenService: ReturnType<typeof mockOf<TokenIssuer>>;
+  let tokenIssuer: ReturnType<typeof mockOf<TokenIssuer>>;
   let users: ReturnType<typeof mockOf<UsersRepository>>;
   let sessions: ReturnType<typeof mockOf<SessionsRepository>>;
   let sessionTokens: ReturnType<typeof mockOf<SessionTokensService>>;
@@ -57,7 +58,7 @@ describe('RefreshSessionHandler', () => {
 
   beforeEach(() => {
     log.length = 0;
-    tokenService = mockOf<TokenIssuer>({ verifyRefreshToken: async () => claims });
+    tokenIssuer = mockOf<TokenIssuer>({ verifyRefreshToken: async () => claims });
     users = mockOf<UsersRepository>({ findById: async () => user });
     sessions = mockOf<SessionsRepository>({
       revokeForRotation: async () => {
@@ -86,7 +87,7 @@ describe('RefreshSessionHandler', () => {
       },
       runs: 0,
     };
-    handler = new RefreshSessionHandler(tokenService, users, sessions, sessionTokens, transaction);
+    handler = new RefreshSessionHandler(tokenIssuer, users, sessions, sessionTokens, transaction);
   });
 
   const command = new RefreshSessionCommand(REFRESH_TOKEN, { ip: '1.2.3.4' });
@@ -94,7 +95,7 @@ describe('RefreshSessionHandler', () => {
   it('rotates atomically: revoke the presented session + open its successor in one transaction', async () => {
     await expect(handler.execute(command)).resolves.toBe(tokens);
 
-    expect(tokenService.verifyRefreshToken).toHaveBeenCalledWith(REFRESH_TOKEN);
+    expect(tokenIssuer.verifyRefreshToken).toHaveBeenCalledWith(REFRESH_TOKEN);
     const [rotation] = sessions.revokeForRotation.mock.calls[0] ?? [];
     expect(rotation).toMatchObject({
       id: sessionId,
@@ -113,9 +114,15 @@ describe('RefreshSessionHandler', () => {
       log.push('revoke-for-rotation');
       return false;
     });
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
 
     await expect(handler.execute(command)).rejects.toBeInstanceOf(
       RefreshTokenReuseDetectedException,
+    );
+
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      { userId: user.id, sessionId, revokedSessions: 3 },
+      'Refresh token reuse detected: all sessions of the user revoked',
     );
 
     expect(sessions.revokeAllForUser).toHaveBeenCalledWith(user.id, expect.any(Date));
@@ -144,12 +151,12 @@ describe('RefreshSessionHandler', () => {
   });
 
   it('maps JWT failures before touching the database: expired → SESSION_EXPIRED, other → INVALID_REFRESH_TOKEN', async () => {
-    tokenService.verifyRefreshToken.mockRejectedValue(
+    tokenIssuer.verifyRefreshToken.mockRejectedValue(
       new UnauthenticatedException('Token has expired', { code: AuthErrorCode.TOKEN_EXPIRED }),
     );
     await expect(handler.execute(command)).rejects.toMatchObject({ code: 'SESSION_EXPIRED' });
 
-    tokenService.verifyRefreshToken.mockRejectedValue(
+    tokenIssuer.verifyRefreshToken.mockRejectedValue(
       new UnauthenticatedException('Invalid token', { code: AuthErrorCode.INVALID_TOKEN }),
     );
     await expect(handler.execute(command)).rejects.toMatchObject({
