@@ -25,7 +25,6 @@
     "@platform/cassandra": "workspace:*",
     "@platform/common": "workspace:*",
     "@platform/config": "workspace:*",
-    "@platform/contracts": "workspace:*",
     "@platform/database": "workspace:*",
     "@domain/files": "workspace:*",
     "@platform/graphql": "workspace:*",

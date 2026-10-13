@@ -57,6 +57,8 @@ describe('defineEventContract', () => {
 
   it.each([
     'orders.order-placed',
+    'orders.order-placed.v0',
+    'orders.order-placed.v01',
     'Orders.order-placed.v1',
     'orders.order_placed.v1',
     'orders.order-placed.v1.dlq',

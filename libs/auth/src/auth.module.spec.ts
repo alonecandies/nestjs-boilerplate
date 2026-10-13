@@ -2,10 +2,12 @@ import { Global, type INestApplicationContext, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
+import { generateId } from '@platform/common';
 import { redisConfig } from '@platform/config';
 import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import { afterEach, describe, expect, it } from 'vitest';
+import { AuthErrorCode } from './auth.constants.js';
 import { AuthModule } from './auth.module.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { PermissionsGuard } from './guards/permissions.guard.js';
@@ -51,11 +53,23 @@ describe('AuthModule (DI wiring)', () => {
     await denylist.deny(issued.jti, issued.exp);
     await expect(denylist.isDenied(issued.jti)).resolves.toBe(true);
 
-    // JwtService defaults (no expiresIn, iss/aud set) stay compatible with TokenService.
-    const raw = await app.get(JwtService).signAsync({ sub: 'x', typ: 'other' });
-    expect(app.get(JwtService).decode<{ iss: string; aud: string }>(raw)).toMatchObject({
-      iss: 'nestjs-boilerplate',
-      aud: 'nestjs-boilerplate',
+    // This package only verifies: its JwtService has no signing defaults (algorithm, iss, aud), so
+    // a stray `sign()` through it can never mint an access token that TokenService accepts.
+    const jwt = app.get(JwtService);
+    const now = Math.floor(Date.now() / 1_000);
+    const stray = await jwt.signAsync({
+      sub: 'u-1',
+      email: 'a@b.c',
+      roles: [Role.Admin],
+      typ: 'access',
+      jti: generateId(),
+      iat: now,
+      exp: now + 60,
+    });
+    expect(jwt.decode(stray)).not.toHaveProperty('iss');
+    expect(jwt.decode(stray)).not.toHaveProperty('aud');
+    await expect(tokens.verifyAccessToken(stray)).rejects.toMatchObject({
+      code: AuthErrorCode.INVALID_TOKEN,
     });
     expect(app.get(JwtAuthGuard)).toBeInstanceOf(JwtAuthGuard);
   });

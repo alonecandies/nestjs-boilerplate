@@ -1,10 +1,10 @@
 /**
- * Kafka topics carrying integration events are named `<context>.<event-name>.v<major>`. A
- * breaking payload change ships as a NEW topic (`.v2`) consumed side by side; additive changes
- * stay on the same topic because payload schemas are tolerant readers (unknown keys are
- * stripped, not rejected).
+ * Kafka topics carrying integration events are named `<context>.<event-name>.v<major>` (major ≥ 1,
+ * no leading zero: `.v0` and `.v01` are rejected when the contract is defined). A breaking payload
+ * change ships as a NEW topic (`.v2`) consumed side by side; additive changes stay on the same
+ * topic because payload schemas are tolerant readers (unknown keys are stripped, not rejected).
  */
-export const EVENT_TOPIC_PATTERN = /^[a-z]+\.[a-z]+(?:-[a-z]+)*\.v\d+$/;
+export const EVENT_TOPIC_PATTERN = /^[a-z]+\.[a-z]+(?:-[a-z]+)*\.v[1-9]\d*$/;
 
 /** Narrows an untrusted value (a CLI argument, `KafkaContext.getTopic()`) to a topic name. */
 export function isEventTopic(value: unknown): value is string {

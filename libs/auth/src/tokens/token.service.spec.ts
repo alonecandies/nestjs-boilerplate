@@ -64,9 +64,17 @@ describe('TokenService', () => {
   it('enforces the typ claim even when the signature, iss and aud are right', async () => {
     const forged = await jwt.signAsync(
       { sub: user.id, jti: 's', typ: 'refresh', email: 'a@b.c', roles: [] },
-      { secret: config.accessSecret, expiresIn: 60 },
+      {
+        secret: config.accessSecret,
+        expiresIn: 60,
+        issuer: config.issuer,
+        audience: config.audience,
+      },
     );
     await expectAuthError(tokens.verifyAccessToken(forged), 'INVALID_TOKEN');
+    await expect(tokens.verifyAccessToken(forged)).rejects.toMatchObject({
+      details: { reason: 'expected a access token' },
+    });
   });
 
   it('reports expiry distinctly (TOKEN_EXPIRED) and honours the 5s clock tolerance', async () => {

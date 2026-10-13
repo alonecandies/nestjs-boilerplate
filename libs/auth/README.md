@@ -75,7 +75,7 @@ The Redis keys use the `redis` namespace (`REDIS_KEY_PREFIX`). Password hashing 
 ## Gotchas
 
 - **401 codes.** `MISSING_TOKEN`, `INVALID_TOKEN`, `TOKEN_EXPIRED` (clients should refresh), `TOKEN_REVOKED` and `MISSING_CREDENTIALS`. Permission failures are 403 `FORBIDDEN`, with `details.requiredRoles` or `details.requiredPermissions`.
-- **Token types.** Access and refresh tokens use different secrets and a `typ` claim, so one can never be replayed as the other. Issuers (and `signTestAccessToken`) write `iat` and `exp` into the payload, so never add `expiresIn` to `JwtModule` sign defaults (jsonwebtoken rejects both).
+- **Token types.** Access and refresh tokens use different secrets and a `typ` claim, so one can never be replayed as the other. Issuers (and `signTestAccessToken`) write `iat` and `exp` into the payload and pass their secret, algorithm, `iss` and `aud` per call, so never add `expiresIn` to `JwtModule` sign defaults (jsonwebtoken rejects both). `AuthModule`'s own `JwtModule` has no sign defaults at all: this package only verifies.
 - **Unknown roles in a token are dropped, not rejected.** This supports rolling deploys with least privilege.
 - **`rpc` handlers bypass all three guards.** Services trust the edge. User context travels as gRPC metadata.
 - **WebSockets** are authenticated once, at the handshake. `JwtAuthGuard` then only checks that `socket.data.user` exists and is not expired. Revocation is not re-checked per message, so disconnect sockets on logout if you need that.

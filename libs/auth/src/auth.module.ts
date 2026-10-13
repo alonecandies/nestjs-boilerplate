@@ -22,13 +22,15 @@ export interface AuthModuleSetup {
 }
 
 /**
- * Module defaults for code that injects `JwtService` directly. `expiresIn` is deliberately NOT set:
- * token issuers write `exp` into the payload and jsonwebtoken rejects both at once.
+ * Verification defaults of the `JwtService` this module registers. This package only verifies, so
+ * there are no signing defaults (no `signOptions`): a stray `sign()` through this `JwtService`
+ * carries no `iss`/`aud` and never passes `TokenService`. Issuers (identity's `TokenIssuer`, with
+ * its own `JwtModule`, and `signTestAccessToken`) pass their secret, algorithm, `iss` and `aud` per
+ * call.
  */
 export function createJwtModuleOptions(config: AuthConfig): JwtModuleOptions {
   return {
     secret: config.accessSecret,
-    signOptions: { algorithm: JWT_ALGORITHM, issuer: config.issuer, audience: config.audience },
     verifyOptions: {
       algorithms: [JWT_ALGORITHM],
       issuer: config.issuer,

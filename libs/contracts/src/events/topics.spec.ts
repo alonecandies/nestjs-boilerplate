@@ -8,6 +8,8 @@ describe('isEventTopic', () => {
 
   it.each([
     'orders.order-placed',
+    'orders.order-placed.v0',
+    'orders.order-placed.v01',
     'orders.order-placed.v1.dlq',
     'Orders.order-placed.v1',
     'orders.order_placed.v1',

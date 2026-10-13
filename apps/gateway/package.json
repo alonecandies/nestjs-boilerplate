@@ -22,7 +22,6 @@
     "@platform/bootstrap": "workspace:*",
     "@platform/common": "workspace:*",
     "@platform/config": "workspace:*",
-    "@platform/contracts": "workspace:*",
     "@domain/files": "workspace:*",
     "@platform/graphql": "workspace:*",
     "@domain/identity": "workspace:*",
@@ -51,8 +50,6 @@
   },
   "devDependencies": {
     "@platform/testing": "workspace:*",
-    "@domain/identity-contracts": "workspace:*",
-    "@domain/notifications-contracts": "workspace:*",
     "@nestjs/jwt": "catalog:",
     "@nestjs/testing": "catalog:",
     "cache-manager": "catalog:",
