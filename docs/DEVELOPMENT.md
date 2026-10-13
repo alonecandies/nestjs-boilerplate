@@ -53,7 +53,7 @@ bun run dev                 # monolith on http://localhost:3000
 
 **Why the per-app files matter.** Without them every app would bind HTTP `3000` and gRPC `0.0.0.0:50051`, and the services would not apply migrations. Every root `dev*` script runs `setup:env` first. If you start an app another way, for example `bun run dev` inside `apps/<app>`, run `bun run setup:env` once.
 
-**Adding a variable.** Add it to a namespace schema in `libs/config/src/namespaces/*.config.ts`, then document it in the root `.env.example` (as `KEY=` or `# KEY=`). `node scripts/check-env-example.mjs` reads the schema sources (no build needed) and fails when the two drift. CI runs it. All variables are listed in [CONFIGURATION.md](CONFIGURATION.md).
+**Adding a variable.** Add it to its owner's namespace schema: a platform variable to `libs/config/src/namespaces/*.config.ts`, a domain-owned one to the domain's `domains/<x>/src/**/*.config.ts` (each `*-service` app that loads that namespace passes it to `validateAllEnv(env, [...])` in its `test/env-example.spec.ts`). Then document it in the root `.env.example` (as `KEY=` or `# KEY=`), which lists the variables of both. `node scripts/check-env-example.mjs` reads the schema sources (no build needed) and fails when the two drift; `--list` shows which file declares each variable. CI runs it. All variables are listed in [CONFIGURATION.md](CONFIGURATION.md).
 
 Compose reads the root `.env` only for `${VAR}` interpolation. Containers get their environment from `docker-compose.yml`. See [DOCKER.md](DOCKER.md).
 
@@ -400,7 +400,7 @@ export class EmailAlreadyTakenException extends DomainConflictException {
 }
 ```
 
-**Configuration.** Read settings only through `@platform/config` namespaces: `ConfigModule.forFeature(stripeConfig)` + `@Inject(stripeConfig.KEY) cfg: StripeConfig`. Each namespace is a zod schema (`defineConfigNamespace`), validated at boot. `process.env` is not used outside `libs/config`, with documented exceptions: `drizzle.config.ts`, OTel bootstrap and test setup.
+**Configuration.** Read settings only through `@platform/config` namespaces: `ConfigModule.forFeature(mailConfig)` + `@Inject(mailConfig.KEY) cfg: MailConfig`. Each namespace is a zod schema (`defineConfigNamespace`), validated at boot. `process.env` is not used outside `libs/config`, with documented exceptions: `drizzle.config.ts`, OTel bootstrap and test setup.
 
 **Other rules.**
 

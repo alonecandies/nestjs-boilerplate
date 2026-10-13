@@ -20,9 +20,11 @@ flowchart LR
   sets `ignoreEnvFile: true`. The single source of truth is `process.env`.
 - **Precedence:** real environment variables > `apps/<app>/.env` > root `.env` > schema default
   (Node never overrides a variable already set, and the later `--env-file` wins over the earlier).
-- **Namespaces.** Variables are grouped into 14 shared namespaces
+- **Namespaces.** Variables are grouped into 13 platform namespaces
   (`libs/config/src/namespaces/*.config.ts`, registered in `CONFIG_NAMESPACES` in
-  [all-config.ts](../libs/config/src/all-config.ts)) plus two app-local ones
+  [all-config.ts](../libs/config/src/all-config.ts)), the namespaces each domain owns
+  (`domains/<x>/src/**/*.config.ts`: billing's `stripe`, identity's `password` and `refreshToken`,
+  the gRPC client URLs, files' limits) plus two app-local ones
   (`apps/gateway/src/gateway.config.ts`, `apps/monolith/src/monolith.config.ts`). Each is a zod
   schema keyed by the env var names, transformed into a typed camelCase object.
 - **Lazy, per-process validation.** Only `app` and `observability` are loaded globally. Every other
@@ -34,8 +36,8 @@ flowchart LR
   already in the container.
 - **Fail fast, never leak.** An invalid value throws `EnvValidationError` at boot, naming **every**
   offending variable of the namespace (`Invalid environment for "auth": … → at JWT_ACCESS_SECRET`)
-  and never echoing values. `validateAllEnv()` (exported by `@platform/config`) checks all 14 shared
-  namespaces at once, for scripts and CI.
+  and never echoing values. `validateAllEnv(env, domainNamespaces)` (exported by `@platform/config`)
+  checks the platform namespaces plus the domain namespaces passed in, all at once, for scripts and CI.
 - **Only `@platform/config` reads `process.env`.** Documented exceptions: the OpenTelemetry preload
   (`libs/observability/src/otel.ts`, standard `OTEL_*` variables) and
   each domain's `domains/<x>/drizzle.config.ts` (`DATABASE_URL` for drizzle-kit).
@@ -122,8 +124,8 @@ forwarded as raw bytes + signature to billing-service, which verifies it with
 
 ## Environment variables by namespace
 
-138 distinct variables across the 14 shared namespaces (`node scripts/check-env-example.mjs` prints
-the count). "—" = no default (unset). `NODE_ENV` (read by every namespace with a production guard) and `SERVICE_NAME` are read by
+The distinct variables of the platform and domain namespaces (`node scripts/check-env-example.mjs`
+prints the count; `--list` names the file that declares each). "—" = no default (unset). `NODE_ENV` (read by every namespace with a production guard) and `SERVICE_NAME` are read by
 several namespaces with the same rules; they are listed once, under `app`.
 
 ### `app` — HTTP server, CORS, cluster, shutdown, maintenance, docs
@@ -537,7 +539,7 @@ GRPC_TLS_KEY_PATH=/etc/grpc/tls.key
 STRIPE_SECRET_KEY=sk_live_...
 STRIPE_WEBHOOK_SECRET=whsec_...
 METRICS_BEARER_TOKEN=<at least 16 chars>
-# run `bun run db:migrate` (or the image's dist/migrate.js) as a release job instead
+# run the app's dist/migrate.js (its db:migrate script) as a release job instead
 DATABASE_RUN_MIGRATIONS=false
 ```
 
@@ -640,9 +642,10 @@ What the containers get regardless of your `.env` (local-only conveniences):
 | Check                                                                                         | What it enforces                                                                                                                                                                                                                                                                                  | Where it runs                                       |
 | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
 | `node scripts/check-env-example.mjs` (`--list`: every variable and the file that declares it) | Every variable a schema in `libs/config/src/namespaces` or in a domain's `domains/<x>/src/**/*.config.ts` reads is listed in the root `.env.example` (as `KEY=` or `# KEY=`), and nothing unknown appears above the `# docker compose ONLY` marker (Node/OTel runtime variables are allow-listed) | CI "Config drift" step (`.github/workflows/ci.yml`) |
-| `apps/{identity,notifications,billing}-service/test/env-example.spec.ts`                      | The app's `.env.example` parses against the config namespaces and pins its ports / consumer group                                                                                                                                                                                                 | `bun run test`                                      |
+| `apps/{identity,notifications,billing}-service/test/env-example.spec.ts`                      | The app's `.env.example` parses against the platform namespaces plus the domain namespaces the service loads (`validateAllEnv(env, [...])`) and pins its ports / consumer group                                                                                                                   | `bun run test`                                      |
 | `apps/gateway/src/gateway.config.spec.ts`, `apps/monolith/src/monolith.config.spec.ts`        | The app-local namespaces (`KAFKA_GROUP_ID` default and pattern)                                                                                                                                                                                                                                   | `bun run test`                                      |
-| `libs/config/src/namespaces/namespaces.spec.ts`                                               | Defaults, derived values and cross-field guards of every shared namespace                                                                                                                                                                                                                         | `bun run test`                                      |
+| `libs/config/src/namespaces/namespaces.spec.ts`                                               | Defaults, derived values and cross-field guards of every platform namespace                                                                                                                                                                                                                       | `bun run test`                                      |
+| `libs/config/src/all-config.spec.ts`                                                          | `CONFIG_NAMESPACES` holds platform namespaces only; `validateAllEnv` with domain namespaces                                                                                                                                                                                                       | `bun run test`                                      |
 
 Adding a variable:
 
