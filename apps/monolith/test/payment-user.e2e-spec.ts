@@ -105,7 +105,7 @@ describe('Payment.user in the monolith (app-level resolver over the local ports)
   beforeAll(async () => {
     e2e = await createMonolithE2eApp({
       postgresRows: (sql) =>
-        sql.startsWith('select') && sql.includes('"payments"') ? paymentRows : [],
+        sql.startsWith('select') && sql.includes('"billing"."payments"') ? paymentRows : [],
     });
     ada = await register('ada@example.com', 'Ada');
     alan = await register('alan@example.com', 'Alan');

@@ -85,7 +85,7 @@ node --watch --watch-preserve-output \
 2. `customConditions: ["@repo/source"]` in `tsconfig.base.json` (typecheck and editor),
 3. `ssr.resolve.conditions` in `vitest.config.ts`, which also drops `development|production` so tests resolve exactly what Node resolves (a single `graphql` realm).
 
-Typecheck, tests and `dev` therefore all read `domains/*/src` and `libs/*/src` directly. You only need `dist/` (`bun run build`) for production-style runs: each app's `start` script, `bun run --filter @platform/database db:migrate`, `node scripts/docker/check-kafka-topics.mjs`, and Docker images.
+Typecheck, tests and `dev` therefore all read `domains/*/src` and `libs/*/src` directly. You only need `dist/` (`bun run build`) for production-style runs: each app's `start` script, `bun run --filter @app/<app> db:migrate`, `node scripts/docker/check-kafka-topics.mjs`, and Docker images.
 
 Everyday commands:
 
@@ -183,7 +183,7 @@ What to expect:
 
 - The generated code is a starting point. Check the relative imports (they must end in `.js`) and that every class Nest injects is imported as a value. See [DI pitfalls](#conventions-and-di-pitfalls).
 - **Domain and platform packages have no `g` script** and there is no root `nest-cli.json`, because `domains/*` and `libs/*` are plain workspace packages and not Nest CLI "libraries". Domain code lives in `domains/`, so write it by hand following the layout of an existing domain (next section). Use `nest g` inside an app only for code that belongs to that app.
-- Generated gRPC types come from `bun run proto:gen` and Drizzle migrations from `bun run db:generate`. Never edit either output by hand.
+- Generated gRPC types come from `bun run proto:gen` and Drizzle migrations from `bun run db:generate`. Never edit either output by hand, apart from the one-line `CREATE SCHEMA IF NOT EXISTS` edit of a domain's first migration ([migrations](#database-migrations-postgres--drizzle)).
 
 ## Guide: add a new domain module
 
@@ -224,11 +224,12 @@ In `package.json`, keep the `exports` block exactly as in billing (the `@repo/so
 - Errors are subclasses of the concrete `DomainException`s in `@platform/common` (see `domains/billing/src/domain/billing.errors.ts`).
 - Integration events are published after the transaction commits, from a relay (see `domains/billing/src/application/relays/payment-succeeded.relay.ts`). There is no transactional outbox yet (a known follow-up).
 
-**4. Persistence (Postgres).** Put the tables in `src/infrastructure/persistence/orders.schema.ts` and export an `ordersSchema` object, then:
+**4. Persistence (Postgres).** Put the tables in `src/infrastructure/persistence/orders.schema.ts`, declared on an exported `ordersPgSchema = pgSchema('orders')`, and export an `ordersSchema` object, then:
 
-- add `'../../domains/orders/src/**/*.schema.ts'` to `SCHEMA_GLOBS` in `libs/database/drizzle.config.ts` (one migration history for every context),
-- merge the schema into the app's Drizzle schema: `const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema, ...ordersSchema }` in `apps/monolith/src/app.module.ts`,
-- run `bun run db:generate` and commit the new SQL plus `meta/` snapshot (see [migrations](#database-migrations-postgres--drizzle)).
+- copy `domains/billing/drizzle.config.ts` (`schemaFilter: ['orders']`, `migrations: { schema: 'orders', table: '__drizzle_migrations' }`), the package's `db:generate` / `db:studio` scripts (pick a free studio port) and its `drizzle-kit` devDependency,
+- export `ordersMigrations` from `src/infrastructure/persistence/orders.migrations.ts` (copy `billing.migrations.ts` and its spec),
+- run `bun run --filter @domain/orders db:generate --name init`, change the first statement of the new `0000_init.sql` to `CREATE SCHEMA IF NOT EXISTS "orders";`, and commit the SQL plus `meta/` (see [migrations](#database-migrations-postgres--drizzle)),
+- merge the schema into the app's Drizzle schema (`const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema, ...ordersSchema }` in `apps/monolith/src/app.module.ts`) and add `ordersMigrations` to the app's `src/database.migrations.ts`.
 
 **5. Modules.** Copy the billing pattern:
 
@@ -339,7 +340,8 @@ static forRemote(): DynamicModule {
 - `package.json`: `"name": "@app/orders-service"`, the Vitest project names in `test`/`test:e2e`, and the dependencies (`@domain/orders`, …).
 - `.env.example`: `SERVICE_NAME=orders-service`, `PORT=3004`, `GRPC_URL=0.0.0.0:50054`, `KAFKA_GROUP_ID=orders-service`, `DATABASE_RUN_MIGRATIONS=true`.
 - `src/instrument.ts`: `startTracing({ serviceName: 'orders-service' })`.
-- `src/app.module.ts`: the global modules the core needs (`AppConfigModule.forRoot()`, `ConfigModule.forFeature(grpcConfig)`, `ObservabilityModule.forRoot({ healthContributors })`, `CqrsModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: ordersSchema })`, `RedisModule.forRootAsync()`, `KafkaProducerModule.forRootAsync()`), then `OrdersGrpcModule` and `provideCommonEnhancersAsync(…)`.
+- `src/app.module.ts`: the global modules the core needs (`AppConfigModule.forRoot()`, `ConfigModule.forFeature(grpcConfig)`, `ObservabilityModule.forRoot({ healthContributors })`, `CqrsModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: ordersSchema, migrations: DATABASE_MIGRATIONS })`, `RedisModule.forRootAsync()`, `KafkaProducerModule.forRootAsync()`), then `OrdersGrpcModule` and `provideCommonEnhancersAsync(…)`.
+- `src/database.migrations.ts` (`DATABASE_MIGRATIONS = [ordersMigrations]`), `src/migrate.ts` (`import 'reflect-metadata'`, then `await runMigrationsCli(DATABASE_MIGRATIONS)`) and the `db:migrate` / `db:migrate:dev` scripts: copy them from `apps/billing-service`.
 - `src/main.ts`: `connectGrpcServer(app, [ORDERS_GRPC_PACKAGE])` after `createServiceApp(AppModule)` and before `app.startAllMicroservices()` and `listen(app)`.
 
 Add root scripts by copying `dev:billing` (`"dev:orders": "bun run setup:env && bun run --filter @app/orders-service dev"`), and append the service to `dev:microservices`.
@@ -413,21 +415,39 @@ export class EmailAlreadyTakenException extends DomainConflictException {
 
 ## Database migrations (Postgres / Drizzle)
 
-All Postgres-backed contexts (identity and billing today) share **one migration history** in `libs/database/src/migrations` (`NNNN_name.sql` + `meta/`). `libs/database/drizzle.config.ts` diffs every file matched by `SCHEMA_GLOBS` (`../../domains/identity/src/**/*.schema.ts`, `../../domains/billing/src/**/*.schema.ts`) with `casing: 'snake_case'`, the same casing the runtime `drizzle()` uses.
+Each Postgres-backed context owns a Postgres **schema** and its own **migration history**:
 
-| Command                                          | What it does                                                                                                                                               |
-| ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bun run db:generate`                            | `drizzle-kit generate`: writes a new SQL migration from the schema diff. Review the SQL, then commit the SQL and the `meta/` snapshot.                     |
-| `bun run db:migrate`                             | Runs `libs/database` `db:migrate:dev`, which applies pending migrations from **sources** (swc-node, `@repo/source`) with the root `.env`'s `DATABASE_URL`. |
-| `bun run --filter @platform/database db:migrate` | The same from `dist/migrate.js` (needs `bun run build`). This is the production release job. See [DOCKER.md](DOCKER.md).                                   |
-| `bun run db:studio`                              | Drizzle Studio against `DATABASE_URL`.                                                                                                                     |
+| Set      | Schema     | History (`NNNN_name.sql` + `meta/`)                          | drizzle-kit config                   | Bookkeeping table               |
+| -------- | ---------- | ------------------------------------------------------------ | ------------------------------------ | ------------------------------- |
+| platform | `app`      | `libs/database/src/platform/migrations` (hand-written)       | none                                 | `app.__drizzle_migrations`      |
+| identity | `identity` | `domains/identity/src/infrastructure/persistence/migrations` | `domains/identity/drizzle.config.ts` | `identity.__drizzle_migrations` |
+| billing  | `billing`  | `domains/billing/src/infrastructure/persistence/migrations`  | `domains/billing/drizzle.config.ts`  | `billing.__drizzle_migrations`  |
+
+- Tables are declared on an exported `pgSchema('<x>')` in the domain's `*.schema.ts`, with `casing: 'snake_case'`
+  (the casing the runtime `drizzle()` uses). Raw SQL qualifies names (`identity.users`).
+- One bookkeeping table per set is mandatory: drizzle's migrator only applies files newer than the **last** row of
+  its table, so two histories sharing a table would silently skip the older one's files. `DatabaseModule` rejects two
+  sets with one table.
+- **Order.** `DatabaseModule.forRootAsync({ schema, migrations })` and each app's `src/migrate.ts` apply the platform
+  set first (it cannot be left out), then the app's sets in array order, all under one advisory lock. Each app lists
+  its sets once, in `src/database.migrations.ts`: the monolith `[identityMigrations, billingMigrations]`,
+  identity-service `[identityMigrations]`, billing-service `[billingMigrations]`.
+
+| Command                                  | What it does                                                                                                                                                    |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bun run db:generate`                    | `drizzle-kit generate` in every domain that has a config: a new SQL migration from that domain's schema diff. Review the SQL, then commit it with `meta/`.      |
+| `bun run db:migrate`                     | The monolith's `src/migrate.ts` from **sources** (swc-node, `@repo/source`) with the root `.env` and `apps/monolith/.env`: the platform set, identity, billing. |
+| `bun run --filter @app/<app> db:migrate` | The same from the app's `dist/migrate.js` (needs `bun run build`), with that app's sets. This is the production release job. See [DOCKER.md](DOCKER.md).        |
+| `bun run db:studio`                      | Drizzle Studio per domain against `DATABASE_URL`: identity on port 4983, billing on 4984.                                                                       |
 
 Notes:
 
-- `DATABASE_RUN_MIGRATIONS=true` (set in the per-app `.env` of the monolith, identity-service and billing-service) applies migrations at boot under a Postgres **advisory lock**, so replicas that boot together apply them once. In production, set it to `false` and run the migrate job.
+- `DATABASE_RUN_MIGRATIONS=true` (set in the per-app `.env` of the monolith, identity-service and billing-service) applies the sets at boot under a Postgres **advisory lock**, so replicas and services that boot together apply each file once. In production, set it to `false` and run each app image's migrate job.
 - Migrations are forward-only. Write expand/contract changes (add a nullable column → backfill → enforce) so the old and new versions of the code can run side by side during a rollout.
-- Hand-written SQL (extensions, `pg_trgm` indexes, …) goes in a generated file. Use `drizzle-kit generate --custom` from `libs/database` to get an empty one that is registered in the journal.
-- CI runs `bun run db:generate` and fails if it produces a diff or a new untracked file. A `*.schema.ts` change without its migration cannot merge.
+- One domain at a time: `bun run --filter @domain/identity db:generate --name <change>`. A hand-written domain migration: add `--custom` for an empty file registered in that domain's journal.
+- **A new history** starts with `bun run --filter @domain/<x> db:generate --name init`. Change its first statement from `CREATE SCHEMA "<x>";` to `CREATE SCHEMA IF NOT EXISTS "<x>";`: the migrator creates the schema first, for `<x>.__drizzle_migrations`. It is the only hand edit of generated SQL, and the domain's `*.migrations.spec.ts` checks it.
+- SQL that belongs to no domain (extensions; grants and functions from B3) goes in the platform set: add `NNNN_name.sql` and its `meta/_journal.json` entry by hand ([libs/database/README.md](../libs/database/README.md#platform-migration-set)).
+- CI runs `bun run db:generate` and fails if it produces a diff or a new untracked file under `domains/*/src/infrastructure/persistence/migrations`. A `*.schema.ts` change without its migration cannot merge.
 
 ## Cassandra CQL migrations
 
@@ -477,27 +497,28 @@ Producing and consuming:
 
 ## Troubleshooting
 
-| Symptom                                                                                  | Cause and fix                                                                                                                                                                                                                            |
-| ---------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `EADDRINUSE :::3000`, or every service binds 3000/50051                                  | Either `apps/<app>/.env` is missing (run `bun run setup:env`), or the monolith and the gateway are both running. Both bind 3000.                                                                                                         |
-| `Nest can't resolve dependencies of X (?)`, or a DTO is not validated                    | An injected class or a DTO was imported with `import type`. Import it as a value. See [DI pitfalls](#conventions-and-di-pitfalls).                                                                                                       |
-| `TS1484: 'X' is a type and must be imported using a type-only import`                    | The opposite case: an interface or type alias imported as a value under `verbatimModuleSyntax`. `bun run lint:fix` repairs it.                                                                                                           |
-| `ReferenceError: Cannot access 'X' before initialization`                                | An ESM import cycle reached by decorator metadata. Break the cycle, or use `forwardRef(() => X)` + `WrapperType<X>`.                                                                                                                     |
-| `Cannot find module …/dist/index.js` when starting an app                                | The process ran without `--conditions=@repo/source`, for example the `start` script or a bare `node`, and libs are not built. Use `bun run dev`, or run `bun run build` first.                                                           |
-| gRPC Timestamps arrive as `{ seconds, nanos }`                                           | The process imported only _types_ from a contracts package, or a second `protobufjs` copy exists. Import any value from it (every `<X>_GRPC_PACKAGE` does), and keep the single `protobufjs@7` from the root `overrides`.                |
-| gRPC server error `object expected` on a Timestamp field                                 | The handler returned an ISO string. Return a `Date`.                                                                                                                                                                                     |
-| `instanceof` fails across packages, or `ClientsModule` is registered twice               | Two copies of a `@nestjs/*` package. Keep `linker = "hoisted"` in `bunfig.toml` and do not add per-package `node_modules`.                                                                                                               |
-| A Kafka consumer fails at boot with an unknown topic, or "coordinator is loading" errors | The topic is missing from `docker/kafka/topics.txt`, or infra was started without the init job. Run `bun run docker:infra`. A few "coordinator is loading" warnings on a fresh broker are normal.                                        |
-| A Kafka message is redelivered forever                                                   | An error escaped the handler. Consumers must use `@KafkaConsumerController()`, which dead-letters the failure to `<topic>.dlq` and commits the offset.                                                                                   |
-| Cassandra: `NoHostAvailableError`, or every query fails                                  | `CASSANDRA_LOCAL_DC` must equal the node's data center (`datacenter1` in compose). Otherwise the driver ignores the node. Cassandra also needs about a minute on first start.                                                            |
-| Boot hangs about 2 min, then fails on a CQL migration                                    | A crashed instance left a claim in `applying`. Run the `DELETE` printed in the log, then restart.                                                                                                                                        |
-| `bun run proto:gen` fails with `env: node: No such file or directory`                    | `protoc-gen-ts_proto` is a `#!/usr/bin/env node` script. Put Node 24 on `PATH` (`nvm use`).                                                                                                                                              |
-| CI "Generated artefacts drift" fails                                                     | A `.proto` or `*.schema.ts` changed without a regenerated output. Run `bun run proto:gen` / `bun run db:generate` and commit `domains/*/contracts/src/generated` / `libs/database/src/migrations`.                                       |
-| CI "Config drift" fails                                                                  | A config schema reads a variable that the root `.env.example` does not list, or `topics.txt` and the contracts disagree. Run `node scripts/check-env-example.mjs` (and the topics check after a build).                                  |
-| Latency rises sharply under load in a container (Argon2 login, uploads)                  | `UV_THREADPOOL_SIZE` is above the container's CPU quota. Measured: 16 threads on a 2-CPU cap raised p95 from 36 ms to 304 ms. Keep it ≤ the CPUs the process gets (default 4). See [PERFORMANCE.md](PERFORMANCE.md).                     |
-| Stripe checkout or webhook returns errors locally                                        | `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` are placeholders. Set test keys, then forward webhooks with `stripe listen --forward-to localhost:3000/v1/billing/webhooks/stripe`.                                                          |
-| Presigned upload/download URLs point to an unreachable host or port                      | They are signed for `S3_PUBLIC_ENDPOINT`. On the host, set it next to `S3_ENDPOINT`; for containers on a remapped S3 port, pass `S3_HOST_PORT` to the compose command too (`S3_PUBLIC_ENDPOINT=http://localhost:${S3_HOST_PORT:-9000}`). |
-| A non-JSON `<claude-code-hint … />` line on stderr (billing-service, monolith)           | stripe-node 22 prints it at import when `CLAUDECODE` / `CLAUDE_CODE_CHILD_SESSION` are set (apps launched from Claude Code). Not app output: start the app with `env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION …`.                      |
-| `docker build -t img/$app:local` produces a lowercase or odd tag in zsh                  | zsh expands `$app:l`. Quote it: `"img/${app}:local"`.                                                                                                                                                                                    |
+| Symptom                                                                                  | Cause and fix                                                                                                                                                                                                                                    |
+| ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `EADDRINUSE :::3000`, or every service binds 3000/50051                                  | Either `apps/<app>/.env` is missing (run `bun run setup:env`), or the monolith and the gateway are both running. Both bind 3000.                                                                                                                 |
+| `Nest can't resolve dependencies of X (?)`, or a DTO is not validated                    | An injected class or a DTO was imported with `import type`. Import it as a value. See [DI pitfalls](#conventions-and-di-pitfalls).                                                                                                               |
+| `TS1484: 'X' is a type and must be imported using a type-only import`                    | The opposite case: an interface or type alias imported as a value under `verbatimModuleSyntax`. `bun run lint:fix` repairs it.                                                                                                                   |
+| `ReferenceError: Cannot access 'X' before initialization`                                | An ESM import cycle reached by decorator metadata. Break the cycle, or use `forwardRef(() => X)` + `WrapperType<X>`.                                                                                                                             |
+| `Cannot find module …/dist/index.js` when starting an app                                | The process ran without `--conditions=@repo/source`, for example the `start` script or a bare `node`, and libs are not built. Use `bun run dev`, or run `bun run build` first.                                                                   |
+| gRPC Timestamps arrive as `{ seconds, nanos }`                                           | The process imported only _types_ from a contracts package, or a second `protobufjs` copy exists. Import any value from it (every `<X>_GRPC_PACKAGE` does), and keep the single `protobufjs@7` from the root `overrides`.                        |
+| gRPC server error `object expected` on a Timestamp field                                 | The handler returned an ISO string. Return a `Date`.                                                                                                                                                                                             |
+| `instanceof` fails across packages, or `ClientsModule` is registered twice               | Two copies of a `@nestjs/*` package. Keep `linker = "hoisted"` in `bunfig.toml` and do not add per-package `node_modules`.                                                                                                                       |
+| A Kafka consumer fails at boot with an unknown topic, or "coordinator is loading" errors | The topic is missing from `docker/kafka/topics.txt`, or infra was started without the init job. Run `bun run docker:infra`. A few "coordinator is loading" warnings on a fresh broker are normal.                                                |
+| A Kafka message is redelivered forever                                                   | An error escaped the handler. Consumers must use `@KafkaConsumerController()`, which dead-letters the failure to `<topic>.dlq` and commits the offset.                                                                                           |
+| Cassandra: `NoHostAvailableError`, or every query fails                                  | `CASSANDRA_LOCAL_DC` must equal the node's data center (`datacenter1` in compose). Otherwise the driver ignores the node. Cassandra also needs about a minute on first start.                                                                    |
+| Boot hangs about 2 min, then fails on a CQL migration                                    | A crashed instance left a claim in `applying`. Run the `DELETE` printed in the log, then restart.                                                                                                                                                |
+| `bun run proto:gen` fails with `env: node: No such file or directory`                    | `protoc-gen-ts_proto` is a `#!/usr/bin/env node` script. Put Node 24 on `PATH` (`nvm use`).                                                                                                                                                      |
+| CI "Generated artefacts drift" fails                                                     | A `.proto` or `*.schema.ts` changed without a regenerated output. Run `bun run proto:gen` / `bun run db:generate` and commit `domains/*/contracts/src/generated` / `domains/<domain>/src/infrastructure/persistence/migrations`.                 |
+| Users or payments created before the per-domain schemas are missing                      | The tables moved from `public` to the `identity` and `billing` schemas with fresh histories; the old `public` tables are orphaned. Reset once: `docker compose --profile '*' down -v` (deletes every local volume), then `bun run docker:infra`. |
+| CI "Config drift" fails                                                                  | A config schema reads a variable that the root `.env.example` does not list, or `topics.txt` and the contracts disagree. Run `node scripts/check-env-example.mjs` (and the topics check after a build).                                          |
+| Latency rises sharply under load in a container (Argon2 login, uploads)                  | `UV_THREADPOOL_SIZE` is above the container's CPU quota. Measured: 16 threads on a 2-CPU cap raised p95 from 36 ms to 304 ms. Keep it ≤ the CPUs the process gets (default 4). See [PERFORMANCE.md](PERFORMANCE.md).                             |
+| Stripe checkout or webhook returns errors locally                                        | `STRIPE_SECRET_KEY`/`STRIPE_WEBHOOK_SECRET` are placeholders. Set test keys, then forward webhooks with `stripe listen --forward-to localhost:3000/v1/billing/webhooks/stripe`.                                                                  |
+| Presigned upload/download URLs point to an unreachable host or port                      | They are signed for `S3_PUBLIC_ENDPOINT`. On the host, set it next to `S3_ENDPOINT`; for containers on a remapped S3 port, pass `S3_HOST_PORT` to the compose command too (`S3_PUBLIC_ENDPOINT=http://localhost:${S3_HOST_PORT:-9000}`).         |
+| A non-JSON `<claude-code-hint … />` line on stderr (billing-service, monolith)           | stripe-node 22 prints it at import when `CLAUDECODE` / `CLAUDE_CODE_CHILD_SESSION` are set (apps launched from Claude Code). Not app output: start the app with `env -u CLAUDECODE -u CLAUDE_CODE_CHILD_SESSION …`.                              |
+| `docker build -t img/$app:local` produces a lowercase or odd tag in zsh                  | zsh expands `$app:l`. Quote it: `"img/${app}:local"`.                                                                                                                                                                                            |
 
 Still stuck? Set `LOG_LEVEL=debug` (with `LOG_PRETTY=true` for readable output), check `/health/ready` (it lists each contributor), and see the gotchas in [DOCKER.md](DOCKER.md).

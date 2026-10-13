@@ -39,7 +39,7 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
       const result = await repository.create(payment);
 
       expect(queries).toHaveLength(1);
-      expect(lastSql()).toMatch(/^insert into "payments" \(/);
+      expect(lastSql()).toMatch(/^insert into "billing"\."payments" \(/);
       expect(lastSql()).toContain('on conflict ("user_id","idempotency_key") do nothing returning');
       expect(result.created).toBe(true);
       expect(result.payment.toSnapshot()).toEqual(payment.toSnapshot());
@@ -59,7 +59,7 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
       expect(result).toMatchObject({ created: false });
       expect(result.payment.id).toBe(existing.id);
       expect(queries[1]?.sql).toMatch(
-        /where \("payments"\."user_id" = \$1 and "payments"\."idempotency_key" = \$2\) limit \$3$/,
+        /where \("billing"\."payments"\."user_id" = \$1 and "billing"\."payments"\."idempotency_key" = \$2\) limit \$3$/,
       );
     });
   });
@@ -75,7 +75,7 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
 
     expect(found?.id).toBe(payment.id);
     expect(lastSql()).toContain(
-      'where ("payments"."id" = $1 or "payments"."stripe_checkout_session_id" = $2)',
+      'where ("billing"."payments"."id" = $1 or "billing"."payments"."stripe_checkout_session_id" = $2)',
     );
     expect(lastSql()).toMatch(/limit \$3 for update$/);
   });
@@ -88,9 +88,9 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
 
       await repository.save(payment);
 
-      expect(lastSql()).toMatch(/^update "payments" set .*"version" = \$\d+/);
-      expect(lastSql()).toContain('where ("payments"."id" = $');
-      expect(lastSql()).toContain('"payments"."version" = $');
+      expect(lastSql()).toMatch(/^update "billing"\."payments" set .*"version" = \$\d+/);
+      expect(lastSql()).toContain('where ("billing"."payments"."id" = $');
+      expect(lastSql()).toContain('"billing"."payments"."version" = $');
       expect(queries[0]?.params).toEqual(
         expect.arrayContaining([PaymentStatus.Failed, 3, payment.id, 2]),
       );
@@ -121,10 +121,12 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
     expect(all).toEqual({ items: [], nextCursor: null });
     expect(queries[0]).toMatchObject({ params: [userId, 3] });
     expect(queries[0]?.sql).toMatch(
-      /where "payments"\."user_id" = \$1 order by "payments"\."id" desc limit \$2$/,
+      /where "billing"\."payments"\."user_id" = \$1 order by "billing"\."payments"\."id" desc limit \$2$/,
     );
     expect(queries[1]).toMatchObject({ params: [51] });
-    expect(queries[1]?.sql).toMatch(/from "payments" order by "payments"\."id" desc limit \$1$/);
+    expect(queries[1]?.sql).toMatch(
+      /from "billing"\."payments" order by "billing"\."payments"\."id" desc limit \$1$/,
+    );
   });
 
   it('pages with a keyset cursor: the look-ahead row yields nextCursor, which resumes after it', async () => {
@@ -147,14 +149,14 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
     expect(second).toMatchObject({ nextCursor: null });
     expect(second.items.map((p) => p.id)).toEqual([a.id]);
     expect(queries[1]?.sql).toMatch(
-      /where \("payments"\."user_id" = \$1 and "payments"\."id" < \$2\) order by "payments"\."id" desc limit \$3$/,
+      /where \("billing"\."payments"\."user_id" = \$1 and "billing"\."payments"\."id" < \$2\) order by "billing"\."payments"\."id" desc limit \$3$/,
     );
     expect(queries[1]?.params).toEqual([userId, b.id, 3]);
 
     // Admin listing: the primary key.
     await repository.list({ limit: 2, cursor });
     expect(queries[2]?.sql).toMatch(
-      /from "payments" where "payments"\."id" < \$1 order by "payments"\."id" desc limit \$2$/,
+      /from "billing"\."payments" where "billing"\."payments"\."id" < \$1 order by "billing"\."payments"\."id" desc limit \$2$/,
     );
     expect(queries[2]?.params).toEqual([b.id, 3]);
   });
@@ -172,7 +174,7 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
     await expect(events.markProcessed({ id: 'evt_1', type: 'x' })).resolves.toBe(true);
     await expect(events.markProcessed({ id: 'evt_1', type: 'x' })).resolves.toBe(false);
     expect(lastSql()).toBe(
-      'insert into "stripe_events" ("id", "type", "processed_at") values ($1, $2, default) on conflict ("id") do nothing returning "id"',
+      'insert into "billing"."stripe_events" ("id", "type", "processed_at") values ($1, $2, default) on conflict ("id") do nothing returning "id"',
     );
   });
 
@@ -185,7 +187,7 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
     await expect(events.deleteProcessedBefore(cutoff, 500)).resolves.toBe(2);
 
     expect(lastSql()).toBe(
-      'delete from "stripe_events" where "stripe_events"."id" in (select "id" from "stripe_events" where "stripe_events"."processed_at" < $1 limit $2)',
+      'delete from "billing"."stripe_events" where "billing"."stripe_events"."id" in (select "id" from "billing"."stripe_events" where "billing"."stripe_events"."processed_at" < $1 limit $2)',
     );
     expect(queries.at(-1)?.params).toEqual([cutoff.toISOString(), 500]);
   });

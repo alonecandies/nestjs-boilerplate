@@ -16,17 +16,17 @@ composition root.
 
 ## Composition (`src/app.module.ts`)
 
-| Module                                                                   | Why                                                                                                                                      |
-| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `AppConfigModule.forRoot()` + `ConfigModule.forFeature(grpcConfig)`      | `app`/`observability` + the gRPC bind namespace `connectGrpcServer` reads, validated at boot                                             |
-| `ObservabilityModule.forRoot({ healthContributors: [postgres, redis] })` | pino JSON logs, request context, `/metrics`, `/health/*`; Kafka is not a readiness dependency (best-effort events)                       |
-| `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`                       | command/query buses; `PurgeExpiredSessionsCron` (hourly, `@WithLock`)                                                                    |
-| `DatabaseModule.forRootAsync({ schema: identitySchema })`                | Drizzle + postgres.js pool, transactional CLS plugin, boot-time migrations                                                               |
-| `RedisModule.forRootAsync()`                                             | access-token denylist, distributed cron lock                                                                                             |
-| `KafkaProducerModule.forRootAsync()`                                     | idempotent producer for `UserRegisteredRelay`                                                                                            |
-| `AuthModule.forRootAsync({ globalGuards: false })`                       | `AccessTokenDenylist` (logout); no guards: only the gateway calls it (`PasswordHasher` and `TokenIssuer` come with `IdentityCoreModule`) |
-| `IdentityGrpcModule`                                                     | `IdentityCoreModule` + `AuthGrpcController`, `UsersGrpcController`                                                                       |
-| `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`            | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC too                                                        |
+| Module                                                                                     | Why                                                                                                                                      |
+| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `AppConfigModule.forRoot()` + `ConfigModule.forFeature(grpcConfig)`                        | `app`/`observability` + the gRPC bind namespace `connectGrpcServer` reads, validated at boot                                             |
+| `ObservabilityModule.forRoot({ healthContributors: [postgres, redis] })`                   | pino JSON logs, request context, `/metrics`, `/health/*`; Kafka is not a readiness dependency (best-effort events)                       |
+| `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`                                         | command/query buses; `PurgeExpiredSessionsCron` (hourly, `@WithLock`)                                                                    |
+| `DatabaseModule.forRootAsync({ schema: identitySchema, migrations: DATABASE_MIGRATIONS })` | Drizzle + postgres.js pool, transactional CLS plugin, boot-time migrations (platform set + identity)                                     |
+| `RedisModule.forRootAsync()`                                                               | access-token denylist, distributed cron lock                                                                                             |
+| `KafkaProducerModule.forRootAsync()`                                                       | idempotent producer for `UserRegisteredRelay`                                                                                            |
+| `AuthModule.forRootAsync({ globalGuards: false })`                                         | `AccessTokenDenylist` (logout); no guards: only the gateway calls it (`PasswordHasher` and `TokenIssuer` come with `IdentityCoreModule`) |
+| `IdentityGrpcModule`                                                                       | `IdentityCoreModule` + `AuthGrpcController`, `UsersGrpcController`                                                                       |
+| `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`                              | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC too                                                        |
 
 `main.ts`: `createServiceApp(AppModule)` → `connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE])` →
 `startAllMicroservices()` → `listen(app)`. The HTTP port opens last, so readiness probes only see
@@ -57,7 +57,7 @@ Everything else comes from the root `.env` / the environment ([`@platform/config
 | `SERVICE_NAME`                                              | `identity-service`         | log `service`, Kafka client id, envelope `source`, pool `application_name`                                  |
 | `PORT` / `GRPC_URL`                                         | `3001` / `0.0.0.0:50051`   | the gateway dials `IDENTITY_GRPC_URL`                                                                       |
 | `KAFKA_GROUP_ID`                                            | `identity-service`         | no consumer today; explicit so a future one never shares a group                                            |
-| `DATABASE_RUN_MIGRATIONS`                                   | `true`                     | advisory-locked; set `false` when a `bun run db:migrate` job owns it                                        |
+| `DATABASE_RUN_MIGRATIONS`                                   | `true`                     | advisory-locked (platform set + identity); set `false` when a `dist/migrate.js` job owns it                 |
 | `DATABASE_URL`, `REDIS_URL`, `KAFKA_BROKERS`                | root `.env`                |                                                                                                             |
 | `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`                   | root `.env` / secret store | the dev defaults are rejected when `NODE_ENV=production`                                                    |
 | `ARGON2_*`, `GRPC_MAX_MESSAGE_BYTES`, `SHUTDOWN_TIMEOUT_MS` | defaults                   | Argon2 hashing runs on the libuv pool; keep `UV_THREADPOOL_SIZE` ≤ the container CPUs (raise both together) |

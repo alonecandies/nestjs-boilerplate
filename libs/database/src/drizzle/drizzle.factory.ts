@@ -4,6 +4,7 @@ import type { AppConfig, DatabaseConfig } from '@platform/config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import type { DatabaseModuleOptions } from '../database.types.js';
+import { withPlatformMigrations } from '../migrator/migration-sets.js';
 import { runMigrations } from '../migrator/run-migrations.js';
 import type { DrizzleDB, DrizzleSchema } from './drizzle.types.js';
 import { DrizzleQueryLogger } from './drizzle-query.logger.js';
@@ -33,12 +34,11 @@ export async function createDrizzleDatabase<TSchema extends DrizzleSchema>(
 ): Promise<DrizzleDB<TSchema>> {
   const target = describePostgresUrl(cfg.url);
   if (options.runMigrations ?? cfg.runMigrations) {
+    // The platform set first, then the app's domain sets in order, all under one advisory lock.
     await runMigrations(cfg.url, {
+      migrations: withPlatformMigrations(options.migrations),
       logger,
       applicationName: app.serviceName,
-      ...(options.migrationsFolder === undefined
-        ? {}
-        : { migrationsFolder: options.migrationsFolder }),
     });
   }
 

@@ -53,16 +53,16 @@ schematics import `TestingModule` as a value and `consistent-type-imports` would
 App-specific overrides live in [`.env.example`](./.env.example); everything else has working
 defaults for the local docker-compose infra in `libs/config` (see the root README).
 
-| Variable                   | Default          | Purpose                                                                  |
-| -------------------------- | ---------------- | ------------------------------------------------------------------------ |
-| `SERVICE_NAME`             | `app`            | logs, metrics, Kafka client id, Redis connection names → set it          |
-| `PORT` / `HOST`            | `3000` / 0.0.0.0 | HTTP listener                                                            |
-| `KAFKA_GROUP_ID`           | `monolith`       | consumer group of the in-process consumers (shared by all replicas)      |
-| `DATABASE_RUN_MIGRATIONS`  | `false`          | apply the drizzle migrations at boot (advisory-locked)                   |
-| `CASSANDRA_RUN_MIGRATIONS` | `true`           | apply the CQL migrations at boot (LWT-claimed)                           |
-| `CLUSTER_WORKERS`          | `1`              | node:cluster workers (`0` = per core)                                    |
-| `DOCS_ENABLED`             | not in prod      | `/docs`, `/openapi.json`, `/openapi.yaml`                                |
-| `MAINTENANCE_MODE`         | `false`          | every route except `/health*` and `/metrics` answers 503 + `Retry-After` |
+| Variable                   | Default          | Purpose                                                                           |
+| -------------------------- | ---------------- | --------------------------------------------------------------------------------- |
+| `SERVICE_NAME`             | `app`            | logs, metrics, Kafka client id, Redis connection names → set it                   |
+| `PORT` / `HOST`            | `3000` / 0.0.0.0 | HTTP listener                                                                     |
+| `KAFKA_GROUP_ID`           | `monolith`       | consumer group of the in-process consumers (shared by all replicas)               |
+| `DATABASE_RUN_MIGRATIONS`  | `false`          | apply the platform set, identity and billing migrations at boot (advisory-locked) |
+| `CASSANDRA_RUN_MIGRATIONS` | `true`           | apply the CQL migrations at boot (LWT-claimed)                                    |
+| `CLUSTER_WORKERS`          | `1`              | node:cluster workers (`0` = per core)                                             |
+| `DOCS_ENABLED`             | not in prod      | `/docs`, `/openapi.json`, `/openapi.yaml`                                         |
+| `MAINTENANCE_MODE`         | `false`          | every route except `/health*` and `/metrics` answers 503 + `Retry-After`          |
 
 The Kafka topics (and their `.dlq`) must exist — auto-creation is off: `identity.user-registered.v1`,
 `billing.payment-succeeded.v1`, `notifications.notification-created.v1`.

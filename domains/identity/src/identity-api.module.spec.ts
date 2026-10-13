@@ -30,7 +30,7 @@ type App = Awaited<ReturnType<typeof createFastifyTestApp>>;
 
 const users = new Map<string, Record<string, unknown>>();
 const database = createFakePostgres((sql, params): FakeResult => {
-  if (sql.startsWith('select "id" from "users" where "users"."email"')) {
+  if (sql.startsWith('select "id" from "identity"."users" where "identity"."users"."email"')) {
     return [...users.values()]
       .filter((row) => row['email'] === params[0])
       .map((row) => ({ id: row['id'] }));
@@ -44,7 +44,7 @@ const database = createFakePostgres((sql, params): FakeResult => {
     const { password_hash: _hash, ...rest } = row;
     return [rest];
   }
-  if (sql.startsWith('insert into "users"')) {
+  if (sql.startsWith('insert into "identity"."users"')) {
     const [id, email, passwordHash, displayName, roles, createdAt, updatedAt] = params;
     users.set(String(id), {
       id,
@@ -113,9 +113,9 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
     expect(body.user.roles).toEqual([Role.User]);
     const statements = database.executed.map((query) => query.sql.split(' (')[0]);
     expect(statements).toEqual([
-      'select "id" from "users" where "users"."email" = $1 limit $2',
-      'insert into "users"',
-      'insert into "sessions"',
+      'select "id" from "identity"."users" where "identity"."users"."email" = $1 limit $2',
+      'insert into "identity"."users"',
+      'insert into "identity"."sessions"',
     ]);
     // The refresh token itself is never stored: the session row carries its sha256.
     const sessionInsert = database.executed[2];

@@ -17,7 +17,7 @@ import { UsersGrpcController } from './presentation/grpc/users-grpc.controller.j
 
 const USER_ID = '01994f6c-1c3a-7b4e-9f00-5d1e2a3b4c5d';
 const database = createFakePostgres((sql) =>
-  sql.includes('from "users" where "users"."id"')
+  sql.includes('from "identity"."users" where "identity"."users"."id"')
     ? [
         {
           id: USER_ID,
@@ -78,7 +78,7 @@ describe('IdentityGrpcModule (identity-service wiring)', () => {
       createdAt: NOW,
       updatedAt: NOW,
     });
-    expect(database.executed.at(-1)?.sql).toContain('where "users"."id" = $1');
+    expect(database.executed.at(-1)?.sql).toContain('where "identity"."users"."id" = $1');
   });
 
   it('hashes with the identity-owned PasswordHasher, configured by the password namespace', async () => {

@@ -1,8 +1,16 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { type INestApplicationContext, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { generateId, isUuidV7, sha256Hex } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
-import { DatabaseModule, DRIZZLE, type DrizzleDB } from '@platform/database';
+import {
+  type DatabaseMigrationSet,
+  DatabaseModule,
+  DRIZZLE,
+  type DrizzleDB,
+  platformMigrations,
+} from '@platform/database';
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import { sql } from 'drizzle-orm';
 import { ClsModule } from 'nestjs-cls';
@@ -12,12 +20,13 @@ import { UserAggregate } from '../../domain/user.aggregate.js';
 import { DrizzleSessionsRepository } from './drizzle-sessions.repository.js';
 import { DrizzleTransactionRunner } from './drizzle-transaction.runner.js';
 import { DrizzleUsersRepository } from './drizzle-users.repository.js';
+import { identityMigrations } from './identity.migrations.js';
 import { type IdentitySchema, identitySchema } from './identity.schema.js';
 
 /*
  * DrizzleUsersRepository / DrizzleSessionsRepository against a real PostgreSQL 18, through the
- * real DatabaseModule, which applies the REAL generated migrations (@platform/database
- * src/migrations) at boot. Opt-in (needs Docker):
+ * real DatabaseModule, which applies the platform set and identity's REAL generated history
+ * (./migrations, schema `identity`) at boot, like identity-service. Opt-in (needs Docker):
  *   INTEGRATION=1 bunx vitest run --project identity:int
  * Set INTEGRATION_DATABASE_URL to use an existing throwaway database instead of testcontainers.
  * Rows use unique emails/search tokens, so reruns against the same database do not collide.
@@ -29,7 +38,11 @@ const IMAGE = 'postgres:18.6-alpine3.24';
   imports: [
     AppConfigModule.forRoot(),
     ClsModule.forRoot({ global: true }),
-    DatabaseModule.forRootAsync({ schema: identitySchema, runMigrations: true }),
+    DatabaseModule.forRootAsync({
+      schema: identitySchema,
+      migrations: [identityMigrations],
+      runMigrations: true,
+    }),
   ],
   providers: [DrizzleUsersRepository, DrizzleSessionsRepository, DrizzleTransactionRunner],
 })
@@ -40,11 +53,33 @@ class IdentityPersistenceModule {}
   imports: [
     AppConfigModule.forRoot(),
     ClsModule.forRoot({ global: true }),
-    DatabaseModule.forRootAsync({ schema: identitySchema, postgres: { max: 1 } }),
+    DatabaseModule.forRootAsync({
+      schema: identitySchema,
+      migrations: [identityMigrations],
+      postgres: { max: 1 },
+    }),
   ],
   providers: [DrizzleUsersRepository],
 })
 class SingleConnectionModule {}
+
+/**
+ * Boots IdentityPersistenceModule. `abortOnError: false`: a failing boot rejects with its own
+ * error, where Nest's default calls process.abort() and kills the Vitest worker before afterAll.
+ */
+const boot = (): Promise<INestApplicationContext> =>
+  NestFactory.createApplicationContext(IdentityPersistenceModule, {
+    logger: false,
+    abortOnError: false,
+  });
+
+/** Entries in a set's drizzle journal: once applied, its bookkeeping table holds one row each. */
+const journalSize = (set: DatabaseMigrationSet): number => {
+  const journal = JSON.parse(readFileSync(join(set.folder, 'meta', '_journal.json'), 'utf8')) as {
+    entries: unknown[];
+  };
+  return journal.entries.length;
+};
 
 const sleep = (ms: number): Promise<'timeout'> =>
   new Promise((resolve) => setTimeout(() => resolve('timeout'), ms));
@@ -69,13 +104,21 @@ const register = (email: string, displayName = 'Integration User'): UserAggregat
 
 describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on PostgreSQL 18', () => {
   let container: StartedPostgreSqlContainer | undefined;
-  let app: INestApplicationContext;
+  let app: INestApplicationContext | undefined;
   let db: DrizzleDB<IdentitySchema>;
   let usersRepo: DrizzleUsersRepository;
   let sessionsRepo: DrizzleSessionsRepository;
   let transaction: DrizzleTransactionRunner;
   const run = generateId().slice(-12);
   const email = (name: string): string => `${name}.${run}@example.com`;
+
+  /** Bookkeeping rows of the platform set (schema `app`) and of identity's set. */
+  const bookkeeping = async (): Promise<{ app: number; identity: number }> => {
+    const [counts] = await db.execute<{ app: number; identity: number }>(sql`
+      select (select count(*)::int from app.__drizzle_migrations) as app,
+        (select count(*)::int from identity.__drizzle_migrations) as identity`);
+    return { app: counts?.app ?? -1, identity: counts?.identity ?? -1 };
+  };
 
   beforeAll(async () => {
     let url = process.env['INTEGRATION_DATABASE_URL'];
@@ -89,7 +132,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     }
     vi.stubEnv('DATABASE_URL', url);
     vi.stubEnv('SERVICE_NAME', 'identity-int');
-    app = await NestFactory.createApplicationContext(IdentityPersistenceModule, { logger: false });
+    app = await boot();
     db = app.get(DRIZZLE);
     usersRepo = app.get(DrizzleUsersRepository);
     sessionsRepo = app.get(DrizzleSessionsRepository);
@@ -102,16 +145,46 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     vi.unstubAllEnvs();
   });
 
-  it('boot applied the initial migration (identity + billing tables, enums)', async () => {
-    const tables = await db.execute<{ table_name: string }>(sql`
-      select table_name from information_schema.tables
-      where table_schema = 'public' order by table_name`);
-    expect(tables.map((row) => row.table_name)).toEqual(
-      expect.arrayContaining(['users', 'sessions', 'payments', 'stripe_events']),
-    );
-    const enums = await db.execute<{ typname: string }>(sql`
-      select typname from pg_type where typname in ('user_role', 'payment_status') order by 1`);
-    expect(enums.map((row) => row.typname)).toEqual(['payment_status', 'user_role']);
+  it("boot applied the platform set and identity's history only, into their own schemas", async () => {
+    const tables = await db.execute<{ name: string }>(sql`
+      select table_schema || '.' || table_name as name from information_schema.tables
+      where table_schema in ('app', 'identity', 'billing')`);
+    // identity-service never creates billing's tables: each app applies only its own sets.
+    expect(tables.map((row) => row.name).toSorted()).toEqual([
+      'app.__drizzle_migrations',
+      'identity.__drizzle_migrations',
+      'identity.sessions',
+      'identity.users',
+    ]);
+    const enums = await db.execute<{ name: string }>(sql`
+      select n.nspname || '.' || t.typname as name
+      from pg_type t join pg_namespace n on n.oid = t.typnamespace
+      where t.typname in ('user_role', 'payment_status') and n.nspname <> 'public'`);
+    expect(enums.map((row) => row.name)).toEqual(['identity.user_role']);
+    const [trgm] = await db.execute<{ schema: string }>(sql`
+      select n.nspname as schema from pg_extension e join pg_namespace n on n.oid = e.extnamespace
+      where e.extname = 'pg_trgm'`);
+    expect(trgm?.schema).toBe('public');
+  });
+
+  it('puts no table and no user_role type in public', async () => {
+    // The platform set's pg_trgm puts functions, operators and types in public, never tables.
+    // Under this spec's role `app`, an unqualified table or enum lands in schema `app` instead
+    // (search_path "$user", public), where the first test's lists catch it.
+    const tables = await db.execute<{ name: string }>(sql`
+      select table_name as name from information_schema.tables where table_schema = 'public'`);
+    expect(tables.map((row) => row.name)).toEqual([]);
+    const types = await db.execute<{ name: string }>(sql`
+      select t.typname as name from pg_type t join pg_namespace n on n.oid = t.typnamespace
+      where n.nspname = 'public' and t.typname = 'user_role'`);
+    expect(types.map((row) => row.name)).toEqual([]);
+  });
+
+  it("records one bookkeeping row per journal entry, in each set's own table", async () => {
+    await expect(bookkeeping()).resolves.toEqual({
+      app: journalSize(platformMigrations),
+      identity: journalSize(identityMigrations),
+    });
   });
 
   it('insert → findById (no hash) / findCredentialsByEmail (hash) / existsByEmail', async () => {
@@ -220,6 +293,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
   it('drizzle queries are server-side prepared statements (DATABASE_PREPARE=true)', async () => {
     const single = await NestFactory.createApplicationContext(SingleConnectionModule, {
       logger: false,
+      abortOnError: false,
     });
     try {
       const repo = single.get(DrizzleUsersRepository);
@@ -234,7 +308,9 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
       const statements = await singleDb.execute<{ statement: string }>(sql`
         select statement from pg_prepared_statements where not from_sql`);
       const texts = statements.map((row) => row.statement);
-      expect(texts).toEqual(expect.arrayContaining([expect.stringMatching(/"users"\."id" = \$1/)]));
+      expect(texts).toEqual(
+        expect.arrayContaining([expect.stringMatching(/"identity"\."users"\."id" = \$1/)]),
+      );
       // Every batch size reuses ONE statement (`= any($1::uuid[])`), not one per `IN` arity.
       expect(texts.filter((text) => text.includes('any($1::uuid[])'))).toHaveLength(1);
     } finally {
@@ -244,7 +320,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
 
   it('search uses the pg_trgm GIN index (users_search_trgm_idx)', async () => {
     const [index] = await db.execute<{ indexdef: string }>(sql`
-      select indexdef from pg_indexes where indexname = 'users_search_trgm_idx'`);
+      select indexdef from pg_indexes where schemaname = 'identity' and indexname = 'users_search_trgm_idx'`);
     expect(index?.indexdef).toMatch(/USING gin \(email gin_trgm_ops, display_name gin_trgm_ops\)/);
 
     const plan = await db.transaction(async (tx) => {
@@ -252,7 +328,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
       await tx.execute(sql`set local enable_seqscan = off`);
       await tx.execute(sql`set local enable_indexscan = off`);
       const rows = await tx.execute<{ 'QUERY PLAN': string }>(sql`
-        explain select id from users
+        explain select id from identity.users
         where email ilike '%zzq%' or display_name ilike '%zzq%'
         order by id desc limit 21`);
       return rows.map((row) => row['QUERY PLAN']).join('\n');
@@ -262,7 +338,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
 
   it('the DB defaults (uuidv7 id, roles) cover raw SQL inserts', async () => {
     const [row] = await db.execute<{ id: string; roles: string }>(sql`
-      insert into users (email, password_hash, display_name)
+      insert into identity.users (email, password_hash, display_name)
       values (${email('raw')}, 'x', 'Raw Insert') returning id, roles::text`);
     expect(isUuidV7(row?.id)).toBe(true);
     expect(row?.roles).toBe('{user}');
@@ -298,7 +374,20 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
       sessionsRepo.create({ ...session, id: generateId(), userId: generateId() }),
     ).rejects.toThrow();
     // ...and deleting the user cascades.
-    await db.execute(sql`delete from users where id = ${user.id}`);
+    await db.execute(sql`delete from identity.users where id = ${user.id}`);
     await expect(sessionsRepo.findById(session.id)).resolves.toBeNull();
+  });
+
+  // Last: it replaces the context (and the repositories) the tests above share.
+  it('a second boot of the same wiring against the same database applies nothing', async () => {
+    const before = await bookkeeping();
+    // A restart: the first context and its pool are gone before the second one boots.
+    const first = app;
+    app = undefined; // afterAll then closes only what is open, even if the boot below throws
+    await first?.close();
+    // Rejects, failing this test, if the restart re-ran a migration (`CREATE TYPE` again).
+    app = await boot();
+    db = app.get(DRIZZLE);
+    await expect(bookkeeping()).resolves.toEqual(before);
   });
 });

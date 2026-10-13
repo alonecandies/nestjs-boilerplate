@@ -21,10 +21,11 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
  * `BillingApiModule.forLocal()`).
  *
  * Expects these global app-level modules: `AppConfigModule`, `CqrsModule.forRoot()`,
- * `DatabaseModule.forRootAsync({ schema: billingSchema })` (DRIZZLE + `@Transactional()`),
- * `KafkaProducerModule.forRootAsync()`, `RedisModule.forRootAsync()` (the purge cron's
- * distributed lock) and — for the cron to be scheduled — `ScheduleModule.forRoot()`. It imports
- * its own Stripe adapter (`StripeModule.forRootAsync()`), so no app imports Stripe.
+ * `DatabaseModule.forRootAsync({ schema: billingSchema, migrations: [billingMigrations] })`
+ * (DRIZZLE + `@Transactional()`), `KafkaProducerModule.forRootAsync()`,
+ * `RedisModule.forRootAsync()` (the purge cron's distributed lock) and — for the cron to be
+ * scheduled — `ScheduleModule.forRoot()`. It imports its own Stripe adapter
+ * (`StripeModule.forRootAsync()`), so no app imports Stripe.
  */
 @Module({
   imports: [ConfigModule.forFeature(stripeConfig), StripeModule.forRootAsync()],

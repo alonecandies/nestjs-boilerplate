@@ -61,7 +61,10 @@ function knownUserRow(): FakeRow {
 
 const postgres = createFakePostgres(identitySchema, (sql, params) => {
   if (sql === 'select 1') return [{ '?column?': 1 }];
-  if (sql.includes('from "users" where "users"."id"') && params[0] === KNOWN_USER_ID) {
+  if (
+    sql.includes('from "identity"."users" where "identity"."users"."id"') &&
+    params[0] === KNOWN_USER_ID
+  ) {
     return [knownUserRow()];
   }
   return []; // unknown ids and e-mails

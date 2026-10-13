@@ -52,9 +52,9 @@ const PERSISTENCE: Provider[] = [
  * `JwtModule`; `auth` + `refreshToken` namespaces).
  * Imported by the monolith (through `IdentityApiModule.forLocal()`) and identity-service
  * (through `IdentityGrpcModule`). Expects the app-level global modules: `CqrsModule.forRoot()`,
- * `DatabaseModule.forRootAsync({ schema: identitySchema })` (Drizzle + transactional CLS plugin),
- * `RedisModule` (denylist, locks), `AuthModule` (the access-token denylist),
- * `KafkaProducerModule` and — for the cron — `ScheduleModule.forRoot()`.
+ * `DatabaseModule.forRootAsync({ schema: identitySchema, migrations: [identityMigrations] })`
+ * (Drizzle + transactional CLS plugin), `RedisModule` (denylist, locks), `AuthModule` (the
+ * access-token denylist), `KafkaProducerModule` and — for the cron — `ScheduleModule.forRoot()`.
  */
 @Module({
   imports: [

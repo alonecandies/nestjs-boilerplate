@@ -48,11 +48,11 @@ abstractions; only `IdentityCoreModule` knows they are Drizzle/Postgres.
 
 The modules assume these app-level (global) modules:
 
-| App              | Required global modules                                                                                                                                                                                                                                                                                                            |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| monolith         | `AppConfigModule`, `ObservabilityModule`, `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema } })`, `RedisModule`, `AppCacheModule`, `AuthModule` (before `AppThrottlerModule`), `AppThrottlerModule`, `KafkaProducerModule`, `AppGraphqlModule`     |
-| gateway          | `AppConfigModule`, `ObservabilityModule`, `RedisModule`, `AppCacheModule`, `AuthModule`, `AppThrottlerModule`, `AppGraphqlModule` (no DB, no CQRS, no Kafka producer needed for identity)                                                                                                                                          |
-| identity-service | `AppConfigModule`, `ObservabilityModule`, `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: identitySchema })`, `RedisModule` (denylist + locks), `KafkaProducerModule`, `AuthModule.forRootAsync({ globalGuards: false })`; `main.ts`: `connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE])` |
+| App              | Required global modules                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| monolith         | `AppConfigModule`, `ObservabilityModule`, `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema }, migrations: [identityMigrations, billingMigrations] })`, `RedisModule`, `AppCacheModule`, `AuthModule` (before `AppThrottlerModule`), `AppThrottlerModule`, `KafkaProducerModule`, `AppGraphqlModule` |
+| gateway          | `AppConfigModule`, `ObservabilityModule`, `RedisModule`, `AppCacheModule`, `AuthModule`, `AppThrottlerModule`, `AppGraphqlModule` (no DB, no CQRS, no Kafka producer needed for identity)                                                                                                                                                                                           |
+| identity-service | `AppConfigModule`, `ObservabilityModule`, `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: identitySchema, migrations: [identityMigrations] })`, `RedisModule` (denylist + locks), `KafkaProducerModule`, `AuthModule.forRootAsync({ globalGuards: false })`; `main.ts`: `connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE])`                |
 
 ```ts
 // apps/monolith/src/app.module.ts
@@ -60,7 +60,10 @@ import { IdentityApiModule, identitySchema } from '@domain/identity';
 imports: [
   CqrsModule.forRoot(),
   ScheduleModule.forRoot(),
-  DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema } }),
+  DatabaseModule.forRootAsync({
+    schema: { ...identitySchema, ...billingSchema },
+    migrations: [identityMigrations, billingMigrations],
+  }),
   RedisModule.forRootAsync(),
   AppCacheModule.forRootAsync(),
   AuthModule.forRootAsync(),
@@ -77,7 +80,7 @@ imports: [, /* edge infra */ IdentityApiModule.forRemote()];
 imports: [
   CqrsModule.forRoot(),
   ScheduleModule.forRoot(),
-  DatabaseModule.forRootAsync({ schema: identitySchema }),
+  DatabaseModule.forRootAsync({ schema: identitySchema, migrations: [identityMigrations] }),
   RedisModule.forRootAsync(),
   KafkaProducerModule.forRootAsync(),
   AuthModule.forRootAsync({ globalGuards: false }),
@@ -203,13 +206,16 @@ close the "committed but not published" window; it is not implemented.
   `refresh_token_hash`, `user_agent`, `ip`, `expires_at`, `revoked_at`, `replaced_by_id`,
   `created_at`; indexes `sessions_user_id_idx`, `sessions_expires_at_idx`.
 - Keyset pagination on `users.id DESC` uses the PK. The `ILIKE '%q%'` search uses
-  `users_search_trgm_idx` (pg_trgm GIN on `email` + `display_name`, migration
-  `0001_users_search_trgm`, which also creates the extension). Trigrams need 3+ characters, so
+  `users_search_trgm_idx` (pg_trgm GIN on `email` + `display_name`; the extension comes from
+  `@platform/database`'s platform set, which always runs first). Trigrams need 3+ characters, so
   every transport rejects a shorter search term (`IDENTITY_LIMITS.SEARCH_MIN_LENGTH`; a blank one
   means "no filter").
 
-The schema file imports only `drizzle-orm` and a dependency-free relative file, so drizzle-kit can
-load it. Migrations are generated centrally in `@platform/database`.
+The tables and the `user_role` enum live in the `identity` Postgres schema (`identityPgSchema`); raw SQL qualifies
+them (`identity.users`). The schema file imports only `drizzle-orm` and a dependency-free relative file, so
+drizzle-kit can load it. Identity owns its migration history: `drizzle.config.ts` generates
+`src/infrastructure/persistence/migrations` (`bun run --filter @domain/identity db:generate`), bookkeeping in
+`identity.__drizzle_migrations`, and `identityMigrations` applies it after the platform set.
 
 ## Configuration
 
@@ -245,7 +251,7 @@ locks, denylist and cache).
 Integration (Docker): `INTEGRATION=1 bunx vitest run --project identity:int` runs
 `infrastructure/persistence/users.repository.int-spec.ts` on PostgreSQL 18 (testcontainers, or an
 existing throwaway database via `INTEGRATION_DATABASE_URL`). It boots the real `DatabaseModule`, which
-applies the generated `@platform/database` migrations, then covers the repositories: the hash-free
+applies the platform set and identity's own history (schema `identity`), then covers the repositories: the hash-free
 projection, `users_email_unique` → `EMAIL_TAKEN`, `findByIds`, keyset + literal ILIKE search,
 `user_role[]` updates, DB defaults, the session FK cascade and compare-and-set rotation, the row
 lock of `findAggregate` and the admin-count lock (a concurrent caller waits), server-side prepared

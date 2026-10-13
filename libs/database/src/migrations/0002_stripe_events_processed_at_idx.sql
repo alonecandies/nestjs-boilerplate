@@ -1,1 +1,0 @@
-CREATE INDEX "stripe_events_processed_at_idx" ON "stripe_events" USING btree ("processed_at");

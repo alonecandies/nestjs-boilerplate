@@ -5,7 +5,8 @@
  *
  * Wiring: `IdentityCoreModule` (handlers, repositories, relay, cron), `IdentityGrpcModule`
  * (identity-service), `IdentityApiModule.forLocal()` (monolith) / `.forRemote()` (gateway).
- * `identitySchema` goes into `DatabaseModule.forRootAsync({ schema })`.
+ * `identitySchema` and the migration set `identityMigrations` go into
+ * `DatabaseModule.forRootAsync({ schema, migrations })`.
  */
 
 // Application: ports, commands/queries (for other in-process callers), mappers.
@@ -68,7 +69,8 @@ export {
 export { IdentityGrpcModule } from './identity-grpc.module.js';
 // Infrastructure: where the gateway dials identity-service (IdentityApiModule.forRemote()).
 export * from './infrastructure/adapters/grpc/identity-grpc-client.config.js';
-// Infrastructure: the Drizzle schema for DatabaseModule / drizzle-kit.
+// Infrastructure: the Drizzle schema and the migration set for DatabaseModule / drizzle-kit.
+export { identityMigrations } from './infrastructure/persistence/identity.migrations.js';
 export {
   type IdentitySchema,
   identitySchema,

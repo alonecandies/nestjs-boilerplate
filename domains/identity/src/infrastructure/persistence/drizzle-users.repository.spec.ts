@@ -53,7 +53,7 @@ describe('DrizzleUsersRepository', () => {
       updatedAt: NOW,
     });
     expect(executed[0]?.sql).toBe(
-      'select "id", "email", "display_name", "roles", "created_at", "updated_at" from "users" where "users"."id" = $1 limit $2',
+      'select "id", "email", "display_name", "roles", "created_at", "updated_at" from "identity"."users" where "identity"."users"."id" = $1 limit $2',
     );
     expect(executed[0]?.params).toEqual([id, 1]);
   });
@@ -69,14 +69,16 @@ describe('DrizzleUsersRepository', () => {
     const { repository, executed } = setup(() => [fullRow(id)]);
     const found = await repository.findCredentialsByEmail('ada@example.com');
     expect(executed[0]?.sql).toContain('"password_hash"');
-    expect(executed[0]?.sql).toContain('where "users"."email" = $1');
+    expect(executed[0]?.sql).toContain('where "identity"."users"."email" = $1');
     expect(found).toMatchObject({ id, email: 'ada@example.com', passwordHash: '$argon2id$h' });
   });
 
   it('existsByEmail selects only the id', async () => {
     const { repository, executed } = setup(() => [{ id: generateId() }]);
     await expect(repository.existsByEmail('ada@example.com')).resolves.toBe(true);
-    expect(executed[0]?.sql).toBe('select "id" from "users" where "users"."email" = $1 limit $2');
+    expect(executed[0]?.sql).toBe(
+      'select "id" from "identity"."users" where "identity"."users"."email" = $1 limit $2',
+    );
   });
 
   it('findByIds: ONE query with ONE array parameter (same SQL for any batch size); none for an empty batch', async () => {
@@ -89,7 +91,7 @@ describe('DrizzleUsersRepository', () => {
     const found = await repository.findByIds([a, b]);
     expect(found.map((user) => user.id)).toEqual([a, b]);
     expect(executed).toHaveLength(1);
-    expect(executed[0]?.sql).toMatch(/where "users"\."id" = any\(\$1::uuid\[\]\)$/);
+    expect(executed[0]?.sql).toMatch(/where "identity"\."users"\."id" = any\(\$1::uuid\[\]\)$/);
     expect(executed[0]?.params).toEqual([[a, b]]);
 
     await repository.findByIds([a, b, generateId()]);
@@ -109,7 +111,7 @@ describe('DrizzleUsersRepository', () => {
 
     const [query] = executed;
     expect(query?.sql).toContain(
-      'where (("users"."email" ilike $1 or "users"."display_name" ilike $2) and "users"."id" < $3) order by "users"."id" desc limit $4',
+      'where (("identity"."users"."email" ilike $1 or "identity"."users"."display_name" ilike $2) and "identity"."users"."id" < $3) order by "identity"."users"."id" desc limit $4',
     );
     expect(query?.params).toEqual(['%50\\%\\_off\\\\%', '%50\\%\\_off\\\\%', cursorId, 3]);
     expect(page.items.map((user) => user.id)).toEqual(ids.slice(0, 2));
@@ -120,7 +122,7 @@ describe('DrizzleUsersRepository', () => {
     const { repository, executed } = setup(() => [row(generateId())]);
     const page = await repository.list({ limit: 20 });
     expect(executed[0]?.sql).toBe(
-      'select "id", "email", "display_name", "roles", "created_at", "updated_at" from "users" order by "users"."id" desc limit $1',
+      'select "id", "email", "display_name", "roles", "created_at", "updated_at" from "identity"."users" order by "identity"."users"."id" desc limit $1',
     );
     expect(page.nextCursor).toBeNull();
   });
@@ -139,7 +141,7 @@ describe('DrizzleUsersRepository', () => {
     const user = newUser();
     await repository.insert(user);
     expect(executed[0]?.sql).toMatch(
-      /^insert into "users" \("id", "email", "password_hash", "display_name", "roles", "created_at", "updated_at"\)/,
+      /^insert into "identity"\."users" \("id", "email", "password_hash", "display_name", "roles", "created_at", "updated_at"\)/,
     );
     expect(executed[0]?.params).toContain(user.id);
     expect(executed[0]?.params).toContain('{"user"}');
@@ -172,11 +174,11 @@ describe('DrizzleUsersRepository', () => {
     await repository.updatePasswordHash(id, '$argon2id$new', NOW);
 
     expect(executed[0]?.sql).toBe(
-      'update "users" set "roles" = $1, "updated_at" = $2 where "users"."id" = $3',
+      'update "identity"."users" set "roles" = $1, "updated_at" = $2 where "identity"."users"."id" = $3',
     );
     expect(executed[0]?.params).toEqual(['{"admin","user"}', NOW.toISOString(), id]);
     expect(executed[1]?.sql).toBe(
-      'update "users" set "password_hash" = $1, "updated_at" = $2 where "users"."id" = $3',
+      'update "identity"."users" set "password_hash" = $1, "updated_at" = $2 where "identity"."users"."id" = $3',
     );
   });
 
@@ -186,7 +188,7 @@ describe('DrizzleUsersRepository', () => {
     const user = await repository.findAggregate(id);
     expect(user).toBeInstanceOf(UserAggregate);
     expect(user?.roles).toEqual(['admin', 'user']);
-    expect(executed[0]?.sql).toMatch(/where "users"\."id" = \$1 limit \$2 for update$/);
+    expect(executed[0]?.sql).toMatch(/where "identity"\."users"\."id" = \$1 limit \$2 for update$/);
   });
 
   it('countAdmins takes the role-change advisory lock first, then counts admins', async () => {
@@ -198,7 +200,9 @@ describe('DrizzleUsersRepository', () => {
       sql: 'select pg_advisory_xact_lock(hashtext($1))',
       params: ['identity:user-roles'],
     });
-    expect(executed[1]?.sql).toBe('select count(*) from "users" where "users"."roles" @> $1');
+    expect(executed[1]?.sql).toBe(
+      'select count(*) from "identity"."users" where "identity"."users"."roles" @> $1',
+    );
     expect(executed[1]?.params).toEqual(['{"admin"}']);
   });
 });

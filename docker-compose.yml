@@ -73,8 +73,9 @@ x-env-identity: &env-identity
 
 x-env-postgres: &env-postgres
   DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}
-  # Advisory-locked, so concurrent replicas/services are safe. Production: run it as a job
-  # (`docker compose run --rm -w /app/libs/database identity-service dist/migrate.js`).
+  # Advisory-locked, so concurrent replicas/services are safe. Each app applies the platform set plus
+  # its own domain sets. Production: run them as a job per app image
+  # (`docker compose run --rm --no-deps identity-service dist/migrate.js`).
   DATABASE_RUN_MIGRATIONS: "true"
 
 x-env-cassandra: &env-cassandra

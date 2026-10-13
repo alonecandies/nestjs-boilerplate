@@ -14,6 +14,7 @@ import postgres, { type Sql } from 'postgres';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   DatabaseHealthIndicator,
+  type DatabaseMigrationSet,
   DatabaseModule,
   DRIZZLE,
   type DrizzleDB,
@@ -23,8 +24,10 @@ import {
   keysetPage,
   keysetWhere,
   MIGRATIONS_ADVISORY_LOCK_ID,
+  platformMigrations,
   runMigrations,
 } from '../src/index.js';
+import { gadgetsMigrations, widgetsMigrations } from './fixtures/fixture-sets.js';
 import { type NewWidget, type Widget, widgets } from './fixtures/widgets.schema.js';
 
 /*
@@ -34,7 +37,6 @@ import { type NewWidget, type Widget, widgets } from './fixtures/widgets.schema.
 
 const IMAGE = 'postgres:18.6-alpine3.24';
 const PACKAGE_ROOT = join(import.meta.dirname, '..');
-const FIXTURE_MIGRATIONS = join(import.meta.dirname, 'fixtures', 'migrations');
 const schema = { widgets };
 type Adapter = DrizzleTransactionalAdapter<typeof schema>;
 
@@ -104,11 +106,12 @@ describe('@platform/database against PostgreSQL 18', () => {
     await admin.unsafe(`create database ${name}`);
     return urlFor(name);
   };
-  const migrationRows = async (url: string): Promise<number> => {
+  const migrationRows = async (url: string, set: DatabaseMigrationSet): Promise<number> => {
     const client = postgres(url, { max: 1, onnotice: noop });
     try {
       const [row] = await client<{ count: number }[]>`
-        select count(*)::int as count from public.__drizzle_migrations`;
+        select count(*)::int as count
+        from ${client(set.migrationsSchema)}.${client(set.migrationsTable)}`;
       return row?.count ?? -1;
     } finally {
       await client.end();
@@ -132,32 +135,40 @@ describe('@platform/database against PostgreSQL 18', () => {
   describe('runMigrations()', () => {
     it('applies each migration exactly once when replicas race, then releases the lock', async () => {
       const url = await createDatabase('race');
+      const migrations = [widgetsMigrations, gadgetsMigrations];
       const runs = await Promise.all(
         [1, 2, 3].map(() =>
-          runMigrations(url, {
-            migrationsFolder: FIXTURE_MIGRATIONS,
-            lockPollIntervalMs: 50,
-            logger: silent,
-          }),
+          runMigrations(url, { migrations, lockPollIntervalMs: 50, logger: silent }),
         ),
       );
-      expect(sumBy(runs, 'applied')).toBe(2);
-      expect(runs.every((run) => run.total === 2)).toBe(true);
-      expect(await migrationRows(url)).toBe(2);
+      expect(sumBy(runs, 'applied')).toBe(3);
+      expect(runs.every((run) => run.total === 3)).toBe(true);
+      expect(await migrationRows(url, widgetsMigrations)).toBe(2);
       const [locks] = await admin<{ count: number }[]>`
         select count(*)::int as count from pg_locks
         where locktype = 'advisory' and objid = ${MIGRATIONS_ADVISORY_LOCK_ID}`;
       expect(locks?.count).toBe(0);
 
-      const rerun = await runMigrations(url, {
-        migrationsFolder: FIXTURE_MIGRATIONS,
+      const rerun = await runMigrations(url, { migrations, logger: silent });
+      expect(rerun).toMatchObject({ applied: 0, total: 3 });
+    });
+
+    it('gives each set its own bookkeeping table, so a set with OLDER timestamps still applies', async () => {
+      const url = await createDatabase('sets');
+      const summary = await runMigrations(url, {
+        migrations: [widgetsMigrations, gadgetsMigrations],
         logger: silent,
       });
-      expect(rerun).toMatchObject({ applied: 0, total: 2 });
+      expect(summary.sets.map(({ name, applied }) => ({ name, applied }))).toEqual([
+        { name: 'widgets', applied: 2 },
+        { name: 'gadgets', applied: 1 },
+      ]);
+      expect(await migrationRows(url, widgetsMigrations)).toBe(2);
+      expect(await migrationRows(url, gadgetsMigrations)).toBe(1);
     });
   });
 
-  describe('migrate.ts CLI', () => {
+  describe("runMigrationsCli() (the body of every app's migrate.ts)", () => {
     const cli = (url: string, ...args: string[]) =>
       execFileAsync(
         process.execPath,
@@ -165,19 +176,29 @@ describe('@platform/database against PostgreSQL 18', () => {
           '--conditions=@repo/source',
           '--import',
           '@swc-node/register/esm-register',
-          'src/migrate.ts',
+          'test/fixtures/migrate.ts',
           ...args,
         ],
         { cwd: PACKAGE_ROOT, env: { ...process.env, DATABASE_URL: url }, timeout: 90_000 },
       );
 
-    it('migrates a database and exits 0; a second run is a no-op', async () => {
+    it('applies the platform set, then the given sets, and exits 0; a second run is a no-op', async () => {
       const url = await createDatabase('cli');
-      const first = await cli(url, '--migrations-folder', 'test/fixtures/migrations');
-      expect(first.stdout).toContain('Done: 2 applied, 2 total');
-      const second = await cli(url, '--migrations-folder', 'test/fixtures/migrations');
-      expect(second.stdout).toContain('Done: 0 applied, 2 total');
-      expect(await migrationRows(url)).toBe(2);
+      const first = await cli(url);
+      expect(first.stdout).toContain('Done: 4 applied, 4 total (platform, widgets, gadgets)');
+      const second = await cli(url);
+      expect(second.stdout).toContain('Done: 0 applied, 4 total (platform, widgets, gadgets)');
+      expect(await migrationRows(url, platformMigrations)).toBe(1);
+      expect(await migrationRows(url, widgetsMigrations)).toBe(2);
+    });
+
+    it('exits 1 on an unknown flag (the removed --migrations-folder)', async () => {
+      await expect(
+        cli('postgres://app:app@127.0.0.1:1/app', '--migrations-folder', 'x'),
+      ).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining('--migrations-folder') as unknown,
+      });
     });
 
     it('exits 1 with the config error for an invalid DATABASE_URL', async () => {
@@ -202,10 +223,13 @@ describe('@platform/database against PostgreSQL 18', () => {
         imports: [
           AppConfigModule.forRoot(),
           ClsModule.forRoot({ global: true }),
+          // The platform set runs first and creates schema `app`. Connected as role `app`, the
+          // default search_path ("$user", public) then starts with `app`, so the unqualified
+          // widgets table lands there; every query below is unqualified too.
           DatabaseModule.forRootAsync({
             schema,
             runMigrations: true,
-            migrationsFolder: FIXTURE_MIGRATIONS,
+            migrations: [widgetsMigrations],
           }),
         ],
         providers: [WidgetsRepository, WidgetsService],

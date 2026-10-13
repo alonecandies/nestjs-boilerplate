@@ -5,7 +5,8 @@
  *
  * Wiring: `BillingCoreModule` (handlers, relay, repositories) + `BillingGrpcModule`
  * (billing-service) or `BillingApiModule.forLocal()` (monolith) / `.forRemote()` (gateway).
- * `billingSchema` goes into `DatabaseModule.forRootAsync({ schema })`.
+ * `billingSchema` and the migration set `billingMigrations` go into
+ * `DatabaseModule.forRootAsync({ schema, migrations })`.
  */
 
 // Application
@@ -29,6 +30,7 @@ export * from './domain/payment-status.enum.js';
 export * from './infrastructure/adapters/grpc/billing-grpc.adapter.js';
 export * from './infrastructure/adapters/grpc/billing-grpc-client.config.js';
 export * from './infrastructure/adapters/local/billing-local.adapter.js';
+export { billingMigrations } from './infrastructure/persistence/billing.migrations.js';
 export {
   type BillingSchema,
   billingSchema,

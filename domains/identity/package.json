@@ -16,7 +16,9 @@
     "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run --config ../../vitest.config.ts --project identity",
-    "clean": "rimraf dist coverage"
+    "clean": "rimraf dist coverage",
+    "db:generate": "drizzle-kit generate",
+    "db:studio": "drizzle-kit studio"
   },
   "dependencies": {
     "@platform/auth": "workspace:*",
@@ -55,6 +57,7 @@
     "@nestjs/testing": "catalog:",
     "@testcontainers/postgresql": "catalog:",
     "@types/lodash-es": "catalog:",
-    "@types/passport-local": "catalog:"
+    "@types/passport-local": "catalog:",
+    "drizzle-kit": "catalog:"
   }
 }

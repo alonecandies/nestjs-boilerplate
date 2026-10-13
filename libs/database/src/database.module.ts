@@ -18,6 +18,7 @@ import type { DrizzleDB, DrizzleSchema } from './drizzle/drizzle.types.js';
 import { DrizzlePostgresTransactionalAdapter } from './drizzle/drizzle-transactional.adapter.js';
 import { InjectDrizzle } from './drizzle/inject-drizzle.decorator.js';
 import { DatabaseHealthIndicator } from './health/database.health.js';
+import { withPlatformMigrations } from './migrator/migration-sets.js';
 
 /** How long `end()` lets in-flight queries finish on shutdown before destroying sockets. */
 const POOL_END_TIMEOUT_SEC = 5;
@@ -67,12 +68,17 @@ const transactionalPlugin = (options: DatabaseTransactionalOptions): ClsPluginTr
  * `TransactionHost` / `@Transactional()`, and `DatabaseHealthIndicator` (register it with
  * `ObservabilityModule.forRoot({ healthContributors: [DatabaseHealthIndicator] })`).
  * Pool settings come from the `database` config namespace; `application_name` = SERVICE_NAME.
+ * With `runMigrations` / DATABASE_RUN_MIGRATIONS, boot applies `platformMigrations` and then
+ * `options.migrations` in order, under one advisory lock, before the pool opens.
  */
 @Module({})
 export class DatabaseModule {
   static forRootAsync<TSchema extends DrizzleSchema>(
     options: DatabaseModuleOptions<TSchema>,
   ): DynamicModule {
+    // Checked when the module is defined, not at the first migrating boot: a set listed twice or a
+    // shared bookkeeping table then fails every test that builds the app module.
+    withPlatformMigrations(options.migrations);
     const transactional = resolveTransactionalOptions(options.transactional);
     return {
       module: DatabaseModule,
