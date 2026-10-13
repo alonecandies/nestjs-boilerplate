@@ -258,6 +258,11 @@ lock of `findAggregate` and the admin-count lock (a concurrent caller waits), se
 statements (`pg_prepared_statements`, one statement for every `findByIds` batch size) and the
 trigram search index (`EXPLAIN` → `Bitmap Index Scan on users_search_trgm_idx`).
 
+Test doubles for the apps: `@domain/identity/testing` exports `createInMemoryIdentityPersistence`
+(in-memory `UsersRepository`/`SessionsRepository` and an inline `TransactionRunner`, used by the
+monolith e2e suite under the real handlers) and `FakeIdentityState`, `FakeAuthPort`, `FakeUsersPort`
+(a fake identity-service behind the gateway's ports). Production code never imports the subpath.
+
 ## Gotchas
 
 - Roles live in the access token: role changes apply after the next refresh (≤ 15 min). Reuse

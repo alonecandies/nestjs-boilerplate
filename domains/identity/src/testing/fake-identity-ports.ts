@@ -1,12 +1,3 @@
-import {
-  AuthPort,
-  EmailAlreadyTakenException,
-  InvalidCredentialsException,
-  InvalidRefreshTokenException,
-  normalizeEmail,
-  type TokenIssuer,
-  UsersPort,
-} from '@domain/identity';
 import type {
   AuthTokens,
   ListUsersRequest,
@@ -18,18 +9,20 @@ import type {
   User,
   UserPage,
 } from '@domain/identity-contracts';
-import { NotificationNotFoundException, NotificationsPort } from '@domain/notifications';
-import type {
-  ListNotificationsRequest,
-  MarkNotificationReadRequest,
-  Notification,
-  NotificationPage,
-} from '@domain/notifications-contracts';
 import { type AccessTokenDenylist, isRole } from '@platform/auth';
 import { EntityNotFoundException, generateId } from '@platform/common';
+import {
+  AuthPort,
+  EmailAlreadyTakenException,
+  InvalidCredentialsException,
+  InvalidRefreshTokenException,
+  normalizeEmail,
+  type TokenIssuer,
+  UsersPort,
+} from '../index.js';
 
 /*
- * In-memory stand-ins for identity- and notifications-service, bound IN PLACE OF the gRPC
+ * In-memory stand-ins for identity-service (`AuthPort`, `UsersPort`), bound IN PLACE OF the gRPC
  * adapters (the ports are the seam). They return the same `@platform/contracts` shapes and throw the
  * same DomainExceptions the gRPC adapters map from status codes + error trailers, so the
  * gateway's presentation, guards, filters and caches run exactly as against the real services.
@@ -162,33 +155,5 @@ export class FakeUsersPort extends UsersPort {
     if (!this.state.users.has(input.id)) throw new EntityNotFoundException('User', input.id);
     this.state.setRoles(input.id, input.roles);
     return this.getUser(input.id);
-  }
-}
-
-/** The fake notifications-service inbox. */
-export class FakeNotificationsPort extends NotificationsPort {
-  readonly inbox = new Map<string, Notification[]>();
-
-  add(notification: Omit<Notification, 'id' | 'read' | 'createdAt'>): Notification {
-    const stored: Notification = {
-      ...notification,
-      id: generateId(),
-      read: false,
-      createdAt: new Date(),
-    };
-    this.inbox.set(stored.userId, [stored, ...(this.inbox.get(stored.userId) ?? [])]);
-    return stored;
-  }
-
-  async list(input: ListNotificationsRequest): Promise<NotificationPage> {
-    return { items: (this.inbox.get(input.userId) ?? []).slice(0, input.limit) };
-  }
-
-  async markRead(input: MarkNotificationReadRequest): Promise<void> {
-    const notification = this.inbox
-      .get(input.userId)
-      ?.find((candidate) => candidate.id === input.notificationId);
-    if (!notification) throw new NotificationNotFoundException(input.notificationId);
-    notification.read = true;
   }
 }

@@ -1,3 +1,5 @@
+import type { CursorPage } from '@platform/common';
+import { decodeIdCursor, keysetPage } from '@platform/database';
 import {
   EmailAlreadyTakenException,
   type ListUsersCriteria,
@@ -11,9 +13,7 @@ import {
   type UserRole,
   type UserSnapshot,
   UsersRepository,
-} from '@domain/identity';
-import type { CursorPage } from '@platform/common';
-import { decodeIdCursor, keysetPage } from '@platform/database';
+} from '../index.js';
 
 /**
  * In-memory implementations of identity's persistence ports (`UsersRepository`,

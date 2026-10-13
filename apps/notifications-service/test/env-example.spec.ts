@@ -13,7 +13,7 @@ import { NOTIFICATIONS_CONSUMER_GROUP } from '../src/notifications-service.const
 describe('notifications-service .env.example', () => {
   const env = parseEnv(readFileSync(join(import.meta.dirname, '..', '.env.example'), 'utf8'));
 
-  it('passes every config namespace', () => {
+  it('passes every config namespace this service loads', () => {
     expect(() => validateAllEnv(env)).not.toThrow();
   });
 

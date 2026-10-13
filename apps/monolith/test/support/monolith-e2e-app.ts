@@ -5,6 +5,7 @@ import {
   TransactionRunner,
   UsersRepository,
 } from '@domain/identity';
+import { createInMemoryIdentityPersistence } from '@domain/identity/testing';
 import { getQueueToken } from '@nestjs/bullmq';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -30,7 +31,6 @@ import {
   createL1OnlyCache,
   type FakeRows,
 } from './fake-infrastructure.js';
-import { createInMemoryIdentityPersistence } from './in-memory-identity.js';
 
 export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
 

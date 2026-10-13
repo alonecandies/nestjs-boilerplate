@@ -1,6 +1,8 @@
 import { BillingPort } from '@domain/billing';
 import { AuthPort, refreshTokenConfig, TokenIssuer, UsersPort } from '@domain/identity';
+import { FakeAuthPort, FakeIdentityState, FakeUsersPort } from '@domain/identity/testing';
 import { NotificationsPort } from '@domain/notifications';
+import { FakeNotificationsPort } from '@domain/notifications/testing';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { JwtService } from '@nestjs/jwt';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -17,12 +19,6 @@ import { createCache } from 'cache-manager';
 import { PubSub } from 'graphql-subscriptions';
 import { GATEWAY_API_DOCS } from '../../src/app.constants.js';
 import { AppModule } from '../../src/app.module.js';
-import {
-  FakeAuthPort,
-  FakeIdentityState,
-  FakeNotificationsPort,
-  FakeUsersPort,
-} from './fake-upstreams.js';
 
 export type GatewayE2e = Awaited<ReturnType<typeof createGatewayE2eApp>>;
 
@@ -75,8 +71,9 @@ export async function createGatewayE2eApp(options: GatewayE2eOptions = {}) {
     .useValue(new PubSub())
     .overrideProvider(StorageService)
     .useValue(storage);
-  if (options.billing !== undefined)
+  if (options.billing !== undefined) {
     builder.overrideProvider(BillingPort).useValue(options.billing);
+  }
 
   const app: NestFastifyApplication = await createFastifyTestApp(
     builder,

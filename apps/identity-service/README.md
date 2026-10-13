@@ -109,8 +109,8 @@ bunx vitest run --project identity-service --project identity-service:e2e
   postgres/redis, 200 while `KAFKA_BROKERS` is unreachable), a problem+json 404, and real gRPC
   round trips from a gateway-style `ClientGrpcProxy`: `GetUser` (Timestamp → `Date`), `NOT_FOUND` + `x-error-code`, `INVALID_ARGUMENT`
   before any SQL, `Login` → `UNAUTHENTICATED`/`INVALID_CREDENTIALS`, breaker stays closed.
-- `test/env-example.spec.ts` validates `.env.example` against every config namespace and pins the
-  ports.
+- `test/env-example.spec.ts` validates `.env.example` against every config namespace this service
+  loads (the platform ones plus identity's `password` and `refreshToken`) and pins the ports.
 
 No Docker is needed. `domains/identity` has the unit tests and a Postgres integration test
 (`INTEGRATION=1`).

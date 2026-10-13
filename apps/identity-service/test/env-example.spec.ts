@@ -14,7 +14,7 @@ import { describe, expect, it } from 'vitest';
 describe('identity-service .env.example', () => {
   const env = parseEnv(readFileSync(join(import.meta.dirname, '..', '.env.example'), 'utf8'));
 
-  it('passes every config namespace', () => {
+  it('passes every config namespace this service loads', () => {
     expect(() => validateAllEnv(env, [passwordConfig, refreshTokenConfig])).not.toThrow();
   });
 

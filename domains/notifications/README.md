@@ -257,6 +257,7 @@ capped.
 - gRPC round trip (`presentation/grpc/notifications-grpc.roundtrip.spec.ts`): `NotificationsGrpcAdapter` ↔ `NotificationsGrpcController` over real loopback gRPC. The remote adapter returns the local mapper's exact shape (map data, Date, `nextPageState` absent on the last page) and keeps `NOTIFICATION_NOT_FOUND` across the hop.
 - WebSocket gateway: handshake middleware (valid, Bearer header, missing, revoked, forged), room join, disconnect at token expiry (and timer cleanup), the revocation sweep, `WsSessionGuard` (TOKEN_REVOKED), `markRead` ack, `ping`, room push.
 - Module composition for every topology: the Core welcome flow end to end (command → aggregate → saga → Kafka), `forLocal()`/`forRemote()` port binding, and the gRPC/Messaging controllers.
+- Test doubles for the apps: `@domain/notifications/testing` exports `FakeNotificationsPort` (an in-memory inbox behind the gateway's `NotificationsPort`).
 
 ## Gotchas
 
