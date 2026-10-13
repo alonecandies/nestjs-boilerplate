@@ -52,7 +52,7 @@ Every requested capability, where it lives and where to see it in use. Paths are
 | class-transformer + class-validator                         | DTOs in `domains/*/src/presentation/http/dto`, global class-validator pipe in `libs/common/src/providers/common-enhancers.ts`                                                                                                                                                                                                                                                                                          | `domains/identity/src/presentation/http/dto/register.dto.ts`, `domains/identity/src/presentation/shared/transforms.ts`                                                                                                 |
 | zod                                                         | env validation `libs/config/src/env`, Kafka envelope `libs/contracts/src/events/envelope.ts`, gRPC payloads `libs/transport/src/grpc/zod-rpc-validation.pipe.ts`, global Standard Schema pipe (`common-enhancers.ts`)                                                                                                                                                                                                  | `domains/notifications/src/presentation/ws/notifications-ws.schemas.ts`                                                                                                                                                |
 | Middlewares                                                 | `libs/common/src/middlewares` (`correlation-id`, `maintenance-mode`), plus helmet, compression, CORS, cookies in `create-http-app.ts`                                                                                                                                                                                                                                                                                  | `MAINTENANCE_MODE=true`; applied in every `apps/*/src/app.module.ts`                                                                                                                                                   |
-| Mailer (BullMQ)                                             | `libs/mailer` (`mail.service.ts` enqueues, `mail.processor.ts` sends, Handlebars `templates/`), queue in `libs/redis/src/queue`                                                                                                                                                                                                                                                                                        | welcome / payment receipt / daily digest mails, caught by Mailpit at `http://localhost:8025`                                                                                                                           |
+| Mailer (BullMQ)                                             | `libs/mailer` (`mail.service.ts` enqueues, `mail.processor.ts` renders and sends, shared layout partials), queue in `libs/redis/src/queue`; a domain that sends mail owns its Handlebars templates, and the app registers their folders (`templateDirs`)                                                                                                                                                               | notifications' welcome / payment receipt / daily digest mails (`domains/notifications/src/infrastructure/mail/templates`), caught by Mailpit at `http://localhost:8025`                                                |
 | Scheduling                                                  | `@nestjs/schedule`; `*.cron.ts` in `domains/*/src/infrastructure/scheduling`, made single-run across replicas by `@WithLock()`                                                                                                                                                                                                                                                                                         | `domains/identity/src/infrastructure/scheduling/purge-expired-sessions.cron.ts`, `domains/notifications/src/infrastructure/scheduling/daily-digest.cron.ts`                                                            |
 | File storage: S3 + GCS                                      | `libs/storage/src/drivers/{s3,gcs}-storage.driver.ts` (`STORAGE_DRIVER=s3\|gcs`), `domains/files` (upload, presigned URLs, access policy)                                                                                                                                                                                                                                                                              | `POST /v1/files`, `POST /v1/files/presigned-uploads`; RustFS (S3) and fake-gcs in compose                                                                                                                              |
 | Stripe                                                      | `domains/billing` (Stripe adapter in `src/infrastructure/stripe`, checkout sessions, signed webhook, idempotent event log)                                                                                                                                                                                                                                                                                             | `POST /v1/billing/checkout-sessions`, `POST /v1/billing/webhooks/stripe`                                                                                                                                               |
@@ -60,7 +60,7 @@ Every requested capability, where it lives and where to see it in use. Paths are
 | lodash                                                      | `lodash-es` named imports across the codebase (ESM). CommonJS `lodash` is kept only in `libs/mailer/package.json`, because `@nestjs-modules/mailer`'s Handlebars adapter `require`s it without declaring it                                                                                                                                                                                                            | `libs/bootstrap/src/docs/setup-api-docs.ts` (`omitBy`, `once`)                                                                                                                                                         |
 | rimraf                                                      | every package's `clean` script, root `clean`                                                                                                                                                                                                                                                                                                                                                                           | `bun run clean`                                                                                                                                                                                                        |
 | Lerna                                                       | `lerna.json` (independent versions, Conventional Commits), Nx 23 task runner and cache (`nx.json`)                                                                                                                                                                                                                                                                                                                     | `bun run build`, `bun run release`; [docs/RELEASING.md](docs/RELEASING.md)                                                                                                                                             |
-| Tests                                                       | Vitest 5 (`vitest.config.ts`, one project per package): `*.spec.ts` unit, `apps/*/test/*.e2e-spec.ts` e2e, `*.int-spec.ts` integration (`INTEGRATION=1`; Testcontainers Postgres, live Redis); helpers in `libs/testing`                                                                                                                                                                                               | `bun run test`; 217 test files / 1693 tests at the time of writing; [docs/TESTING.md](docs/TESTING.md)                                                                                                                 |
+| Tests                                                       | Vitest 5 (`vitest.config.ts`, one project per package): `*.spec.ts` unit, `apps/*/test/*.e2e-spec.ts` e2e, `*.int-spec.ts` integration (`INTEGRATION=1`; Testcontainers Postgres, live Redis); helpers in `libs/testing`                                                                                                                                                                                               | `bun run test`; 252 test files / 1869 tests at the time of writing; [docs/TESTING.md](docs/TESTING.md)                                                                                                                 |
 | API specification page                                      | `libs/bootstrap/src/docs/setup-api-docs.ts`                                                                                                                                                                                                                                                                                                                                                                            | Scalar at `/docs`, OpenAPI at `/openapi.json` and `/openapi.yaml`, Apollo Sandbox at `/graphql`; [docs/API.md](docs/API.md)                                                                                            |
 
 ### Version policy and deliberate pins
@@ -109,11 +109,11 @@ Then open:
 
 Notes:
 
-- `bun run db:migrate` runs the monolith's `src/migrate.ts` (the platform set, then identity's and billing's
-  histories) against the `DATABASE_URL` of the root `.env`. It is
-  optional on a dev machine: every app `.env.example` that owns Postgres tables sets `DATABASE_RUN_MIGRATIONS=true`, so
-  the app applies pending migrations at boot under an advisory lock. Use the explicit step in CI or when you set
-  `DATABASE_RUN_MIGRATIONS=false`. Cassandra tables have no root script: they are created at boot
+- `bun run db:migrate` runs the monolith's migrate entry (`apps/monolith/src/migrate.ts`) against the `DATABASE_URL` of
+  the root `.env`: the platform migration set first, then identity's and billing's, each in its own Postgres schema with
+  its own history. It is optional on a dev machine: every app `.env.example` that owns Postgres tables sets
+  `DATABASE_RUN_MIGRATIONS=true`, so the app applies its sets at boot under an advisory lock. Use the explicit step in CI
+  or when you set `DATABASE_RUN_MIGRATIONS=false`. Cassandra tables have no root script: they are created at boot
   (`CASSANDRA_RUN_MIGRATIONS=true`).
 - **A local database from before the per-domain schemas.** Identity's and billing's tables now live in the
   `identity` and `billing` Postgres schemas, each with its own history starting at `0000_init`; nothing moves the old
@@ -285,7 +285,8 @@ flowchart LR
   gateway --> redis & s3
 ```
 
-Inside each domain package the dependencies point inward:
+Inside each domain package the dependencies point inward (two documented exceptions, identity's `security/` and billing's
+`stripe/` adapters, are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#3-layers)):
 
 ```mermaid
 flowchart LR
@@ -307,33 +308,35 @@ each with a `.dlq`) travel in a zod-validated envelope defined in `libs/contract
 ├── apps/                          # deployables (@app/*): thin main.ts + app.module.ts, e2e tests
 │   ├── monolith/                  # every domain in one process: REST + GraphQL + Socket.IO + Kafka consumers
 │   ├── gateway/                   # microservices edge: REST + GraphQL + Socket.IO → gRPC clients
-│   ├── identity-service/          # gRPC AuthService + UsersService (Postgres)
+│   ├── identity-service/          # gRPC AuthService + UsersService (Postgres schema identity)
 │   ├── notifications-service/     # gRPC NotificationsService + Kafka consumers + mail (Cassandra)
-│   └── billing-service/           # gRPC BillingService (Postgres, Stripe)
-├── domains/                       # business code: one package per bounded context (@domain/*)
-│   ├── identity/                  # users, sessions, roles           ┐
-│   ├── notifications/             # inbox, sagas, WS gateway, digest │ hexagonal + CQRS:
-│   ├── billing/                   # Stripe checkout, payments        │ domain / application /
-│   └── files/                     # uploads, presigned URLs          ┘ infrastructure / presentation
+│   └── billing-service/           # gRPC BillingService (Postgres schema billing, Stripe)
+├── domains/                       # business code: one package per bounded context (@domain/*), hexagonal + CQRS
+│   ├── identity/                  # users, sessions, roles, token issuance, password hashing (schema identity)
+│   │   └── contracts/             # @domain/identity-contracts: proto, gRPC package spec, events
+│   ├── notifications/             # inbox, sagas, WS gateway, digest, mail templates (Cassandra)
+│   │   └── contracts/             # @domain/notifications-contracts
+│   ├── billing/                   # Stripe checkout + webhooks, Stripe adapter, payments (schema billing)
+│   │   └── contracts/             # @domain/billing-contracts
+│   └── files/                     # uploads, presigned URLs (edge-only)
 ├── libs/                          # platform + shared kernel, no business rules (@platform/*)
-│   ├── auth/                      # JWT strategy, guards, RBAC, access-token denylist
+│   ├── auth/                      # JWT verification, guards, RBAC, access-token denylist
 │   ├── bootstrap/                 # createHttpApp (Fastify), API docs, cluster mode, process handlers
 │   ├── cassandra/                 # client, CQL migrator, paging, health
 │   ├── common/                    # errors, filters, pipes, interceptors, middlewares, utils (uuid v7)
-│   ├── config/                    # zod-validated env → typed config namespaces
-│   ├── contracts/                 # .proto + ts-proto types, Kafka topics and event schemas
-│   ├── database/                  # Drizzle + postgres.js, migration runner + platform set, keyset pagination
+│   ├── config/                    # zod-validated env → typed platform config namespaces
+│   ├── contracts/                 # Kafka envelope + headers, GrpcPackageSpec/EventContract, buf config
+│   ├── database/                  # Drizzle + postgres.js, migration sets, keyset pagination
 │   ├── graphql/                   # Apollo config, complexity, DataLoader, pub/sub, scalars
-│   ├── mailer/                    # BullMQ mail queue + processor, Handlebars templates
+│   ├── mailer/                    # BullMQ mail queue + processor over the registered template folders
 │   ├── observability/             # pino, Prometheus, OpenTelemetry, @nestjs/observe, health
-│   ├── payments/                  # Stripe client wrapper
 │   ├── redis/                     # Redis client, cache, throttler, locks, queues, Socket.IO adapter
 │   ├── storage/                   # S3 + GCS drivers behind one StorageService
 │   ├── testing/                   # test app factory, mocks
 │   └── transport/                 # gRPC (clients, server, errors, health) + Kafka (producer, consumers, DLQ)
 ├── docker/                        # service configs: postgres, cassandra, kafka, storage, prometheus, grafana, alloy, k6
 ├── docs/                          # the guides linked below
-├── scripts/                       # setup-env.mjs, check-env-example.mjs, docker/ (image assembly, infra checks)
+├── scripts/                       # setup-env.mjs, check-env-example.mjs, check-boundaries.mjs, docker/ (image assembly, infra checks)
 ├── patches/                       # bun patchedDependencies (kafkajs)
 ├── .github/workflows/ci.yml       # CI: verify, integration, image (per app), compose
 ├── .husky/                        # pre-commit (lint-staged), commit-msg (commitlint)
@@ -365,37 +368,39 @@ Every infra port can be moved with a `*_HOST_PORT` variable (compose-only sectio
 
 ## Root scripts
 
-| Script                                                               | What it does                                                                                                               |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `setup`                                                              | `bun install`, then `setup:env`                                                                                            |
-| `setup:env`                                                          | copy every missing `.env` from its `.env.example` (root + `apps/*`), never overwrites                                      |
-| `prepare`                                                            | install the Husky hooks (runs automatically after `bun install`)                                                           |
-| `dev` / `dev:monolith`                                               | monolith on the host in watch mode (TS sources, no build)                                                                  |
-| `dev:microservices`                                                  | gateway + identity + notifications + billing, in parallel (`concurrently`)                                                 |
-| `dev:gateway` / `dev:identity` / `dev:notifications` / `dev:billing` | one app on the host                                                                                                        |
-| `build`                                                              | SWC build of every package (`lerna run build`, Nx-cached, topological)                                                     |
-| `build:affected`                                                     | build only the packages changed since `origin/master`                                                                      |
-| `typecheck`                                                          | one `tsc -p tsconfig.json` over the whole repository                                                                       |
-| `test` / `test:watch`                                                | Vitest unit + e2e (fakes at the network edges)                                                                             |
-| `test:e2e`                                                           | only the `*:e2e` Vitest projects                                                                                           |
-| `test:cov`                                                           | tests with V8 coverage                                                                                                     |
-| `test:int`                                                           | integration tests (`*.int-spec.ts`, `INTEGRATION=1`), needs Docker                                                         |
-| `lint` / `lint:fix`                                                  | Biome + ESLint (check / fix)                                                                                               |
-| `format`                                                             | Biome format + Prettier (Markdown, YAML)                                                                                   |
-| `check`                                                              | the CI quality gate: `biome ci`, ESLint with `--max-warnings=0`, `prettier --check`, `tsc`                                 |
-| `commit`                                                             | Conventional Commit prompt (Commitizen + `@commitlint/cz-commitlint`)                                                      |
-| `release`                                                            | `lerna version --conventional-commits` (bump + changelog + tag, no push)                                                   |
-| `clean`                                                              | every package's `clean` (rimraf `dist`, `coverage`) + Nx/ESLint caches                                                     |
-| `graph`                                                              | Nx project graph                                                                                                           |
-| `proto:gen`                                                          | regenerate the ts-proto types in `domains/*/contracts/src/generated`                                                       |
-| `db:generate`                                                        | generate each domain's Drizzle migration from its schema (`drizzle-kit generate` in `domains/identity`, `domains/billing`) |
-| `db:migrate`                                                         | apply the platform set, then identity's and billing's histories (the monolith's `migrate.ts`, root `.env` `DATABASE_URL`)  |
-| `db:studio`                                                          | Drizzle Studio per domain (identity on port 4983, billing on 4984)                                                         |
-| `docker:infra`                                                       | `docker compose up -d --wait` (infrastructure only)                                                                        |
-| `docker:monolith` / `docker:microservices`                           | build and start a topology in containers                                                                                   |
-| `docker:observability`                                               | Prometheus, Grafana, Jaeger, exporters                                                                                     |
-| `docker:down`                                                        | stop every profile (`docker compose --profile '*' down`)                                                                   |
-| `loadtest`                                                           | k6 load test against the running topology (report in `docker/k6/reports/`)                                                 |
+| Script                                                               | What it does                                                                                                                                          |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `setup`                                                              | `bun install`, then `setup:env`                                                                                                                       |
+| `setup:env`                                                          | copy every missing `.env` from its `.env.example` (root + `apps/*`), never overwrites                                                                 |
+| `prepare`                                                            | install the Husky hooks (runs automatically after `bun install`)                                                                                      |
+| `dev` / `dev:monolith`                                               | monolith on the host in watch mode (TS sources, no build)                                                                                             |
+| `dev:microservices`                                                  | gateway + identity + notifications + billing, in parallel (`concurrently`)                                                                            |
+| `dev:gateway` / `dev:identity` / `dev:notifications` / `dev:billing` | one app on the host                                                                                                                                   |
+| `build`                                                              | SWC build of every package (`lerna run build`, Nx-cached, topological)                                                                                |
+| `build:affected`                                                     | build only the packages changed since `origin/master`                                                                                                 |
+| `typecheck`                                                          | one `tsc -p tsconfig.json` over the whole repository                                                                                                  |
+| `test` / `test:watch`                                                | Vitest unit + e2e (fakes at the network edges)                                                                                                        |
+| `test:e2e`                                                           | only the `*:e2e` Vitest projects                                                                                                                      |
+| `test:cov`                                                           | tests with V8 coverage                                                                                                                                |
+| `test:int`                                                           | integration tests (`*.int-spec.ts`, `INTEGRATION=1`), needs Docker                                                                                    |
+| `lint` / `lint:fix`                                                  | Biome + ESLint (check / fix)                                                                                                                          |
+| `format`                                                             | Biome format + Prettier (Markdown, YAML)                                                                                                              |
+| `check`                                                              | the CI quality gate: `biome ci`, ESLint with `--max-warnings=0`, `prettier --check`, `tsc`, the layer boundary check (`scripts/check-boundaries.mjs`) |
+| `check:boundaries`                                                   | the layer boundary check alone                                                                                                                        |
+| `commit`                                                             | Conventional Commit prompt (Commitizen + `@commitlint/cz-commitlint`)                                                                                 |
+| `release`                                                            | `lerna version --conventional-commits` (bump + changelog + tag, no push)                                                                              |
+| `clean`                                                              | every package's `clean` (rimraf `dist`, `coverage`) + Nx/ESLint caches                                                                                |
+| `graph`                                                              | Nx project graph                                                                                                                                      |
+| `proto:gen`                                                          | regenerate the ts-proto types of every contracts package (`domains/*/contracts/src/generated`)                                                        |
+| `proto:lint`                                                         | buf lint of every contracts package's protos                                                                                                          |
+| `db:generate`                                                        | generate the Drizzle migrations of every Postgres domain (`domains/*/drizzle.config.ts`)                                                              |
+| `db:migrate`                                                         | apply the platform, identity and billing migration sets (root `.env` `DATABASE_URL`)                                                                  |
+| `db:studio`                                                          | Drizzle Studio per domain (identity on port 4983, billing on 4984)                                                                                    |
+| `docker:infra`                                                       | `docker compose up -d --wait` (infrastructure only)                                                                                                   |
+| `docker:monolith` / `docker:microservices`                           | build and start a topology in containers                                                                                                              |
+| `docker:observability`                                               | Prometheus, Grafana, Jaeger, exporters                                                                                                                |
+| `docker:down`                                                        | stop every profile (`docker compose --profile '*' down`)                                                                                              |
+| `loadtest`                                                           | k6 load test against the running topology (report in `docker/k6/reports/`)                                                                            |
 
 Run any of them with `bun run <script>`.
 
@@ -421,6 +426,9 @@ Package READMEs:
   [billing-service](apps/billing-service/README.md).
 - Domain libs: [identity](domains/identity/README.md), [notifications](domains/notifications/README.md),
   [billing](domains/billing/README.md), [files](domains/files/README.md).
+- Contracts packages: [identity-contracts](domains/identity/contracts/README.md),
+  [notifications-contracts](domains/notifications/contracts/README.md),
+  [billing-contracts](domains/billing/contracts/README.md).
 - Infrastructure libs: [auth](libs/auth/README.md), [bootstrap](libs/bootstrap/README.md),
   [cassandra](libs/cassandra/README.md), [common](libs/common/README.md), [config](libs/config/README.md),
   [contracts](libs/contracts/README.md), [database](libs/database/README.md), [graphql](libs/graphql/README.md),

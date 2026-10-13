@@ -37,17 +37,20 @@ repositories.
 
 ## Vitest projects
 
-[`vitest.config.ts`](../vitest.config.ts) builds the project list itself. Every folder under `apps/`
-or `libs/` that has a `package.json` becomes a project:
+[`vitest.config.ts`](../vitest.config.ts) builds the project list itself. Every folder under `apps/`,
+`domains/` or `libs/` that has a `package.json` becomes a project, and so does a domain's nested contracts
+package (`<domain>-contracts`):
 
-| Project name | Created for                                    | Includes                                        | Timeouts (test / hook) |
-| ------------ | ---------------------------------------------- | ----------------------------------------------- | ---------------------- |
-| `<name>`     | every lib and app (unit)                       | `src/**/*.spec.ts`, `test/**/*.spec.ts`         | Vitest defaults        |
-| `<app>:e2e`  | every app                                      | `test/**/*.e2e-spec.ts`                         | 30 s / 60 s            |
-| `<name>:int` | every lib and app, **only if `INTEGRATION=1`** | `src/**/*.int-spec.ts`, `test/**/*.int-spec.ts` | 120 s / 180 s          |
+| Project name | Created for                                | Includes                                        | Timeouts (test / hook) |
+| ------------ | ------------------------------------------ | ----------------------------------------------- | ---------------------- |
+| `<name>`     | every package (unit)                       | `src/**/*.spec.ts`, `test/**/*.spec.ts`         | Vitest defaults        |
+| `<app>:e2e`  | every app                                  | `test/**/*.e2e-spec.ts`                         | 30 s / 60 s            |
+| `<name>:int` | every package, **only if `INTEGRATION=1`** | `src/**/*.int-spec.ts`, `test/**/*.int-spec.ts` | 120 s / 180 s          |
 
-Examples: `redis`, `identity`, `gateway`, `gateway:e2e`, `identity-service:e2e`, `database:int`,
-`identity:int`. A new package gets its projects automatically. You do not need to register it.
+Examples: `redis`, `identity`, `billing-contracts`, `gateway`, `gateway:e2e`, `identity-service:e2e`,
+`database:int`, `identity:int`. A new package gets its projects automatically. You do not need to register it.
+One more project, `scripts`, runs the specs of the repo tooling (`scripts/**/*.spec.ts`, such as the layer boundary
+check).
 
 Shared settings: `globals: true`, `setupFiles: ['reflect-metadata']`, `pool: 'forks'` (Nest apps hold
 sockets and timers, and forks isolate them most reliably), `clearMocks` and `restoreMocks`. Coverage
@@ -69,10 +72,11 @@ uses the `v8` provider over `apps/*/src/**`, `domains/*/src/**` and `libs/*/src/
 | `INTEGRATION=1 bunx vitest run --project identity:int` | one integration project                                                                                  |
 | `bun run --filter @app/gateway test` / `test:e2e`      | the package's own script (`vitest run --config ../../vitest.config.ts --project gateway[:e2e]`)          |
 
-`bun run check` is the static gate (Biome, ESLint, Prettier, `tsc`). It does **not** run tests, so run
-`bun run test` too before pushing. CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs
-`bun run test` in the quality job and `bun run test:int` in a separate `integration` job. That job has
-Docker for testcontainers and a `redis` service container with `REDIS_URL=redis://localhost:6379`.
+`bun run check` is the static gate (Biome, ESLint, Prettier, `tsc`, the layer boundary check). It does
+**not** run tests, so run `bun run test` too before pushing. CI
+([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs `bun run test` in the quality job and
+`bun run test:int` in a separate `integration` job. That job has Docker for testcontainers and a `redis`
+service container with `REDIS_URL=redis://localhost:6379`.
 
 ## Writing tests
 
@@ -94,11 +98,10 @@ Docker for testcontainers and a `redis` service container with `REDIS_URL=redis:
 | `FakeIdentityState`, `FakeAuthPort`, `FakeUsersPort`                                                               | `@domain/identity/testing`                                      | A fake identity-service behind the gateway's `AuthPort`/`UsersPort`                                                                                                                       |
 | `FakeNotificationsPort`                                                                                            | `@domain/notifications/testing`                                 | A fake notifications-service inbox behind the gateway's `NotificationsPort`                                                                                                               |
 | `graphql(query, variables?, headers?)`, `bearer(token)`, `expectProblem(res, status, code?)`, `multipartFile(...)` | `apps/{gateway,monolith}/test/support/http.ts`                  | `inject()` options for `POST /graphql`, an `Authorization` header, an RFC 9457 problem assertion (it also checks that `requestId` matches the header), and a multipart upload body        |
-
-| `startServiceTestApp(builder, { grpc, kafka? })`, `freePort()` | `apps/<service>/test/support/` | Boots a service like `main.ts` does (HTTP wiring, gRPC server on a real loopback port, optional in-process Kafka consumer) |
-| `createFakeSql` | `libs/database/test/fake-sql.ts` | postgres.js `Sql` stand-in for module wiring, `@Transactional()`, health and migration-lock unit tests |
-| `createFakeCassandraClient` | `libs/cassandra/test/fake-cassandra.ts` | cassandra-driver stand-in for the Cassandra lib's unit tests |
-| `InMemoryPaymentsRepository`, `InMemoryStripeEventsRepository` | `domains/billing/test/billing-test.utils.ts` | Billing repositories in memory |
+| `startServiceTestApp(builder, { grpc, kafka? })`, `freePort()`                                                     | `apps/<service>/test/support/`                                  | Boots a service like `main.ts` does (HTTP wiring, gRPC server on a real loopback port, optional in-process Kafka consumer)                                                                |
+| `createFakeSql`                                                                                                    | `libs/database/test/fake-sql.ts`                                | postgres.js `Sql` stand-in for module wiring, `@Transactional()`, health and migration-lock unit tests                                                                                    |
+| `createFakeCassandraClient`                                                                                        | `libs/cassandra/test/fake-cassandra.ts`                         | cassandra-driver stand-in for the Cassandra lib's unit tests                                                                                                                              |
+| `InMemoryPaymentsRepository`, `InMemoryStripeEventsRepository`                                                     | `domains/billing/test/billing-test.utils.ts`                    | Billing repositories in memory                                                                                                                                                            |
 
 `@platform/testing` depends on no other workspace package and imports `vitest`. Import it only from spec
 files and `test/**`. `@platform/redis/testing` is a separate subpath for the same reason: production code

@@ -1,6 +1,6 @@
 // Parses every app container's resolved docker-compose environment through the config namespaces
-// the app loads, platform AND domain-owned, the way each process would at boot (compose runs
-// NODE_ENV=production, so the production guards apply). Needs `bun run build` first.
+// the app loads (platform, domain-owned and app-local), the way each process would at boot (compose
+// runs NODE_ENV=production, so the production guards apply). Needs `bun run build` first.
 //
 //   docker compose --profile microservices --profile monolith config --format json > "$TMPDIR/compose.json"
 //   node docs/superpowers/plans/2026-10-12-b1-ownership-moves/artifacts/checkpoint/compose-guards.mjs "$TMPDIR/compose.json"
@@ -61,7 +61,12 @@ const DOMAIN = {
   ],
   files: ['domains/files/dist/files.config.js', 'filesConfig'],
 };
-for (const [name, [path, exportName]] of Object.entries(DOMAIN)) {
+// App-local namespaces (KAFKA_GROUP_ID of the hybrid consumer), read by that app's main.ts.
+const APP = {
+  monolith: ['apps/monolith/dist/monolith.config.js', 'monolithConfig'],
+  gateway: ['apps/gateway/dist/gateway.config.js', 'gatewayConfig'],
+};
+for (const [name, [path, exportName]] of Object.entries({ ...DOMAIN, ...APP })) {
   NAMESPACES[name] = await load(path, exportName);
 }
 for (const [name, namespace] of Object.entries(NAMESPACES)) {
@@ -87,6 +92,7 @@ const LOADS = {
     'password',
     'refreshToken',
     'files',
+    'monolith',
   ],
   gateway: [
     'app',
@@ -103,6 +109,7 @@ const LOADS = {
     'identityGrpcClient',
     'billingGrpcClient',
     'notificationsGrpcClient',
+    'gateway',
   ],
   'identity-service': [
     'app',

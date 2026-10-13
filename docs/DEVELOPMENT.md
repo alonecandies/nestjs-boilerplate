@@ -43,11 +43,11 @@ bun run dev                 # monolith on http://localhost:3000
 
 ## Environment files
 
-| File                      | Holds                                                                                                                                                                          | Committed?      |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------- |
-| `.env.example` (root)     | Every variable that `@platform/config` reads, grouped by config namespace, with its default. A bottom section holds the docker-compose-only knobs (`DOCKER_*`, `*_HOST_PORT`). | yes             |
-| `apps/<app>/.env.example` | Per-app overrides only: `SERVICE_NAME`, `PORT`, `GRPC_URL`, `KAFKA_GROUP_ID`, `DATABASE_RUN_MIGRATIONS`, `CASSANDRA_RUN_MIGRATIONS`, and the gateway's upstream `*_GRPC_URL`.  | yes             |
-| `.env`, `apps/<app>/.env` | Your local copies, created by `bun run setup:env`.                                                                                                                             | no (gitignored) |
+| File                      | Holds                                                                                                                                                                                  | Committed?      |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------- |
+| `.env.example` (root)     | Every variable of the platform and domain config namespaces, grouped by namespace, with its default. A bottom section holds the docker-compose-only knobs (`DOCKER_*`, `*_HOST_PORT`). | yes             |
+| `apps/<app>/.env.example` | Per-app overrides only: `SERVICE_NAME`, `PORT`, `GRPC_URL`, `KAFKA_GROUP_ID`, `DATABASE_RUN_MIGRATIONS`, `CASSANDRA_RUN_MIGRATIONS`, and the gateway's upstream `*_GRPC_URL`.          | yes             |
+| `.env`, `apps/<app>/.env` | Your local copies, created by `bun run setup:env`.                                                                                                                                     | no (gitignored) |
 
 **Load order.** Each app's `dev`/`start` script passes `--env-file-if-exists=../../.env --env-file-if-exists=.env`. Real environment variables win, then `apps/<app>/.env`, then the root `.env`. The defaults in `libs/config` apply last, and they already target the local compose infra, so the apps can boot with no `.env` at all.
 
@@ -89,22 +89,22 @@ Typecheck, tests and `dev` therefore all read `domains/*/src` and `libs/*/src` d
 
 Everyday commands:
 
-| Command                                    | Purpose                                                                                                      |
-| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------ |
-| `bun run typecheck`                        | One `tsc -p tsconfig.json` over every app and lib, from sources.                                             |
-| `bun run test` / `bun run test:watch`      | Vitest. Each folder under `apps/` and `libs/` is a project named after it.                                   |
-| `bunx vitest run --project billing`        | One project (`<app>:e2e` for an app's e2e suite).                                                            |
-| `bun run lint` / `bun run lint:fix`        | Biome, then type-aware ESLint.                                                                               |
-| `bun run format`                           | Biome format + Prettier (Markdown/YAML).                                                                     |
-| `bun run check`                            | The full static gate CI runs: `biome ci`, `eslint --max-warnings=0`, `prettier --check`, `tsc`.              |
-| `bun run build` / `bun run build:affected` | SWC build of every package (Lerna + Nx, cached and topological) or only those changed since `origin/master`. |
-| `bun run graph`                            | Nx project graph.                                                                                            |
+| Command                                    | Purpose                                                                                                                                                         |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bun run typecheck`                        | One `tsc -p tsconfig.json` over every app and lib, from sources.                                                                                                |
+| `bun run test` / `bun run test:watch`      | Vitest. Each package under `apps/`, `domains/` and `libs/` is a project named after its folder (`<domain>-contracts` for a contracts package).                  |
+| `bunx vitest run --project billing`        | One project (`<app>:e2e` for an app's e2e suite).                                                                                                               |
+| `bun run lint` / `bun run lint:fix`        | Biome, then type-aware ESLint.                                                                                                                                  |
+| `bun run format`                           | Biome format + Prettier (Markdown/YAML).                                                                                                                        |
+| `bun run check`                            | The full static gate CI runs: `biome ci`, `eslint --max-warnings=0`, `prettier --check`, `tsc`, then the layer boundary check (`scripts/check-boundaries.mjs`). |
+| `bun run build` / `bun run build:affected` | SWC build of every package (Lerna + Nx, cached and topological) or only those changed since `origin/master`.                                                    |
+| `bun run graph`                            | Nx project graph.                                                                                                                                               |
 
 More about tests in [TESTING.md](TESTING.md).
 
 ## Running each topology locally
 
-One codebase can run as two topologies. The REST, GraphQL and Socket.IO surface is the same in both. Only the binding of the domain ports changes: `XApiModule.forLocal()` uses the in-process CQRS buses, and `XApiModule.forRemote()` uses gRPC clients. See [ARCHITECTURE.md](ARCHITECTURE.md).
+One codebase can run as two topologies. The REST, GraphQL and Socket.IO surface is the same in both. Only the binding of the domain ports changes: `XApiModule.forLocal()` uses the in-process CQRS buses, and `XApiModule.forRemote()` uses gRPC clients to call the services. See [ARCHITECTURE.md](ARCHITECTURE.md).
 
 | Topology      | Command                                                                                                      | Processes (HTTP / gRPC)                                                                                                        |
 | ------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
@@ -187,15 +187,25 @@ What to expect:
 
 ## Guide: add a new domain module
 
-Example: an `orders` bounded context that starts inside the monolith. Use `domains/billing` as the template. It is the smallest domain package that has every layer.
+Example: an `orders` bounded context that starts inside the monolith. Use `domains/billing` as the template: it is the smallest domain with every layer, a contracts package, its own config namespace and its own Postgres migration set.
 
-**1. Create the package** `domains/orders/`:
+**1. Create the domain package and its contracts package:**
 
 ```text
 domains/orders/
-├── package.json        # copy domains/billing/package.json and rename
-├── tsconfig.json       # copy domains/billing/tsconfig.json as is
+├── package.json          # copy domains/billing/package.json, rename to @domain/orders
+├── tsconfig.json         # copy domains/billing/tsconfig.json as is
+├── drizzle.config.ts     # copy domains/billing/drizzle.config.ts (schema file, out folder, orders.__drizzle_migrations)
 ├── README.md
+├── contracts/            # @domain/orders-contracts: the context's published language
+│   ├── package.json      # copy domains/billing/contracts/package.json, rename to @domain/orders-contracts
+│   ├── tsconfig.json     # copy domains/billing/contracts/tsconfig.json (extends ../../../tsconfig.base.json)
+│   └── src/
+│       ├── index.ts                  # barrel: ORDERS_GRPC_PACKAGE, ORDER_PLACED_EVENT, payload types
+│       ├── proto/orders/v1/orders.proto
+│       ├── generated/orders/v1/      # ts-proto output (bun run proto:gen), never edited by hand
+│       ├── grpc/                     # ORDERS_GRPC_PACKAGE: GrpcPackageSpec
+│       └── events/                   # ORDER_PLACED_EVENT: EventContract<OrderPlacedPayload>
 └── src/
     ├── index.ts                    # the public API (barrel)
     ├── orders.constants.ts         # error codes, tokens
@@ -203,35 +213,44 @@ domains/orders/
     ├── orders-api.module.ts        # forLocal() / forRemote()
     ├── domain/                     # aggregates, domain events, errors (DomainException subclasses)
     ├── application/                # commands/, queries/ (+ handlers), ports/ (abstract classes), repositories/ (abstract)
-    ├── infrastructure/             # persistence/ (*.schema.ts, Drizzle repositories), adapters/local|grpc, scheduling/
-    └── presentation/               # http/ (controllers + DTOs), graphql/ (resolvers, models), grpc/, kafka consumers
+    ├── infrastructure/             # persistence/ (*.schema.ts, migrations/), adapters/local|grpc, scheduling/
+    ├── presentation/               # http/ (controllers + DTOs), graphql/ (resolvers, models), grpc/, kafka consumers
+    └── testing/                    # optional ./testing subpath: in-memory fakes for the apps' e2e suites
 ```
 
-In `package.json`, keep the `exports` block exactly as in billing (the `@repo/source` → `src`, `default` → `dist` pair) and the same `build`/`typecheck`/`test`/`clean` scripts. Change only the Vitest project name: `--project orders`. **Declare every import**: `@platform/*` (and, sparingly, other `@domain/*`) packages as `workspace:*`, third-party packages as `catalog:` (the versions live once, in the root `catalog`). Biome's `noUndeclaredDependencies` rule fails otherwise.
+In both `package.json` files, keep the `exports` block exactly as in billing (the `@repo/source` → `src`, `default` → `dist` pair; add a `./testing` entry like `@domain/identity`'s only if you ship fakes) and the same scripts: `build`/`typecheck`/`test`/`clean`, plus `db:generate`/`db:studio` in the domain (pick a free studio port) and `proto:gen`/`proto:lint` in the contracts package. Rename the Vitest projects (`--project orders`, `--project orders-contracts`). **Declare every import**: `@platform/*` and `@domain/<x>-contracts` packages as `workspace:*`, third-party packages as `catalog:` (the versions live once, in the root `catalog`). A domain depends on another domain **only through its contracts package** (`@domain/identity-contracts`, never `@domain/identity`). A contracts package depends only on `@platform/contracts` and third-party packages. A `./testing` subpath (`@domain/identity/testing`, `@platform/auth/testing`) is imported only by specs and `test/` code. `scripts/check-boundaries.mjs` fails otherwise, and Biome's `noUndeclaredDependencies` catches undeclared imports.
 
-**2. Link it.** Add `"@domain/orders": "workspace:*"` to the consuming app's `dependencies` (`apps/monolith/package.json`), then run `bun install`. Nothing else needs registering:
+**2. Link it.** Add `"@domain/orders": "workspace:*"` to the consuming app's `dependencies` (`apps/monolith/package.json`). Add `"@domain/orders-contracts": "workspace:*"` to every package that calls the context over gRPC or consumes its events. Run `bun install`. Nothing else needs registering:
 
-- Vitest discovers every folder that has a `package.json`.
-- The root `tsconfig.json` includes `domains/*/src`.
-- `scripts/check-boundaries.mjs` checks the name (`@domain/orders`) and that no platform package imports it.
-- Lerna/Nx find the package through the workspaces.
-- commitlint accepts `orders` as a scope automatically.
+- the workspaces cover `domains/*` and `domains/*/contracts`;
+- Vitest makes both packages projects (`orders`, `orders-contracts`), and the root `tsconfig.json` includes both;
+- `scripts/check-boundaries.mjs` checks the names (`@domain/orders`, `@domain/orders-contracts`) and the rules above;
+- Lerna/Nx find the packages through the workspaces;
+- commitlint accepts `orders` and `orders-contracts` as scopes.
 
-**3. Write the layers** in dependency order: domain → application → infrastructure → presentation.
+**3. Write the contracts.**
+
+- Put `orders.proto` under `contracts/src/proto/orders/v1/` and run `bun run proto:gen`. The `proto:gen`/`proto:lint` scripts you copied run buf from the package folder with the shared policy and ts-proto template of `libs/contracts` (`buf.yaml`, `buf.gen.yaml`); the root `proto:gen` and `proto:lint` run them in every `domains/*/contracts` package.
+- Export the gRPC package spec (`ORDERS_GRPC_PACKAGE`, a `GrpcPackageSpec`) and one `EventContract` per Kafka topic (`ORDER_PLACED_EVENT = defineEventContract('orders.order-placed.v1', orderPlacedPayload)`).
+- `@platform/transport` takes these values, never names: `GrpcClientsModule.register({ spec, url })`, `connectGrpcServer(app, [ORDERS_GRPC_PACKAGE])`, `@KafkaEventPattern(ORDER_PLACED_EVENT)`, `new ParseEventEnvelopePipe(ORDER_PLACED_EVENT)` and `KafkaProducer.publish(ORDER_PLACED_EVENT, payload, { key })`.
+- Add the topic and its `.dlq` to `docker/kafka/topics.txt` (see [Kafka topics](#kafka-topics)).
+
+**4. Write the layers** in dependency order: domain → application → infrastructure → presentation.
 
 - Commands and queries extend `Command<T>` / `Query<T>` from `@nestjs/cqrs`. Handlers live next to them.
-- Presentation depends **only on ports** (`abstract class OrdersPort`). Ports return `@platform/contracts` types, so a local adapter and a later gRPC adapter return identical shapes.
+- Presentation depends **only on ports** (`abstract class OrdersPort`). Ports return the contracts package's types, so a local adapter and a later gRPC adapter return identical shapes.
 - Errors are subclasses of the concrete `DomainException`s in `@platform/common` (see `domains/billing/src/domain/billing.errors.ts`).
 - Integration events are published after the transaction commits, from a relay (see `domains/billing/src/application/relays/payment-succeeded.relay.ts`). There is no transactional outbox yet (a known follow-up).
 
-**4. Persistence (Postgres).** Put the tables in `src/infrastructure/persistence/orders.schema.ts`, declared on an exported `ordersPgSchema = pgSchema('orders')`, and export an `ordersSchema` object, then:
+**5. Persistence (Postgres).** The context owns a Postgres schema and a migration history:
 
-- copy `domains/billing/drizzle.config.ts` (`schemaFilter: ['orders']`, `migrations: { schema: 'orders', table: '__drizzle_migrations' }`), the package's `db:generate` / `db:studio` scripts (pick a free studio port) and its `drizzle-kit` devDependency,
-- export `ordersMigrations` from `src/infrastructure/persistence/orders.migrations.ts` (copy `billing.migrations.ts` and its spec),
-- run `bun run --filter @domain/orders db:generate --name init`, change the first statement of the new `0000_init.sql` to `CREATE SCHEMA IF NOT EXISTS "orders";`, and commit the SQL plus `meta/` (see [migrations](#database-migrations-postgres--drizzle)),
-- merge the schema into the app's Drizzle schema (`const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema, ...ordersSchema }` in `apps/monolith/src/app.module.ts`) and add `ordersMigrations` to the app's `src/database.migrations.ts`.
+- declare the tables in `src/infrastructure/persistence/orders.schema.ts` on an exported `ordersPgSchema = pgSchema('orders')`, and export an `ordersSchema` object;
+- `domains/orders/drizzle.config.ts` (step 1) reads that schema file, writes to `src/infrastructure/persistence/migrations` and records applied files in `orders.__drizzle_migrations` (`schemaFilter: ['orders']`, `migrations: { schema: 'orders', table: '__drizzle_migrations' }`). The separate table matters: drizzle applies only the files newer than the **last** row of its table, so a shared table would let one domain skip another's files;
+- export `ordersMigrations`, a `DatabaseMigrationSet`, from `src/infrastructure/persistence/orders.migrations.ts` (copy `billing.migrations.ts` and its spec);
+- start the history with `bun run --filter @domain/orders db:generate --name init`, change the first statement of the new `0000_init.sql` to `CREATE SCHEMA IF NOT EXISTS "orders";`, and commit the SQL plus the `meta/` snapshot. Later changes: `bun run db:generate` (it runs every domain's config);
+- in each app that owns the data, merge the schema (`const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema, ...ordersSchema }` in `apps/monolith/src/app.module.ts`) and add `ordersMigrations` to the app's `src/database.migrations.ts`. `DatabaseModule.forRootAsync({ schema, migrations: DATABASE_MIGRATIONS })` and `src/migrate.ts` both read that list: the platform set always runs first, then the sets in array order, under one advisory lock. See [migrations](#database-migrations-postgres--drizzle).
 
-**5. Modules.** Copy the billing pattern:
+**6. Modules.** Copy the billing pattern:
 
 ```ts
 // orders-core.module.ts: what the owning process runs
@@ -259,11 +278,19 @@ export class OrdersApiModule {
 }
 ```
 
-**6. Wire the app.** Import `OrdersApiModule.forLocal()` in `apps/monolith/src/app.module.ts`, after `AuthModule`, `AppThrottlerModule` and `AppGraphqlModule` (the import-order comment there explains why). Never import the Core module a second time.
+**7. Wire the app.** Import `OrdersApiModule.forLocal()` in `apps/monolith/src/app.module.ts`, after `AuthModule`, `AppThrottlerModule` and `AppGraphqlModule` (the import-order comment there explains why). Never import the Core module a second time.
 
-**7. Configuration.** If the context needs settings, add a namespace `libs/config/src/namespaces/orders.config.ts` with `defineConfigNamespace('orders', schema)`. Register it in `CONFIG_NAMESPACES` (`libs/config/src/all-config.ts`) and export it from `libs/config/src/index.ts`. Document the variables in `.env.example`. Consume it with `ConfigModule.forFeature(ordersConfig)` + `@Inject(ordersConfig.KEY)`.
+**8. Configuration.** If the context needs settings, define its own namespace inside the domain, next to the code that reads it. Billing's `stripe.config.ts` is the model: `defineConfigNamespace('orders', schema)` from `@platform/config`, where the schema is a `z.object({ ... })` keyed by the env var names.
 
-**8. Tests.** Write unit specs next to the code (`*.spec.ts`) and an e2e spec in `apps/monolith/test/*.e2e-spec.ts`, using fakes at the network edges. See [TESTING.md](TESTING.md). Then run `bun run check && bun run test`.
+- Load it with `ConfigModule.forFeature(ordersConfig)` in the module that injects it, and inject it with `@Inject(ordersConfig.KEY)`.
+- Document every variable in the root `.env.example`. `node scripts/check-env-example.mjs` reads `libs/config/src/namespaces` and every `domains/*/src/**/*.config.ts`, and fails on an undocumented or unknown variable.
+- A service's `test/env-example.spec.ts` passes the domain namespaces it loads: `validateAllEnv(env, [ordersConfig])`.
+- `@platform/config` registers platform namespaces only: a domain namespace is always loaded and validated explicitly, as above.
+- Add a row to the "Which app loads which namespace" table in [CONFIGURATION.md](CONFIGURATION.md#which-app-loads-which-namespace).
+
+**9. Mail (optional).** A context that sends mail owns its templates: a `templates/` folder of `*.hbs` files exported as `ORDERS_MAIL_TEMPLATES_DIR`, a template → context map and a builder (`defineMail<OrdersMailContextMap>()`). The app that delivers the mails registers the folder: `AppMailerModule.forRootAsync({ templateDirs: [NOTIFICATIONS_MAIL_TEMPLATES_DIR, ORDERS_MAIL_TEMPLATES_DIR] })`. A template name must be unique across the registered folders (boot fails on a duplicate). See `domains/notifications/src/application/mail/notifications-mail.ts` and `domains/notifications/src/infrastructure/mail/`.
+
+**10. Tests.** Write unit specs next to the code (`*.spec.ts`) and an e2e spec in `apps/monolith/test/*.e2e-spec.ts`, using fakes at the network edges. If the apps need the context faked, export the fakes from a `./testing` subpath (see `@domain/identity/testing`). See [TESTING.md](TESTING.md). Then run `bun run check && bun run test`.
 
 ## Guide: extract a module into a new microservice
 
@@ -272,7 +299,7 @@ This continues the `orders` example: the context moves into its own `orders-serv
 ```mermaid
 flowchart LR
   P[proto in domains/orders/contracts] --> G[bun run proto:gen]
-  G --> R[ORDERS_GRPC_PACKAGE + client URL]
+  G --> R[ORDERS_GRPC_PACKAGE + orders client config]
   R --> S[OrdersGrpcModule + controller]
   S --> A[apps/orders-service]
   R --> C[OrdersGrpcAdapter + forRemote]
@@ -280,37 +307,25 @@ flowchart LR
   A --> D[compose service + CI image matrix]
 ```
 
-**1. Contract.** Create the contracts package `domains/orders/contracts` (`@domain/orders-contracts`; copy `domains/billing/contracts`) and write `src/proto/orders/v1/orders.proto` (`package orders.v1; service OrdersService { … }`). Timestamps use `google.protobuf.Timestamp`, and int64 fields arrive as decimal strings. Then:
+**1. Contract.** Add the service to `domains/orders/contracts/src/proto/orders/v1/orders.proto` (`package orders.v1; service OrdersService { … }`). Timestamps use `google.protobuf.Timestamp`, and int64 fields arrive as decimal strings. Then:
 
 ```bash
 bun run proto:lint   # buf lint of every contracts package (STANDARD minus two response-naming rules)
 bun run proto:gen    # buf generate + libs/contracts/scripts/proto-esm-fix.mjs (needs `node` on PATH)
 ```
 
-Commit `domains/orders/contracts/src/generated/**`. CI regenerates it and fails on any diff. Re-export it from `domains/orders/contracts/src/index.ts` in both forms, flat and as a namespace (in case a later `v2` reuses message names):
+Commit `domains/orders/contracts/src/generated/**`. CI regenerates it and fails on any diff. The contracts barrel re-exports the generated module flat and as a namespace (`export * as ordersV1 from './generated/orders/v1/orders.pb.js'`), in case a later `v2` reuses message names.
 
-```ts
-export * from './generated/orders/v1/orders.pb.js';
-export * as ordersV1 from './generated/orders/v1/orders.pb.js';
-```
+**2. Package spec.** Export `ORDERS_GRPC_PACKAGE` (a `GrpcPackageSpec`, in `contracts/src/grpc/orders.grpc-package.ts`) from the contracts package, the way `@domain/billing-contracts` exports `BILLING_GRPC_PACKAGE`. It holds:
 
-**2. Export the package spec** `ORDERS_GRPC_PACKAGE` from `domains/orders/contracts/src/grpc/orders.grpc-package.ts` (and the barrel). Value-import the service name from the generated module, so it cannot drift from the proto and the Timestamp ↔ Date wrapper is always registered:
+- the proto package, folder and path;
+- the service names, value-imported from the generated module so they cannot drift from the proto (the import also registers the Timestamp ↔ Date wrapper);
+- the client token;
+- the idempotent methods, which are retried on `UNAVAILABLE`.
 
-```ts
-export const ORDERS_GRPC_PACKAGE: GrpcPackageSpec = {
-  package: 'orders.v1',
-  protoDir: join(import.meta.dirname, '..', 'proto'),
-  protoPath: ['orders/v1/orders.proto'],
-  services: [ORDERS_SERVICE_NAME],
-  clientToken: 'ORDERS_GRPC_CLIENT',
-  // Only methods that are safe to run twice: these are retried on UNAVAILABLE.
-  idempotentMethods: { [ORDERS_SERVICE_NAME]: ['GetOrder', 'ListOrders'] },
-};
-```
+**3. Client target.** Add `domains/orders/src/infrastructure/adapters/grpc/orders-grpc-client.config.ts`, an `ordersGrpcClientConfig` namespace reading `ORDERS_GRPC_URL` (copy `billing-grpc-client.config.ts`). `OrdersApiModule.forRemote()` reads it, as `BillingApiModule.forRemote()` reads billing's. Document the variable in the root `.env.example` and in `apps/gateway/.env.example`.
 
-**3. Client target.** Add `domains/orders/src/infrastructure/adapters/grpc/orders-grpc-client.config.ts`, a copy of `billing-grpc-client.config.ts` with the namespace `ordersGrpcClient` and `ORDERS_GRPC_URL: zStr('localhost:50054')`. `OrdersApiModule.forRemote()` passes `ordersGrpcClientConfig.parse().url` as the `url` of `GrpcClientsModule.register()`. Document the variable in the root `.env.example` and in `apps/gateway/.env.example`.
-
-**4. Server side, in the lib.** Add `OrdersGrpcController` under `presentation/grpc/` and `OrdersGrpcModule` (imports `OrdersCoreModule` and declares the controller):
+**4. Server side, in the domain.** Add `OrdersGrpcController` under `presentation/grpc/` and `OrdersGrpcModule` (imports `OrdersCoreModule` and declares the controller). The generated types come from `@domain/orders-contracts`:
 
 ```ts
 @GrpcController() // Controller + DomainException → gRPC status filter + per-call CLS context
@@ -325,30 +340,27 @@ export class OrdersGrpcController implements OrdersServiceController {
 }
 ```
 
-**5. Client side, in the lib.** Add `OrdersGrpcAdapter implements OrdersPort` under `infrastructure/adapters/grpc/`. Base it on `BillingGrpcAdapter`: inject `ORDERS_GRPC_PACKAGE.clientToken`, `grpcConfig.KEY` and `GrpcCircuitBreakers`, and wrap every call in `grpcCall(…, { timeoutMs, operation, breaker })`. proto-loader decodes absent message fields as `null`, so normalise them the way `normalizePayment` does. Then add the remote binding:
-
-```ts
-static forRemote(): DynamicModule {
-  const target = { spec: ORDERS_GRPC_PACKAGE, url: grpcConfig.parse().clients.orders };
-  return { module: OrdersApiModule, imports: [GrpcClientsModule.register(target)],
-    controllers: [OrdersController], providers: [OrdersResolver, { provide: OrdersPort, useClass: OrdersGrpcAdapter }], exports: [OrdersPort] };
-}
-```
+**5. Client side, in the domain.** Add `OrdersGrpcAdapter implements OrdersPort` under `infrastructure/adapters/grpc/`, based on `BillingGrpcAdapter`: inject the client registered for `ORDERS_GRPC_PACKAGE` (`@Inject(ORDERS_GRPC_PACKAGE.clientToken)`), `grpcConfig.KEY` and `GrpcCircuitBreakers`, and wrap every call in `grpcCall(…, { timeoutMs, operation, breaker })`. proto-loader decodes absent message fields as `null`, so normalise them the way `normalizePayment` does. Add the remote binding by copying `BillingApiModule.forRemote()`: `GrpcClientsModule.register({ spec: ORDERS_GRPC_PACKAGE, url: ordersGrpcClientConfig.parse().url })`.
 
 **6. The service app.** Copy `apps/billing-service` to `apps/orders-service` and change:
 
 - `package.json`: `"name": "@app/orders-service"`, the Vitest project names in `test`/`test:e2e`, and the dependencies (`@domain/orders`, …).
 - `.env.example`: `SERVICE_NAME=orders-service`, `PORT=3004`, `GRPC_URL=0.0.0.0:50054`, `KAFKA_GROUP_ID=orders-service`, `DATABASE_RUN_MIGRATIONS=true`.
 - `src/instrument.ts`: `startTracing({ serviceName: 'orders-service' })`.
-- `src/app.module.ts`: the global modules the core needs (`AppConfigModule.forRoot()`, `ConfigModule.forFeature(grpcConfig)`, `ObservabilityModule.forRoot({ healthContributors })`, `CqrsModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: ordersSchema, migrations: DATABASE_MIGRATIONS })`, `RedisModule.forRootAsync()`, `KafkaProducerModule.forRootAsync()`), then `OrdersGrpcModule` and `provideCommonEnhancersAsync(…)`.
-- `src/database.migrations.ts` (`DATABASE_MIGRATIONS = [ordersMigrations]`), `src/migrate.ts` (`import 'reflect-metadata'`, then `await runMigrationsCli(DATABASE_MIGRATIONS)`) and the `db:migrate` / `db:migrate:dev` scripts: copy them from `apps/billing-service`.
+- `src/app.module.ts`: the global modules the core needs, then `OrdersGrpcModule` and `provideCommonEnhancersAsync(…)`. The global modules are `AppConfigModule.forRoot()`, `ConfigModule.forFeature(grpcConfig)`, `ObservabilityModule.forRoot({ healthContributors })`, `CqrsModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: ordersSchema, migrations: DATABASE_MIGRATIONS })`, `RedisModule.forRootAsync()` and `KafkaProducerModule.forRootAsync()`.
+- `src/database.migrations.ts` (`DATABASE_MIGRATIONS = [ordersMigrations]`) and `src/migrate.ts`, the release-job migration CLI (`import 'reflect-metadata'`, then `await runMigrationsCli(DATABASE_MIGRATIONS)`), with the `db:migrate` / `db:migrate:dev` scripts: copy them from `apps/billing-service`. The image build fails when an app with a `src/migrate.ts` has no `dist/migrate.js`.
 - `src/main.ts`: `connectGrpcServer(app, [ORDERS_GRPC_PACKAGE])` after `createServiceApp(AppModule)` and before `app.startAllMicroservices()` and `listen(app)`.
 
 Add root scripts by copying `dev:billing` (`"dev:orders": "bun run setup:env && bun run --filter @app/orders-service dev"`), and append the service to `dev:microservices`.
 
 **7. Gateway.** Replace or add `OrdersApiModule.forRemote()` in `apps/gateway/src/app.module.ts`, and add `@domain/orders` to the gateway's dependencies.
 
-**8. Docker and CI.** The `Dockerfile` needs no change (`docker build --build-arg APP=orders-service .`). Add an `orders-service` service with `profiles: [microservices]` to `docker-compose.yml` (copy `billing-service`), set `ORDERS_GRPC_URL: orders-service:50051` on the gateway (inside the network every service binds `GRPC_URL: 0.0.0.0:50051`; only the published host port differs, for example `127.0.0.1:${ORDERS_GRPC_HOST_PORT:-50054}:50051`), and add `orders-service` to the `image` job matrix in `.github/workflows/ci.yml`.
+**8. Docker and CI.**
+
+- The `Dockerfile` needs no change (`docker build --build-arg APP=orders-service .`).
+- Add an `orders-service` service with `profiles: [microservices]` to `docker-compose.yml` (copy `billing-service`).
+- Set `ORDERS_GRPC_URL: orders-service:50051` on the gateway. Inside the network every service binds `GRPC_URL: 0.0.0.0:50051`; only the published host port differs, for example `127.0.0.1:${ORDERS_GRPC_HOST_PORT:-50054}:50051`.
+- Add `orders-service` to the `image` job matrix in `.github/workflows/ci.yml`.
 
 Known limits that apply to extracted services:
 
@@ -400,7 +412,7 @@ export class EmailAlreadyTakenException extends DomainConflictException {
 }
 ```
 
-**Configuration.** Read settings only through `@platform/config` namespaces: `ConfigModule.forFeature(mailConfig)` + `@Inject(mailConfig.KEY) cfg: MailConfig`. Each namespace is a zod schema (`defineConfigNamespace`), validated at boot. `process.env` is not used outside `libs/config`, with documented exceptions: `drizzle.config.ts`, OTel bootstrap and test setup.
+**Configuration.** Read settings only through config namespaces, a platform one from `@platform/config` or your domain's own built with `defineConfigNamespace`: `ConfigModule.forFeature(mailConfig)` + `@Inject(mailConfig.KEY) cfg: MailConfig`. Each namespace is a zod schema (`defineConfigNamespace`), validated at boot. `process.env` is not used outside `libs/config`, with documented exceptions: `drizzle.config.ts`, OTel bootstrap and test setup.
 
 **Other rules.**
 
@@ -489,8 +501,8 @@ Check the provisioning file against the contracts with `bun run build && node sc
 
 Producing and consuming:
 
-- Producers call `KafkaProducer.publish(topic, payload, { key })`. Key by user id so each user's events stay in order.
-- Consumers are `@KafkaConsumerController()` classes with `@KafkaEventPattern(topic)` and `ParseEventEnvelopePipe(topic)`.
+- Producers call `KafkaProducer.publish(contract, payload, { key })` with the producer's contract (`PAYMENT_SUCCEEDED_EVENT`). Key by user id so each user's events stay in order.
+- Consumers are `@KafkaConsumerController()` classes with `@KafkaEventPattern(contract)` and `new ParseEventEnvelopePipe(contract)`, the contract imported from the producer's contracts package.
 - The consumer group comes from `KAFKA_GROUP_ID` in the app's `.env`. Use a distinct group per consuming service, and the same group for every replica of that service.
 - A breaking payload change ships as a new `.v2` topic, consumed side by side with `.v1`. Additive changes stay on the same topic.
 - Dead letters can be replayed with `node --env-file=.env libs/transport/scripts/kafka-dlq-replay.mjs <topic> [--dry-run]` (after `bun run build`).
