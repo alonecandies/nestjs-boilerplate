@@ -56,12 +56,13 @@ StorageModule.forRootAsync({ driver: 'memory' });
 
 ## Environment (`storage` namespace)
 
-`STORAGE_DRIVER` (`s3`|`gcs`, default `s3`), `STORAGE_SIGNED_URL_TTL_SEC` (900),
-`S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT` (defaults to
-`S3_ENDPOINT`), `S3_REGION`, `S3_FORCE_PATH_STYLE`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`,
-`S3_BUCKET`, `GCS_PROJECT_ID`, `GCS_BUCKET`, `GCS_API_ENDPOINT`, `GCS_KEY_FILE`.
+`STORAGE_DRIVER` (`s3`|`gcs`, default `s3`), `STORAGE_SIGNED_URL_TTL_SEC` (900), `S3_ENDPOINT`,
+`S3_PUBLIC_ENDPOINT` (defaults to `S3_ENDPOINT`), `S3_REGION`, `S3_FORCE_PATH_STYLE`,
+`S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_BUCKET`, `GCS_PROJECT_ID`, `GCS_BUCKET`,
+`GCS_API_ENDPOINT`, `GCS_KEY_FILE`.
 
-Upload limits (`STORAGE_MAX_UPLOAD_BYTES`, `STORAGE_MAX_CONCURRENT_UPLOADS`) are not part of `storage`: the domain that accepts uploads defines them in its own namespace.
+Upload limits (`STORAGE_MAX_UPLOAD_BYTES`, `STORAGE_MAX_CONCURRENT_UPLOADS`) are not part of
+`storage`: the domain that accepts uploads defines them in its own namespace.
 
 ## Gotchas
 

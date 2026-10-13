@@ -107,7 +107,7 @@ No Kafka consumer group is needed: identity only **produces** `identity.user-reg
 - **Register**: normalise email → pre-check `existsByEmail` (skips argon2 for duplicates) →
   argon2id hash → `UserAggregate.register()` → **one transaction** (`TransactionRunner` on
   `TransactionHost`): insert user + first session → commit → `UserRegisteredEvent` →
-  `UserRegisteredRelay` → `KafkaProducer.publish(USER_REGISTERED, …, { key: userId, eventId })`.
+  `UserRegisteredRelay` → `KafkaProducer.publish(USER_REGISTERED_EVENT, …, { key: userId, eventId })`.
   The unique constraint still decides under races (`23505` → `EMAIL_TAKEN`).
 - **Login** (REST: `LoginRequestGuard` → `LocalAuthGuard` → `LocalStrategy` → `AuthPort.login`;
   GraphQL: `AuthPort.login`): unknown email burns `verifyDummy` (equal timing), wrong password and
@@ -118,7 +118,7 @@ No Kafka consumer group is needed: identity only **produces** `identity.user-reg
   secret from identity's `refreshToken` namespace, `jti` = session id), and verifies refresh
   tokens. The `sessions` row stores `sha256(refreshToken)` only.
 - **Refresh rotation**: verify the JWT (no DB access for garbage) → one transaction:
-  `UPDATE sessions SET revoked_at, replaced_by_id WHERE id AND user_id AND refresh_token_hash AND
+  `UPDATE identity.sessions SET revoked_at, replaced_by_id WHERE id AND user_id AND refresh_token_hash AND
 revoked_at IS NULL AND expires_at > now RETURNING id` (compare-and-set: concurrent refreshes of
   one token cannot both win) + insert the successor. If nothing matched: a genuine token whose
   session is already revoked is **reuse** → every session of the user is revoked (outside the
@@ -129,7 +129,7 @@ revoked_at IS NULL AND expires_at > now RETURNING id` (compare-and-set: concurre
   user queue, so `previousRoles` in the event is always what was really replaced) →
   `UserAggregate.changeRoles()` (known roles, non-empty, an admin cannot drop their own admin
   role) → on a demotion, `pg_advisory_xact_lock` + count admins (two concurrent demotions cannot
-  leave zero admins → 422 `CANNOT_REMOVE_LAST_ADMIN`) → `UPDATE users SET roles` → after commit,
+  leave zero admins → 422 `CANNOT_REMOVE_LAST_ADMIN`) → `UPDATE identity.users SET roles` → after commit,
   `UserRolesChangedEvent` (audit log). Takes effect on the user's next refresh (≤ access TTL). The edge cache entry `user:{id}` is evicted.
 - **Purge**: hourly `PurgeExpiredSessionsCron` (`@WithLock('identity:purge-sessions', 60 s)`)
   deletes expired sessions in batches of 5 000. Revoked-but-unexpired sessions are kept on

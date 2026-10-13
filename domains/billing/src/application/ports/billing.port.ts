@@ -11,7 +11,7 @@ import type {
  * The billing API as seen by presentation code (REST controller, GraphQL resolver). Bound to
  * `BillingLocalAdapter` (CQRS buses, monolith) or `BillingGrpcAdapter` (gateway →
  * billing-service) by `BillingApiModule.forLocal()` / `.forRemote()`. Both return the same
- * `@platform/contracts` shapes, so presentation code cannot tell them apart.
+ * `@domain/billing-contracts` shapes, so presentation code cannot tell them apart.
  */
 export abstract class BillingPort {
   /** Stripe Checkout Session + `pending` payment row. Idempotent per `(userId, idempotencyKey)`. */

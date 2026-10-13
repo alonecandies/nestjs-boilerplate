@@ -248,7 +248,7 @@ In both `package.json` files, keep the `exports` block exactly as in billing (th
 - `domains/orders/drizzle.config.ts` (step 1) reads that schema file, writes to `src/infrastructure/persistence/migrations` and records applied files in `orders.__drizzle_migrations` (`schemaFilter: ['orders']`, `migrations: { schema: 'orders', table: '__drizzle_migrations' }`). The separate table matters: drizzle applies only the files newer than the **last** row of its table, so a shared table would let one domain skip another's files;
 - export `ordersMigrations`, a `DatabaseMigrationSet`, from `src/infrastructure/persistence/orders.migrations.ts` (copy `billing.migrations.ts` and its spec);
 - start the history with `bun run --filter @domain/orders db:generate --name init`, change the first statement of the new `0000_init.sql` to `CREATE SCHEMA IF NOT EXISTS "orders";`, and commit the SQL plus the `meta/` snapshot. Later changes: `bun run db:generate` (it runs every domain's config);
-- in each app that owns the data, merge the schema (`const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema, ...ordersSchema }` in `apps/monolith/src/app.module.ts`) and add `ordersMigrations` to the app's `src/database.migrations.ts`. `DatabaseModule.forRootAsync({ schema, migrations: DATABASE_MIGRATIONS })` and `src/migrate.ts` both read that list: the platform set always runs first, then the sets in array order, under one advisory lock. See [migrations](#database-migrations-postgres--drizzle).
+- in each app that owns the data, merge the schema (`const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema, ...ordersSchema }` in `apps/monolith/src/app.module.ts`) and add `ordersMigrations` to the app's `src/database.migrations.ts`, then extend that app's `src/database.migrations.spec.ts` (`apps/monolith/src/database.migrations.spec.ts` pins the ordered list of schemas). `DatabaseModule.forRootAsync({ schema, migrations: DATABASE_MIGRATIONS })` and `src/migrate.ts` both read that list: the platform set always runs first, then the sets in array order, under one advisory lock. See [migrations](#database-migrations-postgres--drizzle).
 
 **6. Modules.** Copy the billing pattern:
 
@@ -323,7 +323,7 @@ Commit `domains/orders/contracts/src/generated/**`. CI regenerates it and fails 
 - the client token;
 - the idempotent methods, which are retried on `UNAVAILABLE`.
 
-**3. Client target.** Add `domains/orders/src/infrastructure/adapters/grpc/orders-grpc-client.config.ts`, an `ordersGrpcClientConfig` namespace reading `ORDERS_GRPC_URL` (copy `billing-grpc-client.config.ts`). `OrdersApiModule.forRemote()` reads it, as `BillingApiModule.forRemote()` reads billing's. Document the variable in the root `.env.example` and in `apps/gateway/.env.example`.
+**3. Client target.** Add `domains/orders/src/infrastructure/adapters/grpc/orders-grpc-client.config.ts`, an `ordersGrpcClientConfig` namespace reading `ORDERS_GRPC_URL` (copy `billing-grpc-client.config.ts`). `OrdersApiModule.forRemote()` reads it, as `BillingApiModule.forRemote()` reads billing's. Document the variable in the root `.env.example` and in `apps/gateway/.env.example`, and add an `ordersGrpcClient` row (gateway) to the "Which app loads which namespace" table in [CONFIGURATION.md](CONFIGURATION.md#which-app-loads-which-namespace).
 
 **4. Server side, in the domain.** Add `OrdersGrpcController` under `presentation/grpc/` and `OrdersGrpcModule` (imports `OrdersCoreModule` and declares the controller). The generated types come from `@domain/orders-contracts`:
 
@@ -347,9 +347,10 @@ export class OrdersGrpcController implements OrdersServiceController {
 - `package.json`: `"name": "@app/orders-service"`, the Vitest project names in `test`/`test:e2e`, and the dependencies (`@domain/orders`, …).
 - `.env.example`: `SERVICE_NAME=orders-service`, `PORT=3004`, `GRPC_URL=0.0.0.0:50054`, `KAFKA_GROUP_ID=orders-service`, `DATABASE_RUN_MIGRATIONS=true`.
 - `src/instrument.ts`: `startTracing({ serviceName: 'orders-service' })`.
-- `src/app.module.ts`: the global modules the core needs, then `OrdersGrpcModule` and `provideCommonEnhancersAsync(…)`. The global modules are `AppConfigModule.forRoot()`, `ConfigModule.forFeature(grpcConfig)`, `ObservabilityModule.forRoot({ healthContributors })`, `CqrsModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: ordersSchema, migrations: DATABASE_MIGRATIONS })`, `RedisModule.forRootAsync()` and `KafkaProducerModule.forRootAsync()`.
+- `src/app.module.ts`: the global modules the core needs, then `OrdersGrpcModule` and `provideCommonEnhancersAsync(…)`. The global modules are `AppConfigModule.forRoot()`, `ConfigModule.forFeature(grpcConfig)`, `ObservabilityModule.forRoot({ healthContributors })`, `CqrsModule.forRoot()`, `ScheduleModule.forRoot()` (if the core has crons), `DatabaseModule.forRootAsync({ schema: ordersSchema, migrations: DATABASE_MIGRATIONS })`, `RedisModule.forRootAsync()` and `KafkaProducerModule.forRootAsync()`.
 - `src/database.migrations.ts` (`DATABASE_MIGRATIONS = [ordersMigrations]`) and `src/migrate.ts`, the release-job migration CLI (`import 'reflect-metadata'`, then `await runMigrationsCli(DATABASE_MIGRATIONS)`), with the `db:migrate` / `db:migrate:dev` scripts: copy them from `apps/billing-service`. The image build fails when an app with a `src/migrate.ts` has no `dist/migrate.js`.
 - `src/main.ts`: `connectGrpcServer(app, [ORDERS_GRPC_PACKAGE])` after `createServiceApp(AppModule)` and before `app.startAllMicroservices()` and `listen(app)`.
+- The copied specs, which pin billing's values: `test/env-example.spec.ts` (`validateAllEnv(env, [ordersConfig])` instead of `[stripeConfig]`, and the pinned service name and consumer group `orders-service`, port `3004` and gRPC bind `0.0.0.0:50054`), `src/database.migrations.spec.ts` (`['orders']`), and `test/app.e2e-spec.ts` with `test/support/` (rewrite them for the orders gRPC service).
 
 Add root scripts by copying `dev:billing` (`"dev:orders": "bun run setup:env && bun run --filter @app/orders-service dev"`), and append the service to `dev:microservices`.
 
@@ -412,7 +413,7 @@ export class EmailAlreadyTakenException extends DomainConflictException {
 }
 ```
 
-**Configuration.** Read settings only through config namespaces, a platform one from `@platform/config` or your domain's own built with `defineConfigNamespace`: `ConfigModule.forFeature(mailConfig)` + `@Inject(mailConfig.KEY) cfg: MailConfig`. Each namespace is a zod schema (`defineConfigNamespace`), validated at boot. `process.env` is not used outside `libs/config`, with documented exceptions: `drizzle.config.ts`, OTel bootstrap and test setup.
+**Configuration.** Read settings only through config namespaces, a platform one from `@platform/config` or your domain's own built with `defineConfigNamespace`: `ConfigModule.forFeature(mailConfig)` + `@Inject(mailConfig.KEY) cfg: MailConfig`. Each namespace is a zod schema (`defineConfigNamespace`), validated at boot. `process.env` is not read outside `libs/config`, with documented exceptions: the OpenTelemetry preload (`libs/observability/src/otel.ts`), each domain's `drizzle.config.ts` and test setup.
 
 **Other rules.**
 

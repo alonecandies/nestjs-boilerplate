@@ -134,14 +134,14 @@ Malformed keys that reach the service (for example over GraphQL, or from other c
 ## Configuration (`files` namespace, `src/files.config.ts`)
 
 `STORAGE_MAX_UPLOAD_BYTES` (26214400) caps streamed uploads through the multipart `limits.fileSize`
-and presigned uploads through the announced `contentLength`. `STORAGE_MAX_CONCURRENT_UPLOADS` (4) caps
-streamed uploads in flight per process (per replica / cluster worker); presigned uploads are not
-counted. Memory budget: each streamed upload holds up to ~15 MiB of off-heap Buffers (S3 driver:
+and presigned uploads through the announced `contentLength`. `STORAGE_MAX_CONCURRENT_UPLOADS` (4)
+caps streamed uploads in flight per process (per replica / cluster worker); presigned uploads are
+not counted. Memory budget: each streamed upload holds up to ~15 MiB of off-heap Buffers (S3 driver:
 `(S3_UPLOAD_QUEUE_SIZE + 1) × S3_UPLOAD_PART_SIZE`), outside `--max-old-space-size`, so keep
 `cap × 15 MiB` well below `container memory − max-old-space-size` (gateway: 4 × 15 = 60 MiB of
-512 − 384 = 128 MiB). The variables keep their `STORAGE_` names. `STORAGE_SIGNED_URL_TTL_SEC` (900, platform `storage` namespace) is
-the lifetime of presigned URLs. See `@platform/storage` for the driver variables (`STORAGE_DRIVER`, `S3_*`,
-`GCS_*`).
+512 − 384 = 128 MiB). The variables keep their `STORAGE_` names. `STORAGE_SIGNED_URL_TTL_SEC` (900,
+platform `storage` namespace) is the lifetime of presigned URLs. See `@platform/storage` for the
+driver variables (`STORAGE_DRIVER`, `S3_*`, `GCS_*`).
 
 ## Public API (`src/index.ts`)
 

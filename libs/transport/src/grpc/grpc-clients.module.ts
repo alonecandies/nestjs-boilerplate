@@ -11,7 +11,7 @@ import {
 } from './grpc-client.options.js';
 
 export interface GrpcClientsModuleOptions {
-  /** Deadline, retry and channel tuning applied to every client of this registration. */
+  /** Deadline, retry and channel tuning of this client (one client per registration). */
   client?: GrpcClientOptionsExtras;
   /** Overrides of `DEFAULT_GRPC_CIRCUIT_BREAKER_OPTIONS`. */
   breaker?: Partial<GrpcCircuitBreakerOptions>;

@@ -113,8 +113,9 @@ bunx vitest run --project gateway:e2e      # e2e (test/*.e2e-spec.ts) — no Doc
 
 The e2e suite boots the real `AppModule` with the production HTTP wiring and binds `AuthPort`,
 `UsersPort` and `NotificationsPort` to in-memory fake services (`@domain/identity/testing`,
-`@domain/notifications/testing`) that return the same `@domain/<x>-contracts` shapes and DomainExceptions as the
-gRPC adapters. Billing keeps its real gRPC adapter, pointed at a dead upstream, to assert the 503 mapping;
-`test/payment-user.e2e-spec.ts` binds `BillingPort` to a stub instead (`createGatewayE2eApp({ billing })`) to prove
-`Payment.user` over the remote ports. `REDIS_CLIENT` → `InMemoryRedis`, `CACHE_MANAGER` → L1 only,
-`GRAPHQL_PUB_SUB` → in-process PubSub, `StorageService` → in-memory.
+`@domain/notifications/testing`) that return the same `@domain/<x>-contracts` shapes and
+DomainExceptions as the gRPC adapters. Billing keeps its real gRPC adapter, pointed at a dead
+upstream, to assert the 503 mapping; `test/payment-user.e2e-spec.ts` binds `BillingPort` to a stub
+instead (`createGatewayE2eApp({ billing })`) to prove `Payment.user` over the remote ports.
+`REDIS_CLIENT` → `InMemoryRedis`, `CACHE_MANAGER` → L1 only, `GRAPHQL_PUB_SUB` → in-process PubSub,
+`StorageService` → in-memory.

@@ -50,7 +50,7 @@ Implemented in [`libs/auth`](../libs/auth/README.md) (access-token verification,
 
 1. Verify the refresh JWT first (garbage never reaches the database).
 2. In one transaction, compare-and-set the session:
-   `UPDATE sessions SET revoked_at, replaced_by_id WHERE id AND user_id AND refresh_token_hash AND revoked_at IS NULL AND expires_at > now`,
+   `UPDATE identity.sessions SET revoked_at, replaced_by_id WHERE id AND user_id AND refresh_token_hash AND revoked_at IS NULL AND expires_at > now`,
    then insert the successor session. Two concurrent refreshes of one token cannot both win.
 3. If nothing matched and the token is genuine but its session is already revoked, that is
    **reuse**: every session of the user is revoked (outside the rotation transaction, so the
@@ -264,7 +264,7 @@ are sanitised before they reach the client.
   billing-service verifies them.
 - Missing, forged or stale (> 300 s, `STRIPE_WEBHOOK_TOLERANCE_SEC`) signatures are a 422
   `INVALID_WEBHOOK_SIGNATURE` before any I/O.
-- Exactly-once processing: `INSERT INTO stripe_events … ON CONFLICT DO NOTHING` inside the same
+- Exactly-once processing: `INSERT INTO billing.stripe_events … ON CONFLICT DO NOTHING` inside the same
   transaction as the payment update; duplicates answer `duplicate: true`.
 - `@Public()` and `@SkipThrottle()` (Stripe retries any non-2xx).
 - Checkout redirect URLs come only from `STRIPE_SUCCESS_URL`/`STRIPE_CANCEL_URL`, never from the

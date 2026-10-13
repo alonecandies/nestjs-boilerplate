@@ -63,18 +63,18 @@ export class AppModule {}
 import 'reflect-metadata';
 await runMigrationsCli(DATABASE_MIGRATIONS);
 
-// users.repository.ts (infrastructure layer)
+// drizzle-orders.repository.ts (infrastructure layer)
 import { type DrizzleTransactionalAdapter, keysetFetchLimit, keysetOrder, keysetPage, keysetWhere, TransactionHost } from '@platform/database';
 
 @Injectable()
-export class DrizzleUsersRepository {
+export class DrizzleOrdersRepository {
   // TransactionHost is a class → imported as a VALUE (DI by type). txHost.tx = the active tx or the pool.
-  constructor(private readonly txHost: TransactionHost<DrizzleTransactionalAdapter<typeof schema>>) {}
+  constructor(private readonly txHost: TransactionHost<DrizzleTransactionalAdapter<typeof ordersSchema>>) {}
 
   async list(q: { limit: number; cursor?: string }) {
-    const rows = await this.txHost.tx.select().from(users)
-      .where(keysetWhere(users.id, q.cursor))   // id < cursor (uuidv7 = time-ordered)
-      .orderBy(keysetOrder(users.id))           // ORDER BY id DESC
+    const rows = await this.txHost.tx.select().from(orders)
+      .where(keysetWhere(orders.id, q.cursor))  // id < cursor (uuidv7 = time-ordered)
+      .orderBy(keysetOrder(orders.id))          // ORDER BY id DESC
       .limit(keysetFetchLimit(q.limit));        // limit + 1 look-ahead
     return keysetPage(rows, q.limit);           // { items, nextCursor }
   }
@@ -82,7 +82,7 @@ export class DrizzleUsersRepository {
 
 // a command handler: both writes commit or roll back together, no tx argument threading
 @Transactional()
-async execute(cmd: RegisterUserCommand) { await this.users.insert(...); await this.sessions.insert(...); }
+async execute(cmd: PlaceOrderCommand) { await this.orders.insert(...); await this.lineItems.insert(...); }
 ```
 
 ## Migrations
@@ -164,7 +164,9 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
   (`lt(col, date)`) are fine.
 - `migrate()` runs a set's pending migrations in **one transaction**, so `CREATE INDEX CONCURRENTLY` is impossible.
   A migration whose journal timestamp is older than the last applied one **of the same set** is **silently
-  skipped**: regenerate after merges and run `drizzle-kit check` in CI.
+  skipped**: regenerate after merges. CI's generated-artefacts drift step runs `bun run db:generate` and fails
+  when the schema files and the committed migrations disagree; it does not check timestamp order. Before merging
+  a hand-edited history, run `bunx drizzle-kit check --config domains/<x>/drizzle.config.ts`.
 - Build prepared statements in the constructor body, never in field initialisers.
 - Keyset indexes: a plain ASC btree is scanned backwards for `DESC`. Drizzle's `.desc()` emits `NULLS LAST`, which
   does not match `ORDER BY … DESC`.

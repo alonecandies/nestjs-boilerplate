@@ -457,8 +457,8 @@ Deliberately not done yet:
   commit and the publish loses the event.
 - **Separate metrics listener**, so `/metrics` is served on its own port instead of the API port.
 - **Real-database integration specs for the billing and notifications repositories**. Today `*.int-spec.ts` covers
-  the database lib and the identity users repository (Testcontainers Postgres) and the Redis lib (a live Redis at
-  `REDIS_URL`).
+  the database lib, the identity users repository and billing's migration history (`billing.migrations.int-spec.ts`)
+  (Testcontainers Postgres) and the Redis lib (a live Redis at `REDIS_URL`).
 
 ## License
 

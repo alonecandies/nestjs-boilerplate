@@ -10,7 +10,8 @@ import type {
  * Authentication flows as seen by the presentation layer (REST, GraphQL, passport-local).
  * Bound per topology by `IdentityApiModule`: `.forLocal()` → `AuthLocalAdapter` (CommandBus, same
  * process), `.forRemote()` → `AuthGrpcAdapter` (identity-service over gRPC). Both return the same
- * `@platform/contracts` shapes and throw the same `DomainException`s (codes survive the gRPC hop).
+ * `@domain/identity-contracts` shapes and throw the same `DomainException`s (codes survive the gRPC
+ * hop).
  */
 export abstract class AuthPort {
   /** @throws EmailAlreadyTakenException (409 EMAIL_TAKEN) */

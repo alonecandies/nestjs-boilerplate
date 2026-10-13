@@ -23,8 +23,8 @@ import {
 
 /*
  * In-memory stand-ins for identity-service (`AuthPort`, `UsersPort`), bound IN PLACE OF the gRPC
- * adapters (the ports are the seam). They return the same `@platform/contracts` shapes and throw the
- * same DomainExceptions the gRPC adapters map from status codes + error trailers, so the
+ * adapters (the ports are the seam). They return the same `@domain/identity-contracts` shapes and
+ * throw the same DomainExceptions the gRPC adapters map from status codes + error trailers, so the
  * gateway's presentation, guards, filters and caches run exactly as against the real services.
  * Tokens are signed by identity's real `TokenIssuer`, built from the same env as the gateway's
  * verifier: in production identity-service signs them with the shared JWT_ACCESS_SECRET, which is

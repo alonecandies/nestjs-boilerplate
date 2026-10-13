@@ -38,9 +38,9 @@ class MockedInstance {}
  * `vi.fn()`, so only the methods a test cares about need configuring:
  *
  * ```ts
- * const users = createMock<UsersPort>({ getUser: async () => user });
- * users.listUsers.mockResolvedValue(page);
- * Test.createTestingModule({ providers: [{ provide: UsersPort, useValue: users }] });
+ * const orders = createMock<OrdersPort>({ getOrder: async () => order });
+ * orders.listOrders.mockResolvedValue(page);
+ * Test.createTestingModule({ providers: [{ provide: OrdersPort, useValue: orders }] });
  * ```
  *
  * Function overrides are wrapped in `vi.fn(impl)` (so they are spy-able); other overrides are

@@ -225,7 +225,7 @@ gRPC call and no Postgres query. Writes that change a profile (role changes) cal
 Measured: the cached `GET /v1/users/:id` p95 was 9.6 ms while the whole k6 mix (including Argon2
 sign-ups) was 36 ms. Verified live: the Redis key is `app:cache:user:<id>` (`REDIS_KEY_PREFIX` +
 `cache:` + `user:<id>`), and `GET /v1/auth/me` followed by two `GET /v1/users/:id` produced exactly
-one Postgres `select … from users where id`.
+one Postgres `select … from identity.users where id`.
 
 BullMQ keys are **not** under `REDIS_KEY_PREFIX`: they use BullMQ's own prefix (`bull:<queue>:…`), for
 example `bull:mail:welcome-<userId>`; mail job ids are idempotent (`welcome-<userId>`,

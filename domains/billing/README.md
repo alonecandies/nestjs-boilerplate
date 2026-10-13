@@ -30,21 +30,41 @@ The REST controller and GraphQL resolver are the same classes in both topologies
 `BillingPort`. Both adapters return the `@domain/billing-contracts` `billing.v1` shapes.
 
 ```ts
-// billing-service (HTTP :3003 for /health + /metrics, gRPC :50053)
+// apps/billing-service/src/app.module.ts (HTTP :3003 for /health + /metrics, gRPC :50053)
+import { DATABASE_MIGRATIONS } from './database.migrations.js'; // [billingMigrations], also migrate.ts
+
 @Module({
   imports: [
     AppConfigModule.forRoot(),
+    ConfigModule.forFeature(grpcConfig), // GRPC_URL for connectGrpcServer in main.ts
+    // Readiness = Postgres + Redis. Kafka is deliberately NOT a contributor (best-effort publish).
     ObservabilityModule.forRoot({
-      healthContributors: [DatabaseHealthIndicator, RedisHealthIndicator, KafkaHealthIndicator],
+      healthContributors: [DatabaseHealthIndicator, RedisHealthIndicator],
     }),
     CqrsModule.forRoot(),
-    DatabaseModule.forRootAsync({ schema: billingSchema, migrations: [billingMigrations] }),
+    ScheduleModule.forRoot(), // PurgeStripeEventsCron
+    DatabaseModule.forRootAsync({ schema: billingSchema, migrations: DATABASE_MIGRATIONS }),
     RedisModule.forRootAsync(),
     KafkaProducerModule.forRootAsync(),
     BillingGrpcModule,
   ],
+  providers: [
+    ...provideCommonEnhancersAsync({
+      inject: [appConfig.KEY],
+      useFactory: (app: AppConfig) => ({
+        exposeInternalErrors: !app.isProduction,
+        defaultTimeoutMs: app.handlerTimeoutMs,
+      }),
+    }),
+  ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer
+      .apply(CorrelationIdMiddleware)
+      .forRoutes({ path: '{*splat}', method: RequestMethod.ALL });
+  }
+}
 // main.ts: createServiceApp(AppModule) → connectGrpcServer(app, [BILLING_GRPC_PACKAGE]) → startAllMicroservices → listen
 
 // monolith: CqrsModule.forRoot(), DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema }, migrations: [identityMigrations, billingMigrations] }),
@@ -275,6 +295,9 @@ through `TransactionHost` and join the active transaction.
   adapter (null normalisation, metadata, error mapping), gRPC controller (bus mapping, zod payload schemas).
 - Drizzle repositories: real Drizzle SQL generation on a recording postgres.js fake (ON CONFLICT targets,
   `FOR UPDATE`, optimistic lock, prepared list statements).
+- `billing.migrations.spec.ts` — the migration set: its folder and `billing.__drizzle_migrations` bookkeeping,
+  every table and enum in the `billing` schema, the match with `drizzle.config.ts`, and the baseline's
+  `CREATE SCHEMA IF NOT EXISTS "billing";` first statement.
 - `infrastructure/stripe/*.spec.ts` — the Stripe adapter: SDK error mapping, signature verification (valid, forged, stale, re-serialised, missing, not JSON), Checkout params and idempotency key, module wiring and the invalid-key boot failure.
 - `billing.controller.spec.ts` — Fastify app with the real `AuthModule` guards (tokens from `signTestAccessToken`, `@platform/auth/testing`):
   401/403, 400 validation (body, query, `Idempotency-Key`), serialisation, raw-body webhook, OpenAPI document.
@@ -286,6 +309,14 @@ through `TransactionHost` and join the active transaction.
 - `presentation/grpc/billing-grpc.roundtrip.spec.ts` — `BillingApiModule.forRemote()` ↔ `BillingGrpcController`
   over real loopback gRPC: the remote adapter returns the local mapper's exact shape (int64 string, Date, absent
   optionals), webhook bytes arrive untouched, domain codes survive the hop.
+
+Integration (Docker): `INTEGRATION=1 bunx vitest run --project billing:int` runs
+`infrastructure/persistence/billing.migrations.int-spec.ts` on PostgreSQL 18 (testcontainers, or an
+existing throwaway database via `INTEGRATION_DATABASE_URL`). It boots the real `DatabaseModule`, which
+applies the platform set and billing's own history (schema `billing`), then checks the result: billing's
+tables and enum in `billing` and none of identity's, nothing in `public`, one bookkeeping row per journal
+entry in each set's own table, every index of the former migrations, the DB defaults (uuidv7 id, `pending`
+status) and a second boot that applies nothing.
 
 ## Gotchas
 

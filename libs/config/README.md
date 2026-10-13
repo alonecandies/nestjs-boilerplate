@@ -1,7 +1,8 @@
 # @platform/config
 
 Typed, zod-validated, namespaced environment configuration. **The only package allowed to read
-`process.env`** (documented exceptions: `@platform/observability/otel`, `drizzle.config.ts`, test setup).
+`process.env`**. Documented exceptions: the OpenTelemetry preload (`libs/observability/src/otel.ts`),
+each domain's `drizzle.config.ts` and test setup.
 Every namespace schema is keyed by the **env var names** (so errors name the variable to fix) and
 transformed into a camelCase object. Defaults make `bun run dev` work against the local
 docker-compose infra with zero `.env`.
