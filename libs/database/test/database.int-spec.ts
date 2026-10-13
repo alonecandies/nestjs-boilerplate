@@ -166,6 +166,24 @@ describe('@platform/database against PostgreSQL 18', () => {
       expect(await migrationRows(url, widgetsMigrations)).toBe(2);
       expect(await migrationRows(url, gadgetsMigrations)).toBe(1);
     });
+
+    it('counts what it applied when the bookkeeping schema is mixed-case', async () => {
+      const url = await createDatabase('mixed_case');
+      const mixed: DatabaseMigrationSet = {
+        ...gadgetsMigrations,
+        name: 'MixedCase',
+        migrationsSchema: 'MixedCase_Bookkeeping',
+      };
+      await expect(runMigrations(url, { migrations: [mixed], logger: silent })).resolves.toEqual({
+        sets: [{ name: 'MixedCase', folder: mixed.folder, total: 1, applied: 1 }],
+        total: 1,
+        applied: 1,
+      });
+      expect(await migrationRows(url, mixed)).toBe(1);
+      await expect(
+        runMigrations(url, { migrations: [mixed], logger: silent }),
+      ).resolves.toMatchObject({ total: 1, applied: 0 });
+    });
   });
 
   describe("runMigrationsCli() (the body of every app's migrate.ts)", () => {

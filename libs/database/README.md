@@ -166,7 +166,9 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
   A migration whose journal timestamp is older than the last applied one **of the same set** is **silently
   skipped**: regenerate after merges. CI's generated-artefacts drift step runs `bun run db:generate` and fails
   when the schema files and the committed migrations disagree; it does not check timestamp order. Before merging
-  a hand-edited history, run `bunx drizzle-kit check --config domains/<x>/drizzle.config.ts`.
+  a hand-edited history, run `bunx drizzle-kit check --config domains/<x>/drizzle.config.ts`. The runner refuses
+  a journal whose `when` values do not grow (or an entry without a positive integer `when` or a boolean
+  `breakpoints`) before it connects, but it cannot see a file older than a row a database already holds.
 - Build prepared statements in the constructor body, never in field initialisers.
 - Keyset indexes: a plain ASC btree is scanned backwards for `DESC`. Drizzle's `.desc()` emits `NULLS LAST`, which
   does not match `ORDER BY … DESC`.
@@ -185,4 +187,5 @@ without a schema file. The runtime migrator reads only `meta/_journal.json` and 
 2. append `{ "idx": N, "version": "7", "when": <Date.now()>, "tag": "NNNN_<name>", "breakpoints": true }` to
    `src/platform/migrations/meta/_journal.json`. `when` must be larger than the previous entry's: drizzle applies only
    files newer than the last applied one;
-3. never edit an applied file. `platform.migrations.spec.ts` checks the journal against the folder.
+3. never edit an applied file. `platform.migrations.spec.ts` checks the journal against the folder, and the runner
+   rejects a malformed journal before it connects.

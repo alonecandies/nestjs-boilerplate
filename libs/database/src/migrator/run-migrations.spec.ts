@@ -32,18 +32,29 @@ describe('runMigrations', () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  /** A set whose folder holds a journal listing `tags`, or no journal at all for `null`. */
-  const migrationSet = (name: string, tags: string[] | null): DatabaseMigrationSet => {
+  /** A journal entry as drizzle-kit writes it (`when` grows with `idx`). */
+  const journalEntry = (idx: number, overrides: Record<string, unknown> = {}) => ({
+    idx,
+    version: '7',
+    when: 1_700_000_000_000 + idx,
+    tag: `${String(idx).padStart(4, '0')}_step`,
+    breakpoints: true,
+    ...overrides,
+  });
+
+  /** A set whose folder holds a journal with `entries`, or no journal at all for `null`. */
+  const journalSet = (name: string, entries: object[] | null): DatabaseMigrationSet => {
     const folder = join(dir, name);
     mkdirSync(join(folder, 'meta'), { recursive: true });
-    if (tags !== null) {
-      writeFileSync(
-        join(folder, 'meta', '_journal.json'),
-        JSON.stringify({ entries: tags.map((tag) => ({ tag })) }),
-      );
+    if (entries !== null) {
+      writeFileSync(join(folder, 'meta', '_journal.json'), JSON.stringify({ entries }));
     }
     return { name, folder, migrationsSchema: name, migrationsTable: MIGRATIONS_TABLE };
   };
+
+  /** A set whose folder holds a valid journal listing `tags`, or no journal at all for `null`. */
+  const migrationSet = (name: string, tags: string[] | null): DatabaseMigrationSet =>
+    journalSet(name, tags?.map((tag, idx) => journalEntry(idx, { tag })) ?? null);
 
   it('skips (without connecting) when no set has a drizzle journal yet', async () => {
     const logger = silentLogger();
@@ -67,6 +78,72 @@ describe('runMigrations', () => {
       runMigrations(URL, { migrations: [broken], logger: silentLogger() }),
     ).rejects.toThrow(/Invalid drizzle migration journal/);
     expect(postgres).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an entry whose tag is not a string', [journalEntry(0, { tag: 42 })], 'entries[0].tag'],
+    ['an entry without `when`', [journalEntry(0, { when: undefined })], 'entries[0].when'],
+    ['a fractional `when`', [journalEntry(0, { when: 1.5 })], 'entries[0].when'],
+    ['a `when` that is not positive', [journalEntry(0, { when: 0 })], 'entries[0].when'],
+    [
+      'an entry without boolean `breakpoints`',
+      [journalEntry(0, { breakpoints: 'yes' })],
+      'entries[0].breakpoints',
+    ],
+    [
+      "a `when` equal to the previous entry's",
+      [journalEntry(0), journalEntry(1, { when: journalEntry(0).when })],
+      'entries[1].when',
+    ],
+    [
+      "a `when` older than the previous entry's (drizzle would skip the file)",
+      [journalEntry(0), journalEntry(1), journalEntry(2, { when: 1_600_000_000_000 })],
+      'entries[2].when',
+    ],
+  ])('rejects a journal with %s before connecting', async (_label, entries, path) => {
+    const set = journalSet('bad', entries);
+    const error = await runMigrations(URL, { migrations: [set], logger: silentLogger() }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      `Invalid drizzle migration journal: ${join(set.folder, 'meta', '_journal.json')}`,
+    );
+    expect((error as Error).message).toContain(`→ at ${path}`);
+    expect(postgres).not.toHaveBeenCalled();
+  });
+
+  it('finds the bookkeeping table of a mixed-case schema: the identifiers are bound, not folded', async () => {
+    const orders = migrationSet('Orders', ['0000_init']);
+    let rows = 0;
+    vi.mocked(migrate).mockImplementation(async () => {
+      rows = 1;
+    });
+    const lookups: unknown[][] = [];
+    const sql = createFakeSql((query, values) => {
+      if (query.includes('pg_try_advisory_lock')) return [{ locked: true }];
+      if (query.includes('to_regclass')) {
+        lookups.push(values);
+        // Postgres folds an unquoted name to lower case, so "Orders" is found only when the schema
+        // and table reach it as separate values (quoted with %I), never as one 'Orders.x' string.
+        return [{ exists: values.length === 2 && values[0] === 'Orders' }];
+      }
+      if (query.startsWith('select count(*)')) return [{ count: rows }];
+      return [];
+    });
+    vi.mocked(postgres).mockReturnValue(sql as never);
+
+    const summary = await runMigrations(URL, { migrations: [orders], logger: silentLogger() });
+
+    expect(lookups).toEqual([
+      ['Orders', MIGRATIONS_TABLE],
+      ['Orders', MIGRATIONS_TABLE],
+    ]);
+    expect(summary).toEqual({
+      sets: [{ name: 'Orders', folder: orders.folder, total: 1, applied: 1 }],
+      total: 1,
+      applied: 1,
+    });
   });
 
   it('applies the sets in array order on ONE session, under ONE lock, and sums the summary', async () => {

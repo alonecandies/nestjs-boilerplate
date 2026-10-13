@@ -45,14 +45,39 @@ export interface MigrationRunSummary {
 const DEFAULT_LOCK_TIMEOUT_MS = 5 * 60_000;
 const DEFAULT_LOCK_POLL_INTERVAL_MS = 1_000;
 
-const journalSchema = z.object({ entries: z.array(z.object({ tag: z.string() })) });
+/**
+ * What drizzle's migrator reads from each journal entry: `tag` names the `.sql` file, `when` becomes
+ * the bookkeeping row's `created_at`, `breakpoints` how the file is split. drizzle applies only the
+ * files whose `when` is newer than the last applied row, so `when` must be a positive integer that
+ * grows within the set: an entry without one (or an older one) would be skipped silently.
+ */
+const journalSchema = z.object({
+  entries: z
+    .array(z.object({ tag: z.string(), when: z.int().positive(), breakpoints: z.boolean() }))
+    .superRefine((entries, ctx) => {
+      for (const [index, entry] of entries.entries()) {
+        const previous = entries[index - 1];
+        if (previous !== undefined && entry.when <= previous.when) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [index, 'when'],
+            message: `must be greater than the previous entry's (${previous.when}): drizzle skips a file that is not newer than the last applied one`,
+          });
+        }
+      }
+    }),
+});
 
 /** Number of journal entries, or `null` when the folder has no drizzle journal yet. */
 function readJournalSize(folder: string): number | null {
   const journalPath = join(folder, 'meta', '_journal.json');
   if (!existsSync(journalPath)) return null;
   const journal = journalSchema.safeParse(JSON.parse(readFileSync(journalPath, 'utf8')));
-  if (!journal.success) throw new Error(`Invalid drizzle migration journal: ${journalPath}`);
+  if (!journal.success) {
+    throw new Error(
+      `Invalid drizzle migration journal: ${journalPath}\n${z.prettifyError(journal.error)}`,
+    );
+  }
   return journal.data.entries.length;
 }
 
@@ -82,10 +107,14 @@ async function acquireMigrationLock(
   }
 }
 
-/** Rows in the set's own bookkeeping table (0 before its first run). */
+/**
+ * Rows in the set's own bookkeeping table (0 before its first run). The schema and table names are
+ * quoted (`%I`) like drizzle quotes them, so a mixed-case schema is found instead of case-folded.
+ */
 async function countAppliedMigrations(sql: Sql, set: DatabaseMigrationSet): Promise<number> {
   const [table] = await sql<{ exists: boolean }[]>`
-    select to_regclass(${`${set.migrationsSchema}.${set.migrationsTable}`}) is not null as exists`;
+    select to_regclass(format('%I.%I', ${set.migrationsSchema}::text, ${set.migrationsTable}::text))
+      is not null as exists`;
   if (table?.exists !== true) return 0;
   const [row] = await sql<{ count: number }[]>`
     select count(*)::int as count from ${sql(set.migrationsSchema)}.${sql(set.migrationsTable)}`;
@@ -134,9 +163,10 @@ const summarize = (sets: MigrationSetSummary[]): MigrationRunSummary => ({
  * - a failing set stops the run (the sets after it are not attempted) with an error that names it
  *   and carries the driver's error as `cause`.
  *
- * Every journal is read before connecting (a malformed one fails the run up front). A set whose
- * folder has no `meta/_journal.json` yet is skipped with a warning; when no set has one, nothing
- * connects.
+ * Every journal is read before connecting: a malformed one (an entry without a string `tag`, a
+ * positive integer `when` or a boolean `breakpoints`, or a `when` that does not grow) fails the run
+ * up front, naming the entry. A set whose folder has no `meta/_journal.json` yet is skipped with a
+ * warning; when no set has one, nothing connects.
  */
 export async function runMigrations(
   url: string,
