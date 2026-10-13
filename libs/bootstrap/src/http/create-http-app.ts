@@ -49,7 +49,7 @@ export interface HttpAppSetupOptions {
 }
 
 export interface CreateHttpAppOptions extends HttpAppSetupOptions {
-  /** Keep the raw request body (`req.rawBody`) — needed for Stripe webhook signatures. Default false. */
+  /** Keep the raw request body (`req.rawBody`) — needed to verify webhook signatures. Default false. */
   rawBody?: boolean;
   /**
    * `true`/limits: register `@fastify/multipart` at init with bounded limits (defaults below).

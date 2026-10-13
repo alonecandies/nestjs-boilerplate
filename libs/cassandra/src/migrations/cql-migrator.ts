@@ -11,7 +11,7 @@ import { splitCqlStatements } from './cql-script.js';
 
 const { consistencies } = cassandra.types;
 
-/** `001_create_notifications.cql` → sequence 1, version `001_create_notifications`. */
+/** `001_create_events.cql` → sequence 1, version `001_create_events`. */
 const MIGRATION_FILE = /^(\d+)_([A-Za-z0-9][\w-]*)\.cql$/;
 /** Placeholder replaced by the keyspace, for fully-qualified statements (`{keyspace}.table`). */
 const KEYSPACE_PLACEHOLDER = '{keyspace}';

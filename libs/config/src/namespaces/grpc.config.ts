@@ -74,7 +74,7 @@ export const grpcEnvSchema = z
 
 /**
  * gRPC server bind address, call deadlines, message limits, TLS and reflection. Client targets
- * belong to each domain (`identityGrpcClient`, `notificationsGrpcClient`, `billingGrpcClient`).
+ * belong to the domain they reach, in its own `<x>GrpcClient` namespace (e.g. `ordersGrpcClient`).
  */
 export const grpcConfig = defineConfigNamespace('grpc', grpcEnvSchema);
 export type GrpcConfig = ConfigType<typeof grpcConfig>;

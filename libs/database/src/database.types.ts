@@ -12,7 +12,7 @@ export interface DatabaseTransactionalOptions {
 
 /**
  * One migration history: a drizzle-kit output folder plus its OWN bookkeeping table. Each domain
- * exports one (`identityMigrations`, `billingMigrations`); `platformMigrations` always runs first.
+ * with tables exports one (e.g. `ordersMigrations`); `platformMigrations` always runs first.
  */
 export interface DatabaseMigrationSet {
   /** Label in logs and run summaries; unique within one process. */
@@ -27,7 +27,7 @@ export interface DatabaseMigrationSet {
 export interface DatabaseModuleOptions<TSchema extends DrizzleSchema = DrizzleSchema> {
   /**
    * Drizzle schema (tables + relations) — enables the typed relational API (`db.query.users…`).
-   * Merge several domains' schemas in the monolith: `{ ...identitySchema, ...billingSchema }`.
+   * Merge several domains' schemas in the monolith: `{ ...ordersSchema, ...activitySchema }`.
    */
   schema: TSchema;
   /**

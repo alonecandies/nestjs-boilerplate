@@ -113,6 +113,9 @@ export const storageEnvSchema = z
     },
   }));
 
-/** Object storage (S3-compatible or Google Cloud Storage) and presigned URL TTL (upload limits: `files`). */
+/**
+ * Object storage (S3-compatible or Google Cloud Storage) and presigned URL TTL. Upload limits are
+ * not part of it: the domain that accepts uploads defines them in its own namespace.
+ */
 export const storageConfig = defineConfigNamespace('storage', storageEnvSchema);
 export type StorageConfig = ConfigType<typeof storageConfig>;

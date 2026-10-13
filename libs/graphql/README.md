@@ -36,24 +36,24 @@ export class AppModule {}
 
 // a domain package: register a loader once, use it in field resolvers
 declare module '@platform/graphql' {
-  interface GraphqlLoaders { users: DataLoader<string, User | null> }
+  interface GraphqlLoaders { authors: DataLoader<string, Author | null> }
 }
 
 @Injectable()
-export class UsersLoaderRegistrar implements OnModuleInit {
-  constructor(private readonly registry: DataLoaderRegistry, private readonly users: UsersPort) {}
+export class AuthorsLoaderRegistrar implements OnModuleInit {
+  constructor(private readonly registry: DataLoaderRegistry, private readonly authors: AuthorsPort) {}
   onModuleInit(): void {
-    this.registry.register('users', () => new DataLoader((ids: readonly string[]) => this.users.getUsersByIds([...ids]), { maxBatchSize: 500 }));
+    this.registry.register('authors', () => new DataLoader((ids: readonly string[]) => this.authors.getAuthorsByIds([...ids]), { maxBatchSize: 500 }));
   }
 }
 
-@ResolveField(() => UserModel, { nullable: true, complexity: 5 })
-user(@Parent() p: PaymentModel, @Loader('users') users: GraphqlLoaders['users']) {
-  return users.load(p.userId);
+@ResolveField(() => AuthorModel, { nullable: true, complexity: 5 })
+author(@Parent() post: PostModel, @Loader('authors') authors: GraphqlLoaders['authors']) {
+  return authors.load(post.authorId);
 }
 
-@Subscription(() => NotificationModel, { filter: (p, _v, ctx: GqlContext) => p.userId === ctx.req.user?.id })
-notificationCreated() { return this.pubSub.asyncIterableIterator('notificationCreated'); }
+@Subscription(() => CommentModel, { filter: (p, _v, ctx: GqlContext) => p.authorId === ctx.req.user?.id })
+commentAdded() { return this.pubSub.asyncIterableIterator('commentAdded'); }
 ```
 
 Clients: HTTP `POST /graphql` (`content-type: application/json`). Subscriptions use graphql-ws on the

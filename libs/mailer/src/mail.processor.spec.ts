@@ -18,9 +18,9 @@ function setup(sendNow: () => Promise<void> = async () => undefined) {
 
 function job(overrides: Partial<{ attemptsMade: number; attempts: number }> = {}) {
   return {
-    id: 'welcome-u1',
-    name: 'welcome',
-    data: { to: 'jane@example.com', subject: 'Hi', template: 'welcome', context: {} },
+    id: 'greeting-u1',
+    name: 'greeting',
+    data: { to: 'jane@example.com', subject: 'Hi', template: 'greeting', context: {} },
     attemptsMade: overrides.attemptsMade ?? 1,
     opts: { attempts: overrides.attempts ?? 7 },
   } as unknown as Job<MailJobData, void, string>;

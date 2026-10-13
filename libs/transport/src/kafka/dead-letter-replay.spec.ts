@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { buildDeadLetterRecord } from './dead-letter.js';
 import { buildReplayRecord, replayDeadLetters } from './dead-letter-replay.js';
 
-const TOPIC = 'identity.user-registered.v1';
+const TOPIC = 'fixture.user-registered.v1';
 const DLQ = `${TOPIC}.dlq`;
 const quiet = { log: vi.fn(), warn: vi.fn() };
 

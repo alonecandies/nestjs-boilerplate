@@ -46,7 +46,7 @@ nestjs-cls' `idGenerator`, so `request.id`, the log field `requestId`, `cls.getI
 ```ts
 // apps/<app>/src/instrument.ts — preloaded: node --import ./dist/instrument.js dist/main.js
 import { startTracing } from '@platform/observability/otel';
-await startTracing({ serviceName: 'identity-service' });
+await startTracing({ serviceName: 'orders-service' });
 
 // app.module.ts
 @Module({

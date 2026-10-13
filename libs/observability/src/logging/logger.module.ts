@@ -10,9 +10,9 @@ import { buildLoggerParams } from './logger-params.js';
 
 /**
  * nestjs-pino wiring (internal to `ObservabilityModule`). `LoggerModule` is global, so `Logger`
- * (for `app.useLogger`) and `PinoLogger` / `@InjectPinoLogger()` resolve everywhere; `appConfig`
- * and `observabilityConfig` are provided globally by `AppConfigModule.forRoot()`, plus the app's
- * extra `redactPaths`.
+ * (for `app.useLogger`) and `PinoLogger` / `@InjectPinoLogger()` resolve everywhere. `appConfig`
+ * and `observabilityConfig` are provided globally by `AppConfigModule.forRoot()`; the app's extra
+ * `redactPaths` come from `ObservabilityModule.forRoot()` and are baked in when it runs.
  */
 @Module({})
 export class AppLoggerModule {

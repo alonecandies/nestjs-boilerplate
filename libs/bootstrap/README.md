@@ -39,9 +39,9 @@ await runClustered(async () => {
   await listen(app);
 });
 
-// apps/identity-service/src/main.ts
+// apps/orders-service/src/main.ts
 const app = await createServiceApp(AppModule);
-connectGrpcServer(app, ['identity']);
+connectGrpcServer(app, [ORDERS_GRPC_PACKAGE]); // the domain's GrpcPackageSpec (@domain/orders-contracts)
 await app.startAllMicroservices();
 await listen(app);
 ```

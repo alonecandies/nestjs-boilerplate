@@ -18,7 +18,7 @@ function kafkaContext(send: Send): KafkaContext {
   const message = {
     key: 'user-1',
     value: { id: 'evt-1', payload: { userId: 'user-1' } },
-    headers: { 'x-correlation-id': 'corr-1', 'x-event-type': 'identity.user-registered.v1' },
+    headers: { 'x-correlation-id': 'corr-1', 'x-event-type': 'fixture.user-registered.v1' },
     offset: '42',
     timestamp: '0',
     attributes: 0,
@@ -28,7 +28,7 @@ function kafkaContext(send: Send): KafkaContext {
   return new KafkaContext([
     message as never,
     3,
-    'identity.user-registered.v1',
+    'fixture.user-registered.v1',
     {} as never,
     () => Promise.resolve(),
     producer as never,
@@ -50,7 +50,7 @@ describe('KafkaDeadLetterFilter', () => {
   it('publishes the original record + error headers to <topic>.dlq and EMITS so the offset commits', async () => {
     const send = vi.fn<Send>(() => Promise.resolve([]));
     const filter = new KafkaDeadLetterFilter();
-    const error = new InvalidEventException('Invalid "identity.user-registered.v1" event');
+    const error = new InvalidEventException('Invalid "fixture.user-registered.v1" event');
 
     const result$ = filter.catch(error, host('rpc', kafkaContext(send)));
 
@@ -59,7 +59,7 @@ describe('KafkaDeadLetterFilter', () => {
     await expect(lastValueFrom(result$)).resolves.toBeNull();
     expect(send).toHaveBeenCalledTimes(1);
     const [record] = send.mock.calls[0] ?? [];
-    expect(record?.topic).toBe('identity.user-registered.v1.dlq');
+    expect(record?.topic).toBe('fixture.user-registered.v1.dlq');
     expect(record?.acks).toBe(-1);
     expect(record?.messages).toEqual([
       {
@@ -67,12 +67,12 @@ describe('KafkaDeadLetterFilter', () => {
         value: JSON.stringify({ id: 'evt-1', payload: { userId: 'user-1' } }),
         headers: {
           'x-correlation-id': 'corr-1',
-          'x-event-type': 'identity.user-registered.v1',
-          'x-original-topic': 'identity.user-registered.v1',
+          'x-event-type': 'fixture.user-registered.v1',
+          'x-original-topic': 'fixture.user-registered.v1',
           'x-original-partition': '3',
           'x-original-offset': '42',
           'x-error-type': 'INVALID_EVENT',
-          'x-error-message': 'Invalid "identity.user-registered.v1" event',
+          'x-error-message': 'Invalid "fixture.user-registered.v1" event',
           'x-failed-at': expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) as string,
         },
       },
@@ -119,13 +119,13 @@ describe('buildDeadLetterRecord', () => {
         offset: '7',
       } as never,
       0,
-      'billing.payment-succeeded.v1',
+      'fixture.payment-succeeded.v1',
       {} as never,
       () => Promise.resolve(),
       {} as never,
     ]);
     const record = buildDeadLetterRecord(context, new Error('x'.repeat(5_000)), new Date(0));
-    expect(record.topic).toBe('billing.payment-succeeded.v1.dlq');
+    expect(record.topic).toBe('fixture.payment-succeeded.v1.dlq');
     expect(record.message.key).toBeNull();
     expect(record.message.value).toBe('plain text');
     expect(record.message.headers).toMatchObject({

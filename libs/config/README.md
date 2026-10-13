@@ -44,8 +44,8 @@ Helper conventions: empty/blank values count as **unset** (fall back to the defa
 | `mail`          | `SMTP_HOST` (localhost), `SMTP_PORT` (1025), `SMTP_SECURE` (false), `SMTP_USER`+`SMTP_PASSWORD` → `auth: { user, pass }`, `MAIL_FROM`, `SMTP_POOL` (true), `SMTP_MAX_CONNECTIONS` (5), `MAIL_QUEUE_CONCURRENCY` (5), `SMTP_REQUIRE_TLS` (on in production for a remote host unless `SMTP_SECURE`), `SMTP_ALLOW_INSECURE` (false; production rejects the Mailpit default, an example.com sender and plaintext to a remote host without it)                                                                                                                                                                                                                                                                                                                      |
 | `storage`       | `STORAGE_DRIVER` (s3\|gcs), `STORAGE_SIGNED_URL_TTL_SEC` (900, ≤ 7 d), `S3_ENDPOINT` (http://localhost:9000), `S3_PUBLIC_ENDPOINT` (= endpoint), `S3_REGION`, `S3_FORCE_PATH_STYLE` (true), `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY` (rustfsadmin), `S3_BUCKET` (uploads), `GCS_PROJECT_ID`, `GCS_BUCKET`, `GCS_API_ENDPOINT` (http://localhost:4443), `GCS_KEY_FILE`, `GCS_PUBLIC_ENDPOINT` (signed-URL host), `STORAGE_ALLOW_INSECURE` (false; production requires https S3 endpoints / a Google GCS endpoint without it), `ALLOW_KNOWN_LOCAL_SECRETS` (the RustFS keys)                                                                                                                                                                                    |
 
-Upload limits (`STORAGE_MAX_UPLOAD_BYTES`, `STORAGE_MAX_CONCURRENT_UPLOADS`) are not part of `storage`: they are the
-`files` namespace of `@domain/files` (`domains/files/src/files.config.ts`).
+Upload limits (`STORAGE_MAX_UPLOAD_BYTES`, `STORAGE_MAX_CONCURRENT_UPLOADS`) are not part of `storage`: the domain
+that accepts uploads defines them in its own namespace.
 
 ## Usage
 
@@ -79,10 +79,10 @@ const { url } = databaseConfig.parse(); // or parseEnv('database', databaseEnvSc
 - In `production`, the platform namespaces reject the dev JWT access secret and `CORS_ORIGINS=*` at
   boot, and anything insecure or publicly known unless its explicit opt-out is set (only the local
   compose stack sets them): plaintext Postgres/Redis/Kafka/Cassandra/SMTP, the emulator endpoints,
-  the compose fallbacks (`docs/CONFIGURATION.md#production-guards`). Domain-owned namespaces guard
-  their own settings with the same helpers: identity's `refreshToken` (the dev refresh secret, a
-  refresh secret equal to the access secret) and billing's `stripe` (the placeholders, localhost
-  Checkout redirects).
+  the compose fallbacks (`docs/CONFIGURATION.md#production-guards`). This package does not apply
+  the guards for domain-owned settings: they live in the owning domain's config namespace and use
+  the same helpers (for example, a refresh-token secret that is the dev default or equals the
+  access secret, or a third-party API's placeholder keys and localhost redirect URLs).
 - `CASSANDRA_KEYSPACE` and `REDIS_KEY_PREFIX` are restricted to identifier characters (they are interpolated
   into CQL / keys). Paired credentials (`CASSANDRA_USERNAME`+`PASSWORD`, `SMTP_USER`+`PASSWORD`, Kafka SASL)
   must be set together.

@@ -70,7 +70,7 @@ export const DEFAULT_GRPC_CIRCUIT_BREAKER_OPTIONS: Readonly<GrpcCircuitBreakerOp
 };
 
 /**
- * Registry of circuit breakers, one per upstream name (e.g. `'identity'`), created lazily and
+ * Registry of circuit breakers, one per upstream name (e.g. `'orders'`), created lazily and
  * shared by every adapter that calls that upstream. Use it through `grpcCall(..., { breaker })`.
  * State changes are logged. All breakers shut down (timers cleared) on application shutdown.
  */

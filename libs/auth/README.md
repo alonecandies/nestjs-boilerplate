@@ -3,7 +3,7 @@
 JWT authentication and RBAC for HTTP, GraphQL and WebSocket handlers:
 
 - access tokens are verified locally at every service (no RPC per request)
-- tokens are issued by the identity context (`TokenIssuer`); this package only verifies them
+- tokens are issued by the domain that signs users in; this package only verifies them
 - `@platform/auth/testing` signs access tokens for tests
 - a Redis access-token denylist handles revocation
 - roles map to permissions, enforced by guards and decorators
@@ -21,7 +21,7 @@ JWT authentication and RBAC for HTTP, GraphQL and WebSocket handlers:
 | `AccessTokenDenylist`                                                                                                                                                               | service                 | `deny(jti, expEpochSec)` and `isDenied(jti)`. Keys are `{prefix}:auth:denylist:{jti}` with TTL = remaining lifetime + 5 s. It fails closed (503 on error or after 250 ms) and is a no-op when disabled.                                                                                             |
 | `JwtStrategy`                                                                                                                                                                       | passport strategy `jwt` | Bearer extraction, HS256 + iss/aud/exp with 5 s tolerance, then the `typ` check, then the denylist. Returns `AuthUser`.                                                                                                                                                                             |
 | `JwtAuthGuard`                                                                                                                                                                      | guard                   | Passes `rpc` and `@Public()`. For `ws`, requires a non-expired `socket.data.user`. Runs passport for http/graphql.                                                                                                                                                                                  |
-| `RolesGuard`, `PermissionsGuard`, `LocalAuthGuard`                                                                                                                                  | guards                  | `LocalAuthGuard` runs the `local` strategy, which @domain/identity implements.                                                                                                                                                                                                                      |
+| `RolesGuard`, `PermissionsGuard`, `LocalAuthGuard`                                                                                                                                  | guards                  | `LocalAuthGuard` runs the `local` strategy, which the consuming domain implements.                                                                                                                                                                                                                  |
 | `authenticateSocket(tokens, denylist, token)`, `extractSocketToken(handshake)`, `extractBearerToken(v)`                                                                             | WS helpers              | Authenticate once in `handleConnection`, then store the user in `socket.data.user`.                                                                                                                                                                                                                 |
 | `parseAccessTokenClaims`, `parseRefreshTokenClaims`, `toAuthUser`, `isAuthUser`, `requireAuthUser`, `toUnauthenticated`                                                             | helpers                 | Claim validation and error mapping. The refresh-claim parser is shared with the issuer, so the `typ` cross-check lives in one place.                                                                                                                                                                |
 | `AuthUser`, `AccessTokenClaims`, `RefreshTokenClaims`, `AccessTokenSubject`, `IssuedAccessToken`, `IssuedRefreshToken`, `TokenType`, `PermissionRequirement`, `PermissionMatchMode` | types                   |                                                                                                                                                                                                                                                                                                     |
@@ -68,9 +68,9 @@ These variables come from the `auth` namespace of `@platform/config`:
 - `JWT_ISSUER` and `JWT_AUDIENCE`: default `nestjs-boilerplate`.
 - `AUTH_DENYLIST_ENABLED`: default `true`.
 
-`JWT_REFRESH_SECRET`/`JWT_REFRESH_TTL_SEC` belong to the identity context's `refreshToken` namespace: verifying processes such as the gateway never load them.
+`JWT_REFRESH_SECRET`/`JWT_REFRESH_TTL_SEC` belong to the token issuer's own `refreshToken` namespace: verifying processes such as the gateway never load them.
 
-The Redis keys use the `redis` namespace (`REDIS_KEY_PREFIX`). Password hashing (Argon2id) belongs to the identity context, with its own `password` namespace (`ARGON2_*`).
+The Redis keys use the `redis` namespace (`REDIS_KEY_PREFIX`). Password hashing is not part of this package: the domain that stores credentials owns it, with its own `password` namespace.
 
 ## Gotchas
 

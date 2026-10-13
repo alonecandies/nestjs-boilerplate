@@ -28,33 +28,33 @@ keyspace-bound client (prepared statements and a configured consistency by defau
 ## Usage
 
 ```ts
-// notifications lib: migrations shipped next to the code (SWC copyFiles copies .cql to dist)
-export const notificationsCassandraMigrations = { dir: join(import.meta.dirname, 'migrations') };
+// a domain package: migrations shipped next to the code (SWC copyFiles copies .cql to dist)
+export const activityCassandraMigrations = { dir: join(import.meta.dirname, 'migrations') };
 
 // app.module.ts
-CassandraModule.forRootAsync({ migrations: [notificationsCassandraMigrations] }),
+CassandraModule.forRootAsync({ migrations: [activityCassandraMigrations] }),
 ObservabilityModule.forRoot({ healthContributors: [CassandraHealthIndicator] }),
 
 // repository
 @Injectable()
-export class NotificationsRepository {
+export class ActivityRepository {
   constructor(@InjectCassandra() private readonly client: CassandraClient) {}
 
   list(userId: string, limit: number, pageState?: string) {
-    return executePage(this.client, 'SELECT * FROM notifications_by_user WHERE user_id = ?', [userId], {
+    return executePage(this.client, 'SELECT * FROM activity_by_user WHERE user_id = ?', [userId], {
       fetchSize: limit,
       pageState,
-      mapRow: toNotification,
+      mapRow: toActivity,
     });
   }
 }
 ```
 
-A migration file, e.g. `001_create_notifications.cql`, may contain several statements, and each must be
+A migration file, e.g. `001_create_activity.cql`, may contain several statements, and each must be
 idempotent:
 
 ```sql
-CREATE TABLE IF NOT EXISTS notifications_by_user (...) WITH CLUSTERING ORDER BY (notification_id DESC);
+CREATE TABLE IF NOT EXISTS activity_by_user (...) WITH CLUSTERING ORDER BY (activity_id DESC);
 -- `{keyspace}` is substituted if you prefer fully-qualified names: CREATE TABLE IF NOT EXISTS {keyspace}.t (...)
 ```
 

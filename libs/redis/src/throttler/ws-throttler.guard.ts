@@ -16,8 +16,8 @@ interface SocketLike {
  *
  * ```ts
  * @UseGuards(WsThrottlerGuard)
- * @WebSocketGateway({ namespace: '/notifications' })
- * export class NotificationsGateway { @Throttle({ default: { limit: 5, ttl: 10_000 } }) … }
+ * @WebSocketGateway({ namespace: '/chat' })
+ * export class ChatGateway { @Throttle({ default: { limit: 5, ttl: 10_000 } }) … }
  * ```
  *
  * Same Redis storage and limits as HTTP (`THROTTLE_*`, overridable with `@Throttle()`); tracker =

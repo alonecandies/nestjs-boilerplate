@@ -23,9 +23,9 @@ const LoaderParam = createParamDecorator((name: string, ctx: ExecutionContext) =
 /**
  * Injects this operation's DataLoader into a resolver method:
  * ```ts
- * @ResolveField(() => UserModel, { complexity: 5 })
- * user(@Parent() p: PaymentModel, @Loader('users') users: DataLoader<string, User | null>) {
- *   return users.load(p.userId);
+ * @ResolveField(() => AuthorModel, { complexity: 5 })
+ * author(@Parent() post: PostModel, @Loader('authors') loader: DataLoader<string, Author | null>) {
+ *   return loader.load(post.authorId);
  * }
  * ```
  */

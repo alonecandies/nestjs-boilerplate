@@ -22,8 +22,8 @@ function copyMetadata(from: AnyMethod, to: AnyMethod): void {
  * Meant for `@Cron()` jobs, which fire on every replica:
  *
  * ```ts
- * @Cron(CronExpression.EVERY_HOUR, { name: 'purge-sessions', waitForCompletion: true })
- * @WithLock('identity:purge-sessions', 60_000)
+ * @Cron(CronExpression.EVERY_HOUR, { name: 'purge-expired', waitForCompletion: true })
+ * @WithLock('orders:purge-expired', 60_000)
  * async purge(): Promise<void> { … }
  * ```
  *

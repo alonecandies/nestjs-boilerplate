@@ -1,7 +1,7 @@
 import { deburr, kebabCase, repeat, truncate } from 'lodash-es';
 
 /**
- * `john.doe@example.com` → `j******e@example.com`. For logs and notifications where the address
+ * `john.doe@example.com` → `j******e@example.com`. For logs and messages where the address
  * must be recognisable to its owner but not harvestable.
  */
 export function maskEmail(email: string): string {

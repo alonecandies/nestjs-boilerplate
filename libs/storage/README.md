@@ -61,7 +61,7 @@ StorageModule.forRootAsync({ driver: 'memory' });
 `S3_ENDPOINT`), `S3_REGION`, `S3_FORCE_PATH_STYLE`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`,
 `S3_BUCKET`, `GCS_PROJECT_ID`, `GCS_BUCKET`, `GCS_API_ENDPOINT`, `GCS_KEY_FILE`.
 
-Upload limits (`STORAGE_MAX_UPLOAD_BYTES`, `STORAGE_MAX_CONCURRENT_UPLOADS`) are the `files` namespace of `@domain/files`.
+Upload limits (`STORAGE_MAX_UPLOAD_BYTES`, `STORAGE_MAX_CONCURRENT_UPLOADS`) are not part of `storage`: the domain that accepts uploads defines them in its own namespace.
 
 ## Gotchas
 
@@ -75,8 +75,8 @@ Upload limits (`STORAGE_MAX_UPLOAD_BYTES`, `STORAGE_MAX_CONCURRENT_UPLOADS`) are
 - `PutObject` of a stream with no known length fails, which is why uploads go through lib-storage `Upload`.
   It buffers the stream into `partSize` chunks: one per in-flight part plus the one being filled, so
   each upload holds up to `(queueSize + 1) × partSize` = 3 × 5 MiB ≈ **15 MiB** of off-heap memory
-  (outside `--max-old-space-size`). This port does not limit concurrency; callers must (`@domain/files`
-  caps streamed uploads with `STORAGE_MAX_CONCURRENT_UPLOADS` and answers 503 beyond it). Prefer
+  (outside `--max-old-space-size`). This port does not limit concurrency: callers must cap how many
+  streamed uploads run at once (and answer 503 beyond the cap). Prefer
   presigned URLs for large or frequent uploads: those bytes never touch the API.
 - **GCS:** the real service needs `GCS_API_ENDPOINT=https://storage.googleapis.com`. Any other
   host is treated as an emulator (fake-gcs-server): no auth, and URLs are signed with a throwaway

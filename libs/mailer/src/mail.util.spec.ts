@@ -10,8 +10,8 @@ import {
 
 describe('toMailJobId', () => {
   it('keeps safe keys verbatim', () => {
-    expect(toMailJobId('welcome-0199a3c1-7b2e')).toBe('welcome-0199a3c1-7b2e');
-    expect(toMailJobId('digest_2026.09.29')).toBe('digest_2026.09.29');
+    expect(toMailJobId('greeting-0199a3c1-7b2e')).toBe('greeting-0199a3c1-7b2e');
+    expect(toMailJobId('reminder_2026.09.29')).toBe('reminder_2026.09.29');
   });
 
   it('hashes keys BullMQ rejects or that are unusually long', () => {

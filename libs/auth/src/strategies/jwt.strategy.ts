@@ -15,7 +15,7 @@ import type { AuthUser } from '../types/auth-user.js';
 
 /**
  * Passport `jwt` strategy: `Authorization: Bearer <access token>` verified LOCALLY (HS256
- * signature, `iss`, `aud`, `exp` with 5 s tolerance — no RPC to the identity service), then the
+ * signature, `iss`, `aud`, `exp` with 5 s tolerance — no RPC to the token issuer), then the
  * `typ` claim, then the Redis denylist. The returned `AuthUser` becomes `req.user`.
  */
 @Injectable()

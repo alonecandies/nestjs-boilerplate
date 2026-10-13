@@ -29,10 +29,10 @@ function createMailer(): MailerService & { sendMail: ReturnType<typeof vi.fn> } 
   return { sendMail } as unknown as MailerService & { sendMail: ReturnType<typeof vi.fn> };
 }
 
-const welcome = {
+const reminder = {
   to: 'jane@example.com',
-  subject: 'Welcome!',
-  template: 'welcome',
+  subject: 'Reminder',
+  template: 'reminder',
   context: { displayName: 'Jane' },
 } as const;
 
@@ -41,25 +41,28 @@ describe('MailService.enqueue', () => {
     const queue = createQueue();
     const service = new MailService(queue, createMailer(), cfg);
 
-    const result = await service.enqueue({ ...welcome, idempotencyKey: 'welcome-0199a3c1' });
+    const result = await service.enqueue({ ...reminder, idempotencyKey: 'reminder-0199a3c1' });
 
     expect(queue.add).toHaveBeenCalledWith(
-      'welcome',
+      'reminder',
       {
         to: 'jane@example.com',
-        subject: 'Welcome!',
-        template: 'welcome',
-        context: welcome.context,
+        subject: 'Reminder',
+        template: 'reminder',
+        context: reminder.context,
       },
-      { ...MAIL_JOB_OPTIONS, jobId: 'welcome-0199a3c1' },
+      { ...MAIL_JOB_OPTIONS, jobId: 'reminder-0199a3c1' },
     );
-    expect(result).toEqual({ jobId: 'welcome-0199a3c1' });
+    expect(result).toEqual({ jobId: 'reminder-0199a3c1' });
   });
 
   it('never stores the idempotency key in the job payload', async () => {
     const queue = createQueue();
 
-    await new MailService(queue, createMailer(), cfg).enqueue({ ...welcome, idempotencyKey: 'k1' });
+    await new MailService(queue, createMailer(), cfg).enqueue({
+      ...reminder,
+      idempotencyKey: 'k1',
+    });
 
     expect(queue.add.mock.calls[0]?.[1]).not.toHaveProperty('idempotencyKey');
   });
@@ -68,9 +71,9 @@ describe('MailService.enqueue', () => {
     const queue = createQueue();
     const service = new MailService(queue, createMailer(), cfg);
 
-    await service.enqueue({ ...welcome, idempotencyKey: 'receipt:pay_1' });
-    await service.enqueue({ ...welcome, idempotencyKey: 'receipt:pay_1' });
-    await service.enqueue({ ...welcome, idempotencyKey: '12345' });
+    await service.enqueue({ ...reminder, idempotencyKey: 'reminder:u1' });
+    await service.enqueue({ ...reminder, idempotencyKey: 'reminder:u1' });
+    await service.enqueue({ ...reminder, idempotencyKey: '12345' });
 
     const [first, second, third] = queue.add.mock.calls.map(
       (c) => (c[2] as { jobId: string }).jobId,
@@ -83,7 +86,7 @@ describe('MailService.enqueue', () => {
   it('lets BullMQ generate the id without a key', async () => {
     const queue = createQueue();
 
-    const result = await new MailService(queue, createMailer(), cfg).enqueue(welcome);
+    const result = await new MailService(queue, createMailer(), cfg).enqueue(reminder);
 
     expect(queue.add.mock.calls[0]?.[2]).not.toHaveProperty('jobId');
     expect(result.jobId).toBe('auto-1');
@@ -95,14 +98,14 @@ describe('MailService.sendNow', () => {
     const mailer = createMailer();
 
     await new MailService(createQueue(), mailer, cfg).sendNow({
-      ...welcome,
+      ...reminder,
       context: { displayName: 'Jane', appName: 'Override' },
     });
 
     expect(mailer.sendMail).toHaveBeenCalledWith({
       to: 'jane@example.com',
-      subject: 'Welcome!',
-      template: 'welcome',
+      subject: 'Reminder',
+      template: 'reminder',
       context: { appName: 'Override', year: new Date().getUTCFullYear(), displayName: 'Jane' },
     });
   });

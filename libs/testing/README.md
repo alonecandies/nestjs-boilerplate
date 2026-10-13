@@ -18,17 +18,19 @@ from `*.spec.ts`, `*.e2e-spec.ts` and `test/**`.
 ```ts
 import { createFastifyTestApp, createMock } from '@platform/testing';
 
-const users = createMock<UsersPort>({ getUser: async (id: string) => ({ id, email: 'a@b.io' }) });
+const orders = createMock<OrdersPort>({
+  getOrder: async (id: string) => ({ id, status: 'placed' }),
+});
 
 const app = await createFastifyTestApp(
-  Test.createTestingModule({ imports: [IdentityApiModule.forLocal()] })
-    .overrideProvider(UsersPort)
-    .useValue(users),
+  Test.createTestingModule({ imports: [OrdersApiModule.forLocal()] })
+    .overrideProvider(OrdersPort)
+    .useValue(orders),
   (app) => app.use(/* global middleware, ws adapter, … */),
 );
 
-const res = await app.inject({ method: 'GET', url: '/v1/users/123' });
-expect(users.getUser).toHaveBeenCalledWith('123');
+const res = await app.inject({ method: 'GET', url: '/v1/orders/123' });
+expect(orders.getOrder).toHaveBeenCalledWith('123');
 await app.close();
 
 // auto-mock every unresolved dependency

@@ -34,8 +34,8 @@ import {
  * into `partSize` Buffers, holds one per in-flight part and fills the next one meanwhile, so one
  * upload pins up to ≈ (queueSize + 1) × partSize = 3 × 5 MiB = 15 MiB of off-heap memory (outside
  * `--max-old-space-size`). Kept at the S3 minimum part size and a queue of 2 because these uploads
- * run inside API processes; callers bound how many run at once (`STORAGE_MAX_CONCURRENT_UPLOADS`
- * in `@domain/files`). Bodies of at most one part are sent as a single PutObject.
+ * run inside API processes; callers must bound how many run at once (a per-process cap on
+ * concurrent uploads). Bodies of at most one part are sent as a single PutObject.
  */
 export const S3_UPLOAD_PART_SIZE = 5 * 1024 * 1024;
 export const S3_UPLOAD_QUEUE_SIZE = 2;

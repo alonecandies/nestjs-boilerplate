@@ -6,7 +6,7 @@ PostgreSQL for the monorepo. It provides a tuned **postgres.js** pool, **Drizzle
 contributor, and **uuidv7 keyset-pagination** helpers.
 
 Domain tables live in the domain packages, each in its own Postgres schema with its own drizzle-kit config and
-migration history (`domains/identity`, `domains/billing`). This package owns the connection, the runner, the
+migration history (`domains/<x>`). This package owns the connection, the runner, the
 **platform set** (schema `app`, extensions) and the rule that the platform set always runs first.
 
 Production refuses a `DATABASE_URL` without TLS (`?sslmode=verify-full`, `require` or `verify-ca`, `ssl=true`, or
@@ -44,17 +44,17 @@ code (`DatabaseModule` `postgres.ssl`) wins at runtime, but the boot check only 
 ## Usage
 
 ```ts
-// apps/identity-service/src/database.migrations.ts — one list for AppModule and migrate.ts
-export const DATABASE_MIGRATIONS: readonly DatabaseMigrationSet[] = [identityMigrations];
+// apps/orders-service/src/database.migrations.ts — one list for AppModule and migrate.ts
+export const DATABASE_MIGRATIONS: readonly DatabaseMigrationSet[] = [ordersMigrations];
 
 // app.module.ts
-import { identitySchema } from '@domain/identity'; // the domain's tables + relations record
+import { ordersSchema } from '@domain/orders'; // the domain's tables + relations record
 @Module({
   imports: [
     AppConfigModule.forRoot(),
     ObservabilityModule.forRoot({ healthContributors: [DatabaseHealthIndicator] }),
-    // monolith: { ...identitySchema, ...billingSchema } and [identityMigrations, billingMigrations]
-    DatabaseModule.forRootAsync({ schema: identitySchema, migrations: DATABASE_MIGRATIONS }),
+    // monolith: { ...ordersSchema, ...activitySchema } and [ordersMigrations, activityMigrations]
+    DatabaseModule.forRootAsync({ schema: ordersSchema, migrations: DATABASE_MIGRATIONS }),
   ],
 })
 export class AppModule {}
@@ -87,16 +87,15 @@ async execute(cmd: RegisterUserCommand) { await this.users.insert(...); await th
 
 ## Migrations
 
-| Set                  | Postgres schema | Files                                                        | Produced by                                                      |
-| -------------------- | --------------- | ------------------------------------------------------------ | ---------------------------------------------------------------- |
-| `platformMigrations` | `app`           | `libs/database/src/platform/migrations`                      | hand-written ([Platform migration set](#platform-migration-set)) |
-| `identityMigrations` | `identity`      | `domains/identity/src/infrastructure/persistence/migrations` | `domains/identity/drizzle.config.ts`                             |
-| `billingMigrations`  | `billing`       | `domains/billing/src/infrastructure/persistence/migrations`  | `domains/billing/drizzle.config.ts`                              |
+| Set                                         | Postgres schema | Files                                                   | Produced by                                                      |
+| ------------------------------------------- | --------------- | ------------------------------------------------------- | ---------------------------------------------------------------- |
+| `platformMigrations`                        | `app`           | `libs/database/src/platform/migrations`                 | hand-written ([Platform migration set](#platform-migration-set)) |
+| `<x>Migrations`, one per domain with tables | `<x>`           | `domains/<x>/src/infrastructure/persistence/migrations` | `domains/<x>/drizzle.config.ts`                                  |
 
 - **Order.** `DatabaseModule` (with `runMigrations` / `DATABASE_RUN_MIGRATIONS`) and `runMigrationsCli` apply
   `withPlatformMigrations(migrations)`: the platform set, then the app's sets in array order, under ONE advisory lock
-  (`MIGRATIONS_ADVISORY_LOCK_ID`) on one dedicated connection. identity-service and billing-service can share a
-  database and boot together: their runs are serialised.
+  (`MIGRATIONS_ADVISORY_LOCK_ID`) on one dedicated connection. Several services can share a database and boot
+  together: their runs are serialised.
 - **One bookkeeping table per set** (`<schema>.__drizzle_migrations`). drizzle's migrator compares file timestamps only
   with the newest row of the table it writes to, so two histories in one table would silently skip the older one's
   files. `withPlatformMigrations` rejects a shared table.
@@ -105,10 +104,10 @@ async execute(cmd: RegisterUserCommand) { await this.users.insert(...); await th
 
 ```bash
 bun run db:generate                                    # drizzle-kit generate in every domain (commit the output)
-bun run --filter @domain/identity db:generate --name <change>
+bun run --filter @domain/<x> db:generate --name <change>
 bun run db:migrate                                     # the monolith's src/migrate.ts from sources (root .env)
-bun run --filter @app/identity-service db:migrate      # an app's dist/migrate.js (after build): the release job
-bun run db:studio                                      # Drizzle Studio per domain (identity 4983, billing 4984)
+bun run --filter @app/<x>-service db:migrate           # an app's dist/migrate.js (after build): the release job
+bun run db:studio                                      # Drizzle Studio per domain, each on its own port
 ```
 
 `runMigrationsCli` logs one JSON object per line (`ConsoleLogger({ json: true })`, what log shippers ingest from
@@ -157,7 +156,7 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
 - `*.schema.ts` files may import only `drizzle-orm*` and relative files, because drizzle-kit loads them with its own
   loader. Declare tables with `pgSchema('<x>').table(...)` and export the `pgSchema` object (drizzle-kit emits
   `CREATE SCHEMA` only for exports). `casing: 'snake_case'` must match in every `drizzle.config.ts` and at runtime.
-  Raw SQL uses snake_case and schema-qualified names (`identity.users`, `ARRAY['user']::identity.user_role[]`).
+  Raw SQL uses snake_case and schema-qualified names (`orders.line_items`, `ARRAY['placed']::orders.order_status[]`).
 - The compose and testcontainers role is `app`, and the platform set creates schema `app`: the default `search_path`
   (`"$user", public`) then starts with `app`, so unqualified DDL run as that role lands in `app`. Qualify names in
   hand-written SQL.
@@ -173,7 +172,7 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
 ## Platform migration set
 
 `platformMigrations` (`src/platform/migrations`, bookkeeping in `app.__drizzle_migrations`) holds the SQL no domain
-owns: the `app` schema and the extensions domain tables rely on (`pg_trgm` for identity's trigram index, created
+owns: the `app` schema and the extensions domain tables rely on (`pg_trgm` for a domain's trigram index, created
 `WITH SCHEMA public` because drizzle-kit writes `gin_trgm_ops` unqualified). It is applied before every domain set,
 under the same advisory lock, and cannot be left out.
 

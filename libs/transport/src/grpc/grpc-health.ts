@@ -8,7 +8,7 @@ export type HealthServer = Parameters<HealthImplementation['addToServer']>[0];
 
 /**
  * The `grpc.health.v1.Health` service of one gRPC server. It reports the overall status (`''`)
- * and the status of each fully-qualified service (`identity.v1.UsersService`), and supports both
+ * and the status of each fully-qualified service (`orders.v1.OrdersService`), and supports both
  * `Check` and `Watch`. Kubernetes gRPC probes, `grpc_health_probe` and load balancers read it.
  *
  * `HealthReportingGrpcServer` switches it to `SERVING` once every service is registered, and to

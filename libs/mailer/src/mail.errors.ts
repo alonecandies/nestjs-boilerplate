@@ -3,7 +3,10 @@ import { get, includes, inRange, isNumber } from 'lodash-es';
 
 /**
  * nodemailer codes that fail the same way on every attempt: no valid recipients (`EENVELOPE`), a
- * missing template file (`ENOENT`), or a message that can't be built (`EMESSAGE`).
+ * missing file the message references, such as an attachment `path` (`ENOENT`), or a message that
+ * can't be built (`EMESSAGE`). A template name that no registered folder defines never reaches
+ * this check as `ENOENT`: `sendMail` rejects with a `TypeError`, which is retried, and the `ENOENT`
+ * surfaces as an unhandled rejection (see the README's Gotchas).
  */
 const PERMANENT_CODES = ['EENVELOPE', 'ENOENT', 'EMESSAGE'];
 

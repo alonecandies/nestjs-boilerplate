@@ -59,57 +59,57 @@ consumers never block a partition, and every event is a validated, versioned env
 ## Usage
 
 ```ts
-// identity-service main.ts
+// orders-service main.ts
 const app = await createServiceApp(AppModule);
-connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE]); // after every app.useGlobal*()
+connectGrpcServer(app, [ORDERS_GRPC_PACKAGE]); // after every app.useGlobal*()
 await app.startAllMicroservices();
 await listen(app);
 
 // gRPC controller (service side)
 @GrpcController()
-@UsersServiceControllerMethods()
-export class UsersGrpcController implements UsersServiceController {
-  getUser(
-    @Payload(new ZodRpcValidationPipe(getUserSchema)) req: GetUserRequest,
+@OrdersServiceControllerMethods()
+export class OrdersGrpcController implements OrdersServiceController {
+  getOrder(
+    @Payload(new ZodRpcValidationPipe(getOrderSchema)) req: GetOrderRequest,
     @Ctx() _md?: Metadata,
   ) {
-    return this.queryBus.execute(new GetUserByIdQuery(req.id)); // throws EntityNotFoundException → NOT_FOUND
+    return this.queryBus.execute(new GetOrderByIdQuery(req.id)); // throws EntityNotFoundException → NOT_FOUND
   }
 }
 
 // gRPC adapter (gateway side), in a module importing
-// GrpcClientsModule.register({ spec: IDENTITY_GRPC_PACKAGE, url })
+// GrpcClientsModule.register({ spec: ORDERS_GRPC_PACKAGE, url })
 @Injectable()
-export class UsersGrpcAdapter implements UsersPort, OnModuleInit {
-  private users!: UsersServiceClient;
+export class OrdersGrpcAdapter implements OrdersPort, OnModuleInit {
+  private orders!: OrdersServiceClient;
   constructor(
-    @Inject(IDENTITY_GRPC_PACKAGE.clientToken) private readonly client: ClientGrpc,
+    @Inject(ORDERS_GRPC_PACKAGE.clientToken) private readonly client: ClientGrpc,
     @Inject(grpcConfig.KEY) private readonly cfg: GrpcConfig,
     private readonly breakers: GrpcCircuitBreakers,
     private readonly cls: ClsService,
   ) {}
   onModuleInit(): void {
-    this.users = this.client.getService<UsersServiceClient>('UsersService');
+    this.orders = this.client.getService<OrdersServiceClient>('OrdersService');
   }
-  getUser(id: string): Promise<User> {
+  getOrder(id: string): Promise<Order> {
     const md = createOutgoingMetadata(callerContextFromCls(this.cls));
-    return grpcCall(this.users.getUser({ id }, md), {
+    return grpcCall(this.orders.getOrder({ id }, md), {
       timeoutMs: this.cfg.deadlineMs,
-      operation: 'identity.GetUser',
-      breaker: this.breakers.get('identity'),
+      operation: 'orders.GetOrder',
+      breaker: this.breakers.get('orders'),
     }); // rejects with EntityNotFoundException, just like the local adapter
   }
 }
 
 // Kafka producer and consumer
-await this.kafka.publish(USER_REGISTERED_EVENT, payload, { key: payload.userId });
+await this.kafka.publish(ORDER_PLACED_EVENT, payload, { key: payload.orderId });
 
 @KafkaConsumerController()
-export class IdentityEventsConsumer {
-  @KafkaEventPattern(USER_REGISTERED_EVENT)
-  async onUserRegistered(
-    @Payload(new ParseEventEnvelopePipe(USER_REGISTERED_EVENT))
-    event: EventEnvelopeOf<typeof USER_REGISTERED_EVENT>,
+export class OrdersEventsConsumer {
+  @KafkaEventPattern(ORDER_PLACED_EVENT)
+  async onOrderPlaced(
+    @Payload(new ParseEventEnvelopePipe(ORDER_PLACED_EVENT))
+    event: EventEnvelopeOf<typeof ORDER_PLACED_EVENT>,
   ): Promise<void> {
     /* idempotent on event.id */
   }
@@ -119,7 +119,7 @@ export class IdentityEventsConsumer {
 ## Environment variables (through `@platform/config`)
 
 - `grpc`: `GRPC_URL`, `GRPC_DEADLINE_MS`, `GRPC_MAX_MESSAGE_BYTES`, `GRPC_TLS_CA_PATH`, `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, `GRPC_TLS_REQUIRE_CLIENT_CERT`, `GRPC_ALLOW_INSECURE`, `GRPC_REFLECTION`.
-- client targets: each domain's `*GrpcClient` namespace (`IDENTITY_GRPC_URL`, `NOTIFICATIONS_GRPC_URL`, `BILLING_GRPC_URL`), passed in as `url`.
+- client targets: each domain's `*GrpcClient` namespace (e.g. `ORDERS_GRPC_URL`), passed in as `url`.
 - `kafka`: `KAFKA_BROKERS`, `KAFKA_CLIENT_ID`, `KAFKA_GROUP_ID`, `KAFKA_CONSUMER_CONCURRENCY`, `KAFKA_SSL`, `KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD`, `KAFKA_CONNECTION_TIMEOUT_MS`, `KAFKA_REQUEST_TIMEOUT_MS`.
 - `app`: `SERVICE_NAME`, used as the envelope `source` and as the default client and group id.
 

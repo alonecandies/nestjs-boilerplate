@@ -16,7 +16,7 @@ function kafkaContext(): KafkaContext {
   return new KafkaContext([
     message as never,
     0,
-    'identity.user-registered.v1',
+    'fixture.user-registered.v1',
     {} as never,
     () => Promise.resolve(),
     {} as never,

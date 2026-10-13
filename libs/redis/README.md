@@ -58,7 +58,7 @@ app.useWebSocketAdapter(await createRedisIoAdapter(app));
 
 // cron that must run on one replica only
 @Cron(CronExpression.EVERY_HOUR, { waitForCompletion: true })
-@WithLock('identity:purge-sessions', 60_000)
+@WithLock('orders:purge-expired', 60_000)
 async purge(): Promise<void> { … }
 
 // read-through cache

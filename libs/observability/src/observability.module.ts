@@ -33,8 +33,8 @@ export interface ObservabilityModuleOptions {
   observe?: boolean;
   /**
    * Extra log paths to mask, contributed by the domains this app composes (e.g. a webhook
-   * signature header). Appended to the platform's `LOG_REDACT_PATHS`; fixed at boot, before any
-   * domain module loads.
+   * signature header). Appended to the platform's `LOG_REDACT_PATHS`; fixed when
+   * `ObservabilityModule.forRoot()` runs, at module-definition time.
    */
   redactPaths?: readonly string[];
 }

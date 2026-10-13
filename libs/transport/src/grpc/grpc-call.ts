@@ -8,7 +8,7 @@ export interface GrpcCallOptions {
    * Use `grpcConfig.deadlineMs`, which is also the deadline in the service config.
    */
   timeoutMs: number;
-  /** For logs and error details, e.g. `'identity.UsersService/GetUser'`. */
+  /** For logs and error details, e.g. `'orders.OrdersService/GetOrder'`. */
   operation: string;
   /** Upstream breaker from `GrpcCircuitBreakers.get(name)`. */
   breaker?: GrpcCircuitBreaker | undefined;

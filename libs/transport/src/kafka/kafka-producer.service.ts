@@ -118,7 +118,7 @@ export class KafkaProducer implements OnApplicationBootstrap {
       return true;
     } catch (error) {
       // Not fatal: ClientKafka reconnects on the next emit(). Publishing is best-effort, so only
-      // a process whose main job is consuming (notifications-service) gates readiness on Kafka.
+      // a process whose main job is consuming (an event-driven worker) gates readiness on Kafka.
       this.logger.error(
         'Kafka producer could not connect; it will retry on the next publish',
         error instanceof Error ? error.stack : String(error),

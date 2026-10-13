@@ -137,7 +137,7 @@ describe('KafkaContextInterceptor', () => {
     new KafkaContext([
       { headers, offset: '1' } as never,
       0,
-      'identity.user-registered.v1',
+      'fixture.user-registered.v1',
       {} as never,
       () => Promise.resolve(),
       {} as never,

@@ -121,8 +121,8 @@ const summarize = (sets: MigrationSetSummary[]): MigrationRunSummary => ({
 
 /**
  * Applies the pending drizzle-kit migrations of several sets, in order, safely under concurrency:
- * - ONE advisory lock around every set, so processes sharing a database (identity-service and
- *   billing-service) migrate one after the other;
+ * - ONE advisory lock around every set, so different services sharing a database migrate one
+ *   after the other;
  * - a dedicated `max: 1` client so the session-level lock and every `migrate()` share ONE
  *   connection (`max_lifetime: null` — a recycled socket would silently drop the lock);
  * - `statement_timeout: 0` for this session only: DDL / backfills may legitimately run long;

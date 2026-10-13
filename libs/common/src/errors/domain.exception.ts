@@ -138,7 +138,7 @@ export class BusinessRuleViolationException extends DomainException {
   }
 }
 
-/** 502 — an upstream dependency (Stripe, SMTP, another service) failed. */
+/** 502 — an upstream dependency (a third-party API, SMTP, another service) failed. */
 export class ExternalServiceException extends DomainException {
   override readonly code: string;
   override readonly httpStatus: HttpStatus = HttpStatus.BAD_GATEWAY;
