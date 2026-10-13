@@ -39,7 +39,7 @@ Three top-level folders, one dependency direction: `apps/*` (`@app/*`, the deplo
 - a platform package declares or imports a domain or an app;
 - a domain imports an app, or another domain other than through its contracts package;
 - a contracts package depends on anything but `@platform/contracts` and third-party packages;
-- production source imports a `@<scope>/<pkg>/testing` subpath (fakes and test token signers are for specs and `test/` code only);
+- production source imports a `@<scope>/<pkg>/testing` subpath or the test-only package `@platform/testing` (fakes, test token signers and Vitest helpers are for specs and `test/` code only);
 - a relative import reaches outside its own package, or a package's `name` does not match its folder.
 
 | Path                                                                                         | Role                                                                                                                                                                                                                                                                                                  |

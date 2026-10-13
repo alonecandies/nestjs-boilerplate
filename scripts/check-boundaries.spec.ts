@@ -190,6 +190,36 @@ describe('scripts/check-boundaries.mjs', () => {
   });
 
   it.each([
+    [
+      'the test-only package',
+      "import { createMock } from '@platform/testing';\n",
+      '@platform/testing',
+    ],
+    [
+      'a subpath of the test-only package',
+      "import { createMock } from '@platform/testing/mocks';\n",
+      '@platform/testing/mocks',
+    ],
+  ])('keeps %s (@platform/testing) out of production source', (_label, source, specifier) => {
+    const { status, output } = check({
+      ...LAYERED,
+      'apps/api/src/wiring.ts': source,
+      'libs/kernel/src/helpers.ts': source,
+      // Test code may import it.
+      'apps/api/test/support/app.ts': source,
+      'domains/orders/src/orders.spec.ts': source,
+      'domains/orders/src/testing/fake-orders.ts': source,
+    });
+    expect(status).toBe(1);
+    expect(output).toContain('Layer boundary violations (2):');
+    for (const file of ['apps/api/src/wiring.ts', 'libs/kernel/src/helpers.ts']) {
+      expect(output).toContain(
+        `${file}: must not import "${specifier}" (test-only code must not reach production source)`,
+      );
+    }
+  });
+
+  it.each([
     ['export * from', "export * from '@domain/users';\n"],
     ['export { x } from', "export { User } from '@domain/users';\n"],
     ['import type', "import type { User } from '@domain/users';\n"],
@@ -200,6 +230,14 @@ describe('scripts/check-boundaries.mjs', () => {
     ['vi.doMock', "vi.doMock('@domain/users');\n"],
     ['vi.importActual', "const users = await vi.importActual('@domain/users');\n"],
     ['vi.importMock', "const users = await vi.importMock('@domain/users');\n"],
+    [
+      'vi.importActual<T> (a type argument)',
+      "const users = await vi.importActual<UsersModule>('@domain/users');\n",
+    ],
+    [
+      'vi.importMock<T> (a type argument)',
+      "const users = await vi.importMock<Record<string, unknown>>('@domain/users');\n",
+    ],
     ['declare module', "declare module '@domain/users' {}\n"],
   ])('sees %s reaching another domain', (_form, source) => {
     const { status, output } = check({ ...LAYERED, 'domains/orders/src/users.spec.ts': source });

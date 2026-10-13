@@ -106,7 +106,8 @@ service container with `REDIS_URL=redis://localhost:6379`.
 
 `@platform/testing` depends on no other workspace package and imports `vitest`. Import it only from spec
 files and `test/**`. `@platform/redis/testing` is a separate subpath for the same reason: production code
-never loads it.
+never loads it. `scripts/check-boundaries.mjs` (in `bun run check`) fails on a production import of
+either.
 
 ### A unit test
 
