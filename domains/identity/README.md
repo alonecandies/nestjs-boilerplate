@@ -46,11 +46,11 @@ abstractions; only `IdentityCoreModule` knows they are Drizzle/Postgres.
 
 The modules assume these app-level (global) modules:
 
-| App              | Required global modules                                                                                                                                                                                                                                                                                                            |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| monolith         | `AppConfigModule`, `ObservabilityModule`, `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema } })`, `RedisModule`, `AppCacheModule`, `AuthModule` (before `AppThrottlerModule`), `AppThrottlerModule`, `KafkaProducerModule`, `AppGraphqlModule`     |
-| gateway          | `AppConfigModule`, `ObservabilityModule`, `RedisModule`, `AppCacheModule`, `AuthModule`, `AppThrottlerModule`, `AppGraphqlModule` (no DB, no CQRS, no Kafka producer needed for identity)                                                                                                                                          |
-| identity-service | `AppConfigModule`, `ObservabilityModule`, `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: identitySchema })`, `RedisModule` (denylist + locks), `KafkaProducerModule`, `AuthModule.forRootAsync({ globalGuards: false })`; `main.ts`: `connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE])` |
+| App              | Required global modules                                                                                                                                                                                                                                                                                                                                                             |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| monolith         | `AppConfigModule`, `ObservabilityModule`, `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema }, migrations: [identityMigrations, billingMigrations] })`, `RedisModule`, `AppCacheModule`, `AuthModule` (before `AppThrottlerModule`), `AppThrottlerModule`, `KafkaProducerModule`, `AppGraphqlModule` |
+| gateway          | `AppConfigModule`, `ObservabilityModule`, `RedisModule`, `AppCacheModule`, `AuthModule`, `AppThrottlerModule`, `AppGraphqlModule` (no DB, no CQRS, no Kafka producer needed for identity)                                                                                                                                                                                           |
+| identity-service | `AppConfigModule`, `ObservabilityModule`, `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`, `DatabaseModule.forRootAsync({ schema: identitySchema, migrations: [identityMigrations] })`, `RedisModule` (denylist + locks), `KafkaProducerModule`, `AuthModule.forRootAsync({ globalGuards: false })`; `main.ts`: `connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE])`                |
 
 ```ts
 // apps/monolith/src/app.module.ts
@@ -58,7 +58,10 @@ import { IdentityApiModule, identitySchema } from '@domain/identity';
 imports: [
   CqrsModule.forRoot(),
   ScheduleModule.forRoot(),
-  DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema } }),
+  DatabaseModule.forRootAsync({
+    schema: { ...identitySchema, ...billingSchema },
+    migrations: [identityMigrations, billingMigrations],
+  }),
   RedisModule.forRootAsync(),
   AppCacheModule.forRootAsync(),
   AuthModule.forRootAsync(),
@@ -75,7 +78,7 @@ imports: [, /* edge infra */ IdentityApiModule.forRemote()];
 imports: [
   CqrsModule.forRoot(),
   ScheduleModule.forRoot(),
-  DatabaseModule.forRootAsync({ schema: identitySchema }),
+  DatabaseModule.forRootAsync({ schema: identitySchema, migrations: [identityMigrations] }),
   RedisModule.forRootAsync(),
   KafkaProducerModule.forRootAsync(),
   AuthModule.forRootAsync({ globalGuards: false }),

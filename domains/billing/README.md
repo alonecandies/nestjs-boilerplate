@@ -38,7 +38,7 @@ The REST controller and GraphQL resolver are the same classes in both topologies
       healthContributors: [DatabaseHealthIndicator, RedisHealthIndicator, KafkaHealthIndicator],
     }),
     CqrsModule.forRoot(),
-    DatabaseModule.forRootAsync({ schema: billingSchema }),
+    DatabaseModule.forRootAsync({ schema: billingSchema, migrations: [billingMigrations] }),
     RedisModule.forRootAsync(),
     KafkaProducerModule.forRootAsync(),
     StripeModule.forRootAsync(),
@@ -48,7 +48,7 @@ The REST controller and GraphQL resolver are the same classes in both topologies
 export class AppModule {}
 // main.ts: createServiceApp(AppModule) → connectGrpcServer(app, [BILLING_GRPC_PACKAGE]) → startAllMicroservices → listen
 
-// monolith: CqrsModule.forRoot(), DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema } }),
+// monolith: CqrsModule.forRoot(), DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema }, migrations: [identityMigrations, billingMigrations] }),
 //           KafkaProducerModule, StripeModule, AuthModule, AppThrottlerModule, AppGraphqlModule,
 //           IdentityApiModule.forLocal(), BillingApiModule.forLocal(), …
 // gateway:  AuthModule, AppThrottlerModule, AppGraphqlModule, IdentityApiModule.forRemote(), BillingApiModule.forRemote(), …
@@ -165,7 +165,7 @@ failure marks the payment `failed`; a retry with the same key reopens it and get
 
 1. `StripeService.constructWebhookEvent(rawBody, signature)`: missing, forged or stale (> 5 min) signatures are a
    422 before any I/O.
-2. `@Transactional()`: `INSERT INTO stripe_events … ON CONFLICT (id) DO NOTHING` — a duplicate delivery returns
+2. `@Transactional()`: `INSERT INTO billing.stripe_events … ON CONFLICT (id) DO NOTHING` — a duplicate delivery returns
    `duplicate: true` — then load the payment `FOR UPDATE` (by `client_reference_id`, else session id) and apply:
    - `checkout.session.completed` / `async_payment_succeeded` (paid) → `succeeded` + `PaymentSucceededEvent`
      (a completed-but-`unpaid` session, i.e. a delayed payment method, stays `pending`);

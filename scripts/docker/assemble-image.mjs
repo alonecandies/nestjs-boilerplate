@@ -13,7 +13,8 @@
 //  4. fails the build when something the process needs at runtime is missing:
 //     - a non-TS asset under src/ (.proto, .hbs, .cql, .sql, migration meta …) that is not in dist/,
 //     - a declared runtime dependency that the filtered production install did not provide,
-//     - a workspace symlink that is dangling, or the app's dist/main.js / dist/instrument.js;
+//     - a workspace symlink that is dangling, or the app's dist/main.js / dist/instrument.js, or its
+//       dist/migrate.js when the app has a src/migrate.ts (the migration release job);
 //  5. removes install-only files (bun.lock, bunfig.toml, patches/);
 //  6. with --prune true, deletes from node_modules what Node never reads at runtime: type declarations,
 //     TS sources (Node refuses to strip types under node_modules), source maps (not loaded without
@@ -148,7 +149,11 @@ for (const [name, { dir, manifest }] of closure) {
   }
 }
 
-for (const entrypoint of ['main.js', 'instrument.js']) {
+// dist/migrate.js is the release job of an app that owns Postgres migration sets (src/migrate.ts);
+// the gateway and notifications-service have none, so it is required only where the source exists.
+const entrypoints = ['main.js', 'instrument.js'];
+if (existsSync(join(build, appPackage.dir, 'src', 'migrate.ts'))) entrypoints.push('migrate.js');
+for (const entrypoint of entrypoints) {
   if (!existsSync(join(out, appPackage.dir, 'dist', entrypoint))) {
     problems.push(`${appPackage.manifest.name}: dist/${entrypoint} is missing`);
   }

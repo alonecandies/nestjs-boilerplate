@@ -66,7 +66,8 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
     ScheduleModule.forRoot(),
 
     // Data stores. Migrations: DATABASE_RUN_MIGRATIONS / CASSANDRA_RUN_MIGRATIONS (advisory lock /
-    // LWT claim, so concurrent replicas are safe) or `bun run db:migrate` as a release job.
+    // LWT claim, so concurrent replicas are safe) or, for Postgres, this app's `db:migrate` script
+    // (`dist/migrate.js`, the same DATABASE_MIGRATIONS) as a release job.
     DatabaseModule.forRootAsync({ schema: DATABASE_SCHEMA, migrations: DATABASE_MIGRATIONS }),
     CassandraModule.forRootAsync({ migrations: [notificationsCassandraMigrations] }),
     RedisModule.forRootAsync(),

@@ -17,18 +17,18 @@ root.
 
 ## Composition (`src/app.module.ts`)
 
-| Module                                                                   | Why                                                                                                                |
-| ------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ |
-| `AppConfigModule.forRoot()` + `ConfigModule.forFeature(grpcConfig)`      | `app`/`observability` + the gRPC bind namespace, validated at boot                                                 |
-| `ObservabilityModule.forRoot({ healthContributors: [postgres, redis] })` | pino JSON logs, request context, `/metrics`, `/health/*`; Kafka is not a readiness dependency (best-effort events) |
-| `CqrsModule.forRoot()`                                                   | command/query buses, `EventPublisher` (events published after COMMIT)                                              |
-| `ScheduleModule.forRoot()`                                               | runs `PurgeStripeEventsCron` (hourly `stripe_events` retention, one replica via `@WithLock`)                       |
-| `DatabaseModule.forRootAsync({ schema: billingSchema })`                 | Drizzle + postgres.js pool, the transactional CLS plugin behind `@Transactional()`, migrations                     |
-| `RedisModule.forRootAsync()`                                             | readiness + the distributed lock of `PurgeStripeEventsCron`                                                        |
-| `KafkaProducerModule.forRootAsync()`                                     | idempotent producer for `PaymentSucceededRelay`                                                                    |
-| `StripeModule.forRootAsync()`                                            | Stripe client (retries, timeout) + webhook signature verification                                                  |
-| `BillingGrpcModule`                                                      | `BillingCoreModule` + `BillingGrpcController`                                                                      |
-| `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`            | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC too                                  |
+| Module                                                                                    | Why                                                                                                                |
+| ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `AppConfigModule.forRoot()` + `ConfigModule.forFeature(grpcConfig)`                       | `app`/`observability` + the gRPC bind namespace, validated at boot                                                 |
+| `ObservabilityModule.forRoot({ healthContributors: [postgres, redis] })`                  | pino JSON logs, request context, `/metrics`, `/health/*`; Kafka is not a readiness dependency (best-effort events) |
+| `CqrsModule.forRoot()`                                                                    | command/query buses, `EventPublisher` (events published after COMMIT)                                              |
+| `ScheduleModule.forRoot()`                                                                | runs `PurgeStripeEventsCron` (hourly `stripe_events` retention, one replica via `@WithLock`)                       |
+| `DatabaseModule.forRootAsync({ schema: billingSchema, migrations: DATABASE_MIGRATIONS })` | Drizzle + postgres.js pool, the transactional CLS plugin behind `@Transactional()`, migrations                     |
+| `RedisModule.forRootAsync()`                                                              | readiness + the distributed lock of `PurgeStripeEventsCron`                                                        |
+| `KafkaProducerModule.forRootAsync()`                                                      | idempotent producer for `PaymentSucceededRelay`                                                                    |
+| `StripeModule.forRootAsync()`                                                             | Stripe client (retries, timeout) + webhook signature verification                                                  |
+| `BillingGrpcModule`                                                                       | `BillingCoreModule` + `BillingGrpcController`                                                                      |
+| `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`                             | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC too                                  |
 
 `main.ts`: `createServiceApp(AppModule)` → `connectGrpcServer(app, [BILLING_GRPC_PACKAGE])` →
 `startAllMicroservices()` → `listen(app)`.
@@ -47,15 +47,15 @@ database failures are `INTERNAL` with the message hidden (the gateway maps them 
 `.env.example` holds only what differs per service; `bun run setup:env` copies it to `.env`.
 Everything else comes from the root `.env` / the environment ([`@platform/config`](../../libs/config)):
 
-| Variable                                     | Value here               | Notes                                                                  |
-| -------------------------------------------- | ------------------------ | ---------------------------------------------------------------------- |
-| `SERVICE_NAME`                               | `billing-service`        | log `service`, Kafka client id, envelope `source`                      |
-| `PORT` / `GRPC_URL`                          | `3003` / `0.0.0.0:50053` | the gateway dials `BILLING_GRPC_URL`                                   |
-| `KAFKA_GROUP_ID`                             | `billing-service`        | no consumer today; explicit so a future one never shares a group       |
-| `DATABASE_RUN_MIGRATIONS`                    | `true`                   | advisory-locked; the history is shared with identity (one `0000_init`) |
-| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | secret store             | placeholders by default: checkout fails, webhooks are rejected         |
-| `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`    | root `.env`              | defaults for requests without their own URLs                           |
-| `DATABASE_URL`, `REDIS_URL`, `KAFKA_BROKERS` | root `.env`              |                                                                        |
+| Variable                                     | Value here               | Notes                                                                            |
+| -------------------------------------------- | ------------------------ | -------------------------------------------------------------------------------- |
+| `SERVICE_NAME`                               | `billing-service`        | log `service`, Kafka client id, envelope `source`                                |
+| `PORT` / `GRPC_URL`                          | `3003` / `0.0.0.0:50053` | the gateway dials `BILLING_GRPC_URL`                                             |
+| `KAFKA_GROUP_ID`                             | `billing-service`        | no consumer today; explicit so a future one never shares a group                 |
+| `DATABASE_RUN_MIGRATIONS`                    | `true`                   | advisory-locked: the platform set, then billing's own history (schema `billing`) |
+| `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET` | secret store             | placeholders by default: checkout fails, webhooks are rejected                   |
+| `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`    | root `.env`              | defaults for requests without their own URLs                                     |
+| `DATABASE_URL`, `REDIS_URL`, `KAFKA_BROKERS` | root `.env`              |                                                                                  |
 
 ## Running
 

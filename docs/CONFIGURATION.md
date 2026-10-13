@@ -29,7 +29,7 @@ flowchart LR
   namespace is loaded with `ConfigModule.forFeature(xConfig)` by the module that injects it, so a
   process only validates (and only fails fast on) the variables it actually uses. Code that runs
   outside Nest DI calls `xConfig.parse()` directly: the cluster primary (`run-clustered.ts`), the
-  migration CLI (`libs/database/src/migrate.ts`), each `main.ts` (`SHUTDOWN_TIMEOUT_MS`,
+  migration CLIs (`apps/<app>/src/migrate.ts`, through `runMigrationsCli`), each `main.ts` (`SHUTDOWN_TIMEOUT_MS`,
   `KAFKA_GROUP_ID`), and `connectKafkaConsumer` / `connectGrpcServer` when the namespace is not
   already in the container.
 - **Fail fast, never leak.** An invalid value throws `EnvValidationError` at boot, naming **every**
@@ -38,7 +38,7 @@ flowchart LR
   namespaces at once, for scripts and CI.
 - **Only `@platform/config` reads `process.env`.** Documented exceptions: the OpenTelemetry preload
   (`libs/observability/src/otel.ts`, standard `OTEL_*` variables) and
-  `libs/database/drizzle.config.ts` (`DATABASE_URL` for drizzle-kit).
+  each domain's `domains/<x>/drizzle.config.ts` (`DATABASE_URL` for drizzle-kit).
 
 ### Value syntax
 
@@ -61,7 +61,7 @@ Shared by every field builder in [env.helpers.ts](../libs/config/src/env/env.hel
 | --------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | [`.env.example`](../.env.example) | yes       | Every `@platform/config` variable, grouped by namespace (defaults; tuning knobs commented out), Node runtime variables, then the compose-only section        |
 | `apps/<app>/.env.example`         | yes       | Per-app overrides only: `SERVICE_NAME`, `PORT`, `GRPC_URL`, `KAFKA_GROUP_ID`, migration toggles; the gateway also lists its gRPC client targets and deadline |
-| `.env`, `apps/<app>/.env`         | no        | Your local copies, read by the host apps (`bun run dev*`, `bun run start`) and, for the root file, by `bun run db:migrate`                                   |
+| `.env`, `apps/<app>/.env`         | no        | Your local copies, read by the host apps (`bun run dev*`, `bun run start`) and, for the root file and `apps/monolith/.env`, by `bun run db:migrate`          |
 | `.env.docker`                     | no        | Optional extra app environment for the **containers only** (`env_file` with `required: false` in `docker-compose.yml`)                                       |
 
 ```bash
@@ -174,7 +174,7 @@ identity-service, billing-service, `bun run db:migrate`
 | `DATABASE_STATEMENT_TIMEOUT_MS` | `15000`                                 | **Milliseconds** (Postgres `statement_timeout` GUC); `0` = disabled.                                                                                                                                                                                                                                                                       |
 | `DATABASE_PREPARE`              | `true`                                  | Server-side prepared statements; set `false` behind PgBouncer (transaction mode) / RDS Proxy.                                                                                                                                                                                                                                              |
 | `DATABASE_LOG_QUERIES`          | `false`                                 | Log every SQL statement.                                                                                                                                                                                                                                                                                                                   |
-| `DATABASE_RUN_MIGRATIONS`       | `false`                                 | Apply the Drizzle migrations at boot under a Postgres advisory lock; otherwise run `bun run db:migrate`.                                                                                                                                                                                                                                   |
+| `DATABASE_RUN_MIGRATIONS`       | `false`                                 | Apply the platform migration set and the app's domain sets at boot under a Postgres advisory lock; otherwise run the app's `migrate.ts` (`bun run db:migrate`, or `dist/migrate.js` in the image).                                                                                                                                         |
 | `DATABASE_ALLOW_INSECURE`       | `false`                                 | Production refuses a `DATABASE_URL` without TLS unless this is `true`: only when a sidecar (Cloud SQL Auth Proxy, …) or the network layer encrypts the connection. The local compose stack sets it.                                                                                                                                        |
 
 ### `cassandra` — notifications inbox

@@ -293,6 +293,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
   it('drizzle queries are server-side prepared statements (DATABASE_PREPARE=true)', async () => {
     const single = await NestFactory.createApplicationContext(SingleConnectionModule, {
       logger: false,
+      abortOnError: false,
     });
     try {
       const repo = single.get(DrizzleUsersRepository);

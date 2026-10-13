@@ -208,11 +208,13 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   `http://localhost:3000,http://localhost:5173` like the apps' `CORS_ORIGINS`), so a frontend can `PUT` to a
   presigned URL directly; `scripts/docker/check-infra.sh` asserts the preflight.
 - **Postgres**: `docker/postgres/init/01-extensions.sql` (first start only) adds `pg_stat_statements` and `pg_trgm`.
-  Tables come from the Drizzle migrations (`libs/database/src/migrations`), applied at boot under an advisory lock
-  (`DATABASE_RUN_MIGRATIONS=true`). In production, run them as a release job with the same image:
-  `docker compose run --rm --no-deps -w /app/libs/database identity-service dist/migrate.js` (Kubernetes: a Job
-  with `workingDir: /app/libs/database`, `args: [dist/migrate.js]`) and set `DATABASE_RUN_MIGRATIONS=false`. The
-  image's entrypoint is `node`, so the args replace only the default `CMD`. Release flow: [RELEASING.md](RELEASING.md).
+  Tables come from the Drizzle migration sets, applied at boot under one advisory lock
+  (`DATABASE_RUN_MIGRATIONS=true`): `@platform/database`'s platform set (schema `app`, `pg_trgm`), then the app's own
+  domain histories (identity-service: `identity`; billing-service: `billing`; monolith: both). In production, run
+  them as a release job with the same image, from the app's folder (the image's `WORKDIR`):
+  `docker compose run --rm --no-deps identity-service dist/migrate.js` (Kubernetes: a Job with
+  `args: [dist/migrate.js]`) and set `DATABASE_RUN_MIGRATIONS=false`. The image's entrypoint is `node`, so the args
+  replace only the default `CMD`. Release flow: [RELEASING.md](RELEASING.md).
 - **`infra-ready`**: `docker compose up --wait` only accepts a one-shot container that _exited_ when an enabled service
   depends on it with `service_completed_successfully`. Without an app profile nothing would, and `--wait` would fail
   with `kafka-init exited (0)`. This idle 1 MB container depends on the three init jobs, and so means "infra bootstrapped".
@@ -262,7 +264,8 @@ Compose builds the same targets (`APP_TARGET`, tag `boilerplate/<app>:${TAG:-loc
   - a non-TS asset under a package's `src/` (`.proto`, `.hbs`, `.cql`, `.sql`, drizzle `meta/*.json`) is missing
     from its `dist/` (swc `copyFiles`),
   - a declared runtime dependency of any closure package is not installed, or a workspace symlink dangles,
-  - `dist/main.js` or `dist/instrument.js` is missing.
+  - `dist/main.js` or `dist/instrument.js` is missing, or `dist/migrate.js` (the release job) for an app with a
+    `src/migrate.ts` (monolith, identity-service, billing-service).
 
   It also removes install-only files (`bun.lock`, `bunfig.toml`, `patches/`) from the runtime tree.
 
@@ -429,7 +432,7 @@ Runs on pushes to `master` and on pull requests. Test layout and the integration
 
 - **verify**: Node 24 (`.nvmrc`) + Bun 1.4.3, `bun install --frozen-lockfile`, `bun run check` (Biome, ESLint,
   Prettier, tsc), `bun run test`, `bun run build`, generated-artefact drift (`proto:gen` + `buf lint` + `db:generate`,
-  then a clean `git diff`/`git status` of `domains/*/contracts/src/generated` and `libs/database/src/migrations`),
+  then a clean `git diff`/`git status` of `domains/*/contracts/src/generated` and `domains/*/src/infrastructure/persistence/migrations`),
   commitlint over the PR's commits (pull requests only), then the config drift checks (`.env.example`, Kafka topics).
 - **integration**: `bun run test:int` (`INTEGRATION=1`, every `<package>:int` project): Postgres from testcontainers,
   Redis from a job service container (`REDIS_URL=redis://localhost:6379`).
