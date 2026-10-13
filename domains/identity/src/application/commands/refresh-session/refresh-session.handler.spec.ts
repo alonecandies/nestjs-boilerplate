@@ -1,4 +1,4 @@
-import { AuthErrorCode, type RefreshTokenClaims, type TokenService } from '@platform/auth';
+import { AuthErrorCode, type RefreshTokenClaims } from '@platform/auth';
 import { generateId, sha256Hex, UnauthenticatedException } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -12,6 +12,7 @@ import {
   RefreshTokenReuseDetectedException,
   SessionExpiredException,
 } from '../../../domain/identity.errors.js';
+import type { TokenIssuer } from '../../../infrastructure/security/token-issuer.service.js';
 import type { SessionRecord, SessionsRepository } from '../../persistence/sessions.repository.js';
 import type { UsersRepository } from '../../persistence/users.repository.js';
 import type { SessionTokensService } from '../../services/session-tokens.service.js';
@@ -46,7 +47,7 @@ describe('RefreshSessionHandler', () => {
   });
   const tokens = makeAuthTokens();
 
-  let tokenService: ReturnType<typeof mockOf<TokenService>>;
+  let tokenService: ReturnType<typeof mockOf<TokenIssuer>>;
   let users: ReturnType<typeof mockOf<UsersRepository>>;
   let sessions: ReturnType<typeof mockOf<SessionsRepository>>;
   let sessionTokens: ReturnType<typeof mockOf<SessionTokensService>>;
@@ -56,7 +57,7 @@ describe('RefreshSessionHandler', () => {
 
   beforeEach(() => {
     log.length = 0;
-    tokenService = mockOf<TokenService>({ verifyRefreshToken: async () => claims });
+    tokenService = mockOf<TokenIssuer>({ verifyRefreshToken: async () => claims });
     users = mockOf<UsersRepository>({ findById: async () => user });
     sessions = mockOf<SessionsRepository>({
       revokeForRotation: async () => {

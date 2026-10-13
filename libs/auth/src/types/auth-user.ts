@@ -43,7 +43,7 @@ export interface RefreshTokenClaims {
   aud: string;
 }
 
-/** What `TokenService.issueAccessToken` needs to know about the user. */
+/** What an access-token issuer (and `signTestAccessToken`) needs to know about the user. */
 export interface AccessTokenSubject {
   id: string;
   email: string;

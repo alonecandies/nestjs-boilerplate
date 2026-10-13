@@ -1,7 +1,7 @@
 import { createMock, type Mocked } from '@platform/testing';
 
 /**
- * `createMock<T>()` typed as `Mocked<T> & T`: classes with private members (TokenService,
+ * `createMock<T>()` typed as `Mocked<T> & T`: classes with private members (TokenIssuer,
  * CommandBus…) are then accepted by constructors while every method keeps its vi.fn() API.
  */
 export function mockOf<T extends object>(

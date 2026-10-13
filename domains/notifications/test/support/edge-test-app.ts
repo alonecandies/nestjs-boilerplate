@@ -1,9 +1,10 @@
 import { Global, Module, type Provider, type Type } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
-import { AuthModule, type Role, TokenService } from '@platform/auth';
+import { AuthModule, type Role } from '@platform/auth';
+import { signTestAccessToken } from '@platform/auth/testing';
 import { provideCommonEnhancers } from '@platform/common';
-import { AppConfigModule, redisConfig } from '@platform/config';
+import { AppConfigModule, type AuthConfig, authConfig, redisConfig } from '@platform/config';
 import { AppGraphqlModule, GraphqlPubSubModule } from '@platform/graphql';
 import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
@@ -30,7 +31,7 @@ export interface EdgeTestAppOptions {
 
 /**
  * The real edge wiring with a FAKE port: config, the real AuthModule (global JWT → roles →
- * permissions guards, real TokenService), the common enhancers (both validation pipes,
+ * permissions guards, real token verification), the common enhancers (both validation pipes,
  * problem+json filter), optionally Apollo + in-memory PubSub, on Fastify.
  */
 export async function createEdgeTestApp(options: EdgeTestAppOptions): Promise<EdgeTestApp> {
@@ -53,15 +54,14 @@ export async function createEdgeTestApp(options: EdgeTestAppOptions): Promise<Ed
   return createFastifyTestApp(builder, undefined, { appOptions: { logger: false } });
 }
 
-/** A real access token (signed with the configured secret) for `user`. */
+/** A real access token (signed with the app's `auth` config) for `user`. */
 export async function bearer(
   app: EdgeTestApp,
   user: { id: string; roles: Role[]; email?: string },
 ): Promise<string> {
-  const issued = await app.get(TokenService).issueAccessToken({
-    id: user.id,
-    email: user.email ?? 'ada@example.com',
-    roles: user.roles,
-  });
+  const issued = await signTestAccessToken(
+    { id: user.id, email: user.email ?? 'ada@example.com', roles: user.roles },
+    { config: app.get<AuthConfig>(authConfig.KEY) },
+  );
   return `Bearer ${issued.token}`;
 }

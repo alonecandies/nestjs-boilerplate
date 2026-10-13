@@ -1,7 +1,8 @@
 /**
- * @platform/auth — JWT authentication (passport-jwt, HS256, verified locally at every service),
- * refresh tokens, the Redis access-token denylist, Argon2id password hashing and RBAC
- * (roles → permissions, guards, decorators) for HTTP, GraphQL and WebSocket handlers.
+ * @platform/auth — JWT access-token verification (passport-jwt, HS256, verified locally at every
+ * service), the Redis access-token denylist and RBAC (roles → permissions, guards, decorators) for
+ * HTTP, GraphQL and WebSocket handlers. Tokens are issued by the context that owns sessions; tests
+ * sign them with `@platform/auth/testing`.
  */
 export {
   AuthErrorCode,
@@ -9,7 +10,6 @@ export {
   JWT_CLOCK_TOLERANCE_SEC,
   JWT_STRATEGY,
   LOCAL_STRATEGY,
-  MAX_PASSWORD_LENGTH,
   PERMISSIONS_KEY,
   ROLES_KEY,
 } from './auth.constants.js';
@@ -27,7 +27,6 @@ export { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 export { LocalAuthGuard } from './guards/local-auth.guard.js';
 export { PermissionsGuard } from './guards/permissions.guard.js';
 export { RolesGuard } from './guards/roles.guard.js';
-export { PasswordHasher } from './password/password-hasher.service.js';
 export { isPermission, PERMISSION_VALUES, Permission } from './rbac/permission.enum.js';
 export { isRole, ROLE_VALUES, Role } from './rbac/role.enum.js';
 export {

@@ -3,12 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "JWT authentication (passport-jwt, HS256, local verification), refresh tokens, Redis access-token denylist, Argon2id password hashing and RBAC guards/decorators for HTTP, GraphQL and WebSocket.",
+  "description": "JWT access-token verification (passport-jwt, HS256, local), Redis access-token denylist, RBAC guards/decorators for HTTP, GraphQL and WebSocket, and a test-token signer (./testing).",
   "exports": {
     ".": {
       "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "@repo/source": "./src/testing/index.ts",
+      "types": "./src/testing/index.ts",
+      "default": "./dist/testing/index.js"
     },
     "./package.json": "./package.json"
   },
@@ -27,7 +32,6 @@
     "@nestjs/core": "catalog:",
     "@nestjs/jwt": "catalog:",
     "@nestjs/passport": "catalog:",
-    "@node-rs/argon2": "catalog:",
     "ioredis": "catalog:",
     "lodash-es": "catalog:",
     "passport": "catalog:",

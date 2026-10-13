@@ -1,4 +1,3 @@
-import type { PasswordHasher } from '@platform/auth';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { recordingPublisher } from '../../../../test/cqrs-fakes.js';
 import { makeAuthTokens, passThroughTransaction } from '../../../../test/fixtures.js';
@@ -6,6 +5,7 @@ import { mockOf } from '../../../../test/mocks.js';
 import { UserRegisteredEvent } from '../../../domain/events/user-registered.event.js';
 import { EmailAlreadyTakenException } from '../../../domain/identity.errors.js';
 import type { UserAggregate } from '../../../domain/user.aggregate.js';
+import type { PasswordHasher } from '../../../infrastructure/security/password-hasher.service.js';
 import type { UsersRepository } from '../../persistence/users.repository.js';
 import type { SessionTokensService } from '../../services/session-tokens.service.js';
 import { RegisterUserCommand } from './register-user.command.js';

@@ -1,8 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { hash, type Options, parseOptions, verify } from '@node-rs/argon2';
 import { DomainValidationException } from '@platform/common';
-import { type AuthConfig, authConfig } from '@platform/config';
-import { MAX_PASSWORD_LENGTH } from '../auth.constants.js';
+import { MAX_PASSWORD_LENGTH } from '../../identity.constants.js';
+import { type PasswordConfig, passwordConfig } from './password.config.js';
 
 /**
  * `Algorithm.Argon2id` as a number: @node-rs/argon2's `Algorithm` is an ambient `const enum`
@@ -24,7 +24,7 @@ export class PasswordHasher {
   private readonly options: Options;
   private dummyHash: Promise<string> | undefined;
 
-  constructor(@Inject(authConfig.KEY) config: AuthConfig) {
+  constructor(@Inject(passwordConfig.KEY) config: PasswordConfig) {
     this.options = {
       memoryCost: config.argon2.memoryCost,
       timeCost: config.argon2.timeCost,

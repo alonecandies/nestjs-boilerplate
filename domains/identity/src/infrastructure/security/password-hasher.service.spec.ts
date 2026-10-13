@@ -1,12 +1,11 @@
 import { DomainValidationException } from '@platform/common';
-import { authConfig } from '@platform/config';
 import { describe, expect, it } from 'vitest';
-import { MAX_PASSWORD_LENGTH } from '../auth.constants.js';
+import { MAX_PASSWORD_LENGTH } from '../../identity.constants.js';
+import { passwordConfig } from './password.config.js';
 import { PasswordHasher } from './password-hasher.service.js';
 
 // Cheap parameters keep the suite fast; production uses the OWASP baseline from config.
-const config = authConfig.parse({
-  NODE_ENV: 'test',
+const config = passwordConfig.parse({
   ARGON2_MEMORY_COST: '1024',
   ARGON2_TIME_COST: '1',
   ARGON2_PARALLELISM: '1',
@@ -45,7 +44,7 @@ describe('PasswordHasher', () => {
     const hashed = await hasher.hash('pw');
     expect(hasher.needsRehash(hashed)).toBe(false);
     const stronger = new PasswordHasher(
-      authConfig.parse({ NODE_ENV: 'test', ARGON2_MEMORY_COST: '2048', ARGON2_TIME_COST: '1' }),
+      passwordConfig.parse({ ARGON2_MEMORY_COST: '2048', ARGON2_TIME_COST: '1' }),
     );
     expect(stronger.needsRehash(hashed)).toBe(true);
     expect(hasher.needsRehash('garbage')).toBe(true);

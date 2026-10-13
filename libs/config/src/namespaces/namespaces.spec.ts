@@ -3,12 +3,7 @@ import { errorOf } from '../../test/error-of.js';
 import { ALL_CONFIG_NAMESPACES, CONFIG_NAMESPACES, validateAllEnv } from '../all-config.js';
 import { EnvValidationError } from '../env/parse-env.js';
 import { type AppConfig, appConfig } from './app.config.js';
-import {
-  type AuthConfig,
-  authConfig,
-  DEV_JWT_ACCESS_SECRET,
-  DEV_JWT_REFRESH_SECRET,
-} from './auth.config.js';
+import { type AuthConfig, authConfig, DEV_JWT_ACCESS_SECRET } from './auth.config.js';
 import { cacheConfig } from './cache.config.js';
 import { cassandraConfig } from './cassandra.config.js';
 import { databaseConfig } from './database.config.js';
@@ -120,11 +115,8 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
     expect(authConfig.parse({})).toEqual({
       accessSecret: DEV_JWT_ACCESS_SECRET,
       accessTtlSec: 900,
-      refreshSecret: DEV_JWT_REFRESH_SECRET,
-      refreshTtlSec: 604_800,
       issuer: 'nestjs-boilerplate',
       audience: 'nestjs-boilerplate',
-      argon2: { memoryCost: 19_456, timeCost: 2, parallelism: 1 },
       denylistEnabled: true,
     } satisfies AuthConfig);
     expect(graphqlConfig.parse({})).toMatchObject({
@@ -141,7 +133,6 @@ describe('config namespaces — derived values and coercion', () => {
     const env = {
       NODE_ENV: 'production',
       JWT_ACCESS_SECRET: 'a'.repeat(40),
-      JWT_REFRESH_SECRET: 'b'.repeat(40),
     };
     expect(appConfig.parse(env)).toMatchObject({ isProduction: true, docsEnabled: false });
     expect(observabilityConfig.parse(env).logPretty).toBe(false);
@@ -312,7 +303,7 @@ describe('registered factories', () => {
   it('keep precise inferred types', () => {
     expectTypeOf<AppConfig['port']>().toEqualTypeOf<number>();
     expectTypeOf<AppConfig['nodeEnv']>().toEqualTypeOf<'development' | 'test' | 'production'>();
-    expectTypeOf<AuthConfig['argon2']['memoryCost']>().toEqualTypeOf<number>();
+    expectTypeOf<AuthConfig['accessTtlSec']>().toEqualTypeOf<number>();
     expectTypeOf(storageConfig.parse)
       .returns.toHaveProperty('driver')
       .toEqualTypeOf<'s3' | 'gcs'>();

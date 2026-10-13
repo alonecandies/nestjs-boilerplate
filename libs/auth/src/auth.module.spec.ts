@@ -10,8 +10,8 @@ import { AuthModule } from './auth.module.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { PermissionsGuard } from './guards/permissions.guard.js';
 import { RolesGuard } from './guards/roles.guard.js';
-import { PasswordHasher } from './password/password-hasher.service.js';
 import { Role } from './rbac/role.enum.js';
+import { signTestAccessToken } from './testing/sign-test-access-token.js';
 import { AccessTokenDenylist } from './tokens/access-token-denylist.service.js';
 import { TokenService } from './tokens/token.service.js';
 
@@ -31,7 +31,7 @@ describe('AuthModule (DI wiring)', () => {
     app = undefined;
   });
 
-  it('provides token issuing/verification, hashing and the denylist from config', async () => {
+  it('provides token verification and the denylist from config', async () => {
     @Module({
       imports: [
         ConfigModule.forRoot({ ignoreEnvFile: true }),
@@ -43,19 +43,13 @@ describe('AuthModule (DI wiring)', () => {
     app = await NestFactory.createApplicationContext(TestModule, { logger: false });
 
     const tokens = app.get(TokenService);
-    const issued = await tokens.issueAccessToken({
-      id: 'u-1',
-      email: 'a@b.c',
-      roles: [Role.Admin],
-    });
+    // Signed with the `auth` namespace of process.env: the config this module loaded.
+    const issued = await signTestAccessToken({ id: 'u-1', email: 'a@b.c', roles: [Role.Admin] });
     await expect(tokens.verifyAccessToken(issued.token)).resolves.toMatchObject({ sub: 'u-1' });
 
     const denylist = app.get(AccessTokenDenylist);
     await denylist.deny(issued.jti, issued.exp);
     await expect(denylist.isDenied(issued.jti)).resolves.toBe(true);
-
-    const hasher = app.get(PasswordHasher);
-    await expect(hasher.verify(await hasher.hash('pw'), 'pw')).resolves.toBe(true);
 
     // JwtService defaults (no expiresIn, iss/aud set) stay compatible with TokenService.
     const raw = await app.get(JwtService).signAsync({ sub: 'x', typ: 'other' });

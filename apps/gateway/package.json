@@ -53,6 +53,7 @@
     "@platform/testing": "workspace:*",
     "@domain/identity-contracts": "workspace:*",
     "@domain/notifications-contracts": "workspace:*",
+    "@nestjs/jwt": "catalog:",
     "@nestjs/testing": "catalog:",
     "cache-manager": "catalog:",
     "graphql": "catalog:",

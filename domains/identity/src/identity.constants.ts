@@ -6,7 +6,7 @@ export const IDENTITY_LIMITS = {
   /** RFC 5321 path limit. */
   EMAIL_MAX_LENGTH: 254,
   PASSWORD_MIN_LENGTH: 8,
-  /** Argon2 cost grows with input length: bound it well below @platform/auth's hard cap (1024). */
+  /** Argon2 cost grows with input length: stay well below `MAX_PASSWORD_LENGTH` (1024). */
   PASSWORD_MAX_LENGTH: 128,
   DISPLAY_NAME_MIN_LENGTH: 1,
   DISPLAY_NAME_MAX_LENGTH: 100,
@@ -21,6 +21,9 @@ export const IDENTITY_LIMITS = {
   USER_AGENT_MAX_LENGTH: 512,
   IP_MAX_LENGTH: 64,
 } as const;
+
+/** Longest password `PasswordHasher` hashes or verifies (argon2 cost DoS guard, any transport). */
+export const MAX_PASSWORD_LENGTH = 1_024;
 
 /** Stable machine codes of identity errors (`ProblemDetails.code`, gRPC `x-error-code`, GraphQL `extensions.code`). */
 export const IdentityErrorCode = {

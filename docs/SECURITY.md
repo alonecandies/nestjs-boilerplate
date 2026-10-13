@@ -20,8 +20,8 @@ Related: [Architecture](ARCHITECTURE.md) · [Development](DEVELOPMENT.md) · [Do
 
 ## Authentication
 
-Implemented in [`libs/auth`](../libs/auth/README.md) (tokens, guards, hashing) and
-[`domains/identity`](../domains/identity/README.md) (sessions, rotation, logout).
+Implemented in [`libs/auth`](../libs/auth/README.md) (access-token verification, guards, denylist) and
+[`domains/identity`](../domains/identity/README.md) (token issuance, password hashing, sessions, rotation, logout).
 
 ### Tokens
 
@@ -32,6 +32,10 @@ Implemented in [`libs/auth`](../libs/auth/README.md) (tokens, guards, hashing) a
 
 - `iss`/`aud` default to `nestjs-boilerplate` (`JWT_ISSUER`, `JWT_AUDIENCE`). Verification allows 5 s of
   clock skew (`JWT_CLOCK_TOLERANCE_SEC`).
+- Identity signs both tokens (`TokenIssuer`, `domains/identity/src/infrastructure/security/`). The
+  refresh secret and TTL live in identity's `refreshToken` namespace, which only the processes
+  running `IdentityCoreModule` (monolith, identity-service) load: the gateway holds the access
+  secret only.
 - The `typ` claim plus separate secrets mean an access token can never be replayed as a refresh
   token or the other way round.
 - Access tokens are verified **at every edge process** with no RPC: signature, `iss`/`aud`/`exp`, `typ`,
@@ -84,11 +88,11 @@ session of the given `refreshToken`, or **every** session when the body omits it
 
 ### Passwords
 
-- Argon2id via `@node-rs/argon2` (`PasswordHasher`, `libs/auth/src/password/`). Parameters from
+- Argon2id via `@node-rs/argon2` (`PasswordHasher`, `domains/identity/src/infrastructure/security/`). Parameters from
   `ARGON2_MEMORY_COST` (19456 KiB), `ARGON2_TIME_COST` (2), `ARGON2_PARALLELISM` (1): the OWASP
   minimum profile. Hashes with outdated parameters are re-hashed transparently at login.
 - Password length 8–128 at registration (`IDENTITY_LIMITS`); `MAX_PASSWORD_LENGTH` (1024) in
-  `@platform/auth` bounds the hashing cost of any input.
+  `@domain/identity` bounds the hashing cost of any input.
 - Login runs `verifyDummy` for unknown emails so response timing does not reveal which accounts
   exist; wrong password and unknown email share one 401 `INVALID_CREDENTIALS`.
 - Registration and login are throttled per IP by `@AuthThrottle()` (`THROTTLE_AUTH_LIMIT` = 10 per
@@ -294,20 +298,20 @@ are sanitised before they reach the client.
 
 ### Boot-time production guards (`NODE_ENV=production`)
 
-| Guard                                                                                                                                                                                                                                                                                     | Source                                                       |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` must not be the dev defaults and must differ                                                                                                                                                                                                   | `libs/config/src/namespaces/auth.config.ts`                  |
-| publicly known values (compose fallbacks, placeholders, RustFS keys) rejected for the JWT secrets, Stripe key and webhook secret, and S3 keys, unless `ALLOW_KNOWN_LOCAL_SECRETS=true`                                                                                                    | `auth`, `stripe`, `storage` namespaces                       |
-| TLS to every dependency unless its explicit opt-out is set: Postgres `sslmode` (`DATABASE_ALLOW_INSECURE`), `rediss://` + password (`REDIS_ALLOW_INSECURE`), `KAFKA_SSL` (`KAFKA_ALLOW_INSECURE`), Cassandra TLS (`CASSANDRA_ALLOW_INSECURE`), mandatory STARTTLS (`SMTP_ALLOW_INSECURE`) | `database`, `redis`, `kafka`, `cassandra`, `mail` namespaces |
-| no local endpoints or senders: S3/GCS emulators (`STORAGE_ALLOW_INSECURE`), the Mailpit default and an example.com sender (`SMTP_ALLOW_INSECURE`), localhost Checkout redirects (`STRIPE_ALLOW_LOCAL_REDIRECTS`), Cassandra SimpleStrategy (`CASSANDRA_ALLOW_SIMPLE_STRATEGY`)            | `storage`, `mail`, `stripe`, `cassandra` namespaces          |
-| `CORS_ORIGINS` must not contain `*`                                                                                                                                                                                                                                                       | `app.config.ts`                                              |
-| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` must not be the dev placeholders (forged webhooks)                                                                                                                                                                                          | `stripe.config.ts`                                           |
-| JWT secrets ≥ 32 characters (all environments)                                                                                                                                                                                                                                            | `auth.config.ts`                                             |
-| `TRUST_PROXY=true` rejected                                                                                                                                                                                                                                                               | `app.config.ts`                                              |
-| plaintext gRPC refused unless `GRPC_ALLOW_INSECURE=true`; TLS cert/key/CA must be consistent                                                                                                                                                                                              | `grpc.config.ts`                                             |
-| `DOCS_ENABLED`, `GRAPHQL_SANDBOX`, `GRAPHQL_INTROSPECTION`, `GRPC_REFLECTION` default to off                                                                                                                                                                                              | `app`, `graphql`, `grpc` namespaces                          |
-| internal error messages and stack traces hidden (problem+json, GraphQL, gRPC, `/health/ready`)                                                                                                                                                                                            | `exposeInternalErrors: !isProduction`                        |
-| paired credentials (SMTP, Cassandra, Kafka SASL) must be set together; Stripe key prefixes checked                                                                                                                                                                                        | `mail`, `cassandra`, `kafka`, `stripe` schemas               |
+| Guard                                                                                                                                                                                                                                                                                     | Source                                                                                                              |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` must not be the dev defaults and must differ                                                                                                                                                                                                   | `libs/config/src/namespaces/auth.config.ts`, `domains/identity/src/infrastructure/security/refresh-token.config.ts` |
+| publicly known values (compose fallbacks, placeholders, RustFS keys) rejected for the JWT secrets, Stripe key and webhook secret, and S3 keys, unless `ALLOW_KNOWN_LOCAL_SECRETS=true`                                                                                                    | `auth`, `refreshToken`, `stripe`, `storage` namespaces                                                              |
+| TLS to every dependency unless its explicit opt-out is set: Postgres `sslmode` (`DATABASE_ALLOW_INSECURE`), `rediss://` + password (`REDIS_ALLOW_INSECURE`), `KAFKA_SSL` (`KAFKA_ALLOW_INSECURE`), Cassandra TLS (`CASSANDRA_ALLOW_INSECURE`), mandatory STARTTLS (`SMTP_ALLOW_INSECURE`) | `database`, `redis`, `kafka`, `cassandra`, `mail` namespaces                                                        |
+| no local endpoints or senders: S3/GCS emulators (`STORAGE_ALLOW_INSECURE`), the Mailpit default and an example.com sender (`SMTP_ALLOW_INSECURE`), localhost Checkout redirects (`STRIPE_ALLOW_LOCAL_REDIRECTS`), Cassandra SimpleStrategy (`CASSANDRA_ALLOW_SIMPLE_STRATEGY`)            | `storage`, `mail`, `stripe`, `cassandra` namespaces                                                                 |
+| `CORS_ORIGINS` must not contain `*`                                                                                                                                                                                                                                                       | `app.config.ts`                                                                                                     |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` must not be the dev placeholders (forged webhooks)                                                                                                                                                                                          | `stripe.config.ts`                                                                                                  |
+| JWT secrets ≥ 32 characters (all environments)                                                                                                                                                                                                                                            | `auth.config.ts`, `refresh-token.config.ts`                                                                         |
+| `TRUST_PROXY=true` rejected                                                                                                                                                                                                                                                               | `app.config.ts`                                                                                                     |
+| plaintext gRPC refused unless `GRPC_ALLOW_INSECURE=true`; TLS cert/key/CA must be consistent                                                                                                                                                                                              | `grpc.config.ts`                                                                                                    |
+| `DOCS_ENABLED`, `GRAPHQL_SANDBOX`, `GRAPHQL_INTROSPECTION`, `GRPC_REFLECTION` default to off                                                                                                                                                                                              | `app`, `graphql`, `grpc` namespaces                                                                                 |
+| internal error messages and stack traces hidden (problem+json, GraphQL, gRPC, `/health/ready`)                                                                                                                                                                                            | `exposeInternalErrors: !isProduction`                                                                               |
+| paired credentials (SMTP, Cassandra, Kafka SASL) must be set together; Stripe key prefixes checked                                                                                                                                                                                        | `mail`, `cassandra`, `kafka`, `stripe` schemas                                                                      |
 
 ### Log redaction
 
@@ -339,7 +343,8 @@ Prometheus scrape the pods directly. A separate metrics listener is a [known gap
 
 - [ ] `NODE_ENV=production` (enables every guard above).
 - [ ] Strong, distinct `JWT_ACCESS_SECRET` and `JWT_REFRESH_SECRET` from a secret store; the gateway
-      and identity-service share the access secret.
+      and identity-service share the access secret; only identity-service (or the monolith) needs
+      the refresh secret.
 - [ ] Real `STRIPE_SECRET_KEY` and `STRIPE_WEBHOOK_SECRET` (the development placeholders are
       rejected at boot when `NODE_ENV=production`); webhook endpoint API version pinned in the
       Stripe dashboard.

@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { maskEmail, normalizeEmail, toSafeFilename } from './string.util.js';
+import { maskEmail, toSafeFilename } from './string.util.js';
 
 describe('string utils', () => {
-  it('normalizeEmail trims and lower-cases', () => {
-    expect(normalizeEmail('  Ada.Lovelace@Example.COM ')).toBe('ada.lovelace@example.com');
-  });
-
   it.each([
     ['john.doe@example.com', 'j******e@example.com'],
     ['ab@example.com', 'a*@example.com'],

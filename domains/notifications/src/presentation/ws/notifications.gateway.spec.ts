@@ -1,5 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { AccessTokenDenylist, AuthModule, Role, TokenService } from '@platform/auth';
+import { signTestAccessToken } from '@platform/auth/testing';
 import { AppConfigModule } from '@platform/config';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeRedisModule } from '../../../test/support/edge-test-app.js';
@@ -76,8 +77,9 @@ describe('NotificationsGateway', () => {
   });
 
   describe('handshake authentication (namespace middleware)', () => {
+    // Signed with the auth namespace of process.env, which AppConfigModule + AuthModule load.
     const accessToken = () =>
-      tokens.issueAccessToken({ id: USER_ID, email: 'a@b.io', roles: [Role.User] });
+      signTestAccessToken({ id: USER_ID, email: 'a@b.io', roles: [Role.User] });
 
     it('installs itself as namespace middleware and accepts a valid token (auth.token)', async () => {
       const use = vi.fn();

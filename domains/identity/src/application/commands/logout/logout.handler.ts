@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
-import { AccessTokenDenylist, TokenService } from '@platform/auth';
+import { AccessTokenDenylist } from '@platform/auth';
+import { TokenIssuer } from '../../../infrastructure/security/token-issuer.service.js';
 import { SessionsRepository } from '../../persistence/sessions.repository.js';
 import { LogoutCommand } from './logout.command.js';
 
@@ -10,7 +11,7 @@ export class LogoutHandler implements ICommandHandler<LogoutCommand> {
 
   constructor(
     private readonly denylist: AccessTokenDenylist,
-    private readonly tokens: TokenService,
+    private readonly tokens: TokenIssuer,
     private readonly sessions: SessionsRepository,
   ) {}
 

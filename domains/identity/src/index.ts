@@ -33,6 +33,7 @@ export { GetUserByIdQuery } from './application/queries/get-user-by-id/get-user-
 export { GetUsersByIdsQuery } from './application/queries/get-users-by-ids/get-users-by-ids.query.js';
 export { ListUsersQuery } from './application/queries/list-users/list-users.query.js';
 // Domain.
+export { normalizeEmail } from './domain/email.js';
 export { UserRegisteredEvent } from './domain/events/user-registered.event.js';
 export { UserRolesChangedEvent } from './domain/events/user-roles-changed.event.js';
 export {
@@ -51,6 +52,7 @@ export { isUserRole, USER_ROLES, type UserRole } from './domain/user-role.js';
 export {
   IDENTITY_LIMITS,
   IdentityErrorCode,
+  MAX_PASSWORD_LENGTH,
   USER_CACHE_TTL_MS,
   USERS_LOADER,
   userCacheKey,
@@ -76,6 +78,16 @@ export {
   users,
   usersRelations,
 } from './infrastructure/persistence/identity.schema.js';
+// Infrastructure: identity's security services and their config namespaces (the apps'
+// env-example specs validate these namespaces too).
+export { type PasswordConfig, passwordConfig } from './infrastructure/security/password.config.js';
+export { PasswordHasher } from './infrastructure/security/password-hasher.service.js';
+export {
+  DEV_JWT_REFRESH_SECRET,
+  type RefreshTokenConfig,
+  refreshTokenConfig,
+} from './infrastructure/security/refresh-token.config.js';
+export { TokenIssuer } from './infrastructure/security/token-issuer.service.js';
 // Presentation: GraphQL types the apps compose with (`Payment.user` in `PaymentUserFieldResolver`).
 export { AuthPayloadModel } from './presentation/graphql/models/auth-payload.model.js';
 export { UserModel } from './presentation/graphql/models/user.model.js';

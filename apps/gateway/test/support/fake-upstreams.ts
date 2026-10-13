@@ -3,6 +3,8 @@ import {
   EmailAlreadyTakenException,
   InvalidCredentialsException,
   InvalidRefreshTokenException,
+  normalizeEmail,
+  type TokenIssuer,
   UsersPort,
 } from '@domain/identity';
 import type {
@@ -23,16 +25,17 @@ import type {
   Notification,
   NotificationPage,
 } from '@domain/notifications-contracts';
-import { type AccessTokenDenylist, isRole, type TokenService } from '@platform/auth';
-import { EntityNotFoundException, generateId, normalizeEmail } from '@platform/common';
+import { type AccessTokenDenylist, isRole } from '@platform/auth';
+import { EntityNotFoundException, generateId } from '@platform/common';
 
 /*
  * In-memory stand-ins for identity- and notifications-service, bound IN PLACE OF the gRPC
  * adapters (the ports are the seam). They return the same `@platform/contracts` shapes and throw the
  * same DomainExceptions the gRPC adapters map from status codes + error trailers, so the
  * gateway's presentation, guards, filters and caches run exactly as against the real services.
- * Tokens are signed with the gateway's own TokenService: in production identity-service signs them
- * with the same JWT_ACCESS_SECRET, which is what lets the gateway verify them locally.
+ * Tokens are signed by identity's real `TokenIssuer`, built from the same env as the gateway's
+ * verifier: in production identity-service signs them with the shared JWT_ACCESS_SECRET, which is
+ * what lets the gateway verify them locally.
  */
 
 interface StoredUser {
@@ -59,7 +62,7 @@ export class FakeIdentityState {
 export class FakeAuthPort extends AuthPort {
   constructor(
     private readonly state: FakeIdentityState,
-    private readonly tokens: TokenService,
+    private readonly tokens: TokenIssuer,
     private readonly denylist: AccessTokenDenylist,
   ) {
     super();

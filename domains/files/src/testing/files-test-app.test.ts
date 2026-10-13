@@ -2,9 +2,10 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import type { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
-import { AccessTokenDenylist, AuthModule, type Role, TokenService } from '@platform/auth';
+import { AccessTokenDenylist, AuthModule, type Role } from '@platform/auth';
+import { signTestAccessToken } from '@platform/auth/testing';
 import { generateId, provideCommonEnhancers } from '@platform/common';
-import { storageConfig } from '@platform/config';
+import { type AuthConfig, authConfig, storageConfig } from '@platform/config';
 import { InMemoryStorageService, StorageModule, StorageService } from '@platform/storage';
 import { createFastifyTestApp } from '@platform/testing';
 import { filesConfig } from '../files.config.js';
@@ -12,8 +13,8 @@ import { FilesModule } from '../files.module.js';
 
 /**
  * Test-only helper (a `*.test.ts` file: ignored by the SWC build, not collected by Vitest).
- * Boots `FilesModule` the way the gateway/monolith do — real AuthModule guards and
- * TokenService, the common enhancers (validation pipes + problem+json filter), a Fastify adapter
+ * Boots `FilesModule` the way the gateway/monolith do — real AuthModule guards (tokens from
+ * signTestAccessToken), the common enhancers (validation pipes + problem+json filter), a Fastify adapter
  * that auto-registers @fastify/multipart — with an in-memory `StorageService` and no Redis.
  */
 export interface FilesTestApp {
@@ -73,12 +74,13 @@ export async function createFilesTestApp(options: FilesTestAppOptions = {}): Pro
 
   const storage = app.get(StorageService);
   if (!(storage instanceof InMemoryStorageService)) throw new Error('expected the memory driver');
-  const tokens = app.get(TokenService);
+  const config = app.get<AuthConfig>(authConfig.KEY);
 
   return {
     app,
     storage,
     tokenFor: async (roles, userId = generateId()) =>
-      (await tokens.issueAccessToken({ id: userId, email: `${userId}@example.com`, roles })).token,
+      (await signTestAccessToken({ id: userId, email: `${userId}@example.com`, roles }, { config }))
+        .token,
   };
 }

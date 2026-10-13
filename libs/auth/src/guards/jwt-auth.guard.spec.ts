@@ -1,21 +1,18 @@
 import { Reflector } from '@nestjs/core';
-import { JwtService } from '@nestjs/jwt';
 import { Public, UnauthenticatedException } from '@platform/common';
 import { authConfig, redisConfig } from '@platform/config';
 import { RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createJwtModuleOptions } from '../auth.module.js';
 import { Role } from '../rbac/role.enum.js';
 import { JwtStrategy } from '../strategies/jwt.strategy.js';
 import { makeAuthUser } from '../testing/auth-test.utils.js';
+import { signTestAccessToken } from '../testing/sign-test-access-token.js';
 import { AccessTokenDenylist } from '../tokens/access-token-denylist.service.js';
-import { TokenService } from '../tokens/token.service.js';
 import { executionContext, type Transport } from './execution-context.test.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
 
 const config = authConfig.parse({ NODE_ENV: 'test' });
-const tokens = new TokenService(new JwtService(createJwtModuleOptions(config)), config);
 const redis = new InMemoryRedis();
 const denylist = new AccessTokenDenylist(
   redis.asRedis(),
@@ -42,7 +39,7 @@ const target = (handler: () => void = Controller.prototype.secured) => ({
   cls: Controller,
 });
 const bearer = async (roles = [Role.User]): Promise<{ token: string; jti: string; exp: number }> =>
-  tokens.issueAccessToken({ id: 'u-1', email: 'a@b.c', roles });
+  signTestAccessToken({ id: 'u-1', email: 'a@b.c', roles }, { config });
 
 async function failureCode(promise: Promise<unknown>): Promise<string> {
   const error: unknown = await promise.then(

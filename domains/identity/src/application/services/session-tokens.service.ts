@@ -1,8 +1,8 @@
 import type { AuthTokens, ClientInfo } from '@domain/identity-contracts';
 import { Injectable } from '@nestjs/common';
-import { TokenService } from '@platform/auth';
 import { generateId, sha256Hex } from '@platform/common';
 import { BEARER_TOKEN_TYPE } from '../../identity.constants.js';
+import { TokenIssuer } from '../../infrastructure/security/token-issuer.service.js';
 import { toSessionClient } from '../mappers/client-info.mapper.js';
 import { toAccessTokenSubject, toUserContract } from '../mappers/user.mapper.js';
 import { SessionsRepository } from '../persistence/sessions.repository.js';
@@ -17,7 +17,7 @@ import type { UserRecord } from '../persistence/users.repository.js';
 @Injectable()
 export class SessionTokensService {
   constructor(
-    private readonly tokens: TokenService,
+    private readonly tokens: TokenIssuer,
     private readonly sessions: SessionsRepository,
   ) {}
 

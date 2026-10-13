@@ -8,7 +8,6 @@ import { JWT_ALGORITHM, JWT_CLOCK_TOLERANCE_SEC } from './auth.constants.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { PermissionsGuard } from './guards/permissions.guard.js';
 import { RolesGuard } from './guards/roles.guard.js';
-import { PasswordHasher } from './password/password-hasher.service.js';
 import { JwtStrategy } from './strategies/jwt.strategy.js';
 import { AccessTokenDenylist } from './tokens/access-token-denylist.service.js';
 import { TokenService } from './tokens/token.service.js';
@@ -17,14 +16,14 @@ export interface AuthModuleSetup {
   /**
    * Register `JwtAuthGuard` → `RolesGuard` → `PermissionsGuard` as global guards (in that
    * order). Default `true` (edge apps). gRPC/Kafka-only services pass `false` and use
-   * `TokenService` / `PasswordHasher` directly.
+   * `TokenService` / `AccessTokenDenylist` directly.
    */
   globalGuards?: boolean;
 }
 
 /**
  * Module defaults for code that injects `JwtService` directly. `expiresIn` is deliberately NOT set:
- * `TokenService` writes `exp` into the payload and jsonwebtoken rejects both at once.
+ * token issuers write `exp` into the payload and jsonwebtoken rejects both at once.
  */
 export function createJwtModuleOptions(config: AuthConfig): JwtModuleOptions {
   return {
@@ -47,8 +46,8 @@ const GLOBAL_GUARDS: Provider[] = [
 ];
 
 /**
- * Global authentication & authorization (blueprint §3.11): JWT issuing/verification, the Redis
- * access-token denylist, Argon2id hashing, the passport `jwt` strategy and the RBAC guards.
+ * Global authentication & authorization (blueprint §3.11): access-token verification, the Redis
+ * access-token denylist, the passport `jwt` strategy and the RBAC guards.
  * Requires `RedisModule` (global) for the denylist.
  *
  * Import it BEFORE `AppThrottlerModule` so the throttler can track authenticated users by id.
@@ -70,7 +69,6 @@ export class AuthModule {
       ],
       providers: [
         TokenService,
-        PasswordHasher,
         AccessTokenDenylist,
         JwtStrategy,
         JwtAuthGuard,
@@ -80,7 +78,6 @@ export class AuthModule {
       ],
       exports: [
         TokenService,
-        PasswordHasher,
         AccessTokenDenylist,
         JwtAuthGuard,
         RolesGuard,

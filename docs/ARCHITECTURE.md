@@ -48,7 +48,7 @@ Three top-level folders, one dependency direction: `apps/*` (`@app/*`, the deplo
 | `libs/contracts`                                                                                                 | Generic contract plumbing: `GrpcPackageSpec`, `EventContract`, the zod envelope, the buf policy                         |
 | `libs/transport`                                                                                                 | gRPC clients/servers, status mapping, circuit breakers, Kafka producer/consumer plumbing, dead-lettering                |
 | `libs/common`                                                                                                    | `DomainException` hierarchy, problem+json, global pipes/filter/timeout interceptor, middlewares, utilities              |
-| `libs/auth`                                                                                                      | JWT + RBAC guards, `TokenService`, `PasswordHasher`, access-token denylist                                              |
+| `libs/auth`                                                                                                      | JWT verification + RBAC guards, `TokenService` (verification only), access-token denylist, `@platform/auth/testing`     |
 | `libs/graphql`                                                                                                   | Apollo on Fastify, graphql-ws, DataLoader registry, error formatting, Redis PubSub                                      |
 | `libs/observability`                                                                                             | pino logger, nestjs-cls request context, Prometheus metrics, terminus health, OpenTelemetry, `@nestjs/observe`          |
 | `libs/config`                                                                                                    | Every env var, validated per namespace (see [CONFIGURATION.md](CONFIGURATION.md))                                       |
@@ -75,7 +75,7 @@ flowchart TB
 What the layering does and does not promise:
 
 - Domain code is plain TypeScript and throws `DomainException` subclasses, never `HttpException`.
-- Application handlers depend on abstract repository ports (bound in the `XCoreModule`) **and directly on platform libraries** where an abstraction would add nothing: `RegisterUserHandler` injects `PasswordHasher` (`@platform/auth`), `HandleStripeWebhookHandler` injects billing's own `StripeService` (`infrastructure/stripe`), relays inject `KafkaProducer` (`@platform/transport`), `WelcomeUserHandler` injects `MailService` (`@platform/mailer`).
+- Application handlers depend on abstract repository ports (bound in the `XCoreModule`) **and directly on platform libraries** where an abstraction would add nothing: `LogoutHandler` injects `AccessTokenDenylist` (`@platform/auth`), `HandleStripeWebhookHandler` injects billing's own `StripeService` (`infrastructure/stripe`), relays inject `KafkaProducer` (`@platform/transport`), `WelcomeUserHandler` injects `MailService` (`@platform/mailer`).
 - Folder names for repository ports differ per library: `application/persistence/` (identity), `application/ports/` (notifications), `application/repositories/` (billing).
 - `domains/files` is smaller: `domain/`, `application/` (`FilesService`, access policy) and `presentation/`, with storage provided by `@platform/storage`.
 

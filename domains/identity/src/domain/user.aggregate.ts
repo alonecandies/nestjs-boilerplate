@@ -1,7 +1,8 @@
 import { AggregateRoot } from '@nestjs/cqrs';
-import { generateId, normalizeEmail, type ValidationIssue } from '@platform/common';
+import { generateId, type ValidationIssue } from '@platform/common';
 import { isEmpty, isEqual, sortBy, uniq } from 'lodash-es';
 import { IDENTITY_LIMITS } from '../identity.constants.js';
+import { normalizeEmail } from './email.js';
 import { UserRegisteredEvent } from './events/user-registered.event.js';
 import { UserRolesChangedEvent } from './events/user-roles-changed.event.js';
 import {

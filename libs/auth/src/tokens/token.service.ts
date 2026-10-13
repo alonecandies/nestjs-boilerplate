@@ -1,19 +1,10 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { JwtService, type JwtSignOptions, type JwtVerifyOptions } from '@nestjs/jwt';
-import { generateId, UnauthenticatedException } from '@platform/common';
+import { JwtService, type JwtVerifyOptions } from '@nestjs/jwt';
+import { UnauthenticatedException } from '@platform/common';
 import { type AuthConfig, authConfig } from '@platform/config';
 import { AuthErrorCode, JWT_ALGORITHM, JWT_CLOCK_TOLERANCE_SEC } from '../auth.constants.js';
-import type {
-  AccessTokenClaims,
-  AccessTokenSubject,
-  AuthUser,
-  IssuedAccessToken,
-  IssuedRefreshToken,
-  RefreshTokenClaims,
-} from '../types/auth-user.js';
-import { parseAccessTokenClaims, parseRefreshTokenClaims, toAuthUser } from './token-claims.js';
-
-const nowSec = (): number => Math.floor(Date.now() / 1_000);
+import type { AccessTokenClaims, AuthUser } from '../types/auth-user.js';
+import { parseAccessTokenClaims, toAuthUser } from './token-claims.js';
 
 /** Verification settings every verifier (TokenService, JwtStrategy, WS handshake) must share. */
 export interface JwtVerificationSettings {
@@ -44,9 +35,10 @@ export function toUnauthenticated(error: unknown): UnauthenticatedException {
 }
 
 /**
- * Issues and verifies JWTs (HS256, `iss`/`aud` checked, `typ` claim checked, uuidv7 `jti`).
- * Access and refresh tokens use SEPARATE secrets and TTLs (`JWT_*` env). `iat`/`exp` are set
- * explicitly from one clock read so the returned `exp` is exactly the token's.
+ * Verifies access tokens locally, with no RPC per request: HS256 signature, `iss`/`aud`, `exp`
+ * (5 s tolerance), then the `typ` claim. This package does not issue tokens: the bounded context
+ * that owns sessions signs them with the shared `JWT_ACCESS_SECRET`, and tests sign them with
+ * `signTestAccessToken` (`@platform/auth/testing`).
  */
 @Injectable()
 export class TokenService {
@@ -55,49 +47,16 @@ export class TokenService {
     @Inject(authConfig.KEY) private readonly config: AuthConfig,
   ) {}
 
-  async issueAccessToken(user: AccessTokenSubject): Promise<IssuedAccessToken> {
-    const iat = nowSec();
-    const exp = iat + this.config.accessTtlSec;
-    const jti = generateId();
-    const payload = {
-      sub: user.id,
-      email: user.email,
-      roles: [...user.roles],
-      typ: 'access',
-      jti,
-      iat,
-      exp,
-    };
-    const token = await this.jwt.signAsync(payload, this.signOptions(this.config.accessSecret));
-    return { token, jti, expiresIn: this.config.accessTtlSec, exp };
-  }
-
-  /** `sessionId` becomes the `jti` (the sessions table stores sha256(token) under that id). */
-  async issueRefreshToken(input: {
-    userId: string;
-    sessionId: string;
-  }): Promise<IssuedRefreshToken> {
-    const iat = nowSec();
-    const exp = iat + this.config.refreshTtlSec;
-    const payload = { sub: input.userId, jti: input.sessionId, typ: 'refresh', iat, exp };
-    const token = await this.jwt.signAsync(payload, this.signOptions(this.config.refreshSecret));
-    return { token, expiresAt: new Date(exp * 1_000) };
-  }
-
   /** Throws `UnauthenticatedException` (`TOKEN_EXPIRED` / `INVALID_TOKEN`). Denylist NOT checked. */
   async verifyAccessToken(token: string): Promise<AccessTokenClaims> {
-    return parseAccessTokenClaims(await this.verify(token, this.config.accessSecret));
-  }
-
-  async verifyRefreshToken(token: string): Promise<RefreshTokenClaims> {
-    return parseRefreshTokenClaims(await this.verify(token, this.config.refreshSecret));
+    return parseAccessTokenClaims(await this.verify(token));
   }
 
   toAuthUser(claims: AccessTokenClaims): AuthUser {
     return toAuthUser(claims);
   }
 
-  /** What verifiers must enforce to accept exactly the tokens issued here. */
+  /** What verifiers must enforce to accept exactly the tokens signed for this deployment. */
   get verificationSettings(): JwtVerificationSettings {
     return {
       algorithms: [JWT_ALGORITHM],
@@ -107,22 +66,13 @@ export class TokenService {
     };
   }
 
-  private signOptions(secret: string): JwtSignOptions {
-    return {
-      secret,
-      algorithm: JWT_ALGORITHM,
-      issuer: this.config.issuer,
-      audience: this.config.audience,
-    };
-  }
-
-  private async verify(token: string, secret: string): Promise<unknown> {
+  private async verify(token: string): Promise<unknown> {
     if (token.length === 0) {
       throw new UnauthenticatedException('Missing token', { code: AuthErrorCode.MISSING_TOKEN });
     }
     try {
       return await this.jwt.verifyAsync<Record<string, unknown>>(token, {
-        secret,
+        secret: this.config.accessSecret,
         ...this.verificationSettings,
       });
     } catch (error) {
