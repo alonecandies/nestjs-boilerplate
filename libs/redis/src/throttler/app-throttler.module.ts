@@ -1,15 +1,18 @@
 import { type DynamicModule, Module, type Provider } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, DiscoveryModule } from '@nestjs/core';
 import { ThrottlerModule, type ThrottlerModuleOptions } from '@nestjs/throttler';
 import { type ThrottleConfig, throttleConfig } from '@platform/config';
 import type { Redis } from 'ioredis';
 import { RedisKeyService } from '../keys/redis-key.service.js';
 import { REDIS_CLIENT } from '../redis.constants.js';
 import { AppThrottlerGuard } from './app-throttler.guard.js';
+import { RateLimitPolicyRegistry } from './rate-limit-policy.js';
+import { RateLimitPolicyValidator } from './rate-limit-policy.validator.js';
 import { RedisThrottlerStorage } from './redis-throttler.storage.js';
-import { DEFAULT_THROTTLE_EXEMPT_PATHS, DEFAULT_THROTTLER_NAME } from './throttle.constants.js';
+import { DEFAULT_THROTTLE_EXEMPT_PATHS, THROTTLER } from './throttle.constants.js';
 import { createThrottleSkipIf } from './throttle-exempt.util.js';
+import { WsThrottlerGuard } from './ws-throttler.guard.js';
 
 export interface AppThrottlerModuleOptions {
   /** Path prefixes never rate limited. Default `DEFAULT_THROTTLE_EXEMPT_PATHS` (ops endpoints). */
@@ -26,27 +29,32 @@ export interface AppThrottlerModuleOptions {
 }
 
 /**
- * Redis-backed rate limiting for every replica: one `default` throttler
- * (`THROTTLE_LIMIT` per `THROTTLE_TTL_MS`), `@AuthThrottle()` for credential endpoints,
- * `@SkipThrottle()` to opt out, ops paths exempt. Requires `RedisModule` (global).
- *
- * Import `AuthModule` BEFORE this module so `JwtAuthGuard` has set `req.user` when the throttler
- * picks its tracker (global guards run in registration order); otherwise limits are per IP only.
+ * Redis-backed rate limiting for every replica (global module):
+ * - `user`: `THROTTLE_LIMIT` per `THROTTLE_TTL_MS`, one budget per user (else client IP) across routes;
+ * - `route`: named policies (`@RateLimit`), declared by domains with `RateLimitModule.forFeature`;
+ * - `@SkipRateLimit()` opts out; ops paths are exempt.
+ * Requires `RedisModule` (global). Import `AuthModule` BEFORE this module so `req.user` is set.
  */
 @Module({})
 export class AppThrottlerModule {
   static forRootAsync(options: AppThrottlerModuleOptions = {}): DynamicModule {
     const skipIf = createThrottleSkipIf(options.exemptPaths ?? DEFAULT_THROTTLE_EXEMPT_PATHS);
-    const guardProviders: Provider[] = [AppThrottlerGuard];
+    const providers: Provider[] = [
+      AppThrottlerGuard,
+      WsThrottlerGuard,
+      RateLimitPolicyRegistry,
+      RateLimitPolicyValidator,
+    ];
     if (options.globalGuard ?? true) {
-      guardProviders.push({ provide: APP_GUARD, useExisting: AppThrottlerGuard });
+      providers.push({ provide: APP_GUARD, useExisting: AppThrottlerGuard });
     }
     return {
       module: AppThrottlerModule,
+      global: true,
       imports: [
-        // AppThrottlerGuard injects the namespace for the @AuthThrottle() limits.
+        DiscoveryModule,
         ConfigModule.forFeature(throttleConfig),
-        // ThrottlerModule is @Global: its options + storage tokens are visible to the guard.
+        // ThrottlerModule is @Global: its options + storage tokens are visible to every guard.
         ThrottlerModule.forRootAsync({
           imports: [ConfigModule.forFeature(throttleConfig)],
           inject: [throttleConfig.KEY, REDIS_CLIENT, RedisKeyService],
@@ -55,7 +63,11 @@ export class AppThrottlerModule {
             redis: Redis,
             keys: RedisKeyService,
           ): ThrottlerModuleOptions => ({
-            throttlers: [{ name: DEFAULT_THROTTLER_NAME, ttl: config.ttlMs, limit: config.limit }],
+            throttlers: [
+              { name: THROTTLER.USER, ttl: config.ttlMs, limit: config.limit },
+              // Real values come from the route's @RateLimit policy (RateLimitGuardBase.bucketFor).
+              { name: THROTTLER.ROUTE, ttl: config.ttlMs, limit: config.limit },
+            ],
             storage: new RedisThrottlerStorage(
               redis,
               keys,
@@ -66,8 +78,8 @@ export class AppThrottlerModule {
           }),
         }),
       ],
-      providers: guardProviders,
-      exports: [AppThrottlerGuard],
+      providers,
+      exports: [AppThrottlerGuard, WsThrottlerGuard, RateLimitPolicyRegistry],
     };
   }
 }

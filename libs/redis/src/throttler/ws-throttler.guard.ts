@@ -1,8 +1,7 @@
 import { type ExecutionContext, Injectable } from '@nestjs/common';
-import { ThrottlerGuard, type ThrottlerRequest } from '@nestjs/throttler';
 import { getContextType } from '@platform/common';
-import { DEFAULT_THROTTLER_NAME } from './throttle.constants.js';
-import { throttleTracker } from './throttle-tracker.util.js';
+import { RateLimitGuardBase, type RateLimitSubject } from './rate-limit-guard.base.js';
+import { THROTTLER } from './throttle.constants.js';
 
 /** The parts of a socket.io `Socket` read here (structural → independent of socket.io copies). */
 interface SocketLike {
@@ -11,46 +10,25 @@ interface SocketLike {
 }
 
 /**
- * Per-MESSAGE rate limiting for WebSocket gateways — the global `AppThrottlerGuard` skips `ws`
- * (there is no request/response to hang headers on). Apply it on the gateway, never as APP_GUARD:
- *
- * ```ts
- * @UseGuards(WsThrottlerGuard)
- * @WebSocketGateway({ namespace: '/chat' })
- * export class ChatGateway { @Throttle({ default: { limit: 5, ttl: 10_000 } }) … }
- * ```
- *
- * Same Redis storage and limits as HTTP (`THROTTLE_*`, overridable with `@Throttle()`); tracker =
- * `user:<socket.data.user.id>` or the handshake address. A blocked message raises
- * `ThrottlerException` (429), which the WS exception filter reports to the client.
- * Requires `AppThrottlerModule` (it provides the throttler options + storage).
+ * Per-MESSAGE rate limiting for WebSocket gateways (the global `AppThrottlerGuard` skips `ws`).
+ * Apply it on the gateway, never as APP_GUARD: `@UseGuards(WsThrottlerGuard)`, with
+ * `@RateLimit('<domain>.<name>')` on handlers that need their own budget. Charges the global `user`
+ * budget and the handler's policy. A blocked message raises `ThrottlerException` (429), which
+ * `@UseWsExceptionFilter()` delivers as `{ ok: false, error }`. Requires `AppThrottlerModule`.
  */
 @Injectable()
-export class WsThrottlerGuard extends ThrottlerGuard {
+export class WsThrottlerGuard extends RateLimitGuardBase {
+  protected override readonly enforced: ReadonlySet<string> = new Set<string>([
+    THROTTLER.USER,
+    THROTTLER.ROUTE,
+  ]);
+
   protected override async shouldSkip(context: ExecutionContext): Promise<boolean> {
     return getContextType(context) !== 'ws';
   }
 
-  protected override async handleRequest({
-    context,
-    limit,
-    ttl,
-    throttler,
-    blockDuration,
-    generateKey,
-  }: ThrottlerRequest): Promise<boolean> {
+  protected override subjectOf(context: ExecutionContext): RateLimitSubject {
     const client = context.switchToWs().getClient<SocketLike | undefined>();
-    const tracker = throttleTracker(
-      client?.data?.user,
-      client?.handshake?.address,
-      this.ipv6SubnetPrefix,
-    );
-    const name = throttler.name ?? DEFAULT_THROTTLER_NAME;
-    const key = generateKey(context, tracker, name);
-    const record = await this.storageService.increment(key, ttl, limit, blockDuration, name);
-    if (record.isBlocked) {
-      await this.throwThrottlingException(context, { limit, ttl, key, tracker, ...record });
-    }
-    return true;
+    return { user: client?.data?.user, ip: client?.handshake?.address };
   }
 }

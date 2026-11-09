@@ -1,7 +1,33 @@
-/** Name of the single configured throttler (`THROTTLE_TTL_MS` / `THROTTLE_LIMIT`). */
-export const DEFAULT_THROTTLER_NAME = 'default';
+/**
+ * Named throttlers (spec §11). Each guard enforces its own subset (`RateLimitGuardBase.enforced`):
+ * `ip` before authentication, `user`/`route`/`auth` after it, `user`/`route` per WebSocket message.
+ * `lockout` is a bucket the `auth` throttler maintains, not a configured throttler.
+ */
+export const THROTTLER = {
+  IP: 'ip',
+  USER: 'user',
+  ROUTE: 'route',
+  AUTH: 'auth',
+  LOCKOUT: 'lockout',
+} as const;
 
-/** Route metadata set by `@AuthThrottle()` (read by `AppThrottlerGuard`). */
+export type ThrottlerName = (typeof THROTTLER)[keyof typeof THROTTLER];
+
+/** Every configured throttler name: `SkipRateLimit()` skips all of them. */
+export const RATE_LIMIT_THROTTLERS: readonly ThrottlerName[] = Object.freeze([
+  THROTTLER.IP,
+  THROTTLER.USER,
+  THROTTLER.ROUTE,
+  THROTTLER.AUTH,
+]);
+
+/** Scope of the budgets that span every route (`ip`, `user`). */
+export const GLOBAL_SCOPE = 'global';
+
+/** Route metadata set by `@RateLimit(policy)` (read by `RateLimitGuardBase`). */
+export const RATE_LIMIT_POLICY_KEY = 'app:rateLimitPolicy';
+
+/** Route metadata set by `@AuthThrottle()` (read by `AppThrottlerGuard`). Removed by task C2. */
 export const AUTH_THROTTLE_KEY = 'app:authThrottle';
 
 /**

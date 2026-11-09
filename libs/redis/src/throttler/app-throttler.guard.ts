@@ -1,9 +1,13 @@
 import { type ExecutionContext, Inject, Injectable } from '@nestjs/common';
-import { ThrottlerGuard, type ThrottlerRequest } from '@nestjs/throttler';
+import type { ThrottlerRequest } from '@nestjs/throttler';
 import { getContextType } from '@platform/common';
 import { type ThrottleConfig, throttleConfig } from '@platform/config';
-import { AUTH_THROTTLE_KEY, DEFAULT_THROTTLER_NAME } from './throttle.constants.js';
-import { throttleTracker } from './throttle-tracker.util.js';
+import {
+  type RateLimitBucket,
+  RateLimitGuardBase,
+  type RateLimitSubject,
+} from './rate-limit-guard.base.js';
+import { AUTH_THROTTLE_KEY, THROTTLER } from './throttle.constants.js';
 
 type HeaderSink = Record<string, unknown>;
 
@@ -18,22 +22,20 @@ interface GqlContextLike {
 }
 
 /**
- * Global throttler guard, transport-aware (hybrid apps run global guards for every transport):
- * - `http` / `graphql` are throttled (graphql through the `{ req, reply }` context),
- * - `ws` is skipped (use `WsThrottlerGuard` on gateways), `rpc` is skipped (gRPC/Kafka traffic is
- *   service-to-service and already limited at the edge),
- * - tracker = `user:<id>` when `JwtAuthGuard` authenticated the request, else `ip:<client ip>`
- *   (Fastify `req.ip` honours `trustProxy`; IPv6 is normalised to its /64 like the default),
- * - `@AuthThrottle()` handlers use the stricter `THROTTLE_AUTH_*` window.
- *
- * Per-user tracking needs the auth guard to run first: import `AuthModule` before
- * `AppThrottlerModule` (global guards run in module-registration order).
+ * Global throttler guard for HTTP and GraphQL (ws: `WsThrottlerGuard`; rpc: limited at the edge).
+ * Charges the `user` budget (user id, else client IP; scope `global`) and the `route` budget of a
+ * `@RateLimit` policy. Register it AFTER `AuthModule` so `req.user` is set.
  */
 @Injectable()
-export class AppThrottlerGuard extends ThrottlerGuard {
+export class AppThrottlerGuard extends RateLimitGuardBase {
   // Property injection keeps ThrottlerGuard's own (decorated) constructor untouched.
   @Inject(throttleConfig.KEY)
   private readonly limits!: ThrottleConfig;
+
+  protected override readonly enforced: ReadonlySet<string> = new Set<string>([
+    THROTTLER.USER,
+    THROTTLER.ROUTE,
+  ]);
 
   protected override async shouldSkip(context: ExecutionContext): Promise<boolean> {
     const type = getContextType(context);
@@ -51,24 +53,37 @@ export class AppThrottlerGuard extends ThrottlerGuard {
     return super.getRequestResponse(context);
   }
 
-  protected override async getTracker(req: HeaderSink): Promise<string> {
-    return throttleTracker(req.user, req.ip, this.ipv6SubnetPrefix);
+  protected override subjectOf(context: ExecutionContext): RateLimitSubject {
+    const { req } = this.getRequestResponse(context);
+    return { user: req['user'], ip: typeof req['ip'] === 'string' ? req['ip'] : undefined };
   }
 
-  protected override async handleRequest(request: ThrottlerRequest): Promise<boolean> {
-    if (
-      request.throttler.name === DEFAULT_THROTTLER_NAME &&
-      this.isAuthThrottled(request.context)
-    ) {
+  protected override responseOf(context: ExecutionContext): HeaderSink {
+    return this.getRequestResponse(context).res;
+  }
+
+  protected override isIgnored(context: ExecutionContext): boolean {
+    const agents = this.commonOptions.ignoreUserAgents;
+    if (!Array.isArray(agents) || agents.length === 0) return false;
+    const headers = this.getRequestResponse(context).req['headers'] as
+      | Record<string, unknown>
+      | undefined;
+    const agent = headers?.['user-agent'];
+    return typeof agent === 'string' && agents.some((pattern) => pattern.test(agent));
+  }
+
+  protected override bucketFor(
+    request: ThrottlerRequest,
+    subject: RateLimitSubject,
+  ): RateLimitBucket | undefined {
+    const bucket = super.bucketFor(request, subject);
+    // Interim until task C2: @AuthThrottle() routes share ONE `auth` scope (F17) with the
+    // THROTTLE_AUTH_* window instead of the global user budget.
+    if (bucket?.throttler === THROTTLER.USER && this.isAuthThrottled(request.context)) {
       const { authLimit, authTtlMs } = this.limits;
-      return super.handleRequest({
-        ...request,
-        limit: authLimit,
-        ttl: authTtlMs,
-        blockDuration: authTtlMs,
-      });
+      return { ...bucket, scope: 'auth', limit: authLimit, ttlMs: authTtlMs, blockMs: authTtlMs };
     }
-    return super.handleRequest(request);
+    return bucket;
   }
 
   private isAuthThrottled(context: ExecutionContext): boolean {

@@ -21,7 +21,7 @@ import {
   TokenService,
 } from '@platform/auth';
 import { toProblemDetails, UnauthenticatedException } from '@platform/common';
-import { Throttle, WsThrottlerGuard } from '@platform/redis';
+import { RateLimit, WsThrottlerGuard } from '@platform/redis';
 import type { DefaultEventsMap, ExtendedError, Namespace, Socket } from 'socket.io';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
 import {
@@ -30,6 +30,7 @@ import {
   userRoom,
 } from '../../notifications.constants.js';
 import type { NotificationResponse } from '../http/notifications.dto.js';
+import { NOTIFICATIONS_RATE_LIMITS } from './notifications-rate-limit.js';
 import {
   type MarkReadAck,
   type MarkReadMessage,
@@ -191,7 +192,7 @@ export class NotificationsGateway
   /** Marks a notification read; the return value is the socket.io ack. */
   @SubscribeMessage(NOTIFICATIONS_WS_EVENTS.MARK_READ)
   @RequirePermissions(Permission.NotificationsRead)
-  @Throttle({ default: { limit: 30, ttl: 10_000 } })
+  @RateLimit(NOTIFICATIONS_RATE_LIMITS.MARK_READ)
   async markRead(
     @MessageBody({ schema: markReadMessageSchema }) body: MarkReadMessage,
     @CurrentUser('id') userId: string,

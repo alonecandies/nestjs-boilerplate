@@ -6,7 +6,7 @@ import { zInt } from '../env/env.helpers.js';
 export const throttleEnvSchema = z
   .object({
     THROTTLE_TTL_MS: zInt(60_000, { min: 1 }),
-    THROTTLE_LIMIT: zInt(100, { min: 1 }),
+    THROTTLE_LIMIT: zInt(300, { min: 1 }),
     THROTTLE_AUTH_TTL_MS: zInt(60_000, { min: 1 }),
     THROTTLE_AUTH_LIMIT: zInt(10, { min: 1 }),
   })

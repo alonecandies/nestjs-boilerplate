@@ -9,6 +9,7 @@
 export const MONOLITH_E2E_ENV: Readonly<Record<string, string>> = {
   NODE_ENV: 'test',
   LOG_LEVEL: 'silent',
+  THROTTLE_LIMIT: '100000',
   SERVICE_NAME: 'monolith-e2e',
   OTEL_SDK_DISABLED: 'true',
   OBSERVE_APP_KEY: '',

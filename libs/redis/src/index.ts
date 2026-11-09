@@ -5,7 +5,7 @@
  * adapter and the readiness contributor. Test doubles live in `@platform/redis/testing`.
  */
 
-// Re-exported so feature libs can opt routes out/in without depending on @nestjs/throttler.
+// Re-exported for apps; prefer RateLimit/SkipRateLimit (they know every throttler name).
 export { SkipThrottle, Throttle } from '@nestjs/throttler';
 export { AppCacheModule, createCacheOptions } from './cache/app-cache.module.js';
 export {
@@ -73,6 +73,21 @@ export {
   type AppThrottlerModuleOptions,
 } from './throttler/app-throttler.module.js';
 export { AuthThrottle } from './throttler/auth-throttle.decorator.js';
+export { RateLimit, SkipRateLimit } from './throttler/rate-limit.decorator.js';
+export { type RateLimitFeatureOptions, RateLimitModule } from './throttler/rate-limit.module.js';
+export {
+  type RateLimitBucket,
+  RateLimitGuardBase,
+  type RateLimitSubject,
+} from './throttler/rate-limit-guard.base.js';
+export { rateLimitKey } from './throttler/rate-limit-key.util.js';
+export {
+  RATE_LIMIT_POLICY_NAME,
+  type RateLimitKeyKind,
+  type RateLimitLockout,
+  type RateLimitPolicy,
+  RateLimitPolicyRegistry,
+} from './throttler/rate-limit-policy.js';
 export {
   msToSeconds,
   RedisThrottlerStorage,
@@ -87,7 +102,11 @@ export {
 export {
   AUTH_THROTTLE_KEY,
   DEFAULT_THROTTLE_EXEMPT_PATHS,
-  DEFAULT_THROTTLER_NAME,
+  GLOBAL_SCOPE,
+  RATE_LIMIT_POLICY_KEY,
+  RATE_LIMIT_THROTTLERS,
+  THROTTLER,
+  type ThrottlerName,
 } from './throttler/throttle.constants.js';
 export { createThrottleSkipIf, isThrottleExemptPath } from './throttler/throttle-exempt.util.js';
 export { throttleTracker } from './throttler/throttle-tracker.util.js';

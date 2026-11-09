@@ -4,7 +4,7 @@ import { parseEnv } from 'node:util';
 import { billingGrpcClientConfig } from '@domain/billing';
 import { filesConfig } from '@domain/files';
 import { identityGrpcClientConfig } from '@domain/identity';
-import { notificationsGrpcClientConfig } from '@domain/notifications';
+import { notificationsGrpcClientConfig, notificationsRateLimitConfig } from '@domain/notifications';
 import { validateAllEnv } from '@platform/config';
 import { describe, expect, it } from 'vitest';
 import { gatewayConfig } from '../src/gateway.config.js';
@@ -20,6 +20,7 @@ const NAMESPACES = [
   billingGrpcClientConfig,
   filesConfig,
   gatewayConfig,
+  notificationsRateLimitConfig,
 ] as const;
 
 /**
