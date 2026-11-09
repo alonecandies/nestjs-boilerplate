@@ -154,6 +154,7 @@
     "graph": "nx graph",
     "proto:gen": "bun run --filter './domains/*/contracts' --filter @platform/transport proto:gen",
     "proto:lint": "bun run --filter './domains/*/contracts' proto:lint",
+    "proto:breaking": "node scripts/check-proto-breaking.mjs --against origin/master",
     "db:generate": "bun run --filter '@domain/*' db:generate",
     "db:check": "bun run --filter '@domain/*' db:check",
     "db:migrate": "bun run --filter @app/monolith db:migrate:dev",

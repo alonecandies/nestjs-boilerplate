@@ -433,7 +433,7 @@ Runs on pushes to `master` and on pull requests. Test layout and the integration
 - **verify**: Node 24 (`.nvmrc`) + Bun 1.4.3, `bun install --frozen-lockfile`, `bun run check` (Biome, ESLint,
   Prettier, tsc), `bun run test`, `bun run build`, generated-artefact drift (`proto:gen` + `buf lint` + `db:generate` + `db:check`,
   then a clean `git diff`/`git status` of `domains/*/contracts/src/generated` and `domains/*/src/infrastructure/persistence/migrations`),
-  commitlint over the PR's commits (pull requests only), then the config drift checks (`.env.example`, Kafka topics).
+  commitlint over the PR's commits and `buf breaking` against the PR base (pull requests only), then the config drift checks (`.env.example`, Kafka topics).
 - **integration**: `bun run test:int` (`INTEGRATION=1`, every `<package>:int` project): Postgres from testcontainers,
   Redis from a job service container (`REDIS_URL=redis://localhost:6379`).
 - **image** (matrix of the 5 apps): `docker buildx` of the `runtime` target, not pushed, GitHub Actions cache per app.

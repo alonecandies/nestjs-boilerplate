@@ -32,11 +32,10 @@ bun run --filter @domain/notifications-contracts proto:lint   # buf lint with th
 bun run --filter @domain/notifications-contracts proto:gen    # buf generate + the shared ESM fix (libs/contracts)
 ```
 
-Check a proto change for breaking changes from this folder before releasing it:
+Breaking changes are checked against the base branch on every pull request (CI runs
+`node scripts/check-proto-breaking.mjs --against <base sha>` for every contracts package). Run it
+locally from the repo root before you push:
 
 ```bash
-buf breaking --config ../../../libs/contracts/buf.yaml \
-  --against '../../../.git#branch=master,subdir=domains/notifications/contracts/src/proto'
+bun run proto:breaking   # buf breaking against origin/master (git fetch origin master first)
 ```
-
-The first comparison after the move to this package must point at the old root instead (`subdir=libs/contracts/src/proto`); it also reports the other contexts' files as deleted, which is expected.
