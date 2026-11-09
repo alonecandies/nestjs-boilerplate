@@ -1,5 +1,11 @@
 import { type ExecutionContext, Inject } from '@nestjs/common';
 import { normalizeIp, ThrottlerGuard, type ThrottlerRequest } from '@nestjs/throttler';
+import {
+  collectDecision,
+  formatRateLimit,
+  formatRateLimitPolicy,
+  type RateLimitDecision,
+} from './rate-limit-headers.js';
 import { rateLimitKey } from './rate-limit-key.util.js';
 import { type RateLimitPolicy, RateLimitPolicyRegistry } from './rate-limit-policy.js';
 import { GLOBAL_SCOPE, RATE_LIMIT_POLICY_KEY, THROTTLER } from './throttle.constants.js';
@@ -116,6 +122,16 @@ export abstract class RateLimitGuardBase extends ThrottlerGuard {
       bucket.blockMs,
       bucket.throttler,
     );
+    this.recordDecision(context, {
+      throttler: bucket.throttler,
+      scope: bucket.scope,
+      limit: bucket.limit,
+      ttlMs: bucket.ttlMs,
+      remaining: record.isBlocked ? 0 : Math.max(0, bucket.limit - record.totalHits),
+      resetSeconds: record.isBlocked ? record.timeToBlockExpire : record.timeToExpire,
+      blocked: record.isBlocked,
+      retryAfterSeconds: record.isBlocked ? record.timeToBlockExpire : 0,
+    });
     if (!record.isBlocked) return;
     const res = this.responseOf(context);
     if (res !== undefined) this.setResponseHeader(res, 'Retry-After', record.timeToBlockExpire);
@@ -126,5 +142,20 @@ export abstract class RateLimitGuardBase extends ThrottlerGuard {
       tracker: bucket.tracker,
       ...record,
     });
+  }
+
+  /**
+   * Every guard decision passes here: writes the IETF headers (all budgets of this response, both
+   * guards) and is the hook for decision metrics (G-10: count at the TOP of this method, before the
+   * early returns, so lockout and WebSocket decisions are counted too). The lockout bucket is never
+   * advertised.
+   */
+  protected recordDecision(context: ExecutionContext, decision: RateLimitDecision): void {
+    if (decision.throttler === THROTTLER.LOCKOUT) return;
+    const res = this.responseOf(context);
+    if (res === undefined) return;
+    const all = collectDecision(res, decision);
+    this.setResponseHeader(res, 'RateLimit-Policy', formatRateLimitPolicy(all));
+    this.setResponseHeader(res, 'RateLimit', formatRateLimit(all));
   }
 }

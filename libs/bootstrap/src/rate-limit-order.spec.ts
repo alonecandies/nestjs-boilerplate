@@ -72,6 +72,23 @@ describe('guard order: the ip throttler runs before authentication', () => {
     await app.close();
   });
 
+  it('sends the IETF headers and exposes them (and Retry-After) through CORS', async () => {
+    await redis.flushall();
+    const response = await app.inject({
+      method: 'GET',
+      url: '/v1/order/public',
+      headers: { origin: 'http://localhost:3000' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['ratelimit-policy']).toBe('"ip";q=3;w=60, "user";q=300;w=60');
+    expect(response.headers['ratelimit']).toBe('"ip";r=2;t=60, "user";r=299;t=60');
+    const exposed = String(response.headers['access-control-expose-headers']).toLowerCase();
+    for (const name of ['ratelimit-policy', 'ratelimit', 'retry-after'])
+      expect(exposed).toContain(name);
+    expect(response.headers['x-ratelimit-limit']).toBeUndefined();
+    await redis.flushall();
+  });
+
   it('counts 401s: the 4th unauthenticated request from one IP is 429, not 401', async () => {
     const hit = () =>
       app.inject({

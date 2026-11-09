@@ -200,6 +200,53 @@ describe('AppThrottlerGuard', () => {
     expect(res.header).toHaveBeenCalledWith('Retry-After', 42);
   });
 
+  it('sets RateLimit-Policy and RateLimit for every charged budget, and on 429 too', async () => {
+    const { guard, increment } = await createGuard();
+    increment.mockImplementation(async (_k, _t, _l, _b, name) =>
+      name === 'route'
+        ? record({ totalHits: 3, timeToExpire: 8 })
+        : record({ totalHits: 10, timeToExpire: 50 }),
+    );
+    const res = { header: vi.fn() };
+    await guard.canActivate(
+      context('http', { headers: {}, user: { id: 'u-1' } }, Controller.prototype.upload, res),
+    );
+    expect(res.header).toHaveBeenLastCalledWith(
+      'RateLimit',
+      '"user";r=90;t=50, "route:files.upload";r=0;t=8',
+    );
+    expect(res.header).toHaveBeenCalledWith(
+      'RateLimit-Policy',
+      '"user";q=100;w=60, "route:files.upload";q=3;w=10',
+    );
+
+    const blockedRes = { header: vi.fn() };
+    increment.mockResolvedValue(record({ isBlocked: true, totalHits: 101, timeToBlockExpire: 30 }));
+    await expect(
+      guard.canActivate(
+        context('http', { headers: {}, ip: '1.2.3.4' }, Controller.prototype.list, blockedRes),
+      ),
+    ).rejects.toBeInstanceOf(ThrottlerException);
+    expect(blockedRes.header).toHaveBeenCalledWith('RateLimit', '"user";r=0;t=30');
+    expect(blockedRes.header).toHaveBeenCalledWith('Retry-After', 30);
+  });
+
+  it('never advertises the lockout bucket', async () => {
+    const { guard } = await createGuard();
+    const res = { header: vi.fn() };
+    await guard.canActivate(
+      context(
+        'http',
+        { headers: {}, ip: '1.2.3.4', body: { email: 'a@x.io' } },
+        Controller.prototype.login,
+        res,
+      ),
+    );
+    const values = res.header.mock.calls.map(([, value]) => String(value)).join(' ');
+    expect(values).toContain('"auth:id.credentials"');
+    expect(values).not.toContain('lockout');
+  });
+
   it('honours ignoreUserAgents', async () => {
     const { guard, increment } = await createGuard({ ignoreUserAgents: [/kube-probe/i] });
     await guard.canActivate(

@@ -87,6 +87,14 @@ export {
   RateLimitGuardBase,
   type RateLimitSubject,
 } from './throttler/rate-limit-guard.base.js';
+export {
+  collectDecision,
+  formatRateLimit,
+  formatRateLimitPolicy,
+  policyItemName,
+  RATE_LIMIT_HEADER_ORDER,
+  type RateLimitDecision,
+} from './throttler/rate-limit-headers.js';
 export { rateLimitKey } from './throttler/rate-limit-key.util.js';
 export {
   RATE_LIMIT_POLICY_NAME,

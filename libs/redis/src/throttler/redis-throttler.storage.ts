@@ -19,7 +19,7 @@ export interface RedisThrottlerStorageOptions {
   failOpen?: boolean;
 }
 
-/** The storage contract reports seconds (used for `Retry-After` / `X-RateLimit-Reset`). */
+/** The storage contract reports seconds (used for `Retry-After` and the IETF `RateLimit` `t=`). */
 export const msToSeconds = (ms: number): number => Math.max(0, Math.ceil(ms / 1_000));
 
 const FAILURE_LOG_INTERVAL_MS = 10_000;
