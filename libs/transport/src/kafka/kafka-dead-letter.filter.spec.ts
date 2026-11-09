@@ -119,13 +119,13 @@ describe('buildDeadLetterRecord', () => {
         offset: '7',
       } as never,
       0,
-      'fixture.payment-succeeded.v1',
+      'fixture.order-placed.v1',
       {} as never,
       () => Promise.resolve(),
       {} as never,
     ]);
     const record = buildDeadLetterRecord(context, new Error('x'.repeat(5_000)), new Date(0));
-    expect(record.topic).toBe('fixture.payment-succeeded.v1.dlq');
+    expect(record.topic).toBe('fixture.order-placed.v1.dlq');
     expect(record.message.key).toBeNull();
     expect(record.message.value).toBe('plain text');
     expect(record.message.headers).toMatchObject({

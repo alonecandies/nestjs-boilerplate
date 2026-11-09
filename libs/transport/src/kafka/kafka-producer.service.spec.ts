@@ -5,7 +5,7 @@ import { CLS_ID, CLS_REQ, ClsService } from 'nestjs-cls';
 import { type Observable, of, Subject, throwError } from 'rxjs';
 import { beforeAll, describe, expect, it, vi } from 'vitest';
 import {
-  FIXTURE_PAYMENT_SUCCEEDED_EVENT,
+  FIXTURE_ORDER_PLACED_EVENT,
   FIXTURE_USER_REGISTERED_EVENT,
   type FixtureUserRegisteredPayload,
 } from '../../test/fixtures/fixture.events.js';
@@ -224,7 +224,7 @@ describe('FakeKafkaProducer', () => {
       source: 'test-svc',
       payload,
     });
-    expect(fake.published(FIXTURE_PAYMENT_SUCCEEDED_EVENT)).toEqual([]);
+    expect(fake.published(FIXTURE_ORDER_PLACED_EVENT)).toEqual([]);
   });
 
   it('still validates payloads, can simulate a broker failure, and clears', async () => {

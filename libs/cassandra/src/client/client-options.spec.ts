@@ -19,7 +19,7 @@ const cfg = cassandraConfig.parse({
   CASSANDRA_CONTACT_POINTS: 'cass-1,cass-2',
   CASSANDRA_PORT: '9142',
   CASSANDRA_LOCAL_DC: 'eu-west-1',
-  CASSANDRA_KEYSPACE: 'notifications',
+  CASSANDRA_KEYSPACE: 'alerts',
   CASSANDRA_CONSISTENCY: 'localQuorum',
   CASSANDRA_CORE_CONNECTIONS: '3',
   CASSANDRA_REQUEST_TIMEOUT_MS: '8000',
@@ -28,13 +28,13 @@ const cfg = cassandraConfig.parse({
 describe('buildClientOptions', () => {
   it('maps the cassandra namespace onto tuned driver options', () => {
     const options = buildClientOptions(cfg, {
-      applicationName: 'notifications-service',
-      keyspace: 'notifications',
+      applicationName: 'alerts-service',
+      keyspace: 'alerts',
     });
     expect(options).toMatchObject({
       contactPoints: ['cass-1', 'cass-2'],
       localDataCenter: 'eu-west-1',
-      keyspace: 'notifications',
+      keyspace: 'alerts',
       protocolOptions: { port: 9142, maxSchemaAgreementWaitSeconds: 30 },
       pooling: {
         coreConnectionsPerHost: { [types.distance.local]: 3, [types.distance.remote]: 1 },
@@ -50,7 +50,7 @@ describe('buildClientOptions', () => {
       socketOptions: { readTimeout: 8000 },
       encoding: { useUndefinedAsUnset: true, useBigIntAsLong: true },
       monitorReporting: { enabled: false },
-      applicationName: 'notifications-service',
+      applicationName: 'alerts-service',
     });
     expect(options.authProvider).toBeUndefined();
   });

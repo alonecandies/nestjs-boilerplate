@@ -42,6 +42,6 @@ describe('RedisKeyService', () => {
   it('prefixes keys with REDIS_KEY_PREFIX', () => {
     const service = new RedisKeyService(redisConfig.parse({ REDIS_KEY_PREFIX: 'svc' }));
     expect(service.prefix).toBe('svc');
-    expect(service.key('lock', 'identity:purge-sessions')).toBe('svc:lock:identity:purge-sessions');
+    expect(service.key('lock', 'orders:purge-sessions')).toBe('svc:lock:orders:purge-sessions');
   });
 });

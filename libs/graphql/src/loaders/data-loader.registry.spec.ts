@@ -59,7 +59,7 @@ describe('DataLoaderRegistry', () => {
   it('creates loaders lazily: untouched loaders cost nothing', () => {
     const { registry, factory } = usersRegistry();
     const expensive = vi.fn(() => new DataLoader<string, string>(async (keys) => [...keys]));
-    registry.register('payments', expensive);
+    registry.register('shipments', expensive);
 
     const loaders = registry.createLoaders();
     void loaders['users'];

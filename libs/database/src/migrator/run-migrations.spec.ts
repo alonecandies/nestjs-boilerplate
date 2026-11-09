@@ -147,15 +147,15 @@ describe('runMigrations', () => {
   });
 
   it('applies the sets in array order on ONE session, under ONE lock, and sums the summary', async () => {
-    const identity = migrationSet('identity', ['0000_init']);
+    const inventory = migrationSet('inventory', ['0000_init']);
     const pending = migrationSet('pending', null);
-    const billing = migrationSet('billing', ['0000_init', '0001_more']);
+    const pricing = migrationSet('pricing', ['0000_init', '0001_more']);
     const appliedBySchema = new Map<string, number>();
     const events: string[] = [];
     vi.mocked(migrate).mockImplementation(async (_db, config) => {
       const schema = config.migrationsSchema ?? '';
       events.push(`migrate ${schema}`);
-      appliedBySchema.set(schema, schema === 'billing' ? 2 : 1);
+      appliedBySchema.set(schema, schema === 'pricing' ? 2 : 1);
     });
     const sql = createFakeSql((query, values) => {
       if (query.includes('pg_try_advisory_lock')) {
@@ -176,28 +176,28 @@ describe('runMigrations', () => {
     vi.mocked(postgres).mockReturnValue(sql as never);
 
     const summary = await runMigrations(URL, {
-      migrations: [identity, pending, billing],
+      migrations: [inventory, pending, pricing],
       logger: silentLogger(),
     });
 
-    expect(events).toEqual(['lock', 'migrate identity', 'migrate billing', 'unlock']);
+    expect(events).toEqual(['lock', 'migrate inventory', 'migrate pricing', 'unlock']);
     expect(vi.mocked(migrate).mock.calls.map(([, config]) => config)).toEqual([
       {
-        migrationsFolder: identity.folder,
-        migrationsSchema: 'identity',
+        migrationsFolder: inventory.folder,
+        migrationsSchema: 'inventory',
         migrationsTable: MIGRATIONS_TABLE,
       },
       {
-        migrationsFolder: billing.folder,
-        migrationsSchema: 'billing',
+        migrationsFolder: pricing.folder,
+        migrationsSchema: 'pricing',
         migrationsTable: MIGRATIONS_TABLE,
       },
     ]);
     expect(summary).toEqual({
       sets: [
-        { name: 'identity', folder: identity.folder, total: 1, applied: 1 },
+        { name: 'inventory', folder: inventory.folder, total: 1, applied: 1 },
         { name: 'pending', folder: pending.folder, total: 0, applied: 0 },
-        { name: 'billing', folder: billing.folder, total: 2, applied: 2 },
+        { name: 'pricing', folder: pricing.folder, total: 2, applied: 2 },
       ],
       total: 3,
       applied: 3,
@@ -207,14 +207,14 @@ describe('runMigrations', () => {
   });
 
   it('stops at a failing set: names it, never attempts the next one, still unlocks and closes', async () => {
-    const identity = migrationSet('identity', ['0000_init']);
-    const billing = migrationSet('billing', ['0000_init']);
+    const inventory = migrationSet('inventory', ['0000_init']);
+    const pricing = migrationSet('pricing', ['0000_init']);
     const audit = migrationSet('audit', ['0000_init']);
-    const failure = new Error('relation "payments" already exists');
+    const failure = new Error('relation "shipments" already exists');
     const events: string[] = [];
     vi.mocked(migrate).mockImplementation(async (_db, config) => {
       events.push(`migrate ${config.migrationsSchema ?? ''}`);
-      if (config.migrationsSchema === 'billing') throw failure;
+      if (config.migrationsSchema === 'pricing') throw failure;
     });
     const sql = createFakeSql((query) => {
       if (query.includes('pg_try_advisory_lock')) {
@@ -227,16 +227,16 @@ describe('runMigrations', () => {
     vi.mocked(postgres).mockReturnValue(sql as never);
 
     const error = await runMigrations(URL, {
-      migrations: [identity, billing, audit],
+      migrations: [inventory, pricing, audit],
       logger: silentLogger(),
     }).catch((caught: unknown) => caught);
 
     expect(error).toBeInstanceOf(Error);
     expect(error).toMatchObject({
-      message: `Migration set "billing" (${billing.folder}) failed`,
+      message: `Migration set "pricing" (${pricing.folder}) failed`,
       cause: failure,
     });
-    expect(events).toEqual(['lock', 'migrate identity', 'migrate billing', 'unlock']);
+    expect(events).toEqual(['lock', 'migrate inventory', 'migrate pricing', 'unlock']);
     expect(sql.end).toHaveBeenCalledWith({ timeout: 5 });
   });
 

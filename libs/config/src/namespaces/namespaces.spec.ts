@@ -21,8 +21,8 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
     expect(ALL_CONFIG_NAMESPACES).toHaveLength(Object.keys(CONFIG_NAMESPACES).length);
   });
 
-  it('holds no domain namespace (stripe belongs to @domain/billing)', () => {
-    expect(CONFIG_NAMESPACES).not.toHaveProperty('stripe');
+  it('holds no domain namespace (domains register their own)', () => {
+    expect(CONFIG_NAMESPACES).not.toHaveProperty('stripe'); // vocabulary-allow: asserts libs hold no stripe code
   });
 
   it('app', () => {
@@ -170,9 +170,9 @@ describe('config namespaces — derived values and coercion', () => {
   });
 
   it('derives Kafka ids from SERVICE_NAME and builds SASL only when complete', () => {
-    expect(kafkaConfig.parse({ SERVICE_NAME: 'identity-service' })).toMatchObject({
-      clientId: 'identity-service',
-      groupId: 'identity-service',
+    expect(kafkaConfig.parse({ SERVICE_NAME: 'orders-service' })).toMatchObject({
+      clientId: 'orders-service',
+      groupId: 'orders-service',
     });
     expect(
       kafkaConfig.parse({
@@ -203,7 +203,7 @@ describe('config namespaces — derived values and coercion', () => {
     ).toEqual({ enabled: true, appKey: 'k', appSecret: 's', serviceId: 'gw' });
   });
 
-  it('storage holds no upload limits (the files namespace of @domain/files owns them)', () => {
+  it('storage holds no upload limits (a domain namespace owns them)', () => {
     const storage = storageConfig.parse({ STORAGE_MAX_UPLOAD_BYTES: '1024' });
     expect(storage).not.toHaveProperty('maxUploadBytes');
     expect(storage).not.toHaveProperty('maxConcurrentUploads');

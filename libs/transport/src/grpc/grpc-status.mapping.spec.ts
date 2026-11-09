@@ -216,10 +216,10 @@ describe('grpcErrorToDomainException (client side)', () => {
     (code) => {
       const exception = grpcErrorToDomainException(
         Object.assign(new Error('Breaker is open'), { code }),
-        'identity.GetUser',
+        'orders.GetUser',
       );
       expect(exception).toBeInstanceOf(ServiceUnavailableException);
-      expect(exception.details).toEqual({ operation: 'identity.GetUser', reason: code });
+      expect(exception.details).toEqual({ operation: 'orders.GetUser', reason: code });
     },
   );
 
@@ -239,11 +239,11 @@ describe('grpcErrorToDomainException (client side)', () => {
     [GrpcStatus.DEADLINE_EXCEEDED, OperationTimeoutException],
   ])('hides upstream details for server-side status %s', (code, type) => {
     const leaky = 'No connection established. Last error: connect ECONNREFUSED 10.0.3.7:50051';
-    const exception = grpcErrorToDomainException(serviceError(code, leaky), 'identity.GetUser');
+    const exception = grpcErrorToDomainException(serviceError(code, leaky), 'orders.GetUser');
     expect(exception).toBeInstanceOf(type);
     expect(exception.message).not.toContain('ECONNREFUSED');
     expect(JSON.stringify(exception.details)).not.toContain('10.0.3.7');
-    expect(exception.details).toMatchObject({ operation: 'identity.GetUser' });
+    expect(exception.details).toMatchObject({ operation: 'orders.GetUser' });
   });
 
   it('maps anything else to ExternalServiceException', () => {
@@ -268,7 +268,7 @@ describe('exceptionToGrpcError (server side)', () => {
 
   it('never sends details of server-side domain failures', () => {
     const response = exceptionToGrpcError(
-      new ExternalServiceException('Stripe failed', { details: { stripeRequestId: 'req_1' } }),
+      new ExternalServiceException('Acmepay failed', { details: { acmepayRequestId: 'req_1' } }),
     );
     expect(response.code).toBe(GrpcStatus.INTERNAL);
     expect(response.metadata?.get('x-error-details-bin')).toEqual([]);
@@ -356,7 +356,7 @@ describe('server → client round trip (mapping only)', () => {
   it('turns a server-side failure into a sanitized 5xx with the stable code only', () => {
     const rebuilt = grpcErrorToDomainException(
       toServiceError(exceptionToGrpcError(new Error('pg: password authentication failed'))),
-      'billing.ListPayments',
+      'catalog.ListShipments',
     );
     expect(rebuilt).toBeInstanceOf(ExternalServiceException);
     expect(rebuilt.httpStatus).toBe(HttpStatus.BAD_GATEWAY);

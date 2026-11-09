@@ -78,7 +78,7 @@ describe('AllExceptionsFilter', () => {
     it('does not log requestId itself (the request-scoped pino logger binds it: no duplicate key)', () => {
       const { host } = fakeAdapterHost();
       const filter = new AllExceptionsFilter(host);
-      const request = { id: 'req-7', url: '/v1/billing/payments', method: 'GET', headers: {} };
+      const request = { id: 'req-7', url: '/v1/catalog/shipments', method: 'GET', headers: {} };
 
       filter.catch(new Error('upstream down'), httpHost(request, fastifyReply()));
       filter.catch(new NotFoundException(), httpHost(request, fastifyReply()));
@@ -86,7 +86,7 @@ describe('AllExceptionsFilter', () => {
       const errorFields = errorSpy.mock.calls[0]?.[0] as Record<string, unknown>;
       const debugFields = debugSpy.mock.calls[0]?.[0] as Record<string, unknown>;
       for (const fields of [errorFields, debugFields]) {
-        expect(fields).toMatchObject({ method: 'GET', path: '/v1/billing/payments' });
+        expect(fields).toMatchObject({ method: 'GET', path: '/v1/catalog/shipments' });
         expect(fields).not.toHaveProperty('requestId');
       }
     });
@@ -151,7 +151,7 @@ describe('AllExceptionsFilter', () => {
 
   it('ws: emits an `exception` event with the problem document', () => {
     const client = { emit: vi.fn() };
-    const host = new ExecutionContextHost([client, { id: 1 }, undefined, 'notifications.markRead']);
+    const host = new ExecutionContextHost([client, { id: 1 }, undefined, 'alerts.markRead']);
     host.setType('ws');
 
     new AllExceptionsFilter(fakeAdapterHost().host).catch(new DomainConflictException(), host);
@@ -161,7 +161,7 @@ describe('AllExceptionsFilter', () => {
       expect.objectContaining({
         status: 409,
         code: 'CONFLICT',
-        instance: 'notifications.markRead',
+        instance: 'alerts.markRead',
       }),
     );
   });

@@ -54,9 +54,9 @@ describe('grpcCall', () => {
     const cancel = vi.fn();
     // Like ClientGrpc: unsubscribing runs the teardown, which calls `call.cancel()`.
     const hanging = new Observable<never>(() => cancel);
-    const result = grpcCall(hanging, { timeoutMs: 1_000, operation: 'identity.GetUser' });
+    const result = grpcCall(hanging, { timeoutMs: 1_000, operation: 'orders.GetUser' });
     const assertion = expect(result).rejects.toMatchObject({
-      details: { operation: 'identity.GetUser' },
+      details: { operation: 'orders.GetUser' },
     });
     await vi.advanceTimersByTimeAsync(1_000);
     await assertion;
@@ -85,7 +85,7 @@ describe('grpcCall', () => {
   });
 
   it('opens the circuit on upstream failures, then fails fast without calling', async () => {
-    const breaker = breakers({ volumeThreshold: 2, errorThresholdPercentage: 50 }).get('identity');
+    const breaker = breakers({ volumeThreshold: 2, errorThresholdPercentage: 50 }).get('orders');
     const upstream = vi.fn(() => throwError(() => serviceError(GrpcStatus.UNAVAILABLE)));
     const options = { timeoutMs: 100, operation: 'op', breaker };
 
@@ -104,7 +104,7 @@ describe('grpcCall', () => {
   });
 
   it('does not open the circuit on caller errors (errorFilter)', async () => {
-    const breaker = breakers({ volumeThreshold: 2, errorThresholdPercentage: 1 }).get('identity');
+    const breaker = breakers({ volumeThreshold: 2, errorThresholdPercentage: 1 }).get('orders');
     const upstream = (): Observable<never> => throwError(() => serviceError(GrpcStatus.NOT_FOUND));
     for (let i = 0; i < 10; i++) {
       await expect(
@@ -153,12 +153,12 @@ describe('isCallerError (breaker errorFilter)', () => {
 describe('GrpcCircuitBreakers', () => {
   it('creates one breaker per upstream and reports states', () => {
     const registry = new GrpcCircuitBreakers();
-    const identity = registry.get('identity');
-    expect(registry.get('identity')).toBe(identity);
-    expect(registry.get('billing')).not.toBe(identity);
-    expect(registry.states()).toEqual({ identity: 'closed', billing: 'closed' });
-    identity.open();
-    expect(registry.states()['identity']).toBe('open');
+    const orders = registry.get('orders');
+    expect(registry.get('orders')).toBe(orders);
+    expect(registry.get('catalog')).not.toBe(orders);
+    expect(registry.states()).toEqual({ orders: 'closed', catalog: 'closed' });
+    orders.open();
+    expect(registry.states()['orders']).toBe('open');
     registry.onApplicationShutdown();
     expect(registry.states()).toEqual({});
   });

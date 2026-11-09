@@ -13,14 +13,14 @@ export type FixtureUserRegisteredPayload = z.infer<typeof fixtureUserRegisteredP
 export const FIXTURE_USER_REGISTERED_EVENT: EventContract<FixtureUserRegisteredPayload> =
   defineEventContract('fixture.user-registered.v1', fixtureUserRegisteredPayload);
 
-export const fixturePaymentSucceededPayload = z.object({
-  paymentId: z.uuid(),
+export const fixtureOrderPlacedPayload = z.object({
+  orderId: z.uuid(),
   userId: z.uuid(),
   amountTotal: z.number().int().nonnegative(),
   currency: z.string().length(3),
-  paidAt: z.iso.datetime(),
+  placedAt: z.iso.datetime(),
 });
-export type FixturePaymentSucceededPayload = z.infer<typeof fixturePaymentSucceededPayload>;
+export type FixtureOrderPlacedPayload = z.infer<typeof fixtureOrderPlacedPayload>;
 
-export const FIXTURE_PAYMENT_SUCCEEDED_EVENT: EventContract<FixturePaymentSucceededPayload> =
-  defineEventContract('fixture.payment-succeeded.v1', fixturePaymentSucceededPayload);
+export const FIXTURE_ORDER_PLACED_EVENT: EventContract<FixtureOrderPlacedPayload> =
+  defineEventContract('fixture.order-placed.v1', fixtureOrderPlacedPayload);

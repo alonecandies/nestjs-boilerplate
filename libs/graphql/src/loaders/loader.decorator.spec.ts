@@ -27,8 +27,8 @@ describe('resolveLoader', () => {
   });
 
   it('throws a descriptive error for unregistered loaders', () => {
-    expect(() => resolveLoader(graphqlExecutionContext(contextWithLoaders()), 'payments')).toThrow(
-      'DataLoader "payments" is not registered',
+    expect(() => resolveLoader(graphqlExecutionContext(contextWithLoaders()), 'shipments')).toThrow(
+      'DataLoader "shipments" is not registered',
     );
   });
 });

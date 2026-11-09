@@ -7,12 +7,12 @@ const redis = redisConfig.parse({ REDIS_URL: 'redis://localhost:6399/1', REDIS_K
 
 describe('createQueueOptions', () => {
   it('builds BullMQ-safe connection options (no per-request retry limit, no keyPrefix)', () => {
-    const options = createQueueOptions(redis, appConfig.parse({ SERVICE_NAME: 'notifications' }));
+    const options = createQueueOptions(redis, appConfig.parse({ SERVICE_NAME: 'alerts' }));
     expect(options.connection).toMatchObject({
       url: 'redis://localhost:6399/1',
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
-      connectionName: 'notifications:bull',
+      connectionName: 'alerts:bull',
       retryStrategy: redisRetryStrategy,
     });
     expect(options.connection).not.toHaveProperty('keyPrefix');
