@@ -72,11 +72,13 @@ export {
   AppThrottlerModule,
   type AppThrottlerModuleOptions,
 } from './throttler/app-throttler.module.js';
+export { type ClientIpResolver, createClientIpResolver } from './throttler/client-ip.util.js';
 export {
   credentialFrom,
   credentialHash,
   normalizeCredential,
 } from './throttler/credential-tracker.util.js';
+export { IpThrottlerGuard, IpThrottlerModule } from './throttler/ip-throttler.guard.js';
 export { LockoutResetInterceptor } from './throttler/lockout-reset.interceptor.js';
 export { RateLimit, SkipRateLimit } from './throttler/rate-limit.decorator.js';
 export { type RateLimitFeatureOptions, RateLimitModule } from './throttler/rate-limit.module.js';

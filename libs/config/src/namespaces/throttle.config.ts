@@ -7,11 +7,16 @@ export const throttleEnvSchema = z
   .object({
     THROTTLE_TTL_MS: zInt(60_000, { min: 1 }),
     THROTTLE_LIMIT: zInt(300, { min: 1 }),
+    THROTTLE_IP_TTL_MS: zInt(60_000, { min: 1 }),
+    THROTTLE_IP_LIMIT: zInt(600, { min: 1 }),
   })
   .transform((env) => ({
     /** @nestjs/throttler 6 windows are in MILLISECONDS. Per-user (else per-IP) budget across routes. */
     ttlMs: env.THROTTLE_TTL_MS,
     limit: env.THROTTLE_LIMIT,
+    /** Pre-auth flood cap per client IP (all routes), counted before JWT verification. */
+    ipTtlMs: env.THROTTLE_IP_TTL_MS,
+    ipLimit: env.THROTTLE_IP_LIMIT,
   }));
 
 /** Rate limiting (Redis-backed @nestjs/throttler). Credential limits are domain policies. */

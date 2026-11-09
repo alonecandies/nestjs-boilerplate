@@ -82,6 +82,32 @@ describe('WsThrottlerGuard', () => {
     expect(increment.mock.calls[0]?.[0]).toBe(rateLimitKey('user', 'global', 'ip:5.6.7.8'));
   });
 
+  it('keys anonymous sockets by the proxy-aware client IP of the handshake request', async () => {
+    const { guard, increment } = await createGuard();
+    Reflect.set(guard, 'app', { trustProxy: ['10.0.0.0/8'] });
+    const socket = {
+      data: {},
+      handshake: { address: '10.0.0.5' },
+      request: {
+        socket: { remoteAddress: '10.0.0.5' },
+        headers: { 'x-forwarded-for': '6.6.6.6, 1.2.3.4' },
+      },
+    };
+    await guard.canActivate(wsContext(socket));
+    expect(increment.mock.calls[0]?.[0]).toBe(rateLimitKey('user', 'global', 'ip:1.2.3.4'));
+  });
+
+  it('ignores X-Forwarded-For when no proxy is trusted (default)', async () => {
+    const { guard, increment } = await createGuard();
+    const socket = {
+      data: {},
+      handshake: { address: '10.0.0.5' },
+      request: { socket: { remoteAddress: '10.0.0.5' }, headers: { 'x-forwarded-for': '1.2.3.4' } },
+    };
+    await guard.canActivate(wsContext(socket));
+    expect(increment.mock.calls[0]?.[0]).toBe(rateLimitKey('user', 'global', 'ip:10.0.0.5'));
+  });
+
   it('raises ThrottlerException (429) when blocked', async () => {
     const { guard, increment } = await createGuard();
     increment.mockResolvedValue(record({ isBlocked: true, timeToBlockExpire: 3 }));

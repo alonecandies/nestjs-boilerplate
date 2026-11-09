@@ -11,6 +11,7 @@ export const GATEWAY_E2E_ENV: Readonly<Record<string, string>> = {
   NODE_ENV: 'test',
   LOG_LEVEL: 'silent',
   THROTTLE_LIMIT: '100000',
+  THROTTLE_IP_LIMIT: '100000',
   IDENTITY_CREDENTIALS_LIMIT: '100000',
   IDENTITY_LOCKOUT_THRESHOLD: '100000',
   SERVICE_NAME: 'gateway-e2e',

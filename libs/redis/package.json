@@ -27,6 +27,7 @@
     "@platform/common": "workspace:*",
     "@platform/config": "workspace:*",
     "@platform/observability": "workspace:*",
+    "@fastify/proxy-addr": "catalog:",
     "@keyv/redis": "catalog:",
     "@nestjs/bullmq": "catalog:",
     "@nestjs/cache-manager": "catalog:",
