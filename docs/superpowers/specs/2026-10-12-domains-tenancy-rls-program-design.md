@@ -3,6 +3,8 @@
 - **Status:** approved 2026-10-12, with option (b) for system access (section 9).
 - **Branch:** `feat/domains-tenancy`
 - **Date:** 2026-10-12
+- **Amended:** 2026-11-09 with Citus + PgBouncer sharding and the Stripe/immudb ledger; every change is listed in
+  section 16.
 
 This document fixes the decisions that cut across the remaining sub-projects, so each one can be planned and built
 without reopening them. The bounded sub-projects (H, D, F, E) get short designs in chat. B, C and G get an
@@ -30,18 +32,20 @@ implementation plan each, written from this document just before they start.
 - Every documented rate limit behaves as written, proven by tests.
 - After every phase these stay green: `bun run check`, all tests, the builds, both images, and the compose topologies.
 
-## 2. Roadmap
+## 2. Roadmap (amended 2026-11-09; see the [sharding design](2026-11-09-sharding-citus-pgbouncer-design.md) section 8 and the [ledger design](2026-11-09-stripe-ledger-immudb-design.md) section 8)
 
-| #   | Sub-project                                                                                                                              | Design gate              | Status             |
-| --- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ | ------------------ |
-| A1  | Move to `domains/`, rename scopes, add the boundary check                                                                                | short (approved)         | **done** `1006b23` |
-| H   | Patch/minor dependency bumps; Bun 1.4.3 pins                                                                                             | short                    | next               |
-| D   | Production hardening (F01–F09, F33, RustFS and CORS guards)                                                                              | short                    |                    |
-| F   | Small fixes (F20, F24, F25, F36)                                                                                                         | short                    |                    |
-| B   | Ownership moves, tenancy, RLS, tenant isolation everywhere (F14, F18, staff bootstrap)                                                   | **this document + plan** |                    |
-| C   | Rate limiting (F17 and the rate-limit gaps)                                                                                              | this document + plan     |                    |
-| G   | Transactional outbox, metrics listener, app-level metrics, slimmer gateway image                                                         | this document + plan     |                    |
-| E   | Real Socket.IO and graphql-ws specs, storage emulator specs, topology smoke test, `buf breaking`, drizzle check (F10–F13, F15, F16, F21) | short                    |                    |
+| #   | Sub-project                                                                                                                              | Design gate                                                             | Status                                                     |
+| --- | ---------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- | ---------------------------------------------------------- |
+| A1  | Move to `domains/`, rename scopes, add the boundary check                                                                                | short (approved)                                                        | **done** `1006b23`                                         |
+| H   | Patch/minor dependency bumps; Bun 1.4.3 pins                                                                                             | short                                                                   | **done** `7040115`                                         |
+| D   | Production hardening (F01–F09, F33, RustFS and CORS guards)                                                                              | short                                                                   | **done** `74f70b7`, `0505e92`                              |
+| F   | Small fixes (F20, F24, F25, F36)                                                                                                         | short                                                                   | **done** `75c477a`                                         |
+| B   | Ownership moves, tenancy, RLS, tenant isolation everywhere (F14, F18, staff bootstrap)                                                   | **this document + plan**                                                | B1 **done** (`069cd56`, final fixes to `9600510`); B2 next |
+| S   | Citus 14.2 sharding + PgBouncer 1.26 (SH-1..SH-12)                                                                                       | [sharding design](2026-11-09-sharding-citus-pgbouncer-design.md) + plan | S0 (SH-1..SH-4) next, before B2 executes                   |
+| L   | Stripe idempotency end to end, immudb double-entry ledger, reconciliation (L-1..L-15)                                                    | [ledger design](2026-11-09-stripe-ledger-immudb-design.md) + plan       | wave 0 next, in parallel with B2                           |
+| C   | Rate limiting (F17 and the rate-limit gaps)                                                                                              | this document + plan                                                    |                                                            |
+| G   | Transactional outbox, metrics listener, app-level metrics, slimmer gateway image                                                         | this document + plan                                                    |                                                            |
+| E   | Real Socket.IO and graphql-ws specs, storage emulator specs, topology smoke test, `buf breaking`, drizzle check (F10–F13, F15, F16, F21) | short                                                                   |                                                            |
 
 B is built in four checkpoints. Each one is a signed commit with everything green:
 
@@ -49,6 +53,22 @@ B is built in four checkpoints. Each one is a signed commit with everything gree
 2. **B2. Tenancy.** Data model, tokens, API and propagation; RLS not enforced yet.
 3. **B3. RLS enforcement.** Roles, policies, the context adapter and the system pool.
 4. **B4. Tenant isolation outside Postgres.** Cassandra, Redis, storage, WebSockets and GraphQL subscriptions.
+
+Phases S and L slot into B and G as follows (task ids from the two design docs):
+
+- **S (Citus + PgBouncer).**
+  - **S0 = SH-1..SH-4, before B2 executes:** the Citus image in compose, Testcontainers (`@platform/testing/postgres`)
+    and CI; the platform distribution helpers and the runner's sequential mode; the Citus-ready schema rules.
+  - **SH-5 / SH-6** (identity and billing distribution migrations) right after the B2 table tasks (B2-1..B2-5, B2-6).
+  - **SH-7..SH-10** inside B3: `SET LOCAL` context in B3-7, role settings in B3-2, PgBouncer with B3-3, the boot
+    guard addition with B3's boot guard.
+  - **SH-11** (worker profile, sharding smoke spec) after B3. **SH-12** in the final squash.
+- **L (Stripe idempotency + immudb ledger + reconciliation).**
+  - **Wave 0, now** (in parallel with B2; touches no tenant column and no billing migration): L-1..L-9.
+  - **Wave 1** after B2-6, B3 (B3-6, B3-10, B3-11) and G-1, G-2: L-10, L-11.
+  - **Wave 2** after G-3 and G-4: L-12..L-15.
+- **Final squash** (program decision): each domain's stacked migrations fold into a fresh `0000_init`, keeping the
+  hand-written SQL (RLS, grants, distribution calls).
 
 ## 3. Package architecture after B
 
@@ -94,10 +114,29 @@ libs/*            @platform/*             platform adapters + shared kernel, no 
 | Domain test fakes in apps (`in-memory-identity.ts`, `fake-upstreams.ts`)                         | a `./testing` subpath of the owning domain                                                                                |                                                                                                                        |
 | `CONFIG_NAMESPACES` / `validateAllEnv`                                                           | platform namespaces only; domain namespaces are passed in by the caller                                                   | `scripts/check-env-example.mjs` also scans `domains/**/*.config.ts`                                                    |
 
-## 4. Data ownership and migrations
+## 4. Data ownership and migrations (amended 2026-11-09; see the sharding design sections 2, 4, 5 and 7.3)
 
 - **One Postgres schema per domain.** `identity.*` and `billing.*`. A platform schema, `app`, holds the RLS helper
-  functions. Tables leave `public`.
+  functions and the Citus distribution helpers. A policy helper that names a domain table (for example
+  `identity.shares_current_tenant`) lives in that domain's schema and migration set. Tables leave `public`.
+- **Citus 14.2 everywhere** (compose, Testcontainers, CI); plain Postgres is an unsupported fallback, on which the
+  distribution helpers are no-ops. Every table is exactly one **kind**:
+
+  | Kind                       | Rule                                                                                                                                            | Tables                                                                                                                                                                                                  |
+  | -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | reference                  | global, small, read-mostly, replicated to every node                                                                                            | `identity.users`, `identity.tenants`, `identity.memberships`                                                                                                                                            |
+  | distributed by `tenant_id` | `tenant_id uuid NOT NULL`, colocated with `app.tenant_colocation`; the PK and every unique lead with `tenant_id` (usually PK `(tenant_id, id)`) | `identity.invitations`, `identity.audit_events`, `billing.payments`, `billing.stripe_events`, `<schema>.outbox`, `billing.ledger_accounts`, `billing.ledger_entry_refs`, `billing.ledger_discrepancies` |
+  | distributed by `user_id`   | own colocation group; PK `(user_id, id)`                                                                                                        | `identity.sessions`                                                                                                                                                                                     |
+  | coordinator-local          | bookkeeping and system-only tables                                                                                                              | `<schema>.__drizzle_migrations`, `billing.ledger_reconciliation_runs`, `billing.ledger_trusted_state`                                                                                                   |
+  - **FKs.** Distributed → reference is allowed (with `ON DELETE CASCADE`); distributed → distributed only between
+    colocated tables and including the distribution column; never reference → distributed, never to or from a
+    coordinator-local table. **No FK crosses a domain schema**: `tenant_id` and `user_id` in billing are plain columns.
+  - **Distribution calls** (`app.make_reference`, `app.distribute_by_tenant`, `app.distribute_by_user`) live in one
+    custom migration per domain right after the B2 table tasks (SH-5 identity, SH-6 billing). A table created later
+    (G-1 outbox, L-10 ledger tables) is distributed inline, right after its `CREATE TABLE`.
+  - Every tenant-scoped repository query also carries an explicit `tenant_id = $param` predicate, for shard routing.
+    RLS stays the guarantee.
+
 - **Migration sets.** Each domain has its own `drizzle.config.ts` and its own history, in
   `domains/<x>/src/infrastructure/persistence/migrations`, with a migrations table at `<schema>.__drizzle_migrations`.
   Separate tables matter: drizzle's migrator applies every file newer than the **last** timestamp in its table, so a
@@ -107,39 +146,63 @@ libs/*            @platform/*             platform adapters + shared kernel, no 
   - The sets run **in array order, under the one advisory lock**.
   - The **platform set always runs first and cannot be left out**. It creates the `app` schema, the helper functions,
     extensions and grants.
+  - **Migrations connect directly to the Citus coordinator**, never through PgBouncer (the session advisory lock
+    needs a direct connection). When the `citus` extension exists, the runner sets
+    `citus.multi_shard_modify_mode = 'sequential'` on its private `max: 1` connection, because drizzle applies all
+    pending files of a set in one transaction.
 - **Three database roles.** Infrastructure creates them; schema files reference them with `pgRole(...).existing()`.
 
-  | Role          | Attributes                                       | Used by                                                 | URL                      |
-  | ------------- | ------------------------------------------------ | ------------------------------------------------------- | ------------------------ |
-  | `app_owner`   | owns the schemas and tables                      | boot migrator, `db:migrate`, drizzle-kit, operator CLIs | `DATABASE_MIGRATION_URL` |
-  | `app_runtime` | `NOSUPERUSER NOBYPASSRLS`, DML grants only       | every request                                           | `DATABASE_URL`           |
-  | `app_system`  | `BYPASSRLS`, DML grants only, small pool (max 5) | the named system methods (section 9)                    | `DATABASE_SYSTEM_URL`    |
+  | Role          | Attributes                                       | Used by                                                 | URL                      | Through                 | Server settings (`ALTER ROLE … SET`)                                                                             |
+  | ------------- | ------------------------------------------------ | ------------------------------------------------------- | ------------------------ | ----------------------- | ---------------------------------------------------------------------------------------------------------------- |
+  | `app_owner`   | owns the schemas and tables                      | boot migrator, `db:migrate`, drizzle-kit, operator CLIs | `DATABASE_MIGRATION_URL` | direct coordinator      | none (the migrator sets sequential mode itself)                                                                  |
+  | `app_runtime` | `NOSUPERUSER NOBYPASSRLS`, DML grants only       | every request                                           | `DATABASE_URL`           | PgBouncer (transaction) | `citus.propagate_set_commands = 'local'`, `statement_timeout = 15s`, `idle_in_transaction_session_timeout = 60s` |
+  | `app_system`  | `BYPASSRLS`, DML grants only, small pool (max 5) | the named system methods (section 9)                    | `DATABASE_SYSTEM_URL`    | PgBouncer (transaction) | same as `app_runtime`                                                                                            |
   - In compose, CI and the Testcontainers specs, the roles come from an init SQL script.
   - `docs/SECURITY.md` gives the production SQL.
   - Grants and default privileges are hand-written SQL in the platform set. drizzle-kit cannot express them.
+  - The role settings live in the shared init SQL and `docs/SECURITY.md`, not in migrations. The timeouts move there
+    because PgBouncer rejects them as startup parameters; with `DATABASE_POOLER=pgbouncer` the client stops sending
+    them.
 
 - **`FORCE ROW LEVEL SECURITY`** is on every domain table, so even an owner connection is filtered.
   - Consequence: **migrations change schema only.** A data backfill, if one is ever needed, runs as `app_system` in a
     separate step.
 - **Boot guard.** At startup `DatabaseModule` checks that the runtime connection is not a superuser, does not have
-  `BYPASSRLS`, and does not own the tables. In production it refuses to start; elsewhere it logs a warning.
+  `BYPASSRLS`, and does not own the tables. In production it refuses to start; elsewhere it logs a warning. On Citus
+  it also requires `citus.propagate_set_commands = 'local'` for the runtime connection.
 - **Fresh baselines.** Each domain's history starts at `0000_init`. Nothing is deployed, so local volumes need one
-  `docker compose down -v`. The README says so.
+  `docker compose down -v`. The README says so. During the program, schema changes stack as numbered migrations
+  (the next free `NNNN` per set at merge time; billing's set stays serialized on one lane); a final task squashes
+  each domain into a fresh `0000_init` that keeps the hand-written SQL (RLS, grants, distribution calls).
 
 ## 5. Tenancy model (identity)
 
-### 5.1 Tables
+### 5.1 Tables (amended 2026-11-09; see the sharding design section 2.3 and the ledger design sections 5 and 8.1)
 
-| Table                   | Columns (beyond `id uuidv7`, `created_at`)                                             | Notes                                                             |
-| ----------------------- | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| `identity.tenants`      | `slug` (unique), `name`, `personal`                                                    | The personal workspace is created at registration                 |
-| `identity.memberships`  | `tenant_id`, `user_id`, `roles` (`tenant_role[]`), `last_active_at`                    | PK `(tenant_id, user_id)`; index `(user_id, last_active_at desc)` |
-| `identity.invitations`  | `tenant_id`, `email`, `roles`, `token_hash`, `invited_by`, `expires_at`, `accepted_at` | Token: 32 random bytes, stored hashed; expires after 7 days       |
-| `identity.audit_events` | `tenant_id`, `actor_id`, `type`, `data jsonb`                                          | Append-only. Covers staff switch-in, role changes, member removal |
-| `identity.users`        | drops `roles`; adds `is_platform_staff`                                                | Users stay global                                                 |
-| `identity.sessions`     | adds `tenant_id`                                                                       | A session belongs to one tenant                                   |
-| `billing.payments`      | adds `tenant_id`                                                                       | Tenant-leading indexes and uniques                                |
-| `billing.stripe_events` | adds `tenant_id`, `user_id` (from the signed event's metadata)                         | So the webhook runs under RLS (section 9)                         |
+Kinds (section 4): R = reference, T = distributed by `tenant_id`, U = distributed by `user_id`, L = coordinator-local.
+`id` is `uuid DEFAULT uuidv7()` and `created_at` is `timestamp(3) with time zone DEFAULT now() NOT NULL` unless stated.
+
+| Table                                       | Kind | Columns (beyond `id uuidv7`, `created_at`)                                                                                                                                                                            | PK / uniques / indexes                                                                                                                             | FKs                                                                      | Notes                                                                                                                                                 |
+| ------------------------------------------- | ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `identity.tenants`                          | R    | `slug text NOT NULL`, `name text NOT NULL`, `personal boolean NOT NULL DEFAULT false`                                                                                                                                 | PK `(id)`; unique `tenants_slug_unique (slug)`; CHECK `tenants_id_not_platform (id <> '00000000-0000-0000-0000-000000000000')`                     | –                                                                        | The personal workspace is created at registration. The nil UUID is `PLATFORM_TENANT_ID`, never a tenant                                               |
+| `identity.memberships`                      | R    | `tenant_id uuid NOT NULL`, `user_id uuid NOT NULL`, `roles identity.tenant_role[] NOT NULL`, `last_active_at timestamptz(3)`; no `id`                                                                                 | PK `(tenant_id, user_id)`; index `(user_id, last_active_at desc)`                                                                                  | `tenant_id → tenants.id`, `user_id → users.id`, both `ON DELETE CASCADE` |                                                                                                                                                       |
+| `identity.invitations`                      | T    | `tenant_id uuid NOT NULL`, `email text NOT NULL`, `roles identity.tenant_role[] NOT NULL`, `token_hash text NOT NULL`, `invited_by uuid NOT NULL`, `expires_at timestamptz(3) NOT NULL`, `accepted_at timestamptz(3)` | PK `(tenant_id, id)`; unique `invitations_tenant_id_token_hash_uq (tenant_id, token_hash)`; index `invitations_token_hash_idx (token_hash)`        | `tenant_id → tenants.id ON DELETE CASCADE`, `invited_by → users.id`      | Token: 32 random bytes, stored hashed; expires after 7 days. `findByTokenHash` is a multi-shard system read                                           |
+| `identity.audit_events`                     | T    | `tenant_id uuid NOT NULL`, `actor_id uuid` (no FK), `type text NOT NULL`, `data jsonb NOT NULL DEFAULT '{}'`                                                                                                          | PK `(tenant_id, id)`; index `(tenant_id, created_at desc)`                                                                                         | `tenant_id → tenants.id ON DELETE CASCADE`                               | Append-only. Covers staff switch-in, role changes, member removal                                                                                     |
+| `identity.users`                            | R    | drops `roles`; adds `is_platform_staff boolean NOT NULL DEFAULT false`                                                                                                                                                | PK `(id)`; unique `users_email_unique (email)`; trigram GIN index kept                                                                             | –                                                                        | Users stay global                                                                                                                                     |
+| `identity.sessions`                         | U    | adds `tenant_id uuid NOT NULL`; `id` has no default (it is the refresh `jti`); `replaced_by_id` stays a plain uuid                                                                                                    | PK `sessions_user_id_id_pk (user_id, id)` (was `(id)`); index `(expires_at)`                                                                       | `user_id → users.id`, `tenant_id → tenants.id`, both `ON DELETE CASCADE` | A session belongs to one tenant. Refresh looks up `(user_id = sub, id = jti)`: a router query                                                         |
+| `billing.payments`                          | T    | adds `tenant_id uuid NOT NULL`, `request_hash text` (nullable; S-2); status enum gains `refunded`, `partially_refunded`, `disputed` (S-6)                                                                             | PK `(tenant_id, id)`; uniques `(tenant_id, stripe_checkout_session_id)`, `(tenant_id, user_id, idempotency_key)`; index `(tenant_id, user_id, id)` | none (no cross-domain FK)                                                | Replaces `payments_user_id_id_idx`, `payments_user_id_idempotency_key_uq` and the global checkout-session unique                                      |
+| `billing.stripe_events`                     | T    | adds `tenant_id uuid NOT NULL`, `user_id uuid` (**nullable**), both from the signed event's metadata                                                                                                                  | PK `(tenant_id, id)` (`id` stays the Stripe event id, `text`); index `(processed_at)`                                                              | none                                                                     | So the webhook runs under RLS (section 9). Platform-level events (`payout.*`) use `PLATFORM_TENANT_ID` and `user_id` NULL, written by a system method |
+| `<schema>.outbox` (G-1)                     | T    | `tenant_id uuid NOT NULL`, `topic`, `key`, `envelope`, `published_at` (section 12)                                                                                                                                    | PK `(tenant_id, id)`                                                                                                                               | none                                                                     | Distributed inline by G-1                                                                                                                             |
+| `billing.ledger_accounts` (L-10)            | T    | `tenant_id uuid NOT NULL`, `code text`, `currency text`, `immudb_account_id uuid`; no `id`                                                                                                                            | PK `(tenant_id, code, currency)`                                                                                                                   | none                                                                     | Platform accounts use `PLATFORM_TENANT_ID`                                                                                                            |
+| `billing.ledger_entry_refs` (L-10)          | T    | `tenant_id uuid NOT NULL`, `entry_id uuid`, `source_key`, `payload_hash`, `immudb_tx_id bigint`, `payment_id`, `kind`, `posted_at`; no `id`                                                                           | PK `(tenant_id, entry_id)`                                                                                                                         | none (`payment_id` plain)                                                | Append-only receipt of each immudb posting                                                                                                            |
+| `billing.ledger_discrepancies` (L-10)       | T    | `tenant_id uuid NOT NULL`, `kind`, `source_key`, `expected jsonb`, `actual jsonb`, `detected_by`, `run_id`, `resolves_id`                                                                                             | PK `(tenant_id, id)`                                                                                                                               | none (`run_id`, `resolves_id` plain: no FK to a local table)             | Append-only: no UPDATE/DELETE grant; a resolution is a new row                                                                                        |
+| `billing.ledger_reconciliation_runs` (L-10) | L    | `from_ts`, `to_ts`, `status`, `counts jsonb`, `finished_at`                                                                                                                                                           | PK `(id)`                                                                                                                                          | none                                                                     | System pool only                                                                                                                                      |
+| `billing.ledger_trusted_state` (L-10)       | L    | `database text`, `tx_id bigint`, `tx_hash bytea`, `verified_at`; no `id`                                                                                                                                              | PK `(database)`                                                                                                                                    | none                                                                     | System pool only                                                                                                                                      |
+
+The exact B2 DDL is in the sharding design section 2.3 ("Exact B2 SQL shapes"). In Drizzle, T and U tables use
+`primaryKey({ columns: [t.tenantId, t.id] })` (or `[t.userId, t.id]`); `uuid().primaryKey()` alone is not valid on
+them. B2-26 puts `{ paymentId, userId, tenantId }` in both the Checkout session metadata and
+`payment_intent_data.metadata`.
 
 ### 5.2 Flows
 
@@ -235,19 +298,34 @@ How the principal reaches each layer:
 
 ## 8. Row-level security
 
-### 8.1 Mechanism
+### 8.1 Mechanism (amended 2026-11-09; see the sharding design sections 7.1 and 7.3)
 
-- **Context.** On `BEGIN`, the Drizzle transactional adapter sets three transaction-local settings in **one statement**
-  from the CLS principal: `select set_config('app.user_id', $1, true), set_config('app.tenant_id', $2, true),
-set_config('app.elevated', $3, true)`.
-  - Transaction-local values cannot leak across pooled connections.
-  - They work behind PgBouncer in transaction mode.
+- **Context.** On `BEGIN`, the Drizzle transactional adapter sets three transaction-local settings in **one
+  simple-protocol round trip**, from the CLS principal: `SET LOCAL app.user_id = '<uuid>'; SET LOCAL
+app.tenant_id = '<uuid or empty>'; SET LOCAL app.elevated = 'on|off'` (sent with `tx.unsafe(sql).simple()`).
+  - Values are never bound parameters (`SET` takes none). The adapter builds the string only from values that pass
+    a strict UUID regex; anything else throws before SQL is sent. `PLATFORM_TENANT_ID` (the nil UUID) is refused as a
+    runtime tenant.
+  - `set_config()` is not used: Citus propagates `SET LOCAL` to the worker connections of the transaction (the role
+    default `citus.propagate_set_commands = 'local'` on `app_runtime` and `app_system`), but never `set_config()`.
+  - Transaction-local values cannot leak across pooled connections, and they work behind PgBouncer in transaction
+    mode.
+  - `elevate(permission)` issues `SET LOCAL app.elevated = 'on'` mid-transaction; Citus propagates it to connections
+    that are already open.
+- **Role settings.** `ALTER ROLE app_runtime SET citus.propagate_set_commands = 'local'` (and the same for
+  `app_system`), plus `statement_timeout` and `idle_in_transaction_session_timeout` through `ALTER ROLE … SET`,
+  because PgBouncer rejects them as startup parameters (section 4).
 - **Helper functions.** These live in the `app` schema (platform set) and are used by every policy:
   - `app.user_id()` **raises** when unset: every runtime unit of work must have a user, so a missing context fails
     loudly instead of returning empty results.
   - `app.tenant_id()` returns `NULL` when unset (tenant-less units of work see no tenant rows).
   - `app.elevated()` returns a boolean.
-  - Policies call each of them as `(select app.x())`, so it runs once per statement.
+  - Policies call each helper directly (`app.tenant_id()`, never `(select app.tenant_id())`). Citus rejects
+    subqueries in policies. The helpers are `STABLE`, and `user_id()`/`tenant_id()` read
+    `nullif(current_setting(…, true), '')`.
+- **Cross-table policy checks** go through `STABLE` helpers that read **reference tables only** (for example
+  `identity.shares_current_tenant(uuid)` over `identity.memberships`). A helper that names a domain table lives in
+  that domain's schema. A helper that reads a distributed table fails inside pushed-down queries.
 - **Unit of work.**
   - Every repository call goes through `txHost.withTransaction(Propagation.Required)`. It joins the handler's
     transaction if there is one; otherwise it opens one per call.
@@ -261,23 +339,37 @@ set_config('app.elevated', $3, true)`.
   - Policies check only the boolean, never a permission name, so a renamed permission can't drift away from its SQL.
   - Tenant isolation always holds: elevation never crosses tenants.
 
-### 8.2 Policies
+### 8.2 Policies (amended 2026-11-09; see the sharding design section 7.2 and the ledger design section 5)
 
 All policies are `PERMISSIVE`, and any table without a policy for the runtime role denies everything.
 
-| Table                   | Read                                                              | Write                                                                                                                                                                                                 |
-| ----------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `identity.users`        | `id = user_id()` **or** they share a membership in `tenant_id()`  | update: `id = user_id()`, and column grants keep `is_platform_staff` out of the runtime role's reach (only `staff:grant` sets it); insert: `id = user_id()` (register inserts "itself")               |
-| `identity.tenants`      | `id = tenant_id()` **or** I hold a membership in it               | insert: `id = tenant_id()`; update: `id = tenant_id() and elevated()`                                                                                                                                 |
-| `identity.memberships`  | `user_id = user_id()` **or** `tenant_id = tenant_id()`            | insert and update: `tenant_id = tenant_id() and elevated()`; delete: `tenant_id = tenant_id() and (elevated() or user_id = user_id())` (leaving deletes my own row, but nobody edits their own roles) |
-| `identity.invitations`  | `tenant_id = tenant_id() and elevated()`                          | same                                                                                                                                                                                                  |
-| `identity.sessions`     | `user_id = user_id()`                                             | same, plus `tenant_id = tenant_id()` on insert                                                                                                                                                        |
-| `identity.audit_events` | `tenant_id = tenant_id() and elevated()`                          | insert: `tenant_id = tenant_id()`                                                                                                                                                                     |
-| `billing.payments`      | `tenant_id = tenant_id() and (user_id = user_id() or elevated())` | insert and update: `tenant_id = tenant_id() and user_id = user_id()` (elevation reads, it never writes another member's payment)                                                                      |
-| `billing.stripe_events` | `tenant_id = tenant_id() and user_id = user_id()`                 | insert: same                                                                                                                                                                                          |
-| `<schema>.outbox` (G)   | none for runtime                                                  | insert: `tenant_id = tenant_id()`                                                                                                                                                                     |
+- **No subqueries in any policy expression** (Citus rejects them on distributed and reference tables): call
+  `app.user_id()`, `app.tenant_id()` and `app.elevated()` directly; `user_id()` etc. below are those calls.
+- **Helper functions read reference tables only.** The two cross-table checks are identity-set helpers over the
+  reference table `identity.memberships`:
+  `identity.shares_current_tenant(u uuid)` = `EXISTS (SELECT 1 FROM identity.memberships m WHERE m.tenant_id =
+app.tenant_id() AND m.user_id = u)`, and `identity.is_member(t uuid)` = the same with `m.tenant_id = t AND
+m.user_id = app.user_id()`. Both are `LANGUAGE sql STABLE`.
+- Rows with `tenant_id = PLATFORM_TENANT_ID` never match a runtime policy (no runtime principal carries the nil UUID);
+  only the system pool reads or writes them.
 
-### 8.3 The two named risks
+| Table                                                                | Read                                                              | Write                                                                                                                                                                                                 |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `identity.users`                                                     | `id = user_id()` **or** `identity.shares_current_tenant(id)`      | update: `id = user_id()`, and column grants keep `is_platform_staff` out of the runtime role's reach (only `staff:grant` sets it); insert: `id = user_id()` (register inserts "itself")               |
+| `identity.tenants`                                                   | `id = tenant_id()` **or** `identity.is_member(id)`                | insert: `id = tenant_id()`; update: `id = tenant_id() and elevated()`                                                                                                                                 |
+| `identity.memberships`                                               | `user_id = user_id()` **or** `tenant_id = tenant_id()`            | insert and update: `tenant_id = tenant_id() and elevated()`; delete: `tenant_id = tenant_id() and (elevated() or user_id = user_id())` (leaving deletes my own row, but nobody edits their own roles) |
+| `identity.invitations`                                               | `tenant_id = tenant_id() and elevated()`                          | same                                                                                                                                                                                                  |
+| `identity.sessions`                                                  | `user_id = user_id()`                                             | same, plus `tenant_id = tenant_id()` on insert                                                                                                                                                        |
+| `identity.audit_events`                                              | `tenant_id = tenant_id() and elevated()`                          | insert: `tenant_id = tenant_id()`                                                                                                                                                                     |
+| `billing.payments`                                                   | `tenant_id = tenant_id() and (user_id = user_id() or elevated())` | insert and update: `tenant_id = tenant_id() and user_id = user_id()` (elevation reads, it never writes another member's payment)                                                                      |
+| `billing.stripe_events`                                              | `tenant_id = tenant_id() and user_id = user_id()`                 | insert: same (platform rows, `user_id` NULL, only through the system pool)                                                                                                                            |
+| `<schema>.outbox` (G)                                                | none for runtime                                                  | insert: `tenant_id = tenant_id()`                                                                                                                                                                     |
+| `billing.ledger_accounts` (L-10)                                     | `tenant_id = tenant_id() and elevated()`                          | insert: `tenant_id = tenant_id()`                                                                                                                                                                     |
+| `billing.ledger_entry_refs` (L-10)                                   | `tenant_id = tenant_id() and elevated()`                          | insert: `tenant_id = tenant_id()`; no update or delete                                                                                                                                                |
+| `billing.ledger_discrepancies` (L-10)                                | `tenant_id = tenant_id() and elevated()`                          | insert: `tenant_id = tenant_id()`; `UPDATE` and `DELETE` revoked                                                                                                                                      |
+| `billing.ledger_reconciliation_runs`, `billing.ledger_trusted_state` | none for runtime (system only)                                    | none for runtime                                                                                                                                                                                      |
+
+### 8.3 The two named risks (amended 2026-11-09; see the sharding design section 7.1)
 
 1. **Silently empty results.**
    - The `users` policy checks `memberships`, which has its own policy. That is the one most likely to return `[]`
@@ -289,13 +381,14 @@ All policies are `PERMISSIVE`, and any table without a policy for the runtime ro
      - UPDATE and DELETE repository methods check the affected row count. Today `updateRoles`,
        `updatePasswordHash` and `revoke` ignore it.
 2. **Overhead.**
-   - A standalone repository call goes from 1 round trip to about 4: `BEGIN`, `set_config`, the query, `COMMIT`.
+   - A standalone repository call goes from 1 round trip to about 4: `BEGIN`, the `SET LOCAL` string, the query,
+     `COMMIT`.
    - On a LAN that is about 1 ms. Handler-level transactions amortize it.
    - The k6 run is repeated before and after B3. A p95 regression above 10 % blocks the checkpoint until it is explained.
    - Connection hold time is unchanged in shape: no transaction ever spans an external call. The Stripe call already
      stays outside, and argon2 runs before the session insert.
 
-## 9. Pre-auth and system access — **decided: option (b)**
+## 9. Pre-auth and system access — **decided: option (b)** (amended 2026-11-09; see the sharding design section 7.4 and the ledger design sections 3 and 5)
 
 Most flows that look anonymous today can run as a principal once the code is reordered:
 
@@ -308,18 +401,34 @@ Most flows that look anonymous today can run as a principal once the code is reo
   - `POST /v1/tenants` uses the same path.
 - **Stripe webhook:** verify the signature, then act as the `{ userId, tenantId }` carried in the signed event's
   metadata. That is stronger than today: a webhook can't touch another tenant's payment.
+  - Platform-level events (`payout.*`, unattributed fees) carry no user or tenant: they are recorded through system
+    method 8 with `tenant_id = PLATFORM_TENANT_ID` and `user_id` NULL.
+  - The ledger's `billing.ledger-posting.v1` consumer runs as the envelope's `{ userId, tenantId }` when both are set,
+    and in `SystemContext` (system method 10) for platform or user-less messages.
 - **Invitation acceptance:** after the token lookup, run as the accepting user in the invitation's tenant, with
   elevation justified by the verified token.
 
-**What remains is the system surface.** These seven methods run without a principal:
+**What remains is the system surface.** These methods run without a principal (1-7 from the original design, 8-11
+added by the ledger design):
 
 1. `users.findCredentialsByEmail` (login lookup)
 2. `users.existsByEmail` (register pre-check; the unique constraint still guards races)
-3. `invitations.findByTokenHash` (accept lookup)
-4. `sessions.deleteExpired` (hourly cron)
-5. `stripeEvents.deleteProcessedBefore` (cleanup cron)
-6. the outbox relay's claim and mark-published (G)
-7. the `staff:grant` CLI (runs as `app_owner`)
+3. `invitations.findByTokenHash` (accept lookup; a multi-shard read on Citus, one index probe per shard)
+4. `sessions.deleteExpired` (hourly cron; a multi-shard `DELETE` without row locks)
+5. `stripeEvents.deleteProcessedBefore` (cleanup cron; same)
+6. the outbox relay's poll and mark-published (G). Under Citus there is no claim with `FOR UPDATE SKIP LOCKED`
+   (unsupported across shards): see section 12.
+7. the `staff:grant` CLI (runs as `app_owner`, directly on the coordinator)
+8. `stripeEvents.markProcessedAsPlatform` and `outbox.insertAsPlatform` (platform-level webhooks such as `payout.*`)
+9. `ledgerReconciliation.listSucceededPayments(from, to, cursor)` and `listEntryRefs(from, to, cursor)` (cross-tenant
+   reads for reconciliation R3, keyset by `(tenant_id, id)`)
+10. `ledgerReconciliation.appendDiscrepancies(rows)`, `enqueueMissingPostings(rows)` and
+    `ledgerEntryRefs.recordAsSystem(rows)` (cross-tenant writes, and the ledger consumer's rows for platform or
+    user-less postings)
+11. `ledgerTrustedState.read(database)` / `advance(database, from, to)` and `ledgerRuns.start/finish`
+
+The system pool goes through PgBouncer like the runtime pool (system methods use no session state). The sharding
+design adds no system method.
 
 **Options:**
 
@@ -383,16 +492,27 @@ Most flows that look anonymous today can run as a principal once the code is reo
   - Budgets **fail open**, with a metric and a bounded command timeout.
   - The `auth` throttler **fails closed** (503).
 
-## 12. Bigger follow-ups (G)
+## 12. Bigger follow-ups (G) (amended 2026-11-09; see the sharding design section 7.4 and the ledger design section 3)
 
 - **Transactional outbox.**
   - Each domain gets a table, `<schema>.outbox`, with columns `id`, `tenant_id`, `topic`, `key`, `envelope`,
-    `created_at` and `published_at`.
-  - Rows are written in the same runtime transaction as the change.
-  - A relay in each process that owns the domain claims rows through the system pool, using `FOR UPDATE SKIP LOCKED`
-    batches, publishes them, then marks them published.
-  - Delivery becomes at-least-once; consumers already dedupe by envelope id. This replaces the publish-after-commit
-    relays.
+    `created_at` and `published_at`. It is distributed by `tenant_id` with PK `(tenant_id, id)`; G-1 distributes it
+    inline (section 4).
+  - Rows are written in the same runtime transaction as the change, so on Citus they land on the same shard (no 2PC).
+    Platform rows (`PLATFORM_TENANT_ID`) are written by system method 8.
+  - **The relay under Citus.** Every process that owns the domain runs the relay, but only **one instance is
+    active** per domain set: leadership is a Redis lock (the `libs/redis/src/lock/with-lock.decorator.ts`
+    mechanism, TTL renewed every poll). A session advisory lock is forbidden behind PgBouncer, and an xact lock would
+    hold a transaction open across the Kafka publish.
+    - Each poll, on the system pool, selects `WHERE published_at IS NULL ORDER BY created_at LIMIT n` as a
+      multi-shard read **without row locks** (multi-shard `FOR UPDATE SKIP LOCKED` is unsupported on Citus), in its
+      own short transaction.
+    - It publishes outside any transaction, then marks each row published with a router
+      `UPDATE … SET published_at = now() WHERE tenant_id = $1 AND id = $2`.
+  - Delivery becomes at-least-once (a leadership handover can resend a batch); consumers already dedupe by envelope
+    id. This replaces the publish-after-commit relays.
+  - The ledger's `billing.ledger-posting.v1` topic rides this relay (ledger design section 3); its consumer is
+    idempotent by deterministic ledger entry id. Citus CDC is a possible later alternative.
 - **Metrics listener.** `/metrics` moves to `METRICS_PORT` (default 9464) on a separate listener and leaves the API port.
 - **App-level metrics.**
   - gRPC client and server calls, latency and status;
@@ -406,10 +526,12 @@ Most flows that look anonymous today can run as a principal once the code is reo
   - `assemble-image.mjs` copies only the files reachable from the app's entrypoint, using file tracing.
   - A subpath export alone doesn't shrink the image today, because whole `dist/` folders are copied.
 
-## 13. Testing strategy
+## 13. Testing strategy (amended 2026-11-09; see the sharding design sections 6 and 7.5 and the ledger design section 6.4)
 
-- **RLS integration specs.** They run on Testcontainers Postgres, with the three roles created by the same init SQL as
-  compose. For every policy they cover:
+- **RLS integration specs.** They run on Testcontainers Citus (`citusdata/citus:14.2.0`, single node) through
+  `startTestPostgres({ localExecution: false, initSql })` from `@platform/testing/postgres`, with the three roles
+  created by the same init SQL as compose. `citus.enable_local_execution=off` is required: with local execution on,
+  a single node hides context-propagation bugs (`set_config` looks correct there). For every policy they cover:
   - the allowed path (expected rows);
   - cross-user and cross-tenant attempts (no rows, or a write rejected by the policy);
   - a missing context (the helper raises);
@@ -423,17 +545,31 @@ Most flows that look anonymous today can run as a principal once the code is reo
 - **Fakes.** The in-memory fakes in `./testing` subpaths learn tenancy, so app end-to-end tests stay fast.
 - **Real connections.** The real-connection Socket.IO and graphql-ws specs (E) cover tenant rooms and revocation.
 - **Load.** The k6 baseline is taken before B3 and compared after it.
+- **Sharding.** One smoke spec in `libs/database` runs coordinator + one worker (`workers: 1`): distribution, a router
+  query, a multi-shard query, the context across nodes and WITH CHECK. Distribution migration specs assert the
+  `pg_dist_partition` kind of every table.
+- **Ledger (immudb).** Int specs run `codenotary/immudb:1.11.2` in Testcontainers (readiness `GET /readyz` on 9497;
+  the image is distroless): provisioning, privileges (UPDATE denied), every mapped error string, the MVCC race and
+  proofs, including a byte-flip negative. A shared contract spec runs against both the in-memory fake and the
+  adapter; verification primitives are checked against golden vectors generated by the Go SDK.
 
-## 14. Risks
+## 14. Risks (amended 2026-11-09; see the sharding design section 10 and the ledger design sections 2.1, 6.3 and A1)
 
-| Risk                                                        | Mitigation                                                                                                                    |
-| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| RLS returns empty results instead of errors                 | Fail-loud `app.user_id()`; both-path integration specs; row-count checks                                                      |
-| Overhead per database call                                  | Handler-level transactions; one `set_config` statement; k6 gate at B3                                                         |
-| gRPC principal metadata is unsigned                         | Trusted only inside the mesh (mTLS); documented. Signed principal headers are a possible later hardening                      |
-| B is large                                                  | Four checkpoints, each with a signed commit and all gates green                                                               |
-| drizzle-kit can't model `FORCE RLS`, `GRANT` or `BYPASSRLS` | Hand-written SQL in the platform set and the domain baselines; the CI drift check still passes because snapshots don't change |
-| Local data reset                                            | One `docker compose down -v` after B1; called out in the README and the PR description                                        |
+| Risk                                                                           | Mitigation                                                                                                                                                                                                                                                                                                               |
+| ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| RLS returns empty results instead of errors                                    | Fail-loud `app.user_id()`; both-path integration specs; row-count checks                                                                                                                                                                                                                                                 |
+| Overhead per database call                                                     | Handler-level transactions; one `SET LOCAL` round trip; k6 gate at B3                                                                                                                                                                                                                                                    |
+| Citus policy restrictions                                                      | No subqueries in policies; helpers read reference tables only. A forgotten `(select …)` fails loudly at `CREATE POLICY`                                                                                                                                                                                                  |
+| Single-node local execution hides propagation bugs                             | RLS specs with `citus.enable_local_execution=off`; the `workers: 1` smoke spec                                                                                                                                                                                                                                           |
+| `SET LOCAL` is built from strings                                              | Strict UUID regex, nil UUID refused, unit spec with hostile input; values come from verified JWT claims only                                                                                                                                                                                                             |
+| amd64-only Citus images (`citusdata/citus:14.2*`)                              | Apple Silicon runs them under emulation (`platform: linux/amd64`); int-spec timeouts have headroom                                                                                                                                                                                                                       |
+| Fan-out queries when a repository forgets the tenant predicate                 | Explicit `tenant_id = $param` rule; reference-table writes (users, memberships) are 2PC but rare                                                                                                                                                                                                                         |
+| immudb cannot erase, and its Node SDK is abandoned (`immudb-node` 1.1.1, 2021) | No PII in ledger rows; a generated gRPC client plus verification ported from the Go SDK with golden vectors                                                                                                                                                                                                              |
+| immudb operations                                                              | Distroless image: readiness via `GET /readyz`, no exec healthcheck; error strings pinned to the image tag and covered by int specs; production `--signingKey` with a pinned public key (key management); backups by replication or volume snapshots; an immudb outage delays postings but never fails a payment (outbox) |
+| gRPC principal metadata is unsigned                                            | Trusted only inside the mesh (mTLS); documented. Signed principal headers are a possible later hardening                                                                                                                                                                                                                 |
+| B is large                                                                     | Four checkpoints, each with a signed commit and all gates green                                                                                                                                                                                                                                                          |
+| drizzle-kit can't model `FORCE RLS`, `GRANT` or `BYPASSRLS`                    | Hand-written SQL in the platform set and the domain baselines; the CI drift check still passes because snapshots don't change                                                                                                                                                                                            |
+| Local data reset                                                               | One `docker compose down -v` after B1; called out in the README and the PR description                                                                                                                                                                                                                                   |
 
 ## 15. Out of scope
 
@@ -443,3 +579,64 @@ Most flows that look anonymous today can run as a principal once the code is reo
 - Tenant deletion and data export.
 - Cross-tenant staff search: staff only switch in.
 - RLS for Cassandra: isolation there is by key design.
+
+## 16. Amendments (2026-11-09)
+
+Source designs, reconciled with each other on 2026-11-09:
+
+- [Sharding design: Citus 14.2 + PgBouncer 1.26](2026-11-09-sharding-citus-pgbouncer-design.md) (cited as "SH §n").
+- [Stripe idempotency, immudb ledger and reconciliation](2026-11-09-stripe-ledger-immudb-design.md) (cited as
+  "LG §n").
+
+Program decisions behind them (user, 2026-11-09): B2, B3, B4, C, G and E run fast in parallel lanes (git worktrees
+off `feat/domains-tenancy`, merged `--no-ff`), one GPG-signed commit per plan task, no attribution lines; plans
+auto-run behind a review workflow, with no human gate; schema changes stack as numbered migrations per domain set
+and a final task squashes each domain into a fresh `0000_init`. This supersedes the "one signed commit per phase"
+wording of section 1's Commits row, which is left as written.
+
+Changes, by section:
+
+1. **§2 Roadmap.** Status refreshed (A1, H, D, F, B1 done; inventory FU-11). Phases S and L added with their slots.
+2. **§4 Data ownership.** Citus 14.2 everywhere (plain Postgres an unsupported fallback); four table kinds
+   (reference, distributed by `tenant_id`, distributed by `user_id`, coordinator-local) with the table list; FK rules,
+   including no FK across domain schemas; distribution calls in SH-5/SH-6 and inline for later tables; explicit
+   `tenant_id` predicates for routing; migrations connect directly to the coordinator, and the runner sets
+   `citus.multi_shard_modify_mode = 'sequential'`; the roles table gains "Through" and "Server settings" columns;
+   the boot guard also checks `citus.propagate_set_commands`; stacked numbered migrations, then a final squash.
+3. **§5.1 Tables.** Kind column and exact shapes from SH §2.3 plus the ledger's B2-6 additions: composite PKs,
+   tenant-leading uniques, `sessions` PK `(user_id, id)`, nullable `stripe_events.user_id`, `payments.request_hash`,
+   three new payment statuses, the `tenants_id_not_platform` CHECK, the outbox and the five ledger tables; B2-26
+   metadata.
+4. **§8.1 Mechanism.** `SET LOCAL` replaces `set_config()` (SH §7.1); role settings via `ALTER ROLE … SET`; helpers
+   called directly, never as `(select …)`; cross-table helpers read reference tables only.
+5. **§8.2 Policies.** No subqueries; `identity.shares_current_tenant` and `identity.is_member` replace the
+   membership subqueries; platform-tenant rows are system-only; ledger table policies added.
+6. **§8.3.** The round-trip wording follows the `SET LOCAL` mechanism.
+7. **§9 System access.** Platform webhooks and the ledger consumer's principal rule; notes on methods 3-7 under
+   Citus; methods 8-11 added from LG §5. The sharding design adds no system method.
+8. **§12 Outbox.** Table kind and PK; the relay under Citus: one active instance (Redis lock), multi-shard poll
+   without row locks, router mark-published, at-least-once; the ledger topic rides it.
+9. **§13 Testing.** RLS specs on Testcontainers Citus with `citus.enable_local_execution=off`; the sharding smoke
+   spec; immudb int specs, contract spec and golden vectors.
+10. **§14 Risks.** Citus policy restrictions, local execution, string-built `SET LOCAL`, amd64-only images, fan-out,
+    immudb erasure/SDK and operations.
+
+Rulings recorded in the design docs (SH §11, LG "Decisions (ruled 2026-11-09)"): Citus everywhere; users, tenants and
+memberships as reference tables; sessions by `user_id`; SH-5/SH-6 distribution migrations kept by the squash
+(SH-12); amd64 emulation on Apple Silicon; single active relay (Redis lock), at-least-once, router mark-published;
+PgBouncer `auth_query` with a SECURITY DEFINER lookup in production and a mounted userlist in compose; worker
+authentication settled in SH-8; D1 verification in wave 0 and R5 in wave 2; D2 relay → Kafka
+`billing.ledger-posting.v1` → billing consumer; D3 production `--signingKey` with a pinned public key in wave 2; D4
+the platform sells to tenants (no Stripe Connect); D5 the B2-6/B2-26 contents above.
+
+Contradictions resolved between the two designs (each doc carries a "Reconciled with … on 2026-11-09" note):
+nullable `stripe_events.user_id`; the ledger's table kinds (three T, two L); `PLATFORM_TENANT_ID` on one shard and
+system-only under RLS; the outbox relay (no `FOR UPDATE SKIP LOCKED` across shards); `SET LOCAL` instead of
+`set_config` in the ledger doc; `identity.shares_current_tenant` (not `app.`); no FK to coordinator-local tables;
+inline distribution for tables created after SH-5/SH-6; ledger RLS specs on `startTestPostgres`. Checked without
+conflict: env names, compose service names, config namespaces, the checkout-session unique.
+
+Follow-ups outside these three files (for the plan writers): inventory items B3-6 ("written with
+`(select app.x())`"), B3-7 (`set_config`) and G-3 (`FOR UPDATE SKIP LOCKED`) describe the superseded mechanisms; this
+section and the design docs win. Shared files to serialize across the S and L lanes: `docker-compose.yml`,
+`scripts/docker/check-infra.sh`, `docs/DOCKER.md`, `.env.example`, `docs/CONFIGURATION.md`.
