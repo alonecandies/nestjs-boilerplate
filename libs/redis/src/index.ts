@@ -72,7 +72,12 @@ export {
   AppThrottlerModule,
   type AppThrottlerModuleOptions,
 } from './throttler/app-throttler.module.js';
-export { AuthThrottle } from './throttler/auth-throttle.decorator.js';
+export {
+  credentialFrom,
+  credentialHash,
+  normalizeCredential,
+} from './throttler/credential-tracker.util.js';
+export { LockoutResetInterceptor } from './throttler/lockout-reset.interceptor.js';
 export { RateLimit, SkipRateLimit } from './throttler/rate-limit.decorator.js';
 export { type RateLimitFeatureOptions, RateLimitModule } from './throttler/rate-limit.module.js';
 export {
@@ -100,7 +105,6 @@ export {
   type ThrottleReply,
 } from './throttler/throttle.command.js';
 export {
-  AUTH_THROTTLE_KEY,
   DEFAULT_THROTTLE_EXEMPT_PATHS,
   GLOBAL_SCOPE,
   RATE_LIMIT_POLICY_KEY,

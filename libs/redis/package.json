@@ -44,7 +44,8 @@
     "cacheable": "catalog:",
     "ioredis": "catalog:",
     "keyv": "catalog:",
-    "lodash-es": "catalog:"
+    "lodash-es": "catalog:",
+    "rxjs": "catalog:"
   },
   "devDependencies": {
     "@types/lodash-es": "catalog:"

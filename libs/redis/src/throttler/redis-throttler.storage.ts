@@ -90,6 +90,13 @@ export class RedisThrottlerStorage implements ThrottlerStorage {
     }
   }
 
+  /** Deletes one bucket's hit counter (not its block): used to clear a lockout after a success. */
+  async reset(key: string, throttlerName: string): Promise<void> {
+    if (this.redis.status !== 'ready') return;
+    const base = this.keys.key('throttle', hashTag(`${throttlerName}:${key}`));
+    await this.redis.del(`${base}:hits`);
+  }
+
   private onFailure(error: unknown, ttl: number): ThrottlerStorageRecord {
     if (!this.failOpen) {
       throw new ServiceUnavailableException('Rate limiter is temporarily unavailable', {

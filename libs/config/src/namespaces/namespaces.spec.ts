@@ -125,12 +125,7 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       sandbox: true,
       introspection: true,
     });
-    expect(throttleConfig.parse({})).toEqual({
-      ttlMs: 60_000,
-      limit: 300,
-      authTtlMs: 60_000,
-      authLimit: 10,
-    });
+    expect(throttleConfig.parse({})).toEqual({ ttlMs: 60_000, limit: 300 });
     expect(cacheConfig.parse({})).toEqual({ ttlMs: 30_000, l1TtlMs: 5000, l1MaxItems: 5000 });
   });
 });

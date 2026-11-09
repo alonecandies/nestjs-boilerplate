@@ -51,8 +51,6 @@ describe('AppThrottlerModule (DI wiring)', () => {
     });
     const guard = app.get(AppThrottlerGuard);
     expect(guard).toBeInstanceOf(AppThrottlerGuard);
-    // Property-injected throttle namespace (the @AuthThrottle() limits).
-    expect(Reflect.get(guard, 'limits')).toMatchObject({ authLimit: 10, authTtlMs: 60_000 });
   });
 
   it('can leave APP_GUARD registration to the app', () => {

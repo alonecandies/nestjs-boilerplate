@@ -1,8 +1,9 @@
 import { Args, Context, Mutation, Resolver } from '@nestjs/graphql';
 import { Public } from '@platform/common';
 import type { GqlContext } from '@platform/graphql';
-import { AuthThrottle } from '@platform/redis';
+import { RateLimit } from '@platform/redis';
 import { AuthPort } from '../../application/ports/auth.port.js';
+import { IDENTITY_RATE_LIMITS } from '../rate-limit/identity-rate-limit.js';
 import { clientInfoOf } from '../shared/client-info.util.js';
 import { toAuthPayloadModel } from './graphql.mapper.js';
 import { LoginInput } from './inputs/login.input.js';
@@ -13,7 +14,7 @@ import { AuthPayloadModel } from './models/auth-payload.model.js';
 /**
  * Credential mutations. Login calls `AuthPort.login` directly (passport-local is an HTTP-body
  * strategy); the error model is identical (`INVALID_CREDENTIALS` in `extensions.code`).
- * `@AuthThrottle` applies because the throttler guard throttles GraphQL too.
+ * `identity.credentials` (shared with REST) applies because the throttler guard throttles GraphQL too.
  */
 @Resolver(() => AuthPayloadModel)
 export class AuthResolver {
@@ -21,7 +22,7 @@ export class AuthResolver {
 
   @Mutation(() => AuthPayloadModel, { description: 'Create an account and open a session' })
   @Public()
-  @AuthThrottle()
+  @RateLimit(IDENTITY_RATE_LIMITS.CREDENTIALS)
   async register(
     @Args('input') input: RegisterInput,
     @Context() context: GqlContext,
@@ -37,7 +38,7 @@ export class AuthResolver {
 
   @Mutation(() => AuthPayloadModel, { description: 'Log in with email + password' })
   @Public()
-  @AuthThrottle()
+  @RateLimit(IDENTITY_RATE_LIMITS.CREDENTIALS)
   async login(
     @Args('input') input: LoginInput,
     @Context() context: GqlContext,

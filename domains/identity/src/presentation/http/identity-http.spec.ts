@@ -1,7 +1,7 @@
 import { Test } from '@nestjs/testing';
 import { Role } from '@platform/auth';
 import { EntityNotFoundException, generateId, provideCommonEnhancers } from '@platform/common';
-import { AppCacheService, AUTH_THROTTLE_KEY } from '@platform/redis';
+import { AppCacheService, RATE_LIMIT_POLICY_KEY } from '@platform/redis';
 import { createFastifyTestApp, createMock } from '@platform/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -73,9 +73,9 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
     cache.loads.length = 0;
   });
 
-  it('credential endpoints use the strict auth throttling window', () => {
+  it('credential endpoints use the identity.credentials rate-limit policy', () => {
     for (const handler of [AuthController.prototype.register, AuthController.prototype.login]) {
-      expect(Reflect.getMetadata(AUTH_THROTTLE_KEY, handler)).toBe(true);
+      expect(Reflect.getMetadata(RATE_LIMIT_POLICY_KEY, handler)).toBe('identity.credentials');
     }
   });
 

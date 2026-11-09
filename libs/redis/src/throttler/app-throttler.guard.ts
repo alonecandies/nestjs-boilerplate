@@ -1,13 +1,15 @@
-import { type ExecutionContext, Inject, Injectable } from '@nestjs/common';
+import { type ExecutionContext, Injectable } from '@nestjs/common';
 import type { ThrottlerRequest } from '@nestjs/throttler';
 import { getContextType } from '@platform/common';
-import { type ThrottleConfig, throttleConfig } from '@platform/config';
+import { credentialFrom, credentialHash } from './credential-tracker.util.js';
+import { markLockoutAttempt } from './lockout.js';
 import {
   type RateLimitBucket,
   RateLimitGuardBase,
   type RateLimitSubject,
 } from './rate-limit-guard.base.js';
-import { AUTH_THROTTLE_KEY, THROTTLER } from './throttle.constants.js';
+import { rateLimitKey } from './rate-limit-key.util.js';
+import { THROTTLER } from './throttle.constants.js';
 
 type HeaderSink = Record<string, unknown>;
 
@@ -23,18 +25,16 @@ interface GqlContextLike {
 
 /**
  * Global throttler guard for HTTP and GraphQL (ws: `WsThrottlerGuard`; rpc: limited at the edge).
- * Charges the `user` budget (user id, else client IP; scope `global`) and the `route` budget of a
- * `@RateLimit` policy. Register it AFTER `AuthModule` so `req.user` is set.
+ * Charges the `user` budget (user id, else client IP; scope `global`), the `route` budget of a
+ * `@RateLimit` policy and, for `credentials` policies, the `auth` bucket (sha256(email)+IP) plus the
+ * per-account `lockout` bucket. Register it AFTER `AuthModule` so `req.user` is set.
  */
 @Injectable()
 export class AppThrottlerGuard extends RateLimitGuardBase {
-  // Property injection keeps ThrottlerGuard's own (decorated) constructor untouched.
-  @Inject(throttleConfig.KEY)
-  private readonly limits!: ThrottleConfig;
-
   protected override readonly enforced: ReadonlySet<string> = new Set<string>([
     THROTTLER.USER,
     THROTTLER.ROUTE,
+    THROTTLER.AUTH,
   ]);
 
   protected override async shouldSkip(context: ExecutionContext): Promise<boolean> {
@@ -76,22 +76,52 @@ export class AppThrottlerGuard extends RateLimitGuardBase {
     request: ThrottlerRequest,
     subject: RateLimitSubject,
   ): RateLimitBucket | undefined {
-    const bucket = super.bucketFor(request, subject);
-    // Interim until task C2: @AuthThrottle() routes share ONE `auth` scope (F17) with the
-    // THROTTLE_AUTH_* window instead of the global user budget.
-    if (bucket?.throttler === THROTTLER.USER && this.isAuthThrottled(request.context)) {
-      const { authLimit, authTtlMs } = this.limits;
-      return { ...bucket, scope: 'auth', limit: authLimit, ttlMs: authTtlMs, blockMs: authTtlMs };
+    if ((request.throttler.name ?? THROTTLER.USER) !== THROTTLER.AUTH) {
+      return super.bucketFor(request, subject);
     }
-    return bucket;
+    const policy = this.policyFor(request.context);
+    if (policy?.key !== 'credentials') return undefined;
+    const credential = credentialHash(this.credentialOf(request.context, policy.credentialField));
+    return {
+      throttler: THROTTLER.AUTH,
+      scope: policy.name,
+      tracker: `cred:${credential}|${this.ipTracker(subject.ip)}`,
+      limit: policy.limit,
+      ttlMs: policy.ttlMs,
+      blockMs: policy.blockMs ?? policy.ttlMs,
+    };
   }
 
-  private isAuthThrottled(context: ExecutionContext): boolean {
-    return (
-      this.reflector.getAllAndOverride<boolean | undefined>(AUTH_THROTTLE_KEY, [
-        context.getHandler(),
-        context.getClass(),
-      ]) === true
-    );
+  /** After the `auth` bucket: the per-account lockout (any IP), reset on success. */
+  protected override async handleRequest(request: ThrottlerRequest): Promise<boolean> {
+    await super.handleRequest(request);
+    // Subclasses (IpThrottlerGuard) that don't enforce `auth` must not touch the lockout either.
+    if ((request.throttler.name ?? THROTTLER.USER) !== THROTTLER.AUTH) return true;
+    if (!this.enforced.has(THROTTLER.AUTH)) return true;
+    if (this.isIgnored(request.context)) return true;
+    const policy = this.policyFor(request.context);
+    if (policy?.key !== 'credentials' || policy.lockout === undefined) return true;
+    const credential = credentialHash(this.credentialOf(request.context, policy.credentialField));
+    if (credential === 'none') return true;
+    const bucket: RateLimitBucket = {
+      throttler: THROTTLER.LOCKOUT,
+      scope: policy.name,
+      tracker: `acct:${credential}`,
+      limit: policy.lockout.threshold,
+      ttlMs: policy.lockout.durationMs,
+      blockMs: policy.lockout.durationMs,
+    };
+    await this.charge(request.context, bucket);
+    const { req } = this.getRequestResponse(request.context);
+    markLockoutAttempt(req, rateLimitKey(bucket.throttler, bucket.scope, bucket.tracker));
+    return true;
+  }
+
+  /** The account identifier: HTTP body field, or GraphQL args (`input.<field>`). */
+  private credentialOf(context: ExecutionContext, field = 'email'): unknown {
+    if (getContextType(context) === 'graphql') {
+      return credentialFrom(context.getArgByIndex<unknown>(1), field);
+    }
+    return credentialFrom(this.getRequestResponse(context).req['body'], field);
   }
 }

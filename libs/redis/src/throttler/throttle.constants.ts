@@ -27,9 +27,6 @@ export const GLOBAL_SCOPE = 'global';
 /** Route metadata set by `@RateLimit(policy)` (read by `RateLimitGuardBase`). */
 export const RATE_LIMIT_POLICY_KEY = 'app:rateLimitPolicy';
 
-/** Route metadata set by `@AuthThrottle()` (read by `AppThrottlerGuard`). Removed by task C2. */
-export const AUTH_THROTTLE_KEY = 'app:authThrottle';
-
 /**
  * Ops endpoints that must never be rate limited: probes and scrapers hit them constantly from a
  * handful of IPs, and a 429 on `/health/ready` would take the pod out of rotation. Matched as path

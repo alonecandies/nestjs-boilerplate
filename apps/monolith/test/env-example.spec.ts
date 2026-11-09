@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { parseEnv } from 'node:util';
 import { stripeConfig } from '@domain/billing';
 import { filesConfig } from '@domain/files';
-import { passwordConfig, refreshTokenConfig } from '@domain/identity';
+import { identityRateLimitConfig, passwordConfig, refreshTokenConfig } from '@domain/identity';
 import { notificationsRateLimitConfig } from '@domain/notifications';
 import { validateAllEnv } from '@platform/config';
 import { describe, expect, it } from 'vitest';
@@ -21,6 +21,7 @@ const NAMESPACES = [
   filesConfig,
   monolithConfig,
   notificationsRateLimitConfig,
+  identityRateLimitConfig,
 ] as const;
 
 /**

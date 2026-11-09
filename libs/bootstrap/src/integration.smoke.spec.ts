@@ -54,7 +54,8 @@ import { type AppConfig, AppConfigModule, appConfig } from '@platform/config';
 import { ObservabilityModule, RequestContextService } from '@platform/observability';
 import {
   AppThrottlerModule,
-  AuthThrottle,
+  RateLimit,
+  RateLimitModule,
   REDIS_CLIENT,
   RedisHealthIndicator,
   RedisModule,
@@ -67,7 +68,6 @@ import { buildFastifyOptions, configureHttpApp } from './index.js';
 
 // Read lazily by the config namespaces when the modules initialise (after these assignments).
 process.env['LOG_LEVEL'] = 'silent';
-process.env['THROTTLE_AUTH_LIMIT'] = '3';
 
 /** Runtime maintenance switch handed to `MaintenanceModeMiddleware` through the common options. */
 const maintenance = { on: false };
@@ -109,7 +109,7 @@ class SmokeController {
   }
 
   @Public()
-  @AuthThrottle()
+  @RateLimit('smoke.credentials')
   @Post('login')
   @HttpCode(200)
   login(): { ok: true } {
@@ -125,6 +125,17 @@ class SmokeController {
     // Before the throttler: global guards run in registration order (per-user tracking).
     AuthModule.forRootAsync({ globalGuards: true }),
     AppThrottlerModule.forRootAsync(),
+    RateLimitModule.forFeature({
+      useFactory: () => [
+        {
+          name: 'smoke.credentials',
+          key: 'credentials',
+          limit: 3,
+          ttlMs: 60_000,
+          lockout: { threshold: 50, durationMs: 60_000 },
+        },
+      ],
+    }),
   ],
   controllers: [SmokeController],
   providers: [
@@ -364,8 +375,13 @@ describe('infrastructure libs compose into one Fastify app (no infrastructure)',
   });
 
   describe('rate limiting (AppThrottlerGuard + RedisThrottlerStorage on the fake)', () => {
-    it('applies the @AuthThrottle window: 429 problem+json with Retry-After', async () => {
-      const hit = () => app.inject({ method: 'POST', url: '/v1/smoke/login' });
+    it('applies the credentials policy window: 429 problem+json with Retry-After', async () => {
+      const hit = () =>
+        app.inject({
+          method: 'POST',
+          url: '/v1/smoke/login',
+          payload: { email: 'smoke@example.com' },
+        });
       for (let i = 0; i < 3; i += 1) expect((await hit()).statusCode).toBe(200);
 
       const limited = await hit();

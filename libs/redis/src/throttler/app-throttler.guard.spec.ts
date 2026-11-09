@@ -6,10 +6,10 @@ import {
   type ThrottlerModuleOptions,
   type ThrottlerStorage,
 } from '@nestjs/throttler';
-import { throttleConfig } from '@platform/config';
 import { describe, expect, it, vi } from 'vitest';
 import { AppThrottlerGuard } from './app-throttler.guard.js';
-import { AuthThrottle } from './auth-throttle.decorator.js';
+import { credentialHash } from './credential-tracker.util.js';
+import { takeLockoutAttempts } from './lockout.js';
 import { RateLimit, SkipRateLimit } from './rate-limit.decorator.js';
 import { rateLimitKey } from './rate-limit-key.util.js';
 import { RateLimitPolicyRegistry } from './rate-limit-policy.js';
@@ -28,10 +28,10 @@ class Controller {
   other(): void {
     // route handler stub
   }
-  @AuthThrottle() login(): void {
+  @RateLimit('id.credentials') login(): void {
     // route handler stub
   }
-  @AuthThrottle() register(): void {
+  @RateLimit('id.credentials') gqlLogin(): void {
     // route handler stub
   }
   @RateLimit('files.upload') upload(): void {
@@ -86,6 +86,7 @@ async function createGuard(options: Partial<Exclude<ThrottlerModuleOptions, unkn
       throttlers: [
         { name: THROTTLER.USER, ttl: 60_000, limit: 100 },
         { name: THROTTLER.ROUTE, ttl: 60_000, limit: 100 },
+        { name: THROTTLER.AUTH, ttl: 60_000, limit: 100 },
       ],
       ...options,
     },
@@ -96,13 +97,15 @@ async function createGuard(options: Partial<Exclude<ThrottlerModuleOptions, unkn
   registry.register([
     { name: 'files.upload', key: 'user', limit: 3, ttlMs: 10_000 },
     { name: 'files.search', key: 'ip', limit: 9, ttlMs: 5_000, blockMs: 0 },
+    {
+      name: 'id.credentials',
+      key: 'credentials',
+      limit: 4,
+      ttlMs: 30_000,
+      lockout: { threshold: 3, durationMs: 900_000 },
+    },
   ]);
   Reflect.set(guard, 'policies', registry);
-  Reflect.set(
-    guard,
-    'limits',
-    throttleConfig.parse({ THROTTLE_AUTH_LIMIT: '7', THROTTLE_AUTH_TTL_MS: '30000' }),
-  );
   await guard.onModuleInit();
   return { guard, increment };
 }
@@ -164,16 +167,6 @@ describe('AppThrottlerGuard', () => {
     const { guard, increment } = await createGuard();
     await guard.canActivate(http(Controller.prototype.list));
     expect(increment.mock.calls.map(([, , , , name]) => name)).toEqual([THROTTLER.USER]);
-  });
-
-  it('shares one "auth" bucket across every @AuthThrottle route (F17)', async () => {
-    const { guard, increment } = await createGuard();
-    await guard.canActivate(http(Controller.prototype.login));
-    await guard.canActivate(http(Controller.prototype.register));
-    expect(increment.mock.calls).toEqual([
-      [rateLimitKey('user', 'auth', 'ip:1.2.3.4'), 30_000, 7, 30_000, 'user'],
-      [rateLimitKey('user', 'auth', 'ip:1.2.3.4'), 30_000, 7, 30_000, 'user'],
-    ]);
   });
 
   it('@SkipRateLimit() skips every named throttler', async () => {
@@ -247,6 +240,97 @@ describe('AppThrottlerGuard', () => {
       }
     }
     expect(Reflect.getMetadata('THROTTLER:SKIPuser', Legacy.prototype.handler)).toBeUndefined();
+  });
+});
+
+describe('auth throttler (credentials policies)', () => {
+  const credKey = (email: string, ip = 'ip:1.2.3.4') =>
+    rateLimitKey('auth', 'id.credentials', `cred:${credentialHash(email)}|${ip}`);
+
+  it('keys REST and GraphQL attempts for one account and IP into one bucket (F17)', async () => {
+    const { guard, increment } = await createGuard();
+    await guard.canActivate(
+      http(Controller.prototype.login, { headers: {}, ip: '1.2.3.4', body: { email: 'A@x.io ' } }),
+    );
+    const gql = context('graphql', { headers: {}, ip: '1.2.3.4' }, Controller.prototype.gqlLogin);
+    Reflect.set(gql, 'getArgByIndex', (i: number) =>
+      i === 1
+        ? { input: { email: 'a@x.io' } }
+        : i === 2
+          ? { req: { headers: {}, ip: '1.2.3.4' }, reply: { header: vi.fn() } }
+          : {},
+    );
+    await guard.canActivate(gql);
+    const authCalls = increment.mock.calls.filter(([, , , , name]) => name === THROTTLER.AUTH);
+    expect(authCalls).toEqual([
+      [credKey('a@x.io'), 30_000, 4, 30_000, 'auth'],
+      [credKey('a@x.io'), 30_000, 4, 30_000, 'auth'],
+    ]);
+  });
+
+  it('separates accounts and IPs, and shares "none" for a missing email', async () => {
+    const { guard, increment } = await createGuard();
+    await guard.canActivate(
+      http(Controller.prototype.login, { headers: {}, ip: '1.2.3.4', body: { email: 'b@x.io' } }),
+    );
+    await guard.canActivate(
+      http(Controller.prototype.login, { headers: {}, ip: '5.6.7.8', body: { email: 'b@x.io' } }),
+    );
+    await guard.canActivate(
+      http(Controller.prototype.login, { headers: {}, ip: '1.2.3.4', body: { email: ['a', 'b'] } }),
+    );
+    const keys = increment.mock.calls.filter(([, , , , n]) => n === THROTTLER.AUTH).map(([k]) => k);
+    expect(keys).toEqual([
+      credKey('b@x.io'),
+      credKey('b@x.io', 'ip:5.6.7.8'),
+      rateLimitKey('auth', 'id.credentials', 'cred:none|ip:1.2.3.4'),
+    ]);
+  });
+
+  it('counts a lockout attempt per account (any IP) and marks it for reset on success', async () => {
+    const { guard, increment } = await createGuard();
+    const req = { headers: {}, ip: '1.2.3.4', body: { email: 'c@x.io' } };
+    await guard.canActivate(http(Controller.prototype.login, req));
+    const lockoutKey = rateLimitKey(
+      'lockout',
+      'id.credentials',
+      `acct:${credentialHash('c@x.io')}`,
+    );
+    expect(increment).toHaveBeenCalledWith(lockoutKey, 900_000, 3, 900_000, 'lockout');
+    expect(takeLockoutAttempts(req)).toEqual([lockoutKey]);
+  });
+
+  it('a locked account answers exactly like a rate limit (429 + Retry-After), existing or not', async () => {
+    const { guard, increment } = await createGuard();
+    increment.mockImplementation(async (_key, _ttl, _limit, _block, name) =>
+      name === 'lockout'
+        ? record({ isBlocked: true, totalHits: 4, timeToBlockExpire: 900 })
+        : record(),
+    );
+    for (const email of ['exists@x.io', 'ghost@x.io']) {
+      const res = { header: vi.fn() };
+      await expect(
+        guard.canActivate(
+          context(
+            'http',
+            { headers: {}, ip: '1.2.3.4', body: { email } },
+            Controller.prototype.login,
+            res,
+          ),
+        ),
+      ).rejects.toBeInstanceOf(ThrottlerException);
+      expect(res.header).toHaveBeenCalledWith('Retry-After', 900);
+    }
+  });
+
+  it('does not lock out requests without a credential and ignores non-credential routes', async () => {
+    const { guard, increment } = await createGuard();
+    await guard.canActivate(
+      http(Controller.prototype.login, { headers: {}, ip: '1.2.3.4', body: {} }),
+    );
+    await guard.canActivate(http(Controller.prototype.list));
+    expect(increment.mock.calls.map(([, , , , n]) => n)).not.toContain('lockout');
+    expect(increment.mock.calls.filter(([, , , , n]) => n === 'auth')).toHaveLength(1);
   });
 });
 

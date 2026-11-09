@@ -1,12 +1,13 @@
 import { type DynamicModule, Module, type Provider } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD, DiscoveryModule } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR, DiscoveryModule } from '@nestjs/core';
 import { ThrottlerModule, type ThrottlerModuleOptions } from '@nestjs/throttler';
 import { type ThrottleConfig, throttleConfig } from '@platform/config';
 import type { Redis } from 'ioredis';
 import { RedisKeyService } from '../keys/redis-key.service.js';
 import { REDIS_CLIENT } from '../redis.constants.js';
 import { AppThrottlerGuard } from './app-throttler.guard.js';
+import { LockoutResetInterceptor } from './lockout-reset.interceptor.js';
 import { RateLimitPolicyRegistry } from './rate-limit-policy.js';
 import { RateLimitPolicyValidator } from './rate-limit-policy.validator.js';
 import { RedisThrottlerStorage } from './redis-throttler.storage.js';
@@ -32,6 +33,7 @@ export interface AppThrottlerModuleOptions {
  * Redis-backed rate limiting for every replica (global module):
  * - `user`: `THROTTLE_LIMIT` per `THROTTLE_TTL_MS`, one budget per user (else client IP) across routes;
  * - `route`: named policies (`@RateLimit`), declared by domains with `RateLimitModule.forFeature`;
+ * - `auth`: credentials policies, sha256(email)+IP, with a per-account lockout reset on success;
  * - `@SkipRateLimit()` opts out; ops paths are exempt.
  * Requires `RedisModule` (global). Import `AuthModule` BEFORE this module so `req.user` is set.
  */
@@ -44,6 +46,8 @@ export class AppThrottlerModule {
       WsThrottlerGuard,
       RateLimitPolicyRegistry,
       RateLimitPolicyValidator,
+      LockoutResetInterceptor,
+      { provide: APP_INTERCEPTOR, useExisting: LockoutResetInterceptor },
     ];
     if (options.globalGuard ?? true) {
       providers.push({ provide: APP_GUARD, useExisting: AppThrottlerGuard });
@@ -67,6 +71,8 @@ export class AppThrottlerModule {
               { name: THROTTLER.USER, ttl: config.ttlMs, limit: config.limit },
               // Real values come from the route's @RateLimit policy (RateLimitGuardBase.bucketFor).
               { name: THROTTLER.ROUTE, ttl: config.ttlMs, limit: config.limit },
+              // Real values come from the route's credentials policy; the account lockout rides on it.
+              { name: THROTTLER.AUTH, ttl: config.ttlMs, limit: config.limit },
             ],
             storage: new RedisThrottlerStorage(
               redis,

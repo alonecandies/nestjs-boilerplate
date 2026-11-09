@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { parseEnv } from 'node:util';
 import { billingGrpcClientConfig } from '@domain/billing';
 import { filesConfig } from '@domain/files';
-import { identityGrpcClientConfig } from '@domain/identity';
+import { identityGrpcClientConfig, identityRateLimitConfig } from '@domain/identity';
 import { notificationsGrpcClientConfig, notificationsRateLimitConfig } from '@domain/notifications';
 import { validateAllEnv } from '@platform/config';
 import { describe, expect, it } from 'vitest';
@@ -21,6 +21,7 @@ const NAMESPACES = [
   filesConfig,
   gatewayConfig,
   notificationsRateLimitConfig,
+  identityRateLimitConfig,
 ] as const;
 
 /**
