@@ -378,9 +378,16 @@ pgbouncer:
     (`platform: linux/amd64`, which silences the Apple Silicon warning).
   - Add `-c shared_preload_libraries=citus,pg_stat_statements` (Citus must come first), `-c citus.shard_count=8` and
     `-c citus.max_shared_pool_size=…`.
-  - The image creates the extension in `POSTGRES_DB` through its own init script. Our `01-extensions.sql` keeps
-    running, and its `uuidv7()` probe passes on PG 18.4.
-  - Volume note: PG 18.4 with the same data layout. A fresh `down -v` is needed anyway (spec §4).
+  - The image ships `/docker-entrypoint-initdb.d/001-create-citus-extension.sql`, but under compose our
+    `./docker/postgres/init:/docker-entrypoint-initdb.d:ro` mount (`docker-compose.yml:191`) hides that
+    directory, so the image's script never runs there. SH-2 adds `docker/postgres/init/00-citus.sql`
+    (`CREATE EXTENSION IF NOT EXISTS citus;`, runs before `01-extensions.sql`) and `check-infra.sh` fails when the
+    extension or the `citus`-first preload is missing. Testcontainers mounts nothing, so there the image's own
+    script creates the extension in `POSTGRES_DB`. Our `01-extensions.sql` keeps running, and its `uuidv7()`
+    probe passes on PG 18.4.
+  - Volume note: init scripts run only on an empty data directory, so a `pg-data` volume created by the old
+    `postgres:18.6-alpine3.24` image has no `citus` extension (and moves from musl to glibc collations). Recreate
+    it (`docs/DOCKER.md`, "Postgres runs Citus"); a fresh `down -v` is needed anyway (spec §4).
 - **Workers profile `citus`** (optional):
   - `postgres-worker-1` and `postgres-worker-2` (same image, trust between nodes on the `backend` network);
   - a one-shot `citus-init` job running `citus_set_coordinator_host('postgres')`, `citus_add_node(…)` for each
@@ -389,7 +396,7 @@ pgbouncer:
   - `scripts/docker/check-infra.sh` asserts `citus_version()` and, under the profile, `citus_check_cluster_node_health()`.
 - **PgBouncer** is an infra service (no profile) once B3-3 lands. Before that, apps keep connecting direct.
 - **Testcontainers (`@platform/testing`).** A new subpath `@platform/testing/postgres` (test-only by the `TEST_ONLY`
-  rule; adds `testcontainers` and `@testcontainers/postgresql` to its `dependencies`):
+  rule; adds `@testcontainers/postgresql` and `postgres` to its `dependencies`, both already in the catalog):
 
   ```ts
   export interface TestPostgresOptions {
