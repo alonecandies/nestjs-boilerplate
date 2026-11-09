@@ -165,8 +165,9 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
 - `migrate()` runs a set's pending migrations in **one transaction**, so `CREATE INDEX CONCURRENTLY` is impossible.
   A migration whose journal timestamp is older than the last applied one **of the same set** is **silently
   skipped**: regenerate after merges. CI's generated-artefacts drift step runs `bun run db:generate` and fails
-  when the schema files and the committed migrations disagree; it does not check timestamp order. Before merging
-  a hand-edited history, run `bunx drizzle-kit check --config domains/<x>/drizzle.config.ts`. The runner refuses
+  when the schema files and the committed migrations disagree; it does not check timestamp order. CI runs
+  `bun run db:check` (`drizzle-kit check` per domain), which fails on a forked snapshot chain; run it after every
+  merge that touches a migrations folder. The runner refuses
   a journal whose `when` values do not grow (or an entry without a positive integer `when` or a boolean
   `breakpoints`) before it connects, but it cannot see a file older than a row a database already holds.
 - Build prepared statements in the constructor body, never in field initialisers.

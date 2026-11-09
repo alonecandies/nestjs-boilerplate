@@ -18,6 +18,7 @@
     "test": "vitest run --config ../../vitest.config.ts --project billing",
     "clean": "rimraf dist coverage",
     "db:generate": "drizzle-kit generate",
+    "db:check": "drizzle-kit check",
     "db:studio": "drizzle-kit studio --port 4984"
   },
   "dependencies": {
