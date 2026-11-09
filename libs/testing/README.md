@@ -1,8 +1,9 @@
 # @platform/testing
 
 Test-only helpers shared by every package's unit and e2e tests. It depends on **no other workspace
-package** (so any package can use it without dependency cycles) and pulls in `vitest` — import it only
-from `*.spec.ts`, `*.e2e-spec.ts` and `test/**`.
+package** (so any package can use it without dependency cycles) and pulls in `vitest` (and, through the
+`./postgres` subpath only, testcontainers and postgres.js) — import it only from `*.spec.ts`,
+`*.int-spec.ts`, `*.e2e-spec.ts` and `test/**`.
 
 ## Public API
 
@@ -12,6 +13,15 @@ from `*.spec.ts`, `*.e2e-spec.ts` and `test/**`.
 | `FastifyTestAppOptions` | `{ adapter?: FastifyAdapter; appOptions?: NestApplicationOptions }`                                                                                                       | custom adapter (body limit, multipart…) / `rawBody`, `logger`                                           |
 | `createMock`            | `<T extends object>(overrides?: Partial<Record<keyof T, unknown>>) => Mocked<T>`                                                                                          | Proxy auto-mock: every accessed member is a cached `vi.fn()`                                            |
 | `Mocked<T>`             | `{ [K in keyof T]: T[K] extends (...a: infer A) => infer R ? Mock<(...a: A) => R> : T[K] }`                                                                               | typed mock view                                                                                         |
+
+### @platform/testing/postgres
+
+| Export                | Signature                                                                               | Purpose                                                                                         |
+| --------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `startTestPostgres`   | `(options?: TestPostgresOptions) => Promise<TestPostgres>`                              | a fresh single-node Citus container per int spec, or the database at `INTEGRATION_DATABASE_URL` |
+| `TestPostgresOptions` | `{ localExecution?: boolean; initSql?: readonly string[]; allowExternalUrl?: boolean }` | `localExecution: false` forces remote shard execution; `initSql` runs as superuser              |
+| `TestPostgres`        | `{ readonly url: string; urlFor(role, password): string; stop(): Promise<void> }`       | superuser URL of database `app`; percent-encoded logins for other roles                         |
+| `TEST_POSTGRES_IMAGE` | `'citusdata/citus:14.2.0'`                                                              | the image compose runs too                                                                      |
 
 ## Usage
 
@@ -39,7 +49,8 @@ Test.createTestingModule({ providers: [SomeHandler] }).useMocker(() => createMoc
 
 ## Environment variables
 
-None.
+`INTEGRATION_DATABASE_URL`: read by `startTestPostgres` only (unless `allowExternalUrl: false`); when set and
+not empty, that database is used instead of a container.
 
 ## Gotchas
 
@@ -53,3 +64,5 @@ None.
   overriding are also `vi.fn()`s at runtime — pass them in `overrides`.
 - `createFastifyTestApp` doesn't bind a port: use `app.inject()` (or `supertest(app.getHttpServer())`).
 - The Nest `Logger` is process-static: `appOptions.logger` of one test app affects others in the same worker.
+- `citusdata/citus:14.2.0` is amd64-only: Docker Desktop emulates it on Apple Silicon, so pull it once
+  before the first int run (`docker pull --platform linux/amd64 citusdata/citus:14.2.0`).

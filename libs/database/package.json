@@ -36,7 +36,7 @@
     "zod": "catalog:"
   },
   "devDependencies": {
-    "@testcontainers/postgresql": "catalog:",
+    "@platform/testing": "workspace:*",
     "@types/lodash-es": "catalog:",
     "drizzle-kit": "catalog:"
   }

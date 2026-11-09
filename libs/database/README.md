@@ -135,8 +135,9 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
 - Unit (`bunx vitest run --project database`) needs no database. `test/fake-sql.ts` fakes the postgres.js pool
   (`unsafe`, `begin`, `end`), so drizzle's real session code runs: module wiring, `@Transactional()` commit and
   rollback, boot retries, the platform-first rule, the per-set runner under one lock, the CLI and health are covered.
-- Integration (`INTEGRATION=1 bunx vitest run --project database:int`) uses `postgres:18.6-alpine3.24` through
-  testcontainers. It covers concurrent `runMigrations` over two sets, separate bookkeeping tables (`gadgets`, a set
+- Integration (`INTEGRATION=1 bunx vitest run --project database:int`) uses `startTestPostgres()` from
+  `@platform/testing/postgres` (Citus 14.2 on PostgreSQL 18.4; the databases it creates have no `citus`
+  extension, so they are plain Postgres). It covers concurrent `runMigrations` over two sets, separate bookkeeping tables (`gadgets`, a set
   with older timestamps, still applies), the CLI (`test/fixtures/migrate.ts`, an app-style entry), boot migrations,
   startup GUCs, `uuidv7()` defaults, transactions, keyset paging, health and shutdown. `test/fixtures/migrations` is
   real drizzle-kit output

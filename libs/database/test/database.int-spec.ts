@@ -6,7 +6,7 @@ import { NestFactory } from '@nestjs/core';
 import { Transactional, TransactionHost } from '@nestjs-cls/transactional';
 import { generateId, isUuidV7 } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { startTestPostgres, type TestPostgres } from '@platform/testing/postgres';
 import { and, eq, sql } from 'drizzle-orm';
 import { noop, sumBy } from 'lodash-es';
 import { ClsModule } from 'nestjs-cls';
@@ -31,11 +31,10 @@ import { gadgetsMigrations, widgetsMigrations } from './fixtures/fixture-sets.js
 import { type NewWidget, type Widget, widgets } from './fixtures/widgets.schema.js';
 
 /*
- * Real Postgres 18 (uuidv7() is PG18-native) via testcontainers. Opt-in:
+ * Real Postgres 18 (uuidv7() is PG18-native) with Citus 14.2, via @platform/testing/postgres. The
+ * databases this spec creates have no citus extension, so they behave as plain Postgres. Opt-in:
  *   INTEGRATION=1 bunx vitest run --project database:int
  */
-
-const IMAGE = 'postgres:18.6-alpine3.24';
 const PACKAGE_ROOT = join(import.meta.dirname, '..');
 const schema = { widgets };
 type Adapter = DrizzleTransactionalAdapter<typeof schema>;
@@ -95,10 +94,10 @@ class WidgetsService {
 }
 
 describe('@platform/database against PostgreSQL 18', () => {
-  let container: StartedPostgreSqlContainer;
+  let pg: TestPostgres;
   let admin: Sql;
   const urlFor = (database: string): string => {
-    const url = new URL(container.getConnectionUri());
+    const url = new URL(pg.url);
     url.pathname = `/${database}`;
     return url.toString();
   };
@@ -119,17 +118,14 @@ describe('@platform/database against PostgreSQL 18', () => {
   };
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer(IMAGE)
-      .withDatabase('app')
-      .withUsername('app')
-      .withPassword('app')
-      .start();
-    admin = postgres(container.getConnectionUri(), { max: 1, onnotice: noop });
+    // Never INTEGRATION_DATABASE_URL: this spec creates databases (race, sets, …) on the server.
+    pg = await startTestPostgres({ allowExternalUrl: false });
+    admin = postgres(pg.url, { max: 1, onnotice: noop });
   });
 
   afterAll(async () => {
     await admin?.end({ timeout: 5 });
-    await container?.stop();
+    await pg?.stop();
   });
 
   describe('runMigrations()', () => {
