@@ -104,7 +104,11 @@ export {
   RateLimitPolicyRegistry,
 } from './throttler/rate-limit-policy.js';
 export {
+  DEFAULT_THROTTLE_COMMAND_TIMEOUT_MS,
+  FAIL_CLOSED_THROTTLERS,
   msToSeconds,
+  RATE_LIMIT_FAIL_OPEN_TOKEN,
+  RATE_LIMIT_FAIL_OPEN_TOTAL,
   RedisThrottlerStorage,
   type RedisThrottlerStorageOptions,
   type ThrottlerStorageRecord,

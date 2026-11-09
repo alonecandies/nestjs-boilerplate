@@ -151,3 +151,47 @@ describe('RedisThrottlerStorage.reset and the lockout boundary', () => {
     });
   });
 });
+
+describe('Redis down (C-10)', () => {
+  it('fails open for budgets and closed (503) for auth and lockout by default', async () => {
+    const redis = new InMemoryRedis();
+    const onFailOpen = vi.fn();
+    const storage = new RedisThrottlerStorage(redis.asRedis(), keys, { onFailOpen });
+    redis.simulateOutage();
+    for (const name of ['ip', 'user', 'route', 'tenant']) {
+      await expect(storage.increment('k', 1_000, 1, 1_000, name)).resolves.toMatchObject({
+        isBlocked: false,
+      });
+    }
+    expect(onFailOpen.mock.calls.map(([name]) => name)).toEqual(['ip', 'user', 'route', 'tenant']);
+    for (const name of ['auth', 'lockout']) {
+      await expect(storage.increment('k', 1_000, 1, 1_000, name)).rejects.toMatchObject({
+        code: 'SERVICE_UNAVAILABLE',
+      });
+    }
+  });
+
+  it('bounds a hung (connected) Redis with the command timeout', async () => {
+    const redis = new InMemoryRedis();
+    const client = redis.asRedis();
+    const storage = new RedisThrottlerStorage(client, keys, { commandTimeoutMs: 20 });
+    Reflect.set(client, 'appThrottleHit', () => new Promise(() => undefined)); // never settles
+    const started = Date.now();
+    await expect(storage.increment('k', 1_000, 1, 1_000, 'user')).resolves.toMatchObject({
+      isBlocked: false,
+    });
+    await expect(storage.increment('k', 1_000, 1, 1_000, 'auth')).rejects.toMatchObject({
+      code: 'SERVICE_UNAVAILABLE',
+    });
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  it('still honours a boolean failOpen for every throttler', async () => {
+    const redis = new InMemoryRedis();
+    const storage = new RedisThrottlerStorage(redis.asRedis(), keys, { failOpen: true });
+    redis.simulateOutage();
+    await expect(storage.increment('k', 1_000, 1, 1_000, 'auth')).resolves.toMatchObject({
+      isBlocked: false,
+    });
+  });
+});

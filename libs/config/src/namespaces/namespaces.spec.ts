@@ -130,6 +130,7 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       limit: 300,
       ipTtlMs: 60_000,
       ipLimit: 600,
+      redisTimeoutMs: 250,
     });
     expect(cacheConfig.parse({})).toEqual({ ttlMs: 30_000, l1TtlMs: 5000, l1MaxItems: 5000 });
   });

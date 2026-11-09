@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR, DiscoveryModule } from '@nestjs/core';
 import { ThrottlerModule, type ThrottlerModuleOptions } from '@nestjs/throttler';
 import { type ThrottleConfig, throttleConfig } from '@platform/config';
+import { makeCounterProvider } from '@platform/observability';
 import type { Redis } from 'ioredis';
 import { RedisKeyService } from '../keys/redis-key.service.js';
 import { REDIS_CLIENT } from '../redis.constants.js';
@@ -10,18 +11,31 @@ import { AppThrottlerGuard } from './app-throttler.guard.js';
 import { LockoutResetInterceptor } from './lockout-reset.interceptor.js';
 import { RateLimitPolicyRegistry } from './rate-limit-policy.js';
 import { RateLimitPolicyValidator } from './rate-limit-policy.validator.js';
-import { RedisThrottlerStorage } from './redis-throttler.storage.js';
+import {
+  RATE_LIMIT_FAIL_OPEN_TOKEN,
+  RATE_LIMIT_FAIL_OPEN_TOTAL,
+  RedisThrottlerStorage,
+} from './redis-throttler.storage.js';
 import { DEFAULT_THROTTLE_EXEMPT_PATHS, THROTTLER } from './throttle.constants.js';
 import { createThrottleSkipIf } from './throttle-exempt.util.js';
 import { WsThrottlerGuard } from './ws-throttler.guard.js';
+
+const failOpenCounter = makeCounterProvider({
+  name: RATE_LIMIT_FAIL_OPEN_TOTAL,
+  help: 'Requests let through without rate limiting because Redis was unavailable or slow',
+  labelNames: ['throttler'],
+});
+
+@Module({ providers: [failOpenCounter], exports: [failOpenCounter] })
+class RateLimitMetricsModule {}
 
 export interface AppThrottlerModuleOptions {
   /** Path prefixes never rate limited. Default `DEFAULT_THROTTLE_EXEMPT_PATHS` (ops endpoints). */
   exemptPaths?: readonly string[];
   /** User agents never rate limited (e.g. `[/kube-probe/i]`). Default: none. */
   ignoreUserAgents?: RegExp[];
-  /** See `RedisThrottlerStorageOptions.failOpen`. Default `true`. */
-  failOpen?: boolean;
+  /** See RedisThrottlerStorageOptions.failOpen. Default: budgets open, auth/lockout closed. */
+  failOpen?: boolean | ((throttlerName: string) => boolean);
   /**
    * Register `AppThrottlerGuard` as `APP_GUARD` (default `true`). Set `false` to register it
    * yourself — e.g. to control its position relative to other global guards.
@@ -61,12 +75,13 @@ export class AppThrottlerModule {
         ConfigModule.forFeature(throttleConfig),
         // ThrottlerModule is @Global: its options + storage tokens are visible to every guard.
         ThrottlerModule.forRootAsync({
-          imports: [ConfigModule.forFeature(throttleConfig)],
-          inject: [throttleConfig.KEY, REDIS_CLIENT, RedisKeyService],
+          imports: [ConfigModule.forFeature(throttleConfig), RateLimitMetricsModule],
+          inject: [throttleConfig.KEY, REDIS_CLIENT, RedisKeyService, RATE_LIMIT_FAIL_OPEN_TOKEN],
           useFactory: (
             config: ThrottleConfig,
             redis: Redis,
             keys: RedisKeyService,
+            failOpenTotal: { inc(labels: { throttler: string }): void },
           ): ThrottlerModuleOptions => ({
             throttlers: [
               { name: THROTTLER.IP, ttl: config.ipTtlMs, limit: config.ipLimit },
@@ -76,11 +91,11 @@ export class AppThrottlerModule {
               // Real values come from the route's credentials policy; the account lockout rides on it.
               { name: THROTTLER.AUTH, ttl: config.ttlMs, limit: config.limit },
             ],
-            storage: new RedisThrottlerStorage(
-              redis,
-              keys,
-              options.failOpen === undefined ? {} : { failOpen: options.failOpen },
-            ),
+            storage: new RedisThrottlerStorage(redis, keys, {
+              ...(options.failOpen === undefined ? {} : { failOpen: options.failOpen }),
+              commandTimeoutMs: config.redisTimeoutMs,
+              onFailOpen: (throttler) => failOpenTotal.inc({ throttler }),
+            }),
             skipIf,
             ...(options.ignoreUserAgents ? { ignoreUserAgents: options.ignoreUserAgents } : {}),
           }),

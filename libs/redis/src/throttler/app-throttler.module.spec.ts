@@ -12,7 +12,7 @@ import { AppThrottlerModule } from './app-throttler.module.js';
 import { RateLimit } from './rate-limit.decorator.js';
 import { RateLimitModule } from './rate-limit.module.js';
 import { RateLimitPolicyRegistry } from './rate-limit-policy.js';
-import { RedisThrottlerStorage } from './redis-throttler.storage.js';
+import { RATE_LIMIT_FAIL_OPEN_TOKEN, RedisThrottlerStorage } from './redis-throttler.storage.js';
 
 const redis = new InMemoryRedis();
 
@@ -105,5 +105,20 @@ describe('AppThrottlerModule (DI wiring)', () => {
     await expect(
       NestFactory.createApplicationContext(TestModule, { logger: false, abortOnError: false }),
     ).rejects.toThrow('@RateLimit names unregistered policies: test.missing');
+  });
+
+  it('registers the fail-open counter and passes THROTTLE_REDIS_TIMEOUT_MS to the storage', async () => {
+    @Module({
+      imports: [
+        ConfigModule.forRoot({ ignoreEnvFile: true }),
+        FakeRedisModule,
+        AppThrottlerModule.forRootAsync(),
+      ],
+    })
+    class TestModule {}
+    app = await NestFactory.createApplicationContext(TestModule, { logger: false });
+    const storage = app.get<ThrottlerStorage>(getStorageToken());
+    expect(Reflect.get(storage, 'commandTimeoutMs')).toBe(250);
+    expect(app.get(RATE_LIMIT_FAIL_OPEN_TOKEN)).toHaveProperty('inc');
   });
 });
