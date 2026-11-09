@@ -43,7 +43,7 @@ package (`<domain>-contracts`):
 
 | Project name | Created for                                | Includes                                        | Timeouts (test / hook) |
 | ------------ | ------------------------------------------ | ----------------------------------------------- | ---------------------- |
-| `<name>`     | every package (unit)                       | `src/**/*.spec.ts`, `test/**/*.spec.ts`         | Vitest defaults        |
+| `<name>`     | every package (unit)                       | `src/**/*.spec.ts`, `test/**/*.spec.ts`         | 15 s / 30 s            |
 | `<app>:e2e`  | every app                                  | `test/**/*.e2e-spec.ts`                         | 30 s / 60 s            |
 | `<name>:int` | every package, **only if `INTEGRATION=1`** | `src/**/*.int-spec.ts`, `test/**/*.int-spec.ts` | 120 s / 180 s          |
 
@@ -231,6 +231,19 @@ loads twice:
 
 So: **do not** add `vi.mock('graphql')` or alias workarounds for "another realm" errors. If one
 appears, a resolve condition is out of sync with Node.
+
+## Test output and timeouts
+
+`vitest.setup.ts` is loaded by every project after `reflect-metadata`. It drops Nest's static logger
+and mutes the errors of the `TestingLogger` that `Test.createTestingModule().compile()` installs, so
+specs that exercise failure paths print no `[Nest]` lines or stack traces. To see them while
+debugging, set `TEST_LOGS=1` (for example `TEST_LOGS=1 npx vitest run --project billing`). Specs
+that assert on logging spy on `Logger.prototype` methods, which still run, or pass their own logger
+with `Test.createTestingModule(…).setLogger(…)`.
+
+Unit and `scripts` projects allow 15 s per test and 30 s per hook (`UNIT_TEST_TIMEOUT_MS`,
+`UNIT_HOOK_TIMEOUT_MS` in `vitest.config.ts`), because they compile Nest modules and run gRPC round
+trips in-process. e2e projects keep 30 s / 60 s and integration projects 120 s / 180 s.
 
 ## Integration tests (testcontainers)
 
