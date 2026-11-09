@@ -164,6 +164,7 @@
     "docker:microservices": "docker compose --profile microservices up -d --build --wait",
     "docker:observability": "docker compose --profile observability up -d --wait",
     "docker:down": "docker compose --profile '*' down",
+    "docker:smoke": "node scripts/docker/check-topology.ts up",
     "loadtest": "docker compose --profile loadtest run --rm k6"
   },
   "devDependencies": {

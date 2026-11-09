@@ -437,9 +437,29 @@ Runs on pushes to `master` and on pull requests. Test layout and the integration
 - **integration**: `bun run test:int` (`INTEGRATION=1`, every `<package>:int` project): Postgres from testcontainers,
   Redis from a job service container (`REDIS_URL=redis://localhost:6379`).
 - **image** (matrix of the 5 apps): `docker buildx` of the `runtime` target, not pushed, GitHub Actions cache per app.
+- **topology** (matrix `monolith`, `microservices`; needs `image`): loads the images the `image` job saved as
+  artifacts and runs `node scripts/docker/check-topology.ts up <topology>` (see below).
 - **compose**: `scripts/docker/validate-compose.sh` (`docker compose config` for every profile combination + one `api`
   per topology) and `scripts/docker/check-infra.sh` (boots and asserts the infra, including the S3 CORS preflight,
   then tears it down).
+
+### Topology smoke test
+
+`scripts/docker/check-topology.ts` (`bun run docker:smoke <monolith|microservices>`) boots one
+topology with the app images in an isolated project (`bp-topology-<topology>`). It moves every
+`*_HOST_PORT` knob 20000 up (so the API is on `127.0.0.1:23000`) unless you set it, so your own
+stack keeps running. It waits for every healthcheck, then for `GET /health/ready` of every app from
+inside the compose network. Then it registers a user through the API and reads it back with
+`GET /v1/auth/me`, and removes the project. `KEEP=1` keeps it running, `NO_BUILD=1 TAG=<tag>`
+reuses built images, and `node scripts/docker/check-topology.ts smoke --base-url <url>` runs only
+the REST journey against a running API. CI runs it for both topologies from the images the `image`
+job built. The script never uses the `boilerplate` project.
+
+Memory: the compose limits of one topology add up to about 4.8 GiB (monolith) and 5.9 GiB
+(microservices), so the microservices job needs a runner with about 6 GiB free. GitHub's
+`ubuntu-24.04` runner has 16 GiB on public repositories and 7 GiB on private ones: on a private
+repository use a larger runner if the job is killed for memory. Locally, give Docker Desktop at
+least 8 GiB.
 
 ## Gotchas (all hit or verified while building this)
 

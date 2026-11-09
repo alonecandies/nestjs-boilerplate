@@ -336,7 +336,7 @@ each with a `.dlq`) travel in a zod-validated envelope defined in `libs/contract
 │   └── transport/                 # gRPC (clients, server, errors, health) + Kafka (producer, consumers, DLQ)
 ├── docker/                        # service configs: postgres, cassandra, kafka, storage, prometheus, grafana, alloy, k6
 ├── docs/                          # the guides linked below
-├── scripts/                       # setup-env.mjs, check-env-example.mjs, check-boundaries.mjs, docker/ (image assembly, infra checks)
+├── scripts/                       # setup-env.mjs, check-env-example.mjs, check-boundaries.mjs, docker/ (image assembly, infra checks, topology smoke test)
 ├── patches/                       # bun patchedDependencies (kafkajs)
 ├── .github/workflows/ci.yml       # CI: verify, integration, image (per app), compose
 ├── .husky/                        # pre-commit (lint-staged), commit-msg (commitlint)
