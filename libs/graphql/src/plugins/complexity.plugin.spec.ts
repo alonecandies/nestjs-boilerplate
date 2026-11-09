@@ -102,7 +102,7 @@ describe('measureComplexity / isIntrospectionOnly', () => {
 describe('ComplexityPlugin (via ApolloServer.executeOperation)', () => {
   let server: ApolloServer<GqlContext>;
   // `createLoaders()` rather than a `{}` literal: domain packages augment `GraphqlLoaders` with
-  // required keys (identity's `users`), which a literal fails once they share the program.
+  // required keys (a domain's `users`), which a literal fails once they share the program.
   const loaders = new DataLoaderRegistry();
   const contextValue = (): GqlContext => ({
     req: { id: 'req-123', headers: {} },

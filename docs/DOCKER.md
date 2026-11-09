@@ -431,7 +431,7 @@ start what you need, or raise Docker Desktop's memory.
 Runs on pushes to `master` and on pull requests. Test layout and the integration projects: [TESTING.md](TESTING.md).
 
 - **verify**: Node 24 (`.nvmrc`) + Bun 1.4.3, `bun install --frozen-lockfile`, `bun run check` (Biome, ESLint,
-  Prettier, tsc), `bun run test`, `bun run build`, generated-artefact drift (`proto:gen` + `buf lint` + `db:generate`,
+  Prettier, tsc), `bun run test`, `bun run build`, generated-artefact drift (`proto:gen` + `buf lint` + `db:generate` + `db:check`,
   then a clean `git diff`/`git status` of `domains/*/contracts/src/generated` and `domains/*/src/infrastructure/persistence/migrations`),
   commitlint over the PR's commits (pull requests only), then the config drift checks (`.env.example`, Kafka topics).
 - **integration**: `bun run test:int` (`INTEGRATION=1`, every `<package>:int` project): Postgres from testcontainers,

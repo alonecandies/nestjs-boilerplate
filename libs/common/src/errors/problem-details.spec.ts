@@ -42,12 +42,12 @@ describe('toProblemDetails', () => {
   });
 
   it('keeps 5xx domain messages but never their details', () => {
-    const error = new ExternalServiceException('Payment provider failed', {
+    const error = new ExternalServiceException('Shipment provider failed', {
       details: { issues: [{ path: 'x', message: 'upstream said 10.0.0.3 refused' }] },
     });
     const problem = toProblemDetails(error, ctx);
     expect(problem).toMatchObject({ status: 502, code: 'EXTERNAL_SERVICE_ERROR' });
-    expect(problem.detail).toBe('Payment provider failed');
+    expect(problem.detail).toBe('Shipment provider failed');
     expect(problem.errors).toBeUndefined();
   });
 

@@ -174,13 +174,13 @@ describe('DatabaseModule', () => {
 
     it('honours DATABASE_RUN_MIGRATIONS, and the option wins over it', async () => {
       vi.stubEnv('DATABASE_RUN_MIGRATIONS', 'true');
-      vi.stubEnv('SERVICE_NAME', 'identity-service');
+      vi.stubEnv('SERVICE_NAME', 'orders-service');
       app = await boot({ schema });
       // No domain sets: the platform set still runs.
       expect(runMigrations).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({
-          applicationName: 'identity-service',
+          applicationName: 'orders-service',
           migrations: [platformMigrations],
         }),
       );

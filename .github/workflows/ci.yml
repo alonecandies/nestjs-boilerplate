@@ -72,11 +72,13 @@ jobs:
 
       # A .proto or *.schema.ts change committed without regenerating fails here. The porcelain
       # check also catches NEW (untracked) migration files, which `git diff` alone misses.
-      - name: Generated artefacts drift (protos, migrations) + buf lint
+      # db:check (drizzle-kit check) fails on a forked snapshot chain (two lanes, one parent).
+      - name: Generated artefacts drift (protos, migrations) + buf lint + drizzle-kit check
         run: |
           bun run proto:gen
           bun run proto:lint
           bun run db:generate
+          bun run db:check
           git diff --exit-code -- domains/*/contracts/src/generated libs/transport/test/fixtures/src/generated 'domains/*/src/infrastructure/persistence/migrations/*'
           test -z "$(git status --porcelain -- domains/*/contracts/src/generated libs/transport/test/fixtures/src/generated 'domains/*/src/infrastructure/persistence/migrations/*')"
 

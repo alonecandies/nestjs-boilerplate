@@ -66,7 +66,7 @@ describe('connectGrpcServer', () => {
 
 describe('connectKafkaConsumer', () => {
   it('connects a Kafka server with the requested consumer group, inheriting app config', () => {
-    const cfg = kafkaConfig.parse({ SERVICE_NAME: 'notifications-service' });
+    const cfg = kafkaConfig.parse({ SERVICE_NAME: 'alerts-service' });
     const { app, connect } = fakeApp({ [kafkaConfig.namespace]: cfg });
 
     connectKafkaConsumer(app, { groupId: 'gateway-push' });
@@ -77,18 +77,18 @@ describe('connectKafkaConsumer', () => {
       transport: Transport.KAFKA,
       options: {
         postfixId: '',
-        client: { clientId: 'notifications-service' },
+        client: { clientId: 'alerts-service' },
         consumer: { groupId: 'gateway-push' },
       },
     });
   });
 
   it('defaults the consumer group to kafkaConfig.groupId', () => {
-    const cfg = kafkaConfig.parse({ SERVICE_NAME: 'notifications-service' });
+    const cfg = kafkaConfig.parse({ SERVICE_NAME: 'alerts-service' });
     const { app, connect } = fakeApp({ [kafkaConfig.namespace]: cfg });
     connectKafkaConsumer(app);
     expect(connect.mock.calls[0]?.[0]).toMatchObject({
-      options: { consumer: { groupId: 'notifications-service' } },
+      options: { consumer: { groupId: 'alerts-service' } },
     });
   });
 });

@@ -91,8 +91,8 @@ describe('CassandraModule', () => {
     FakeClient.connectErrors = [];
     dir = mkdtempSync(join(tmpdir(), 'cassandra-module-'));
     writeFileSync(
-      join(dir, '001_create_notifications.cql'),
-      'CREATE TABLE IF NOT EXISTS notifications_by_user (user_id uuid, id uuid, PRIMARY KEY ((user_id), id));',
+      join(dir, '001_create_alerts.cql'),
+      'CREATE TABLE IF NOT EXISTS alerts_by_user (user_id uuid, id uuid, PRIMARY KEY ((user_id), id));',
     );
   });
   afterEach(async () => {
@@ -123,7 +123,7 @@ describe('CassandraModule', () => {
     expect(app.get(CASSANDRA_CLIENT)).toBe(main);
     expect(main?.events).toContain('log'); // driver log → Nest Logger
     expect(main?.calls.map((c) => c.query)).toContain(
-      'CREATE TABLE IF NOT EXISTS notifications_by_user (user_id uuid, id uuid, PRIMARY KEY ((user_id), id))',
+      'CREATE TABLE IF NOT EXISTS alerts_by_user (user_id uuid, id uuid, PRIMARY KEY ((user_id), id))',
     );
     // GOTCHA 14: policy objects must never be shared between two clients.
     expect(main?.options.policies?.['loadBalancing']).not.toBe(
@@ -170,14 +170,14 @@ describe('CassandraModule', () => {
 
   it('closes the main client when a migration fails at boot', async () => {
     FakeClient.reply = (query) => {
-      if (query.startsWith('CREATE TABLE IF NOT EXISTS notifications_by_user')) {
+      if (query.startsWith('CREATE TABLE IF NOT EXISTS alerts_by_user')) {
         throw new Error('SyntaxException');
       }
       return query.startsWith('SELECT') ? { rows: [] } : { applied: true };
     };
     try {
       await expect(boot({ migrations: [{ dir }] })).rejects.toThrow(
-        /CQL migration 001_create_notifications failed/,
+        /CQL migration 001_create_alerts failed/,
       );
       expect(FakeClient.instances[1]?.shutdowns).toBe(1);
     } finally {

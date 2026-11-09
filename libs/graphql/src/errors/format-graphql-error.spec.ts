@@ -158,7 +158,7 @@ describe('formatGraphqlError', () => {
 describe('formatExecutionResult (graphql-ws onNext)', () => {
   it('formats subscription errors like HTTP ones and keeps data', () => {
     const error = new GraphQLError('db down: password=hunter2', {
-      path: ['notificationCreated'],
+      path: ['alertCreated'],
       originalError: new Error('db down: password=hunter2'),
     });
 
@@ -169,7 +169,7 @@ describe('formatExecutionResult (graphql-ws onNext)', () => {
       errors: [
         {
           message: 'An unexpected error occurred.',
-          path: ['notificationCreated'],
+          path: ['alertCreated'],
           extensions: {
             code: 'INTERNAL',
             status: 500,

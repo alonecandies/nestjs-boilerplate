@@ -15,7 +15,7 @@ import { GrpcController } from './grpc-controller.decorator.js';
 import type { GrpcErrorResponse } from './grpc-status.mapping.js';
 import { ZodRpcValidationPipe } from './zod-rpc-validation.pipe.js';
 
-const grpcHost = (path = '/identity.v1.UsersService/GetUser'): ArgumentsHost =>
+const grpcHost = (path = '/orders.v1.UsersService/GetUser'): ArgumentsHost =>
   ({
     getType: () => 'rpc',
     getArgByIndex: (index: number) => (index === 2 ? { getPath: () => path } : undefined),
@@ -38,7 +38,7 @@ describe('DomainToGrpcExceptionFilter', () => {
     Logger.overrideLogger(false);
   });
 
-  it('emits the mapped gRPC error (status, message, trailers) as an error notification', async () => {
+  it('emits the mapped gRPC error (status, message, trailers) as an error alert', async () => {
     const response = await rejectionOf(
       new DomainToGrpcExceptionFilter(),
       new EntityNotFoundException('User', 'u1'),

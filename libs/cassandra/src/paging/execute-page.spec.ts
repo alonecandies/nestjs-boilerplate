@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createFakeCassandraClient } from '../../test/fake-cassandra.js';
 import { executePage, MAX_FETCH_SIZE, MAX_PAGE_STATE_LENGTH } from './execute-page.js';
 
-const CQL = 'SELECT id, title FROM notifications_by_user WHERE user_id = ?';
+const CQL = 'SELECT id, title FROM alerts_by_user WHERE user_id = ?';
 const mapRow = (row: cassandra.types.Row): { id: string; title: string } => ({
   id: String(row.get('id')),
   title: String(row.get('title')),

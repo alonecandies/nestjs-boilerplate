@@ -461,6 +461,7 @@ Notes:
 - **A new history** starts with `bun run --filter @domain/<x> db:generate --name init`. Change its first statement from `CREATE SCHEMA "<x>";` to `CREATE SCHEMA IF NOT EXISTS "<x>";`: the migrator creates the schema first, for `<x>.__drizzle_migrations`. It is the only hand edit of generated SQL, and the domain's `*.migrations.spec.ts` checks it.
 - SQL that belongs to no domain (extensions; grants and functions from B3) goes in the platform set: add `NNNN_name.sql` and its `meta/_journal.json` entry by hand ([libs/database/README.md](../libs/database/README.md#platform-migration-set)).
 - CI runs `bun run db:generate` and fails if it produces a diff or a new untracked file under `domains/*/src/infrastructure/persistence/migrations`. A `*.schema.ts` change without its migration cannot merge.
+- After merging branches that both generated migrations in one domain, run `bun run db:check`. It runs `drizzle-kit check` in every Postgres domain and fails when two snapshots share a parent; regenerate the later migration on top of the merged history. CI runs it too.
 
 ## Cassandra CQL migrations
 

@@ -9,7 +9,7 @@ import {
 } from './kafka.options.js';
 
 const cfg = kafkaConfig.parse({
-  SERVICE_NAME: 'identity-service',
+  SERVICE_NAME: 'orders-service',
   KAFKA_BROKERS: 'k1:9092,k2:9092',
   KAFKA_CONSUMER_CONCURRENCY: '6',
 });
@@ -18,7 +18,7 @@ describe('createKafkaClientConfig', () => {
   it('maps the namespace and sets no client-level retries (idempotent producer EoS)', () => {
     const client = createKafkaClientConfig(cfg);
     expect(client).toEqual({
-      clientId: 'identity-service',
+      clientId: 'orders-service',
       brokers: ['k1:9092', 'k2:9092'],
       ssl: false,
       connectionTimeout: 3000,
@@ -55,7 +55,7 @@ describe('createKafkaServerOptions', () => {
     expect(options).toMatchObject({
       postfixId: '',
       consumer: {
-        groupId: 'identity-service',
+        groupId: 'orders-service',
         allowAutoTopicCreation: false,
         sessionTimeout: 30_000,
         heartbeatInterval: 3_000,
@@ -86,7 +86,7 @@ describe('createKafkaClientOptions', () => {
     expect(options).toMatchObject({
       postfixId: '',
       producerOnlyMode: true,
-      client: { clientId: 'identity-service-producer', brokers: ['k1:9092', 'k2:9092'] },
+      client: { clientId: 'orders-service-producer', brokers: ['k1:9092', 'k2:9092'] },
       producer: { idempotent: true, createPartitioner: Partitioners.DefaultPartitioner },
       send: { acks: -1 },
     });

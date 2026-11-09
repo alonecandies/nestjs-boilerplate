@@ -46,14 +46,14 @@ describe('DomainException family', () => {
   });
 
   it('supports a one-off code override, details and cause', () => {
-    const cause = new Error('stripe said no');
-    const error = new ExternalServiceException('Payment provider failed', {
-      code: 'STRIPE_ERROR',
-      details: { provider: 'stripe' },
+    const cause = new Error('acmepay said no');
+    const error = new ExternalServiceException('Shipment provider failed', {
+      code: 'ACMEPAY_ERROR',
+      details: { provider: 'acmepay' },
       cause,
     });
-    expect(error.code).toBe('STRIPE_ERROR');
-    expect(error.details).toEqual({ provider: 'stripe' });
+    expect(error.code).toBe('ACMEPAY_ERROR');
+    expect(error.details).toEqual({ provider: 'acmepay' });
     expect(error.cause).toBe(cause);
   });
 

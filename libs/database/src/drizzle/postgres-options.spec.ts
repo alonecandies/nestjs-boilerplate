@@ -17,7 +17,7 @@ const cfg = databaseConfig.parse({
 describe('buildPostgresOptions', () => {
   it('maps the database namespace onto postgres.js options (seconds vs ms)', () => {
     const onNotice = vi.fn();
-    const options = buildPostgresOptions(cfg, { applicationName: 'identity-service', onNotice });
+    const options = buildPostgresOptions(cfg, { applicationName: 'orders-service', onNotice });
     expect(options).toMatchObject({
       max: 12,
       idle_timeout: 30,
@@ -26,7 +26,7 @@ describe('buildPostgresOptions', () => {
       prepare: false,
       onnotice: onNotice,
       connection: {
-        application_name: 'identity-service',
+        application_name: 'orders-service',
         statement_timeout: 5000,
         idle_in_transaction_session_timeout: IDLE_IN_TRANSACTION_TIMEOUT_MS,
         TimeZone: 'UTC',

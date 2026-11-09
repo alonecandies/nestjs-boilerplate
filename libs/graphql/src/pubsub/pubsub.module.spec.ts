@@ -33,15 +33,15 @@ describe('GraphqlPubSubModule', () => {
       const pubSub = app.get<GraphqlPubSub>(GRAPHQL_PUB_SUB);
       expect(pubSub).toBeInstanceOf(PubSub);
 
-      const iterator = pubSub.asyncIterableIterator<{ notificationCreated: { id: string } }>(
-        'notificationCreated',
+      const iterator = pubSub.asyncIterableIterator<{ alertCreated: { id: string } }>(
+        'alertCreated',
       );
       const next = iterator.next();
-      await pubSub.publish('notificationCreated', { notificationCreated: { id: 'n1' } });
+      await pubSub.publish('alertCreated', { alertCreated: { id: 'n1' } });
 
       await expect(next).resolves.toEqual({
         done: false,
-        value: { notificationCreated: { id: 'n1' } },
+        value: { alertCreated: { id: 'n1' } },
       });
       await iterator.return?.();
     } finally {

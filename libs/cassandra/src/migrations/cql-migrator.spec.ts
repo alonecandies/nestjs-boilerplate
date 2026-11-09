@@ -146,7 +146,7 @@ describe('CqlMigrator.run', () => {
   let dir: string;
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'cql-migrator-'));
-    dir = folder(root, 'notifications', {
+    dir = folder(root, 'alerts', {
       '001_create.cql': 'CREATE TABLE IF NOT EXISTS {keyspace}.n (id uuid PRIMARY KEY);',
       '002_index.cql':
         'CREATE INDEX IF NOT EXISTS n_idx ON n (id);\nALTER TABLE n ADD read boolean;',

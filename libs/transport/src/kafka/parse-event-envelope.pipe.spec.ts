@@ -2,7 +2,7 @@ import { generateId } from '@platform/common';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
-  FIXTURE_PAYMENT_SUCCEEDED_EVENT,
+  FIXTURE_ORDER_PLACED_EVENT,
   FIXTURE_USER_REGISTERED_EVENT,
 } from '../../test/fixtures/fixture.events.js';
 import { InvalidEventException } from './kafka.errors.js';
@@ -10,17 +10,17 @@ import { ParseEventEnvelopePipe } from './parse-event-envelope.pipe.js';
 
 const validEnvelope = (): Record<string, unknown> => ({
   id: generateId(),
-  type: FIXTURE_PAYMENT_SUCCEEDED_EVENT.topic,
+  type: FIXTURE_ORDER_PLACED_EVENT.topic,
   version: 1,
   occurredAt: '2026-09-01T10:00:00.000Z',
   source: 'fixture-service',
   correlationId: 'corr-1',
   payload: {
-    paymentId: generateId(),
+    orderId: generateId(),
     userId: generateId(),
     amountTotal: 1999,
     currency: 'usd',
-    paidAt: '2026-09-01T10:00:00.000Z',
+    placedAt: '2026-09-01T10:00:00.000Z',
   },
 });
 
@@ -35,7 +35,7 @@ function thrownBy(fn: () => unknown): unknown {
 }
 
 describe('ParseEventEnvelopePipe', () => {
-  const pipe = new ParseEventEnvelopePipe(FIXTURE_PAYMENT_SUCCEEDED_EVENT);
+  const pipe = new ParseEventEnvelopePipe(FIXTURE_ORDER_PLACED_EVENT);
 
   it('returns the typed envelope and strips unknown keys (tolerant reader)', () => {
     const raw = { ...validEnvelope(), extra: 'ignored' };
@@ -51,7 +51,7 @@ describe('ParseEventEnvelopePipe', () => {
     expect(error).toBeInstanceOf(InvalidEventException);
     expect(error).toMatchObject({
       code: 'INVALID_EVENT',
-      details: { topic: FIXTURE_PAYMENT_SUCCEEDED_EVENT.topic },
+      details: { topic: FIXTURE_ORDER_PLACED_EVENT.topic },
     });
     expect((error as InvalidEventException).issues).toEqual([
       expect.objectContaining({ path: 'payload.amountTotal' }),
