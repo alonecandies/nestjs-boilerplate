@@ -1,8 +1,10 @@
 import { Readable } from 'node:stream';
 import { Logger } from '@nestjs/common';
-import { makeAuthUser, Role } from '@platform/auth';
+import { Role } from '@platform/auth';
+import { makeAuthUser } from '@platform/auth/testing';
 import { DomainValidationException, generateId } from '@platform/common';
-import { InMemoryStorageService, type StorageService, type StoredObject } from '@platform/storage';
+import type { StorageService, StoredObject } from '@platform/storage';
+import { InMemoryStorageService } from '@platform/storage/testing';
 import { createMock } from '@platform/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {

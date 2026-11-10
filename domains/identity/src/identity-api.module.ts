@@ -4,7 +4,6 @@ import { GraphqlLoadersModule } from '@platform/graphql';
 import { GrpcClientsModule, type GrpcClientsModuleOptions } from '@platform/transport';
 import { AuthPort } from './application/ports/auth.port.js';
 import { UsersPort } from './application/ports/users.port.js';
-import { IdentityCoreModule } from './identity-core.module.js';
 import { AuthGrpcAdapter } from './infrastructure/adapters/grpc/auth-grpc.adapter.js';
 import { IdentityGrpcCaller } from './infrastructure/adapters/grpc/identity-grpc.caller.js';
 import { identityGrpcClientConfig } from './infrastructure/adapters/grpc/identity-grpc-client.config.js';
@@ -36,7 +35,8 @@ const PORT_EXPORTS = [AuthPort, UsersPort];
  * register, login, refreshTokens, updateUserRoles), the passport-local strategy and the `users`
  * DataLoader. Presentation depends only on `AuthPort` / `UsersPort`; the binding decides the
  * topology:
- * - `forLocal()` (monolith): ports → CommandBus/QueryBus, imports `IdentityCoreModule`.
+ * - `forLocal()` (monolith): ports → CommandBus/QueryBus. The app imports `IdentityCoreModule` itself
+ *   (from `@domain/identity`): this module is part of `@domain/identity/api`, which never reaches core code.
  * - `forRemote()` (gateway): ports → gRPC clients of identity-service (deadline + breaker). The
  *   client URL (`IDENTITY_GRPC_URL`) is read when `forRemote()` is called.
  *
@@ -49,7 +49,7 @@ export class IdentityApiModule {
   static forLocal(): DynamicModule {
     return {
       module: IdentityApiModule,
-      imports: [IdentityCoreModule, GraphqlLoadersModule, IdentityRateLimitModule],
+      imports: [GraphqlLoadersModule, IdentityRateLimitModule],
       controllers: CONTROLLERS,
       providers: [
         ...PRESENTATION,

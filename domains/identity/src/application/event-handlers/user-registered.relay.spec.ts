@@ -1,7 +1,7 @@
 import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
 import { Logger } from '@nestjs/common';
 import { generateId } from '@platform/common';
-import { FakeKafkaProducer } from '@platform/transport';
+import { FakeKafkaProducer } from '@platform/transport/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UserRegisteredEvent } from '../../domain/events/user-registered.event.js';
 import { UserRegisteredRelay } from './user-registered.relay.js';

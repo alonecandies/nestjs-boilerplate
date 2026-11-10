@@ -50,7 +50,7 @@ const PERSISTENCE: Provider[] = [
  * The identity core: CQRS handlers, the Kafka relay, repositories, the session purge cron and
  * identity's security services: `PasswordHasher` (`password` namespace) and `TokenIssuer` (its own
  * `JwtModule`; `auth` + `refreshToken` namespaces).
- * Imported by the monolith (through `IdentityApiModule.forLocal()`) and identity-service
+ * Imported by the monolith (next to `IdentityApiModule.forLocal()`) and identity-service
  * (through `IdentityGrpcModule`). Expects the app-level global modules: `CqrsModule.forRoot()`,
  * `DatabaseModule.forRootAsync({ schema: identitySchema, migrations: [identityMigrations] })`
  * (Drizzle + transactional CLS plugin), `RedisModule` (denylist, locks), `AuthModule` (the

@@ -3,33 +3,36 @@
  * exactly-once Stripe webhooks, the payments ledger (Drizzle) and the
  * `billing.payment-succeeded.v1` integration event.
  *
- * Wiring: `BillingCoreModule` (handlers, relay, repositories) + `BillingGrpcModule`
- * (billing-service) or `BillingApiModule.forLocal()` (monolith) / `.forRemote()` (gateway).
- * `billingSchema` and the migration set `billingMigrations` go into
+ * Entry points: `@domain/billing/api` (edge surface, re-exported here) and this root entry (adds
+ * core, persistence, the Stripe adapter, commands, queries and domain types).
+ * Wiring: `BillingCoreModule` + `BillingGrpcModule` (billing-service), `BillingCoreModule` +
+ * `BillingApiModule.forLocal()` (monolith), `BillingApiModule.forRemote()` from
+ * `@domain/billing/api` (gateway). `billingSchema` and the migration set `billingMigrations` go into
  * `DatabaseModule.forRootAsync({ schema, migrations })`.
  */
 
+// The edge surface (also `@domain/billing/api`).
+export * from './api/index.js';
 // Application
 export * from './application/commands/create-checkout-session/create-checkout-session.command.js';
 export * from './application/commands/handle-stripe-webhook/handle-stripe-webhook.command.js';
 export * from './application/mappers/payment.mapper.js';
-export * from './application/ports/billing.port.js';
 export * from './application/queries/list-payments/list-payments.query.js';
-// Modules
-export * from './billing.constants.js';
-export * from './billing-api.module.js';
+// Modules and core constants
+export {
+  PAID_WITHOUT_CURRENCY_METRIC,
+  PURGE_STRIPE_EVENTS_BATCH_SIZE,
+  PURGE_STRIPE_EVENTS_LOCK,
+  PURGE_STRIPE_EVENTS_LOCK_TTL_MS,
+  STRIPE_EVENTS_RETENTION_DAYS,
+} from './billing.constants.js';
 export * from './billing-core.module.js';
 export * from './billing-grpc.module.js';
-export * from './billing-log-redaction.js';
 // Domain
 export * from './domain/billing.errors.js';
 export * from './domain/events/payment-succeeded.event.js';
 export * from './domain/payment.aggregate.js';
-export * from './domain/payment-status.enum.js';
-// Infrastructure (adapters are public for custom wiring / tests)
-export * from './infrastructure/adapters/grpc/billing-grpc.adapter.js';
-export * from './infrastructure/adapters/grpc/billing-grpc-client.config.js';
-export * from './infrastructure/adapters/local/billing-local.adapter.js';
+// Infrastructure
 export { billingMigrations } from './infrastructure/persistence/billing.migrations.js';
 export {
   type BillingSchema,
@@ -47,9 +50,5 @@ export * from './infrastructure/stripe/stripe.errors.js';
 export * from './infrastructure/stripe/stripe.module.js';
 export * from './infrastructure/stripe/stripe.service.js';
 export type * from './infrastructure/stripe/stripe.types.js';
-// Presentation
-export * from './presentation/graphql/billing.resolver.js';
-export * from './presentation/graphql/models/checkout-session.model.js';
-export * from './presentation/graphql/models/payment.model.js';
+// Presentation: the gRPC server (billing-service)
 export * from './presentation/grpc/billing-grpc.controller.js';
-export * from './presentation/http/billing.controller.js';

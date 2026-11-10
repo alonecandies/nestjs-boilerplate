@@ -1,4 +1,5 @@
-import { makeAuthUser, Permission, Role } from '@platform/auth';
+import { Permission, Role } from '@platform/auth';
+import { makeAuthUser } from '@platform/auth/testing';
 import { DomainValidationException, generateId } from '@platform/common';
 import { describe, expect, it } from 'vitest';
 import { resolveFileAccess } from './file-access.policy.js';

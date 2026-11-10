@@ -36,7 +36,6 @@ export {
   resolvePermissions,
 } from './rbac/role-permissions.js';
 export { JwtStrategy } from './strategies/jwt.strategy.js';
-export { makeAuthUser } from './testing/auth-test.utils.js';
 export { AccessTokenDenylist } from './tokens/access-token-denylist.service.js';
 export {
   type JwtVerificationSettings,

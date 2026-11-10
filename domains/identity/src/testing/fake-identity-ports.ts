@@ -17,9 +17,9 @@ import {
   InvalidCredentialsException,
   InvalidRefreshTokenException,
   normalizeEmail,
-  type TokenIssuer,
   UsersPort,
 } from '../index.js';
+import type { TokenIssuer } from '../infrastructure/security/token-issuer.service.js';
 
 /*
  * In-memory stand-ins for identity-service (`AuthPort`, `UsersPort`), bound IN PLACE OF the gRPC

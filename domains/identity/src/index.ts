@@ -3,13 +3,17 @@
  * refresh JWTs), refresh-token rotation with reuse detection, logout (denylist), RBAC role
  * administration; REST + GraphQL + gRPC presentation over CQRS, hexagonal ports per topology.
  *
+ * Entry points: `@domain/identity/api` (edge surface, re-exported here), this root entry (adds core,
+ * persistence, commands, queries and domain types) and `@domain/identity/testing` (fakes, tests only).
  * Wiring: `IdentityCoreModule` (handlers, repositories, relay, cron), `IdentityGrpcModule`
- * (identity-service), `IdentityApiModule.forLocal()` (monolith) / `.forRemote()` (gateway).
- * `identitySchema` and the migration set `identityMigrations` go into
- * `DatabaseModule.forRootAsync({ schema, migrations })`.
+ * (identity-service), `IdentityCoreModule` + `IdentityApiModule.forLocal()` (monolith),
+ * `IdentityApiModule.forRemote()` from `@domain/identity/api` (gateway). `identitySchema` and the
+ * migration set `identityMigrations` go into `DatabaseModule.forRootAsync({ schema, migrations })`.
  */
 
-// Application: ports, commands/queries (for other in-process callers), mappers.
+// The edge surface (also `@domain/identity/api`).
+export * from './api/index.js';
+// Application: commands/queries (for other in-process callers), persistence ports.
 export { LoginCommand } from './application/commands/login/login.command.js';
 export { LogoutCommand } from './application/commands/logout/logout.command.js';
 export { PurgeExpiredSessionsCommand } from './application/commands/purge-expired-sessions/purge-expired-sessions.command.js';
@@ -23,13 +27,8 @@ export type {
 } from './application/persistence/sessions.repository.js';
 export { SessionsRepository } from './application/persistence/sessions.repository.js';
 export { TransactionRunner } from './application/persistence/transaction-runner.js';
-export type {
-  ListUsersCriteria,
-  UserRecord,
-} from './application/persistence/users.repository.js';
+export type { ListUsersCriteria, UserRecord } from './application/persistence/users.repository.js';
 export { UsersRepository } from './application/persistence/users.repository.js';
-export { AuthPort } from './application/ports/auth.port.js';
-export { UsersPort } from './application/ports/users.port.js';
 export { GetUserByIdQuery } from './application/queries/get-user-by-id/get-user-by-id.query.js';
 export { GetUsersByIdsQuery } from './application/queries/get-users-by-ids/get-users-by-ids.query.js';
 export { ListUsersQuery } from './application/queries/list-users/list-users.query.js';
@@ -50,16 +49,7 @@ export {
 } from './domain/identity.errors.js';
 export { UserAggregate, type UserSnapshot } from './domain/user.aggregate.js';
 export { isUserRole, USER_ROLES, type UserRole } from './domain/user-role.js';
-export {
-  IDENTITY_LIMITS,
-  IdentityErrorCode,
-  MAX_PASSWORD_LENGTH,
-  USER_CACHE_TTL_MS,
-  USERS_LOADER,
-  userCacheKey,
-} from './identity.constants.js';
 // Modules.
-export { IdentityApiModule } from './identity-api.module.js';
 export {
   IDENTITY_COMMAND_HANDLERS,
   IDENTITY_EVENT_HANDLERS,
@@ -67,12 +57,6 @@ export {
   IdentityCoreModule,
 } from './identity-core.module.js';
 export { IdentityGrpcModule } from './identity-grpc.module.js';
-// Infrastructure: where the gateway dials identity-service (IdentityApiModule.forRemote()).
-export {
-  type IdentityGrpcClientConfig,
-  identityGrpcClientConfig,
-  identityGrpcClientEnvSchema,
-} from './infrastructure/adapters/grpc/identity-grpc-client.config.js';
 // Infrastructure: the Drizzle schema and the migration set for DatabaseModule / drizzle-kit.
 export { identityMigrations } from './infrastructure/persistence/identity.migrations.js';
 export {
@@ -84,27 +68,10 @@ export {
   users,
   usersRelations,
 } from './infrastructure/persistence/identity.schema.js';
-// Infrastructure: identity's security services and their config namespaces (the identity-service
-// and monolith env-example specs validate these namespaces too).
+// Infrastructure: config namespaces the identity-service and monolith env-example specs validate.
+// PasswordHasher and TokenIssuer stay internal (TokenIssuer is on ./testing for test signers).
 export { type PasswordConfig, passwordConfig } from './infrastructure/security/password.config.js';
-export { PasswordHasher } from './infrastructure/security/password-hasher.service.js';
 export {
-  DEV_JWT_REFRESH_SECRET,
   type RefreshTokenConfig,
   refreshTokenConfig,
 } from './infrastructure/security/refresh-token.config.js';
-export { TokenIssuer } from './infrastructure/security/token-issuer.service.js';
-// Presentation: GraphQL types the apps compose with (`Payment.user` in `PaymentUserFieldResolver`).
-export { AuthPayloadModel } from './presentation/graphql/models/auth-payload.model.js';
-export { UserModel } from './presentation/graphql/models/user.model.js';
-export { UserConnectionModel } from './presentation/graphql/models/user-connection.model.js';
-export { RoleEnum } from './presentation/graphql/role.enum.js';
-// Loads the `GraphqlLoaders['users']` augmentation for every importer of this package.
-export { UsersLoaderRegistrar } from './presentation/graphql/users-loader.registrar.js';
-export { UserResponse } from './presentation/http/responses/user.response.js';
-// Presentation: the credential rate-limit policy config (loaded by IdentityApiModule; the env-example
-// specs validate this namespace too).
-export {
-  type IdentityRateLimitConfig,
-  identityRateLimitConfig,
-} from './presentation/rate-limit/identity-rate-limit.config.js';

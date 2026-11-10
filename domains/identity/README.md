@@ -43,8 +43,12 @@ abstractions; only `IdentityCoreModule` knows they are Drizzle/Postgres.
 | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
 | `IdentityCoreModule`                    | command/query/event handlers, relay, repositories (Drizzle), `TransactionRunner`, `SessionTokensService`, cron, `PasswordHasher` (`password` namespace), `TokenIssuer` (own `JwtModule`; `auth` + `refreshToken` namespaces) | monolith, identity-service |
 | `IdentityGrpcModule`                    | `IdentityCoreModule` + `AuthGrpcController`, `UsersGrpcController`                                                                                                                                                           | identity-service           |
-| `IdentityApiModule.forLocal()`          | REST controllers, GraphQL resolvers, `LocalStrategy`, `UserReadCache`, `users` DataLoader + ports → local adapters + `IdentityCoreModule`                                                                                    | monolith                   |
+| `IdentityApiModule.forLocal()`          | REST controllers, GraphQL resolvers, `LocalStrategy`, `UserReadCache`, `users` DataLoader + ports → local adapters (the app imports `IdentityCoreModule` too)                                                                | monolith                   |
 | `IdentityApiModule.forRemote(options?)` | same presentation + ports → gRPC adapters + `GrpcClientsModule.register({ spec: IDENTITY_GRPC_PACKAGE, url }, options)`                                                                                                      | gateway                    |
+
+Entry points: `@domain/identity/api` (edge: `IdentityApiModule`, ports, gRPC client config, GraphQL/REST types;
+what the gateway imports), `@domain/identity` (everything in `./api` plus core, persistence, commands, queries,
+domain), `@domain/identity/testing` (fakes and `TokenIssuer`, tests only).
 
 The modules assume these app-level (global) modules:
 
@@ -56,7 +60,7 @@ The modules assume these app-level (global) modules:
 
 ```ts
 // apps/monolith/src/app.module.ts
-import { IdentityApiModule, identitySchema } from '@domain/identity';
+import { IdentityApiModule, IdentityCoreModule, identitySchema } from '@domain/identity';
 imports: [
   CqrsModule.forRoot(),
   ScheduleModule.forRoot(),
@@ -70,6 +74,7 @@ imports: [
   AppThrottlerModule.forRootAsync(),
   KafkaProducerModule.forRootAsync(),
   AppGraphqlModule.forRootAsync(),
+  IdentityCoreModule,
   IdentityApiModule.forLocal(),
 ];
 

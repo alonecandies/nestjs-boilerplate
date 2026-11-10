@@ -23,12 +23,17 @@ edge (gateway / monolith) ◄───┴── NotificationPushConsumer ◄─�
 
 ## Modules
 
-| Module                                               | Contents                                                                                                                                                         | Imported by                                  |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| `NotificationsCoreModule`                            | Command/query handlers, `NotificationsSagas`, Cassandra repositories, `DailyDigestCron`                                                                          | monolith, notifications-service              |
-| `NotificationsGrpcModule`                            | Core + `NotificationsGrpcController` (`notifications.v1.NotificationsService`)                                                                                   | notifications-service                        |
-| `NotificationsMessagingModule`                       | Core + `IdentityEventsConsumer`, `BillingEventsConsumer`                                                                                                         | monolith, notifications-service              |
-| `NotificationsApiModule.forLocal()` / `.forRemote()` | `NotificationsController`, `NotificationsResolver`, `NotificationsGateway`, `NotificationPushConsumer` + the port (local adapter + Core / gRPC adapter + client) | monolith (`forLocal`), gateway (`forRemote`) |
+| Module                                               | Contents                                                                                                                                                                                                      | Imported by                                  |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
+| `NotificationsCoreModule`                            | Command/query handlers, `NotificationsSagas`, Cassandra repositories, `DailyDigestCron`                                                                                                                       | monolith, notifications-service              |
+| `NotificationsGrpcModule`                            | Core + `NotificationsGrpcController` (`notifications.v1.NotificationsService`)                                                                                                                                | notifications-service                        |
+| `NotificationsMessagingModule`                       | Core + `IdentityEventsConsumer`, `BillingEventsConsumer`                                                                                                                                                      | monolith, notifications-service              |
+| `NotificationsApiModule.forLocal()` / `.forRemote()` | `NotificationsController`, `NotificationsResolver`, `NotificationsGateway`, `NotificationPushConsumer` + the port (local adapter, the monolith imports `NotificationsCoreModule` too / gRPC adapter + client) | monolith (`forLocal`), gateway (`forRemote`) |
+
+Entry points: `@domain/notifications/api` (edge: `NotificationsApiModule`, `NotificationsPort` and its adapters, REST /
+GraphQL / WebSocket / push presentation and constants; what the gateway imports), `@domain/notifications`
+(everything in `./api` plus core, Cassandra, mail, commands, queries, domain) and `@domain/notifications/testing`
+(`FakeNotificationsPort`, tests only).
 
 ### App wiring
 
@@ -70,7 +75,7 @@ connectKafkaConsumer(app, { groupId: 'gateway-push' }); // NotificationPushConsu
 ```
 
 **monolith**: everything of notifications-service (minus the gRPC module and server) plus the edge
-globals, with `NotificationsApiModule.forLocal()` + `NotificationsMessagingModule`, and
+globals, with `NotificationsCoreModule` + `NotificationsApiModule.forLocal()` + `NotificationsMessagingModule`, and
 `connectKafkaConsumer(app, { groupId: 'monolith' })`.
 
 Global modules the lib expects:

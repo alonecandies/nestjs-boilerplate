@@ -1,9 +1,15 @@
-import { BILLING_LOG_REDACT_PATHS, BillingApiModule, billingSchema } from '@domain/billing';
+import {
+  BILLING_LOG_REDACT_PATHS,
+  BillingApiModule,
+  BillingCoreModule,
+  billingSchema,
+} from '@domain/billing';
 import { FilesModule } from '@domain/files';
-import { IdentityApiModule, identitySchema } from '@domain/identity';
+import { IdentityApiModule, IdentityCoreModule, identitySchema } from '@domain/identity';
 import {
   NOTIFICATIONS_MAIL_TEMPLATES_DIR,
   NotificationsApiModule,
+  NotificationsCoreModule,
   NotificationsMessagingModule,
   notificationsCassandraMigrations,
 } from '@domain/notifications';
@@ -49,8 +55,8 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
  * config → observability (logger, cls, health) → infrastructure → IpThrottlerModule BEFORE
  * AuthModule BEFORE AppThrottlerModule (global guards run in registration order: the ip cap must
  * count requests JWT rejects, the per-user throttler must see `req.user`) → GraphQL → domain
- * modules (their `Api`
- * modules import the matching `Core` module — never import a Core module again here).
+ * modules (their `Api` modules no longer import a `Core` module: each is imported here, once,
+ * before its Api module).
  */
 @Module({
   imports: [
@@ -90,10 +96,14 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
     AppGraphqlModule.forRootAsync(),
     GraphqlPubSubModule,
 
-    // Bounded contexts.
+    // Bounded contexts: every Core module, then the edge bound to the local adapters
+    // (XApiModule.forLocal() does not import the core; @domain/<x>/api never reaches it).
+    IdentityCoreModule,
     IdentityApiModule.forLocal(),
+    NotificationsCoreModule,
     NotificationsApiModule.forLocal(),
     NotificationsMessagingModule,
+    BillingCoreModule,
     BillingApiModule.forLocal(),
     FilesModule,
   ],

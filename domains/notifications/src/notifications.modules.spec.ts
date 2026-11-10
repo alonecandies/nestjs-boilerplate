@@ -9,7 +9,8 @@ import { GraphqlPubSubModule } from '@platform/graphql';
 import { MailService } from '@platform/mailer';
 import { AppThrottlerModule } from '@platform/redis';
 import { createMock } from '@platform/testing';
-import { FakeKafkaProducer, KafkaProducer } from '@platform/transport';
+import { KafkaProducer } from '@platform/transport';
+import { FakeKafkaProducer } from '@platform/transport/testing';
 import type cassandra from 'cassandra-driver';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeRedisModule } from '../test/support/edge-test-app.js';
@@ -141,6 +142,7 @@ describe('notifications modules (composition, no infrastructure)', () => {
         CqrsModule.forRoot(),
         infra.FakeInfrastructureModule,
         ...EDGE_GLOBALS,
+        NotificationsCoreModule,
         NotificationsApiModule.forLocal(),
       ],
     }).compile();
