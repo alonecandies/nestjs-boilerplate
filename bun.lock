@@ -736,6 +736,7 @@
       },
       "devDependencies": {
         "@types/lodash-es": "catalog:",
+        "testcontainers": "catalog:",
       },
     },
     "libs/testing": {

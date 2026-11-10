@@ -87,3 +87,9 @@ Upload limits (`STORAGE_MAX_UPLOAD_BYTES`, `STORAGE_MAX_CONCURRENT_UPLOADS`) are
   `..`, empty segments, leading `/`, control characters and backslashes. Check ownership with
   `isKeyWithinPrefix` (it is not fooled by `users/u10` vs `users/u1`).
 - The MinIO images can no longer be pulled. Use `rustfs/rustfs` for local S3.
+
+## Testing
+
+Unit specs mock the SDK clients. `test/storage-drivers.int-spec.ts` runs both drivers against RustFS
+and fake-gcs-server testcontainers (`INTEGRATION=1 npx vitest run --project storage:int`).
+`test/emulators.ts` (`startRustfs()`, `startFakeGcs()`) is reusable by other int specs.
