@@ -8,10 +8,19 @@ await vi.hoisted(async () => {
   Object.assign(process.env, MONOLITH_E2E_ENV);
 });
 
-import { BILLING_LOG_REDACT_PATHS, BillingLocalAdapter, BillingPort } from '@domain/billing';
+import {
+  BILLING_LOG_REDACT_PATHS,
+  BillingCoreModule,
+  BillingLocalAdapter,
+  BillingPort,
+} from '@domain/billing';
 import { IdentityCoreModule } from '@domain/identity';
 import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
-import { NotificationsLocalAdapter, NotificationsPort } from '@domain/notifications';
+import {
+  NotificationsCoreModule,
+  NotificationsLocalAdapter,
+  NotificationsPort,
+} from '@domain/notifications';
 import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
 import { PARAMS_PROVIDER_TOKEN, type Params } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -52,7 +61,9 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
 
   it('imports every Core module itself (XApiModule.forLocal() no longer imports it)', () => {
     const imports = Reflect.getMetadata('imports', AppModule) as unknown[];
-    expect(imports).toEqual(expect.arrayContaining([IdentityCoreModule]));
+    expect(imports).toEqual(
+      expect.arrayContaining([IdentityCoreModule, NotificationsCoreModule, BillingCoreModule]),
+    );
   });
 
   it('binds every port to its LOCAL adapter (CommandBus/QueryBus, no gRPC)', () => {

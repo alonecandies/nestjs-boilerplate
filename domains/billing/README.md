@@ -23,8 +23,12 @@ src/
 | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------- |
 | `BillingCoreModule`            | CQRS handlers, `PaymentSucceededRelay`, Drizzle repositories, the Stripe adapter (`StripeModule.forRootAsync()`)                                 | (via the others) |
 | `BillingGrpcModule`            | `BillingCoreModule` + `BillingGrpcController` (`billing.v1.BillingService`)                                                                      | billing-service  |
-| `BillingApiModule.forLocal()`  | `BillingController` + `BillingResolver` + `BillingPort → BillingLocalAdapter` + `BillingCoreModule`                                              | monolith         |
+| `BillingApiModule.forLocal()`  | `BillingController` + `BillingResolver` + `BillingPort → BillingLocalAdapter` (the app imports `BillingCoreModule` too)                          | monolith         |
 | `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule.register({ spec: BILLING_GRPC_PACKAGE, url })` | gateway          |
+
+Entry points: `@domain/billing/api` (edge: `BillingApiModule`, `BillingPort` and its adapters, gRPC client config,
+GraphQL/REST presentation, log-redaction paths; what the gateway imports) and `@domain/billing` (everything in
+`./api` plus core, persistence, Stripe, commands, queries, domain). No `./testing`.
 
 The REST controller and GraphQL resolver are the same classes in both topologies; they only know
 `BillingPort`. Both adapters return the `@domain/billing-contracts` `billing.v1` shapes.
@@ -69,7 +73,7 @@ export class AppModule implements NestModule {
 
 // monolith: CqrsModule.forRoot(), DatabaseModule.forRootAsync({ schema: { ...identitySchema, ...billingSchema }, migrations: [identityMigrations, billingMigrations] }),
 //           KafkaProducerModule, AuthModule, AppThrottlerModule, AppGraphqlModule,
-//           IdentityApiModule.forLocal(), BillingApiModule.forLocal(), …
+//           IdentityCoreModule, IdentityApiModule.forLocal(), BillingCoreModule, BillingApiModule.forLocal(), …
 // gateway:  AuthModule, AppThrottlerModule, AppGraphqlModule, IdentityApiModule.forRemote(), BillingApiModule.forRemote(), …
 // both:     createHttpApp(AppModule, { rawBody: true }) — the Stripe webhook verifies the raw bytes.
 ```

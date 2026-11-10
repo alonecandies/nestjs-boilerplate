@@ -208,6 +208,7 @@ domains/orders/
 │       └── events/                   # ORDER_PLACED_EVENT: EventContract<OrderPlacedPayload>
 └── src/
     ├── index.ts                    # the public API (barrel)
+    ├── api/index.ts                # the ./api entry: presentation, ports, adapters (what the gateway imports)
     ├── orders.constants.ts         # error codes, tokens
     ├── orders-core.module.ts       # handlers, relays, repositories
     ├── orders-api.module.ts        # forLocal() / forRemote()
@@ -269,7 +270,6 @@ export class OrdersApiModule {
   static forLocal(): DynamicModule {
     return {
       module: OrdersApiModule,
-      imports: [OrdersCoreModule],
       controllers: [OrdersController],
       providers: [OrdersResolver, { provide: OrdersPort, useClass: OrdersLocalAdapter }],
       exports: [OrdersPort],
@@ -278,7 +278,11 @@ export class OrdersApiModule {
 }
 ```
 
-**7. Wire the app.** Import `OrdersApiModule.forLocal()` in `apps/monolith/src/app.module.ts`, after `AuthModule`, `AppThrottlerModule` and `AppGraphqlModule` (the import-order comment there explains why). Never import the Core module a second time.
+**7. Wire the app.** Import `OrdersCoreModule` and `OrdersApiModule.forLocal()` in `apps/monolith/src/app.module.ts`, after `AuthModule`, `AppThrottlerModule` and `AppGraphqlModule` (the import-order comment there explains why). Import the Core module exactly once, in the app (`forLocal()` does not import it).
+
+Export `./api` in `package.json` (the same shape as `domains/billing/package.json`) and list the edge symbols in
+`src/api/index.ts`; the root `src/index.ts` starts with `export * from './api/index.js';`.
+`bun run check` fails while a domain has no `./api` entry.
 
 **8. Configuration.** If the context needs settings, define its own namespace inside the domain, next to the code that reads it. Billing's `stripe.config.ts` is the model: `defineConfigNamespace('orders', schema)` from `@platform/config`, where the schema is a `z.object({ ... })` keyed by the env var names.
 

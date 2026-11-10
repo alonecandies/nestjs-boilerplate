@@ -10,6 +10,7 @@ import { BillingPort } from './application/ports/billing.port.js';
 import { ListPaymentsQuery } from './application/queries/list-payments/list-payments.query.js';
 import { PaymentsRepository } from './application/repositories/payments.repository.js';
 import { BillingApiModule } from './billing-api.module.js';
+import { BillingCoreModule } from './billing-core.module.js';
 import { BillingGrpcModule } from './billing-grpc.module.js';
 import { BillingGrpcAdapter } from './infrastructure/adapters/grpc/billing-grpc.adapter.js';
 import { BillingLocalAdapter } from './infrastructure/adapters/local/billing-local.adapter.js';
@@ -73,6 +74,7 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
         AppConfigModule.forRoot(),
         CqrsModule.forRoot(),
         infra.module,
+        BillingCoreModule,
         BillingApiModule.forLocal(),
       ],
     }).compile();

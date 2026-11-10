@@ -172,9 +172,10 @@ describe('check-api-subpaths', () => {
     expect(strict.output).toContain('@domain/orders: package.json declares no "./api" export');
   });
 
-  it('passes on this repository', () => {
-    const { status, output } = check(REPO_ROOT);
-    expect(output).toContain('API subpaths OK');
+  it('passes on this repository with every domain exporting ./api', () => {
+    const { status, output } = check(REPO_ROOT, '--require-all');
+    // n/n: a domain added later (B2 and on) must export ./api too.
+    expect(output).toMatch(/API subpaths OK \((\d+)\/\1 domains export \.\/api/);
     expect(status).toBe(0);
   });
 });

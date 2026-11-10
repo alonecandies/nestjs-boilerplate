@@ -17,8 +17,8 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
 
 /**
  * The billing core: CQRS handlers, the Kafka relay and the Drizzle repositories. Imported by the
- * process that owns the billing tables (billing-service via `BillingGrpcModule`, monolith via
- * `BillingApiModule.forLocal()`).
+ * process that owns the billing tables (billing-service via `BillingGrpcModule`; the monolith
+ * imports it directly, next to `BillingApiModule.forLocal()`).
  *
  * Expects these global app-level modules: `AppConfigModule`, `CqrsModule.forRoot()`,
  * `DatabaseModule.forRootAsync({ schema: billingSchema, migrations: [billingMigrations] })`

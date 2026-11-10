@@ -141,6 +141,7 @@ describe('notifications modules (composition, no infrastructure)', () => {
         CqrsModule.forRoot(),
         infra.FakeInfrastructureModule,
         ...EDGE_GLOBALS,
+        NotificationsCoreModule,
         NotificationsApiModule.forLocal(),
       ],
     }).compile();

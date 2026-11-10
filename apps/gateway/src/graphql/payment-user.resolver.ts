@@ -1,4 +1,4 @@
-import { PaymentModel } from '@domain/billing';
+import { PaymentModel } from '@domain/billing/api';
 import { USERS_LOADER, UserModel } from '@domain/identity/api';
 import { Parent, ResolveField, Resolver } from '@nestjs/graphql';
 import { type GraphqlLoaders, Loader } from '@platform/graphql';

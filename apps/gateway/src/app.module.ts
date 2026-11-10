@@ -1,7 +1,7 @@
-import { BILLING_LOG_REDACT_PATHS, BillingApiModule } from '@domain/billing';
-import { FilesModule } from '@domain/files';
+import { BILLING_LOG_REDACT_PATHS, BillingApiModule } from '@domain/billing/api';
+import { FilesModule } from '@domain/files/api';
 import { IdentityApiModule } from '@domain/identity/api';
-import { NotificationsApiModule } from '@domain/notifications';
+import { NotificationsApiModule } from '@domain/notifications/api';
 import { type MiddlewareConsumer, Module, type NestModule, RequestMethod } from '@nestjs/common';
 import { AuthModule } from '@platform/auth';
 import {
