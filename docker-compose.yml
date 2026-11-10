@@ -143,7 +143,11 @@ x-watch-lockfile: &watch-lockfile { action: rebuild, path: ./bun.lock }
 services:
   # ═══════════════════════════════ INFRA (no profile: always on) ═══════════════════════════════
   postgres:
-    image: postgres:18.6-alpine3.24
+    # Citus 14.2 on PostgreSQL 18.4 (Debian), single node: this coordinator holds every shard.
+    # amd64-only image: Apple Silicon runs it under emulation; `platform` makes that explicit.
+    # docker/postgres/init/00-citus.sql creates the extension (this mount hides the image's script).
+    image: citusdata/citus:14.2.0
+    platform: linux/amd64
     restart: unless-stopped
     logging: *logging
     networks: [backend]
@@ -174,7 +178,11 @@ services:
       - -c
       - jit=off # JIT compile time hurts OLTP p99
       - -c
-      - shared_preload_libraries=pg_stat_statements
+      - shared_preload_libraries=citus,pg_stat_statements # citus must come first
+      - -c
+      - citus.shard_count=8 # shards per distributed table; fixed when a colocation group is created
+      - -c
+      - citus.max_shared_pool_size=180 # max_connections - 20: bursts to shards queue, not fail
       - -c
       - pg_stat_statements.track=all
       - -c

@@ -101,8 +101,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # *.int-spec.ts only run with INTEGRATION=1 (`bun run test:int` = every '<pkg>:int' project).
-    # Postgres comes from testcontainers (Docker is available on the runner); the Redis specs use
-    # REDIS_URL, served by this service container.
+    # Postgres comes from testcontainers (@platform/testing/postgres: citusdata/citus:14.2.0, single
+    # node, amd64 like the runner); the Redis specs use REDIS_URL, served by this service container.
     services:
       redis:
         image: redis:8.10.2-alpine3.23
@@ -131,6 +131,11 @@ jobs:
 
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
+
+      # Every Postgres int project starts its own container in parallel: pull the image once first,
+      # so no beforeAll spends its 180 s hook timeout on the download.
+      - name: Pull the Citus image of the Postgres int specs
+        run: docker pull citusdata/citus:14.2.0
 
       - name: Integration tests (INTEGRATION=1, testcontainers + service containers)
         run: bun run test:int
