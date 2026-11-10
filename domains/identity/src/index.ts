@@ -102,3 +102,9 @@ export { RoleEnum } from './presentation/graphql/role.enum.js';
 // Loads the `GraphqlLoaders['users']` augmentation for every importer of this package.
 export { UsersLoaderRegistrar } from './presentation/graphql/users-loader.registrar.js';
 export { UserResponse } from './presentation/http/responses/user.response.js';
+// Presentation: the credential rate-limit policy config (loaded by IdentityApiModule; the env-example
+// specs validate this namespace too).
+export {
+  type IdentityRateLimitConfig,
+  identityRateLimitConfig,
+} from './presentation/rate-limit/identity-rate-limit.config.js';

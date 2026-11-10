@@ -26,6 +26,7 @@ import {
   AppCacheModule,
   AppQueueModule,
   AppThrottlerModule,
+  IpThrottlerModule,
   RedisHealthIndicator,
   RedisModule,
 } from '@platform/redis';
@@ -45,9 +46,10 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
  * payment succeeded → receipt, notification created → push), exactly as between microservices.
  *
  * Import order matters where a module reads another's providers while it is being set up:
- * config → observability (logger, cls, health) → infrastructure → AuthModule BEFORE
- * AppThrottlerModule (global guards run in registration order: the throttler must see `req.user`
- * to track per user, and `@AuthThrottle` handlers) → GraphQL → domain modules (their `Api`
+ * config → observability (logger, cls, health) → infrastructure → IpThrottlerModule BEFORE
+ * AuthModule BEFORE AppThrottlerModule (global guards run in registration order: the ip cap must
+ * count requests JWT rejects, the per-user throttler must see `req.user`) → GraphQL → domain
+ * modules (their `Api`
  * modules import the matching `Core` module — never import a Core module again here).
  */
 @Module({
@@ -72,7 +74,9 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
     RedisModule.forRootAsync(),
     AppCacheModule.forRootAsync(),
 
-    // Edge security: JWT + RBAC guards, then the Redis-backed throttler.
+    // Edge security: the pre-auth per-IP cap (counts 401/403 floods), JWT + RBAC guards, then the
+    // per-user / per-route / credential throttler.
+    IpThrottlerModule,
     AuthModule.forRootAsync(),
     AppThrottlerModule.forRootAsync(),
 

@@ -1,4 +1,4 @@
-import { Logger, NotFoundException } from '@nestjs/common';
+import { HttpException, Logger, NotFoundException } from '@nestjs/common';
 import type { HttpAdapterHost } from '@nestjs/core';
 import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context-host.js';
 import { lastValueFrom, type Observable } from 'rxjs';
@@ -179,6 +179,24 @@ describe('AllExceptionsFilter', () => {
       error: expect.objectContaining({ code: 'CONFLICT' }),
     });
     expect(client.emit).not.toHaveBeenCalled();
+  });
+
+  it('ws: a throttled message is acked as { ok: false, error: 429 RATE_LIMITED }', () => {
+    const ack = vi.fn();
+    const host = new ExecutionContextHost([{ emit: vi.fn() }, {}, ack, 'alerts.markRead']);
+    host.setType('ws');
+    new AllExceptionsFilter(fakeAdapterHost().host).catch(
+      new HttpException('ThrottlerException: Too Many Requests', 429),
+      host,
+    );
+    expect(ack).toHaveBeenCalledWith({
+      ok: false,
+      error: expect.objectContaining({
+        status: 429,
+        code: 'RATE_LIMITED',
+        detail: 'Too many requests. Please retry later.',
+      }),
+    });
   });
 
   it('rpc: rethrows as an observable error for controller-scoped filters', async () => {

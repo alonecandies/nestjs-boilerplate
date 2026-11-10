@@ -109,6 +109,8 @@ it imports. A process ignores (and does not validate) variables of namespaces it
 | `password`                |    ✓     |                   |        ✓         |                         |                 | `IdentityCoreModule` (`@domain/identity`)                          |
 | `refreshToken`            |    ✓     |                   |        ✓         |                         |                 | `IdentityCoreModule` (`@domain/identity`)                          |
 | `throttle`                |    ✓     |         ✓         |                  |                         |                 | `AppThrottlerModule`                                               |
+| `identityRateLimit`       |    ✓     |         ✓         |                  |                         |                 | `IdentityApiModule` (`RateLimitModule.forFeature`)                 |
+| `notificationsRateLimit`  |    ✓     |         ✓         |                  |                         |                 | `NotificationsApiModule` (`RateLimitModule.forFeature`)            |
 | `cache`                   |    ✓     |         ✓         |                  |                         |                 | `AppCacheModule`                                                   |
 | `graphql`                 |    ✓     |         ✓         |                  |                         |                 | `AppGraphqlModule`                                                 |
 | `mail`                    |    ✓     |                   |                  |            ✓            |                 | `AppMailerModule`                                                  |
@@ -328,12 +330,44 @@ identity-service (loaded by `IdentityCoreModule`)
 
 [`throttle.config.ts`](../libs/config/src/namespaces/throttle.config.ts) · gateway, monolith
 
-| Variable               | Default | Description                                                   |
-| ---------------------- | ------- | ------------------------------------------------------------- |
-| `THROTTLE_TTL_MS`      | `60000` | Default window (**milliseconds**).                            |
-| `THROTTLE_LIMIT`       | `100`   | Requests per window, per user (authenticated) or client IP.   |
-| `THROTTLE_AUTH_TTL_MS` | `60000` | Window of the stricter credential endpoints (login/register). |
-| `THROTTLE_AUTH_LIMIT`  | `10`    | Requests per auth window (brute-force protection).            |
+| Variable                    | Default | Description                                                                                                                                                                                    |
+| --------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `THROTTLE_TTL_MS`           | `60000` | Window of the per-user budget (**milliseconds**).                                                                                                                                              |
+| `THROTTLE_LIMIT`            | `300`   | Requests per window per user (authenticated) or client IP, across all routes (HTTP, GraphQL, Socket.IO messages). One shared budget replaces the former per-route buckets, hence 300, not 100. |
+| `THROTTLE_IP_TTL_MS`        | `60000` | Window of the pre-auth per-IP cap.                                                                                                                                                             |
+| `THROTTLE_IP_LIMIT`         | `600`   | Requests per window per client IP, counted before the token is checked (401/403 floods count).                                                                                                 |
+| `THROTTLE_REDIS_TIMEOUT_MS` | `250`   | Bound for one rate-limit Redis command. On timeout or outage, budgets fail open (`rate_limit_fail_open_total`) and credential endpoints fail closed with 503.                                  |
+
+**Renamed (no aliases).** `THROTTLE_AUTH_LIMIT` and `THROTTLE_AUTH_TTL_MS` were removed: set
+`IDENTITY_CREDENTIALS_LIMIT` / `IDENTITY_CREDENTIALS_TTL_MS` instead. In code, `@AuthThrottle()` became
+`@RateLimit('identity.credentials')`, `AUTH_THROTTLE_KEY` became `RATE_LIMIT_POLICY_KEY`,
+`DEFAULT_THROTTLER_NAME` was removed (throttlers are `ip`, `user`, `route`, `auth`), and `@SkipThrottle()` must
+become `@SkipRateLimit()`. The old names are not accepted: the old variables are ignored, and
+`AuthThrottle`/`AUTH_THROTTLE_KEY`/`DEFAULT_THROTTLER_NAME` no longer compile. `SkipThrottle`/`Throttle` are still
+re-exported and still compile, but with no `default` throttler they have NO effect: use
+`SkipRateLimit()`/`RateLimit()`.
+
+### `identityRateLimit` — credential endpoints (identity)
+
+[`identity-rate-limit.config.ts`](../domains/identity/src/presentation/rate-limit/identity-rate-limit.config.ts) ·
+gateway, monolith
+
+| Variable                      | Default  | Description                                                                                     |
+| ----------------------------- | -------- | ----------------------------------------------------------------------------------------------- |
+| `IDENTITY_CREDENTIALS_LIMIT`  | `10`     | Register/login attempts per sha256(email)+client IP per window, REST and GraphQL together.      |
+| `IDENTITY_CREDENTIALS_TTL_MS` | `60000`  | Its window.                                                                                     |
+| `IDENTITY_LOCKOUT_THRESHOLD`  | `10`     | Consecutive attempts per account (any IP) since the last success before the account is refused. |
+| `IDENTITY_LOCKOUT_MS`         | `900000` | How long a locked account is refused (429, like any rate limit).                                |
+
+### `notificationsRateLimit` — Socket.IO message policies (notifications)
+
+[`notifications-rate-limit.config.ts`](../domains/notifications/src/presentation/ws/notifications-rate-limit.config.ts) ·
+gateway, monolith
+
+| Variable                         | Default | Description                              |
+| -------------------------------- | ------- | ---------------------------------------- |
+| `NOTIFICATIONS_MARK_READ_LIMIT`  | `30`    | `markRead` messages per user per window. |
+| `NOTIFICATIONS_MARK_READ_TTL_MS` | `10000` | Its window.                              |
 
 ### `cache` — L1 in-process LRU + L2 Redis
 

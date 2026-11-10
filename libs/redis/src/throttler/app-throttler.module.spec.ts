@@ -1,6 +1,6 @@
-import { Global, type INestApplicationContext, Module } from '@nestjs/common';
+import { Controller, Global, type INestApplicationContext, Module, Post } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { NestFactory } from '@nestjs/core';
+import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { getStorageToken, type ThrottlerStorage } from '@nestjs/throttler';
 import { redisConfig } from '@platform/config';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,7 +9,10 @@ import { REDIS_CLIENT } from '../redis.constants.js';
 import { InMemoryRedis } from '../testing/in-memory-redis.js';
 import { AppThrottlerGuard } from './app-throttler.guard.js';
 import { AppThrottlerModule } from './app-throttler.module.js';
-import { RedisThrottlerStorage } from './redis-throttler.storage.js';
+import { RateLimit } from './rate-limit.decorator.js';
+import { RateLimitModule } from './rate-limit.module.js';
+import { RateLimitPolicyRegistry } from './rate-limit-policy.js';
+import { RATE_LIMIT_FAIL_OPEN_TOKEN, RedisThrottlerStorage } from './redis-throttler.storage.js';
 
 const redis = new InMemoryRedis();
 
@@ -42,19 +45,80 @@ describe('AppThrottlerModule (DI wiring)', () => {
     app = await NestFactory.createApplicationContext(TestModule, { logger: false });
     const storage = app.get<ThrottlerStorage>(getStorageToken());
     expect(storage).toBeInstanceOf(RedisThrottlerStorage);
-    await expect(storage.increment('k', 1_000, 5, 1_000, 'default')).resolves.toMatchObject({
+    await expect(storage.increment('k', 1_000, 5, 1_000, 'user')).resolves.toMatchObject({
       totalHits: 1,
       isBlocked: false,
     });
     const guard = app.get(AppThrottlerGuard);
     expect(guard).toBeInstanceOf(AppThrottlerGuard);
-    // Property-injected throttle namespace (the @AuthThrottle() limits).
-    expect(Reflect.get(guard, 'limits')).toMatchObject({ authLimit: 10, authTtlMs: 60_000 });
   });
 
   it('can leave APP_GUARD registration to the app', () => {
     const dynamic = AppThrottlerModule.forRootAsync({ globalGuard: false });
-    expect(dynamic.providers).toEqual([AppThrottlerGuard]);
-    expect(AppThrottlerModule.forRootAsync().providers).toHaveLength(2);
+    expect(dynamic.providers).not.toContainEqual(expect.objectContaining({ provide: APP_GUARD }));
+    expect(AppThrottlerModule.forRootAsync().providers).toContainEqual({
+      provide: APP_GUARD,
+      useExisting: AppThrottlerGuard,
+    });
+  });
+
+  it('collects RateLimitModule.forFeature policies into the global registry', async () => {
+    @Module({
+      imports: [
+        RateLimitModule.forFeature({
+          useFactory: () => [{ name: 'test.thing', key: 'user', limit: 2, ttlMs: 1_000 }],
+        }),
+      ],
+    })
+    class FeatureModule {}
+    @Module({
+      imports: [
+        ConfigModule.forRoot({ ignoreEnvFile: true }),
+        FakeRedisModule,
+        AppThrottlerModule.forRootAsync(),
+        FeatureModule,
+      ],
+    })
+    class TestModule {}
+
+    app = await NestFactory.createApplicationContext(TestModule, { logger: false });
+    expect(app.get(RateLimitPolicyRegistry).require('test.thing')).toMatchObject({ limit: 2 });
+  });
+
+  it('refuses to boot when @RateLimit names an unregistered policy', async () => {
+    @Controller('x')
+    class BadController {
+      @Post() @RateLimit('test.missing') handle(): void {
+        // route handler stub
+      }
+    }
+    @Module({
+      imports: [
+        ConfigModule.forRoot({ ignoreEnvFile: true }),
+        FakeRedisModule,
+        AppThrottlerModule.forRootAsync(),
+      ],
+      controllers: [BadController],
+    })
+    class TestModule {}
+
+    await expect(
+      NestFactory.createApplicationContext(TestModule, { logger: false, abortOnError: false }),
+    ).rejects.toThrow('@RateLimit names unregistered policies: test.missing');
+  });
+
+  it('registers the fail-open counter and passes THROTTLE_REDIS_TIMEOUT_MS to the storage', async () => {
+    @Module({
+      imports: [
+        ConfigModule.forRoot({ ignoreEnvFile: true }),
+        FakeRedisModule,
+        AppThrottlerModule.forRootAsync(),
+      ],
+    })
+    class TestModule {}
+    app = await NestFactory.createApplicationContext(TestModule, { logger: false });
+    const storage = app.get<ThrottlerStorage>(getStorageToken());
+    expect(Reflect.get(storage, 'commandTimeoutMs')).toBe(250);
+    expect(app.get(RATE_LIMIT_FAIL_OPEN_TOKEN)).toHaveProperty('inc');
   });
 });

@@ -26,9 +26,9 @@ import {
   ApiUnauthorizedResponse,
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
-import { SkipThrottle } from '@nestjs/throttler';
 import { type AuthUser, CurrentUser, Permission, RequirePermissions } from '@platform/auth';
 import { Public } from '@platform/common';
+import { SkipRateLimit } from '@platform/redis';
 import { BillingPort } from '../../application/ports/billing.port.js';
 import { BILLING_LIMITS, STRIPE_SIGNATURE_HEADER } from '../../billing.constants.js';
 import { resolvePaymentsOwner } from '../payments-scope.js';
@@ -98,7 +98,7 @@ export class BillingController {
 
   @Post('webhooks/stripe')
   @Public()
-  @SkipThrottle()
+  @SkipRateLimit()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Stripe webhook',

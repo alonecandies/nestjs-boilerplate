@@ -4,6 +4,7 @@ import { Test } from '@nestjs/testing';
 import { AuthModule } from '@platform/auth';
 import { DomainValidationException, generateId, provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
+import { RATE_LIMIT_THROTTLERS } from '@platform/redis';
 import { createFastifyTestApp, createMock, type Mocked } from '@platform/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -231,9 +232,11 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
       expect(res.json()).toMatchObject({ code: 'INVALID_WEBHOOK_SIGNATURE' });
     });
 
-    it('skips throttling', () => {
+    it('skips every rate limiter', () => {
       const handler = Reflect.get(BillingController.prototype, 'handleStripeWebhook') as object;
-      expect(Reflect.getMetadata('THROTTLER:SKIPdefault', handler)).toBe(true);
+      for (const name of RATE_LIMIT_THROTTLERS) {
+        expect(Reflect.getMetadata(`THROTTLER:SKIP${name}`, handler)).toBe(true);
+      }
     });
   });
 

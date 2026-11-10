@@ -26,8 +26,9 @@ import {
 } from '@nestjs/swagger';
 import { type AuthUser, CurrentUser, LocalAuthGuard } from '@platform/auth';
 import { Public, type RequestLike } from '@platform/common';
-import { AuthThrottle } from '@platform/redis';
+import { RateLimit } from '@platform/redis';
 import { AuthPort } from '../../application/ports/auth.port.js';
+import { IDENTITY_RATE_LIMITS } from '../rate-limit/identity-rate-limit.js';
 import { clientInfoOf } from '../shared/client-info.util.js';
 import { UserReadCache } from '../shared/user-read.cache.js';
 import { LoginDto } from './dto/login.dto.js';
@@ -57,7 +58,7 @@ export class AuthController {
 
   @Post('register')
   @Public()
-  @AuthThrottle()
+  @RateLimit(IDENTITY_RATE_LIMITS.CREDENTIALS)
   @ApiOperation({ summary: 'Create an account and open a session' })
   @ApiCreatedResponse({ type: AuthTokensResponse })
   @ApiBadRequestResponse({ type: ProblemResponse, description: 'Invalid body (`errors`).' })
@@ -78,7 +79,7 @@ export class AuthController {
 
   @Post('login')
   @Public()
-  @AuthThrottle()
+  @RateLimit(IDENTITY_RATE_LIMITS.CREDENTIALS)
   @HttpCode(HttpStatus.OK)
   @UseGuards(LoginRequestGuard, LocalAuthGuard)
   @ApiOperation({ summary: 'Log in with email + password (passport-local)' })

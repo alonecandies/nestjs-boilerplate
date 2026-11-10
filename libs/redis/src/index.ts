@@ -5,7 +5,7 @@
  * adapter and the readiness contributor. Test doubles live in `@platform/redis/testing`.
  */
 
-// Re-exported so feature libs can opt routes out/in without depending on @nestjs/throttler.
+// Re-exported for apps; prefer RateLimit/SkipRateLimit (they know every throttler name).
 export { SkipThrottle, Throttle } from '@nestjs/throttler';
 export { AppCacheModule, createCacheOptions } from './cache/app-cache.module.js';
 export {
@@ -72,9 +72,43 @@ export {
   AppThrottlerModule,
   type AppThrottlerModuleOptions,
 } from './throttler/app-throttler.module.js';
-export { AuthThrottle } from './throttler/auth-throttle.decorator.js';
+export { type ClientIpResolver, createClientIpResolver } from './throttler/client-ip.util.js';
 export {
+  credentialFrom,
+  credentialHash,
+  normalizeCredential,
+} from './throttler/credential-tracker.util.js';
+export { IpThrottlerGuard, IpThrottlerModule } from './throttler/ip-throttler.guard.js';
+export { LockoutResetInterceptor } from './throttler/lockout-reset.interceptor.js';
+export { RateLimit, SkipRateLimit } from './throttler/rate-limit.decorator.js';
+export { type RateLimitFeatureOptions, RateLimitModule } from './throttler/rate-limit.module.js';
+export {
+  type RateLimitBucket,
+  RateLimitGuardBase,
+  type RateLimitSubject,
+} from './throttler/rate-limit-guard.base.js';
+export {
+  collectDecision,
+  formatRateLimit,
+  formatRateLimitPolicy,
+  policyItemName,
+  RATE_LIMIT_HEADER_ORDER,
+  type RateLimitDecision,
+} from './throttler/rate-limit-headers.js';
+export { rateLimitKey } from './throttler/rate-limit-key.util.js';
+export {
+  RATE_LIMIT_POLICY_NAME,
+  type RateLimitKeyKind,
+  type RateLimitLockout,
+  type RateLimitPolicy,
+  RateLimitPolicyRegistry,
+} from './throttler/rate-limit-policy.js';
+export {
+  DEFAULT_THROTTLE_COMMAND_TIMEOUT_MS,
+  FAIL_CLOSED_THROTTLERS,
   msToSeconds,
+  RATE_LIMIT_FAIL_OPEN_TOKEN,
+  RATE_LIMIT_FAIL_OPEN_TOTAL,
   RedisThrottlerStorage,
   type RedisThrottlerStorageOptions,
   type ThrottlerStorageRecord,
@@ -85,9 +119,12 @@ export {
   type ThrottleReply,
 } from './throttler/throttle.command.js';
 export {
-  AUTH_THROTTLE_KEY,
   DEFAULT_THROTTLE_EXEMPT_PATHS,
-  DEFAULT_THROTTLER_NAME,
+  GLOBAL_SCOPE,
+  RATE_LIMIT_POLICY_KEY,
+  RATE_LIMIT_THROTTLERS,
+  THROTTLER,
+  type ThrottlerName,
 } from './throttler/throttle.constants.js';
 export { createThrottleSkipIf, isThrottleExemptPath } from './throttler/throttle-exempt.util.js';
 export { throttleTracker } from './throttler/throttle-tracker.util.js';

@@ -2,13 +2,20 @@ import type { ExecutionContext } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
 import { ThrottlerException, type ThrottlerStorage } from '@nestjs/throttler';
 import { describe, expect, it, vi } from 'vitest';
+import { RateLimit } from './rate-limit.decorator.js';
+import { rateLimitKey } from './rate-limit-key.util.js';
+import { RateLimitPolicyRegistry } from './rate-limit-policy.js';
 import type { ThrottlerStorageRecord } from './redis-throttler.storage.js';
+import { THROTTLER } from './throttle.constants.js';
 import { throttleTracker } from './throttle-tracker.util.js';
 import { WsThrottlerGuard } from './ws-throttler.guard.js';
 
 class Gateway {
   onMessage(): void {
-    // handler stub
+    // route handler stub
+  }
+  @RateLimit('chat.send') send(): void {
+    // route handler stub
   }
 }
 
@@ -20,10 +27,14 @@ const record = (overrides: Partial<ThrottlerStorageRecord> = {}): ThrottlerStora
   ...overrides,
 });
 
-function wsContext(socket: Record<string, unknown>, type = 'ws'): ExecutionContext {
+function wsContext(
+  socket: Record<string, unknown>,
+  handler = Gateway.prototype.onMessage,
+  type = 'ws',
+): ExecutionContext {
   return {
     getType: () => type,
-    getHandler: () => Gateway.prototype.onMessage,
+    getHandler: () => handler,
     getClass: () => Gateway,
     switchToWs: () => ({ getClient: () => socket, getData: () => ({}) }),
   } as unknown as ExecutionContext;
@@ -32,38 +43,84 @@ function wsContext(socket: Record<string, unknown>, type = 'ws'): ExecutionConte
 async function createGuard() {
   const increment = vi.fn<ThrottlerStorage['increment']>(async () => record());
   const guard = new WsThrottlerGuard(
-    { throttlers: [{ name: 'default', ttl: 10_000, limit: 5 }] },
+    {
+      throttlers: [
+        { name: THROTTLER.USER, ttl: 60_000, limit: 100 },
+        { name: THROTTLER.ROUTE, ttl: 60_000, limit: 100 },
+      ],
+    },
     { increment },
     new Reflector(),
   );
+  const registry = new RateLimitPolicyRegistry();
+  registry.register([{ name: 'chat.send', key: 'user', limit: 5, ttlMs: 10_000 }]);
+  Reflect.set(guard, 'policies', registry);
   await guard.onModuleInit();
   return { guard, increment };
 }
 
 describe('WsThrottlerGuard', () => {
-  it('throttles messages per authenticated user, else per handshake address', async () => {
+  it('charges the socket user to the global user budget and the message policy', async () => {
     const { guard, increment } = await createGuard();
     await guard.canActivate(
-      wsContext({ data: { user: { id: 'u-1' } }, handshake: { address: '1.1.1.1' } }),
+      wsContext(
+        { data: { user: { id: 'u-1' } }, handshake: { address: '1.2.3.4' } },
+        Gateway.prototype.send,
+      ),
     );
-    await guard.canActivate(wsContext({ data: {}, handshake: { address: '1.1.1.1' } }));
-    expect(increment).toHaveBeenCalledTimes(2);
-    const [first, second] = increment.mock.calls.map(([key]) => key);
-    expect(first).not.toBe(second);
-    expect(increment).toHaveBeenCalledWith(expect.any(String), 10_000, 5, 10_000, 'default');
-  });
-
-  it('rejects blocked messages with ThrottlerException', async () => {
-    const { guard, increment } = await createGuard();
-    increment.mockResolvedValue(record({ isBlocked: true, totalHits: 6, timeToBlockExpire: 9 }));
-    await expect(guard.canActivate(wsContext({ data: {} }))).rejects.toBeInstanceOf(
-      ThrottlerException,
+    expect(increment.mock.calls).toEqual(
+      expect.arrayContaining([
+        [rateLimitKey('user', 'global', 'user:u-1'), 60_000, 100, 60_000, 'user'],
+        [rateLimitKey('route', 'chat.send', 'user:u-1'), 10_000, 5, 10_000, 'route'],
+      ]),
     );
   });
 
-  it('ignores non-WebSocket contexts', async () => {
+  it('falls back to the handshake address', async () => {
     const { guard, increment } = await createGuard();
-    await expect(guard.canActivate(wsContext({}, 'http'))).resolves.toBe(true);
+    await guard.canActivate(wsContext({ data: {}, handshake: { address: '5.6.7.8' } }));
+    expect(increment.mock.calls[0]?.[0]).toBe(rateLimitKey('user', 'global', 'ip:5.6.7.8'));
+  });
+
+  it('keys anonymous sockets by the proxy-aware client IP of the handshake request', async () => {
+    const { guard, increment } = await createGuard();
+    Reflect.set(guard, 'app', { trustProxy: ['10.0.0.0/8'] });
+    const socket = {
+      data: {},
+      handshake: { address: '10.0.0.5' },
+      request: {
+        socket: { remoteAddress: '10.0.0.5' },
+        headers: { 'x-forwarded-for': '6.6.6.6, 1.2.3.4' },
+      },
+    };
+    await guard.canActivate(wsContext(socket));
+    expect(increment.mock.calls[0]?.[0]).toBe(rateLimitKey('user', 'global', 'ip:1.2.3.4'));
+  });
+
+  it('ignores X-Forwarded-For when no proxy is trusted (default)', async () => {
+    const { guard, increment } = await createGuard();
+    const socket = {
+      data: {},
+      handshake: { address: '10.0.0.5' },
+      request: { socket: { remoteAddress: '10.0.0.5' }, headers: { 'x-forwarded-for': '1.2.3.4' } },
+    };
+    await guard.canActivate(wsContext(socket));
+    expect(increment.mock.calls[0]?.[0]).toBe(rateLimitKey('user', 'global', 'ip:10.0.0.5'));
+  });
+
+  it('raises ThrottlerException (429) when blocked', async () => {
+    const { guard, increment } = await createGuard();
+    increment.mockResolvedValue(record({ isBlocked: true, timeToBlockExpire: 3 }));
+    await expect(
+      guard.canActivate(wsContext({ data: { user: { id: 'u-1' } } })),
+    ).rejects.toBeInstanceOf(ThrottlerException);
+  });
+
+  it('skips every transport but ws', async () => {
+    const { guard, increment } = await createGuard();
+    await expect(
+      guard.canActivate(wsContext({}, Gateway.prototype.onMessage, 'http')),
+    ).resolves.toBe(true);
     expect(increment).not.toHaveBeenCalled();
   });
 });

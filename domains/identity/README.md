@@ -137,16 +137,16 @@ revoked_at IS NULL AND expires_at > now RETURNING id` (compare-and-set: concurre
 
 ## REST (URI version `v1`, problem+json errors)
 
-| Method | Path                  | Auth                       | Body / query                               | Success                                      | Errors                                                                         |
-| ------ | --------------------- | -------------------------- | ------------------------------------------ | -------------------------------------------- | ------------------------------------------------------------------------------ |
-| POST   | `/v1/auth/register`   | `@Public`, `@AuthThrottle` | `{ email, password (8–128), displayName }` | 201 `AuthTokensResponse`                     | 400, 409 `EMAIL_TAKEN`, 429                                                    |
-| POST   | `/v1/auth/login`      | `@Public`, `@AuthThrottle` | `{ email, password }` (passport-local)     | 200 `AuthTokensResponse`                     | 400, 401 `INVALID_CREDENTIALS` / `MISSING_CREDENTIALS`, 429                    |
-| POST   | `/v1/auth/refresh`    | `@Public`                  | `{ refreshToken }` (JWT)                   | 200 `AuthTokensResponse`                     | 400, 401 `INVALID_REFRESH_TOKEN` / `SESSION_EXPIRED` / `REFRESH_TOKEN_REUSED`  |
-| POST   | `/v1/auth/logout`     | bearer                     | `{ refreshToken? }`                        | 204                                          | 401                                                                            |
-| GET    | `/v1/auth/me`         | bearer                     | –                                          | 200 `UserResponse`                           | 401                                                                            |
-| GET    | `/v1/users`           | `users:read`               | `?limit (1–100)&cursor&search (3–100)`     | 200 `UserPageResponse`                       | 400, 401, 403, 422 `INVALID_CURSOR`                                            |
-| GET    | `/v1/users/:id`       | self, or `users:read`      | `:id` uuidv7 (`ParseUUIDPipe`)             | 200 `UserResponse` (cached `user:{id}` 30 s) | 400, 401, 403, 404                                                             |
-| PATCH  | `/v1/users/:id/roles` | `users:manage-roles`       | `{ roles: Role[] }`                        | 200 `UserResponse` (evicts the cache)        | 400, 401, 403, 404, 422 `CANNOT_REVOKE_OWN_ADMIN` / `CANNOT_REMOVE_LAST_ADMIN` |
+| Method | Path                  | Auth                                            | Body / query                               | Success                                      | Errors                                                                         |
+| ------ | --------------------- | ----------------------------------------------- | ------------------------------------------ | -------------------------------------------- | ------------------------------------------------------------------------------ |
+| POST   | `/v1/auth/register`   | `@Public`, `@RateLimit('identity.credentials')` | `{ email, password (8–128), displayName }` | 201 `AuthTokensResponse`                     | 400, 409 `EMAIL_TAKEN`, 429                                                    |
+| POST   | `/v1/auth/login`      | `@Public`, `@RateLimit('identity.credentials')` | `{ email, password }` (passport-local)     | 200 `AuthTokensResponse`                     | 400, 401 `INVALID_CREDENTIALS` / `MISSING_CREDENTIALS`, 429                    |
+| POST   | `/v1/auth/refresh`    | `@Public`                                       | `{ refreshToken }` (JWT)                   | 200 `AuthTokensResponse`                     | 400, 401 `INVALID_REFRESH_TOKEN` / `SESSION_EXPIRED` / `REFRESH_TOKEN_REUSED`  |
+| POST   | `/v1/auth/logout`     | bearer                                          | `{ refreshToken? }`                        | 204                                          | 401                                                                            |
+| GET    | `/v1/auth/me`         | bearer                                          | –                                          | 200 `UserResponse`                           | 401                                                                            |
+| GET    | `/v1/users`           | `users:read`                                    | `?limit (1–100)&cursor&search (3–100)`     | 200 `UserPageResponse`                       | 400, 401, 403, 422 `INVALID_CURSOR`                                            |
+| GET    | `/v1/users/:id`       | self, or `users:read`                           | `:id` uuidv7 (`ParseUUIDPipe`)             | 200 `UserResponse` (cached `user:{id}` 30 s) | 400, 401, 403, 404                                                             |
+| PATCH  | `/v1/users/:id/roles` | `users:manage-roles`                            | `{ roles: Role[] }`                        | 200 `UserResponse` (evicts the cache)        | 400, 401, 403, 404, 422 `CANNOT_REVOKE_OWN_ADMIN` / `CANNOT_REMOVE_LAST_ADMIN` |
 
 DTOs are class-validator classes with `@ApiProperty` and `@Transform` normalisation (trimmed,
 lowercased email; trimmed names/search, blank search = no filter). Responses are `@Exclude()`/`@Expose()` allow-list
@@ -220,8 +220,8 @@ drizzle-kit can load it. Identity owns its migration history: `drizzle.config.ts
 ## Configuration
 
 Identity's own namespaces, loaded by `IdentityCoreModule` (`infrastructure/security/`): `password` (`ARGON2_MEMORY_COST`, `ARGON2_TIME_COST`, `ARGON2_PARALLELISM`) and `refreshToken` (`JWT_REFRESH_SECRET`, `JWT_REFRESH_TTL_SEC`; it reads `JWT_ACCESS_SECRET` only for the production must-differ check). Also its own, for the gateway: `identityGrpcClient` (`IDENTITY_GRPC_URL`, `infrastructure/adapters/grpc/`), read by `IdentityApiModule.forRemote()`. From `@platform/config`: `auth` (`JWT_ACCESS_*`, `JWT_ISSUER`/`JWT_AUDIENCE`, `AUTH_DENYLIST_ENABLED`),
-`grpc` (`GRPC_DEADLINE_MS`) for the gateway, `throttle`
-(`THROTTLE_AUTH_LIMIT` / `THROTTLE_AUTH_TTL_MS` for `@AuthThrottle`), `redis` (key prefix of
+`grpc` (`GRPC_DEADLINE_MS`) for the gateway, `throttle`, its own
+`identityRateLimit` (`IDENTITY_CREDENTIALS_*`, `IDENTITY_LOCKOUT_*` for `identity.credentials`), `redis` (key prefix of
 locks, denylist and cache).
 
 ## Tests

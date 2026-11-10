@@ -14,6 +14,7 @@ import { mailConfig } from './mail.config.js';
 import { observabilityConfig } from './observability.config.js';
 import { redisConfig } from './redis.config.js';
 import { storageConfig } from './storage.config.js';
+import { throttleConfig } from './throttle.config.js';
 
 describe('config namespaces — defaults work with an EMPTY environment (local docker infra)', () => {
   it('every namespace parses {}', () => {
@@ -123,6 +124,13 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       path: '/graphql',
       sandbox: true,
       introspection: true,
+    });
+    expect(throttleConfig.parse({})).toEqual({
+      ttlMs: 60_000,
+      limit: 300,
+      ipTtlMs: 60_000,
+      ipLimit: 600,
+      redisTimeoutMs: 250,
     });
     expect(cacheConfig.parse({})).toEqual({ ttlMs: 30_000, l1TtlMs: 5000, l1MaxItems: 5000 });
   });

@@ -15,6 +15,7 @@ import { ObservabilityModule } from '@platform/observability';
 import {
   AppCacheModule,
   AppThrottlerModule,
+  IpThrottlerModule,
   RedisHealthIndicator,
   RedisModule,
 } from '@platform/redis';
@@ -33,7 +34,7 @@ import { PaymentUserFieldResolver } from './graphql/payment-user.resolver.js';
  * Redis — an upstream outage degrades the affected routes (503 problem+json) instead of pulling
  * every gateway replica out of the load balancer.
  *
- * Import order: config → observability → Redis/cache → AuthModule BEFORE AppThrottlerModule
+ * Import order: config → observability → Redis/cache → IpThrottlerModule BEFORE AuthModule BEFORE AppThrottlerModule
  * (global guards run in registration order: the throttler must see `req.user` to track per user)
  * → GraphQL → domain edge modules.
  */
@@ -47,7 +48,9 @@ import { PaymentUserFieldResolver } from './graphql/payment-user.resolver.js';
     RedisModule.forRootAsync(),
     AppCacheModule.forRootAsync(),
 
-    // Edge security: JWT + RBAC guards, then the Redis-backed throttler.
+    // Edge security: the pre-auth per-IP cap (counts 401/403 floods), JWT + RBAC guards, then the
+    // per-user / per-route / credential throttler.
+    IpThrottlerModule,
     AuthModule.forRootAsync(),
     AppThrottlerModule.forRootAsync(),
 

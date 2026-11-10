@@ -7,6 +7,9 @@ export const HTTP_HEADERS = {
   CORRELATION_ID: 'x-correlation-id',
   IDEMPOTENCY_KEY: 'idempotency-key',
   RETRY_AFTER: 'retry-after',
+  /** draft-ietf-httpapi-ratelimit-headers-11 (set by @platform/redis throttler guards). */
+  RATE_LIMIT_POLICY: 'ratelimit-policy',
+  RATE_LIMIT: 'ratelimit',
 } as const;
 
 export type HttpHeaderName = (typeof HTTP_HEADERS)[keyof typeof HTTP_HEADERS];

@@ -17,6 +17,7 @@ import { UsersLoaderRegistrar } from './presentation/graphql/users-loader.regist
 import { AuthController } from './presentation/http/auth.controller.js';
 import { LocalStrategy } from './presentation/http/strategies/local.strategy.js';
 import { UsersController } from './presentation/http/users.controller.js';
+import { IdentityRateLimitModule } from './presentation/rate-limit/identity-rate-limit.js';
 import { UserReadCache } from './presentation/shared/user-read.cache.js';
 
 /** Topology-independent presentation: the same classes in the monolith and the gateway. */
@@ -40,7 +41,7 @@ const PORT_EXPORTS = [AuthPort, UsersPort];
  *   client URL (`IDENTITY_GRPC_URL`) is read when `forRemote()` is called.
  *
  * Expects the app-level global modules: `AuthModule` (guards, TokenService), `AppCacheModule`
- * (`AppCacheService` for `user:{id}`), `AppThrottlerModule` (`@AuthThrottle`) and
+ * (`AppCacheService` for `user:{id}`), `AppThrottlerModule` (`@RateLimit` policies) and
  * `AppGraphqlModule` (only if GraphQL is served — resolvers are inert without it).
  */
 @Module({})
@@ -48,7 +49,7 @@ export class IdentityApiModule {
   static forLocal(): DynamicModule {
     return {
       module: IdentityApiModule,
-      imports: [IdentityCoreModule, GraphqlLoadersModule],
+      imports: [IdentityCoreModule, GraphqlLoadersModule, IdentityRateLimitModule],
       controllers: CONTROLLERS,
       providers: [
         ...PRESENTATION,
@@ -67,7 +68,11 @@ export class IdentityApiModule {
     };
     return {
       module: IdentityApiModule,
-      imports: [GrpcClientsModule.register(target, options), GraphqlLoadersModule],
+      imports: [
+        GrpcClientsModule.register(target, options),
+        GraphqlLoadersModule,
+        IdentityRateLimitModule,
+      ],
       controllers: CONTROLLERS,
       providers: [
         ...PRESENTATION,

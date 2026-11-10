@@ -45,6 +45,7 @@ describe('formatGraphqlError', () => {
         code: 'NOT_FOUND',
         status: 404,
         type: 'https://errors.nestjs-boilerplate.dev/not-found',
+        details: { entity: 'User', id: 'u1' },
       },
     });
   });
@@ -64,6 +65,14 @@ describe('formatGraphqlError', () => {
       status: 422,
       errors: [{ path: 'email', message: 'Invalid email', code: 'invalid_format' }],
     });
+  });
+
+  it('copies public problem details into extensions.details', () => {
+    const format = formatGraphqlError({ exposeInternal: false });
+    const original = new EntityNotFoundException('Widget', 'w-1');
+    const error = new GraphQLError('x', { path: ['widget'], originalError: original });
+    const result = format({ message: 'x', path: ['widget'] }, error);
+    expect(result.extensions?.['details']).toEqual({ entity: 'Widget', id: 'w-1' });
   });
 
   it('maps HttpExceptions thrown by guards and pipes (401/403/400)', () => {

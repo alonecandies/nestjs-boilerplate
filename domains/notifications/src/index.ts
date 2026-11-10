@@ -40,3 +40,7 @@ export * from './presentation/http/notifications.controller.js';
 export * from './presentation/http/notifications.dto.js';
 export * from './presentation/messaging/notification-push.consumer.js';
 export * from './presentation/ws/notifications.gateway.js';
+export {
+  type NotificationsRateLimitConfig,
+  notificationsRateLimitConfig,
+} from './presentation/ws/notifications-rate-limit.config.js';

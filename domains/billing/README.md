@@ -96,11 +96,11 @@ and `KafkaProducerModule`. It imports its own Stripe adapter (`StripeModule.forR
 
 ### REST (`/v1/billing`)
 
-| Method & path             | Auth                                           | Input                                                                                                                                             | Response                                                                                                                       |
-| ------------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /checkout-sessions` | Bearer, `billing:checkout`                     | zod body `{ priceId: string(1..255), quantity?: int 1..100 = 1 }` (strict) + optional `Idempotency-Key` header (8–255 chars of `[A-Za-z0-9._:-]`) | `201 { id, url, paymentId }`                                                                                                   |
-| `POST /webhooks/stripe`   | `@Public`, `@SkipThrottle`, `Stripe-Signature` | raw JSON body (verified byte-for-byte)                                                                                                            | `200 { received, eventId, eventType, duplicate }`                                                                              |
-| `GET /payments`           | Bearer; `?all=true` needs `billing:read-all`   | zod query `{ all?: 'true'\|'false'\|'1'\|'0', limit?: 1..100 = 20, cursor?: string }`                                                             | `200 { items: Payment[], nextCursor: string \| null }` newest first, keyset-paginated (`amountTotal` = minor units, ISO dates) |
+| Method & path             | Auth                                            | Input                                                                                                                                             | Response                                                                                                                       |
+| ------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /checkout-sessions` | Bearer, `billing:checkout`                      | zod body `{ priceId: string(1..255), quantity?: int 1..100 = 1 }` (strict) + optional `Idempotency-Key` header (8–255 chars of `[A-Za-z0-9._:-]`) | `201 { id, url, paymentId }`                                                                                                   |
+| `POST /webhooks/stripe`   | `@Public`, `@SkipRateLimit`, `Stripe-Signature` | raw JSON body (verified byte-for-byte)                                                                                                            | `200 { received, eventId, eventType, duplicate }`                                                                              |
+| `GET /payments`           | Bearer; `?all=true` needs `billing:read-all`    | zod query `{ all?: 'true'\|'false'\|'1'\|'0', limit?: 1..100 = 20, cursor?: string }`                                                             | `200 { items: Payment[], nextCursor: string \| null }` newest first, keyset-paginated (`amountTotal` = minor units, ISO dates) |
 
 Errors are RFC 9457 `application/problem+json`: 400 (validation, `errors[]`), 401, 403, 409
 (`IDEMPOTENCY_KEY_REUSED`, `PAYMENT_CONCURRENTLY_MODIFIED`), 422 (`INVALID_WEBHOOK_SIGNATURE`,
@@ -320,7 +320,7 @@ status) and a second boot that applies nothing.
 
 ## Gotchas
 
-- The webhook route's raw-body, `@Public()` and `@SkipThrottle()` requirements: see **Stripe adapter** above.
+- The webhook route's raw-body, `@Public()` and `@SkipRateLimit()` requirements: see **Stripe adapter** above.
 - Stripe idempotency keys are account-wide, so the client `Idempotency-Key` is never forwarded verbatim; it is
   mapped per user to a payment id, and the Stripe key is `checkout-<paymentId>`.
 - `billing.schema.ts` may only import `drizzle-orm` and dependency-free relative files (drizzle-kit loader).

@@ -31,6 +31,8 @@ export interface ProblemDetails {
   requestId?: string;
   /** Field-level issues (`ValidationIssue`-shaped objects for validation failures). */
   errors?: unknown[];
+  /** Client-safe context of 4xx domain errors (`DomainException.details` minus `issues`). */
+  details?: Record<string, unknown>;
 }
 
 export interface ProblemDetailsContext {
@@ -82,6 +84,7 @@ export function toProblemDetails(exception: unknown, ctx: ProblemDetailsContext)
   if (ctx.instance !== undefined) problem.instance = ctx.instance;
   if (ctx.requestId !== undefined) problem.requestId = ctx.requestId;
   if (base.errors !== undefined && base.errors.length > 0) problem.errors = base.errors;
+  if (base.details !== undefined) problem.details = base.details;
   return problem;
 }
 
@@ -90,6 +93,7 @@ interface ResolvedProblem {
   code: string;
   detail?: string | undefined;
   errors?: unknown[] | undefined;
+  details?: Record<string, unknown> | undefined;
 }
 
 function resolveProblem(exception: unknown, exposeInternal: boolean): ResolvedProblem {
@@ -102,6 +106,7 @@ function resolveProblem(exception: unknown, exposeInternal: boolean): ResolvedPr
       detail: exception.message,
       // 5xx domain details may describe upstream internals — only issues of 4xx errors are public.
       errors: isUnknownArray(issues) && (status < 500 || exposeInternal) ? issues : undefined,
+      details: status < 500 ? publicDetails(exception.details) : undefined,
     };
   }
 
@@ -175,6 +180,43 @@ function extractHttpMessage(
     return { message: VALIDATION_DETAIL, errors };
   }
   return { message: isString(body.message) ? body.message : fallback };
+}
+
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+function jsonSafe(value: unknown, depth: number): JsonValue | undefined {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : undefined;
+  if (depth >= 4) return undefined;
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => jsonSafe(item, depth + 1))
+      .filter((item): item is JsonValue => item !== undefined);
+  }
+  if (isPlainObject(value)) {
+    const out: Record<string, JsonValue> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      const safe = jsonSafe(item, depth + 1);
+      if (safe !== undefined) out[key] = safe;
+    }
+    return out;
+  }
+  return undefined; // Dates, Errors, class instances, functions, symbols, bigint
+}
+
+/**
+ * The public part of `DomainException.details` (F22): plain JSON values only, at most 4 levels,
+ * without `issues` (rendered as `errors`). `DomainExceptionOptions.details` is documented as
+ * client-safe; this is the allow-list that enforces "plain data" on top of that contract.
+ */
+export function publicDetails(
+  details: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (details === undefined) return undefined;
+  const { issues: _issues, ...rest } = details;
+  const safe = jsonSafe(rest, 0);
+  if (safe === null || typeof safe !== 'object' || Array.isArray(safe)) return undefined;
+  return Object.keys(safe).length > 0 ? safe : undefined;
 }
 
 /** `Array.isArray` narrows to `any[]`; keep `unknown` so element access stays type-checked. */

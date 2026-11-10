@@ -80,6 +80,7 @@ export function formatGraphqlError(
       type: problem.type,
     };
     if (problem.errors !== undefined) extensions['errors'] = problem.errors;
+    if (problem.details !== undefined) extensions['details'] = problem.details;
     const stacktrace = formatted.extensions?.['stacktrace'];
     if (exposeInternal && stacktrace !== undefined) extensions['stacktrace'] = stacktrace;
 

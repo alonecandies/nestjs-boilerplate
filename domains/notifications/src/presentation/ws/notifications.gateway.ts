@@ -20,8 +20,8 @@ import {
   RequirePermissions,
   TokenService,
 } from '@platform/auth';
-import { toProblemDetails, UnauthenticatedException } from '@platform/common';
-import { Throttle, WsThrottlerGuard } from '@platform/redis';
+import { toProblemDetails, UnauthenticatedException, UseWsExceptionFilter } from '@platform/common';
+import { RateLimit, WsThrottlerGuard } from '@platform/redis';
 import type { DefaultEventsMap, ExtendedError, Namespace, Socket } from 'socket.io';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
 import {
@@ -30,6 +30,7 @@ import {
   userRoom,
 } from '../../notifications.constants.js';
 import type { NotificationResponse } from '../http/notifications.dto.js';
+import { NOTIFICATIONS_RATE_LIMITS } from './notifications-rate-limit.js';
 import {
   type MarkReadAck,
   type MarkReadMessage,
@@ -77,9 +78,12 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
  * - Messages: the global guards run per message (`JwtAuthGuard` checks `socket.data.user` is
  *   still unexpired, then RBAC), then `WsSessionGuard` (denylist, like HTTP) and per-message
  *   throttling (`WsThrottlerGuard`, Redis-backed).
+ *   Errors (429 included) come back as `{ ok: false, error }` acks or `exception` events
+ *   (`@UseWsExceptionFilter`).
  * - Pushes: `NotificationPushConsumer` calls `pushToUser`; with `RedisIoAdapter` the room emit
  *   reaches the user's sockets on every replica.
  */
+@UseWsExceptionFilter()
 @UseGuards(WsSessionGuard, WsThrottlerGuard)
 @WebSocketGateway({ namespace: NOTIFICATIONS_WS_NAMESPACE })
 export class NotificationsGateway
@@ -191,7 +195,7 @@ export class NotificationsGateway
   /** Marks a notification read; the return value is the socket.io ack. */
   @SubscribeMessage(NOTIFICATIONS_WS_EVENTS.MARK_READ)
   @RequirePermissions(Permission.NotificationsRead)
-  @Throttle({ default: { limit: 30, ttl: 10_000 } })
+  @RateLimit(NOTIFICATIONS_RATE_LIMITS.MARK_READ)
   async markRead(
     @MessageBody({ schema: markReadMessageSchema }) body: MarkReadMessage,
     @CurrentUser('id') userId: string,

@@ -10,6 +10,7 @@ import { NotificationsResolver } from './presentation/graphql/notifications.reso
 import { NotificationsController } from './presentation/http/notifications.controller.js';
 import { NotificationPushConsumer } from './presentation/messaging/notification-push.consumer.js';
 import { NotificationsGateway } from './presentation/ws/notifications.gateway.js';
+import { NotificationsRateLimitModule } from './presentation/ws/notifications-rate-limit.js';
 
 /** Identical in both topologies — they only ever see `NotificationsPort`. */
 const CONTROLLERS: Type[] = [NotificationsController, NotificationPushConsumer];
@@ -34,7 +35,7 @@ export class NotificationsApiModule {
   static forLocal(): DynamicModule {
     return {
       module: NotificationsApiModule,
-      imports: [NotificationsCoreModule],
+      imports: [NotificationsCoreModule, NotificationsRateLimitModule],
       controllers: CONTROLLERS,
       providers: [
         ...PROVIDERS,
@@ -52,7 +53,7 @@ export class NotificationsApiModule {
     };
     return {
       module: NotificationsApiModule,
-      imports: [GrpcClientsModule.register(target)],
+      imports: [GrpcClientsModule.register(target), NotificationsRateLimitModule],
       controllers: CONTROLLERS,
       providers: [...PROVIDERS, { provide: NotificationsPort, useClass: NotificationsGrpcAdapter }],
       exports: [NotificationsPort],

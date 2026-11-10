@@ -11,11 +11,11 @@
 // percentiles are honest (a closed VU loop slows down with the server = coordinated omission).
 // Each iteration sends a distinct X-Forwarded-For (compose sets TRUST_PROXY=uniquelocal, so the
 // private-network k6 container is a trusted proxy), so the per-client auth throttle
-// (THROTTLE_AUTH_LIMIT per minute per IP) models many clients instead of one k6 box.
+// (IDENTITY_CREDENTIALS_LIMIT per minute per email and IP, THROTTLE_IP_LIMIT per minute per IP) models many clients instead of one k6 box.
 //
 // Env: BASE_URL, RATE (journeys/s, default 5), DURATION (default 1m), READ_RATE (iterations/s,
 // default 0), P95_MS (default 250), MAX_ERROR_RATE (default 0.01), MAX_DROPPED_RATIO (default
-// 0.01 of the planned iterations), THROTTLE_LIMIT (app setting, default 100/min/user; sizes the
+// 0.01 of the planned iterations), THROTTLE_LIMIT (app setting, default 300/min/user; sizes the
 // browse pool), PASSWORD, RUN_ID.
 // Keep DURATION below JWT_ACCESS_TTL_SEC (15 min) when READ_RATE > 0: pool tokens are not refreshed.
 import { check, fail, sleep } from 'k6';
@@ -29,7 +29,7 @@ const READ_RATE = Number(__ENV.READ_RATE || 0);
 const P95_MS = Number(__ENV.P95_MS || 250);
 const MAX_ERROR_RATE = Number(__ENV.MAX_ERROR_RATE || 0.01);
 const MAX_DROPPED_RATIO = Number(__ENV.MAX_DROPPED_RATIO || 0.01);
-const THROTTLE_LIMIT = Number(__ENV.THROTTLE_LIMIT || 100);
+const THROTTLE_LIMIT = Number(__ENV.THROTTLE_LIMIT || 300);
 const PASSWORD = __ENV.PASSWORD || 'k6-load-test-Passw0rd';
 // Emails must be unique across runs against the same database.
 const RUN_ID = (__ENV.RUN_ID || Date.now().toString(36)).toLowerCase();
