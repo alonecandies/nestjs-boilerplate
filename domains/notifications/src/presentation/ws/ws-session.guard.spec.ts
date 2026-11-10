@@ -2,7 +2,7 @@ import type { ExecutionContext } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
 import { AccessTokenDenylist, AuthModule } from '@platform/auth';
-import { UnauthenticatedException } from '@platform/common';
+import { AllExceptionsFilter, UnauthenticatedException } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { FakeRedisModule } from '../../../test/support/edge-test-app.js';
@@ -46,6 +46,12 @@ describe('WsSessionGuard', () => {
 
   it('guards every message of the notifications gateway, before throttling', () => {
     expect(Reflect.getMetadata(GUARDS_METADATA, NotificationsGateway)?.[0]).toBe(WsSessionGuard);
+  });
+
+  it('the notifications gateway delivers errors through AllExceptionsFilter (ack / exception event)', () => {
+    expect(Reflect.getMetadata('__exceptionFilters__', NotificationsGateway)).toEqual([
+      AllExceptionsFilter,
+    ]);
   });
 
   it('lets a live session through', async () => {

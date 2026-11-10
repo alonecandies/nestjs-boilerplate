@@ -20,7 +20,7 @@ import {
   RequirePermissions,
   TokenService,
 } from '@platform/auth';
-import { toProblemDetails, UnauthenticatedException } from '@platform/common';
+import { toProblemDetails, UnauthenticatedException, UseWsExceptionFilter } from '@platform/common';
 import { RateLimit, WsThrottlerGuard } from '@platform/redis';
 import type { DefaultEventsMap, ExtendedError, Namespace, Socket } from 'socket.io';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
@@ -78,9 +78,12 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
  * - Messages: the global guards run per message (`JwtAuthGuard` checks `socket.data.user` is
  *   still unexpired, then RBAC), then `WsSessionGuard` (denylist, like HTTP) and per-message
  *   throttling (`WsThrottlerGuard`, Redis-backed).
+ *   Errors (429 included) come back as `{ ok: false, error }` acks or `exception` events
+ *   (`@UseWsExceptionFilter`).
  * - Pushes: `NotificationPushConsumer` calls `pushToUser`; with `RedisIoAdapter` the room emit
  *   reaches the user's sockets on every replica.
  */
+@UseWsExceptionFilter()
 @UseGuards(WsSessionGuard, WsThrottlerGuard)
 @WebSocketGateway({ namespace: NOTIFICATIONS_WS_NAMESPACE })
 export class NotificationsGateway

@@ -11,6 +11,8 @@ import {
   DomainConflictException,
   DomainValidationException,
   ExternalServiceException,
+  PermissionDeniedException,
+  ServiceUnavailableException,
 } from './domain.exception.js';
 import { toProblemDetails } from './problem-details.js';
 
@@ -166,5 +168,41 @@ describe('toProblemDetails', () => {
     expect(problem.type).toBe('https://example.com/problems/conflict');
     expect(problem).not.toHaveProperty('requestId');
     expect(problem).not.toHaveProperty('instance');
+  });
+});
+
+describe('details (F22)', () => {
+  const ctx = { exposeInternal: false };
+
+  it('emits allow-listed details of 4xx domain exceptions', () => {
+    const error = new PermissionDeniedException('Missing permission', {
+      details: { requiredPermissions: ['users:read'], mode: 'all' },
+    });
+    expect(toProblemDetails(error, ctx).details).toEqual({
+      requiredPermissions: ['users:read'],
+      mode: 'all',
+    });
+  });
+
+  it('drops issues (already errors), non-JSON values and 5xx details', () => {
+    const error = new DomainValidationException('Invalid', {
+      issues: [{ path: 'a', message: 'b' }],
+      details: {
+        field: 'a',
+        when: new Date(0),
+        fn: () => 1,
+        nested: { ok: true, err: new Error('x') },
+      },
+    });
+    expect(toProblemDetails(error, ctx).details).toEqual({ field: 'a', nested: { ok: true } });
+    const upstream = new ServiceUnavailableException('down', { details: { host: 'db-1' } });
+    expect(toProblemDetails(upstream, ctx).details).toBeUndefined();
+  });
+
+  it('omits details when nothing public remains', () => {
+    const error = new DomainValidationException('Invalid', {
+      issues: [{ path: 'a', message: 'b' }],
+    });
+    expect(toProblemDetails(error, ctx)).not.toHaveProperty('details');
   });
 });
