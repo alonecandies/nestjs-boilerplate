@@ -15,12 +15,13 @@ import { InMemoryAppCache } from '../test/in-memory-app-cache.js';
 import { AuthPort } from './application/ports/auth.port.js';
 import { UsersPort } from './application/ports/users.port.js';
 import { IdentityApiModule } from './identity-api.module.js';
+import { IdentityCoreModule } from './identity-core.module.js';
 import { AuthLocalAdapter } from './infrastructure/adapters/local/auth-local.adapter.js';
 import { UsersLocalAdapter } from './infrastructure/adapters/local/users-local.adapter.js';
 import { PasswordHasher } from './infrastructure/security/password-hasher.service.js';
 
 /*
- * Monolith composition without infrastructure: IdentityApiModule.forLocal() (→ IdentityCoreModule)
+ * Monolith composition without infrastructure: IdentityCoreModule + IdentityApiModule.forLocal()
  * with the REAL CQRS bus, handlers, repositories, Drizzle query building and relay; only the
  * postgres.js client, Redis and Kafka are fakes. Proves the DI graph of the whole context and the
  * register → session → UserRegisteredEvent → Kafka path end to end.
@@ -85,6 +86,7 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
         ...AUTH_TEST_IMPORTS,
         CqrsModule.forRoot(),
         FakeInfrastructureModule,
+        IdentityCoreModule,
         IdentityApiModule.forLocal(),
       ],
       providers: provideCommonEnhancers(),

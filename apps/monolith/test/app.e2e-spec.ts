@@ -9,11 +9,13 @@ await vi.hoisted(async () => {
 });
 
 import { BILLING_LOG_REDACT_PATHS, BillingLocalAdapter, BillingPort } from '@domain/billing';
+import { IdentityCoreModule } from '@domain/identity';
 import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
 import { NotificationsLocalAdapter, NotificationsPort } from '@domain/notifications';
 import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
 import { PARAMS_PROVIDER_TOKEN, type Params } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { AppModule } from '../src/app.module.js';
 import { bearer, expectProblem, graphql, multipartFile } from './support/http.js';
 import { createMonolithE2eApp, type MonolithE2e } from './support/monolith-e2e-app.js';
 
@@ -46,6 +48,11 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
     // Shutdown hooks of the data modules ran against the fakes (pool end, Cassandra shutdown).
     expect(e2e.postgres.state.ended).toBe(true);
     expect(e2e.cassandra.state.shutdown).toBe(true);
+  });
+
+  it('imports every Core module itself (XApiModule.forLocal() no longer imports it)', () => {
+    const imports = Reflect.getMetadata('imports', AppModule) as unknown[];
+    expect(imports).toEqual(expect.arrayContaining([IdentityCoreModule]));
   });
 
   it('binds every port to its LOCAL adapter (CommandBus/QueryBus, no gRPC)', () => {

@@ -1,6 +1,6 @@
 import { BILLING_LOG_REDACT_PATHS, BillingApiModule, billingSchema } from '@domain/billing';
 import { FilesModule } from '@domain/files';
-import { IdentityApiModule, identitySchema } from '@domain/identity';
+import { IdentityApiModule, IdentityCoreModule, identitySchema } from '@domain/identity';
 import {
   NOTIFICATIONS_MAIL_TEMPLATES_DIR,
   NotificationsApiModule,
@@ -48,7 +48,7 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
  * config → observability (logger, cls, health) → infrastructure → AuthModule BEFORE
  * AppThrottlerModule (global guards run in registration order: the throttler must see `req.user`
  * to track per user, and `@AuthThrottle` handlers) → GraphQL → domain modules (their `Api`
- * modules import the matching `Core` module — never import a Core module again here).
+ * modules no longer import a `Core` module: each is imported here, once, before its Api module).
  */
 @Module({
   imports: [
@@ -87,6 +87,7 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
     GraphqlPubSubModule,
 
     // Bounded contexts.
+    IdentityCoreModule,
     IdentityApiModule.forLocal(),
     NotificationsApiModule.forLocal(),
     NotificationsMessagingModule,

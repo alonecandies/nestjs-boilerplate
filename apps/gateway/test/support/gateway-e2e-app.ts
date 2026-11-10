@@ -1,6 +1,11 @@
 import { BillingPort } from '@domain/billing';
-import { AuthPort, refreshTokenConfig, TokenIssuer, UsersPort } from '@domain/identity';
-import { FakeAuthPort, FakeIdentityState, FakeUsersPort } from '@domain/identity/testing';
+import { AuthPort, refreshTokenConfig, UsersPort } from '@domain/identity';
+import {
+  FakeAuthPort,
+  FakeIdentityState,
+  FakeUsersPort,
+  TokenIssuer,
+} from '@domain/identity/testing';
 import { NotificationsPort } from '@domain/notifications';
 import { FakeNotificationsPort } from '@domain/notifications/testing';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
