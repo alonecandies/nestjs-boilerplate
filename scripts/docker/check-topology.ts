@@ -23,6 +23,8 @@ export const TOPOLOGIES = ['monolith', 'microservices'] as const;
 export type Topology = (typeof TOPOLOGIES)[number];
 
 /** The developer's own compose project (`name:` in docker-compose.yml): never used. */
+const COMPOSE_PROJECT_NAME = /^[a-z0-9][a-z0-9_-]*$/;
+
 export const PROTECTED_PROJECTS: readonly string[] = ['boilerplate'];
 /** In-network HTTP port of every app image (Dockerfile `ENV PORT=3000`). */
 export const APP_HTTP_PORT = 3000;
@@ -48,7 +50,13 @@ export function isTopology(value: string | undefined): value is Topology {
 }
 
 export function projectName(topology: Topology, env: NodeJS.ProcessEnv = process.env): string {
-  const name = env.PROJECT ?? `bp-topology-${topology}`;
+  // An empty PROJECT counts as unset: compose resolves `-p ''` to the file's own name ("boilerplate").
+  const name = env.PROJECT || `bp-topology-${topology}`;
+  if (!COMPOSE_PROJECT_NAME.test(name)) {
+    throw new Error(
+      `refusing project name "${name}": it must match ${COMPOSE_PROJECT_NAME.source} (compose's form)`,
+    );
+  }
   if (PROTECTED_PROJECTS.includes(name)) {
     throw new Error(`refusing to run the topology smoke test in compose project "${name}"`);
   }
@@ -61,7 +69,7 @@ export function shiftedHostPorts(
 ): Record<string, string> {
   const ports: Record<string, string> = {};
   for (const [, name, port] of composeText.matchAll(HOST_PORT_KNOB)) {
-    if (name === undefined || port === undefined || env[name] !== undefined) continue;
+    if (name === undefined || port === undefined || env[name]) continue;
     const n = Number(port);
     ports[name] = String(n + 20_000 <= 65_535 ? n + 20_000 : n - 20_000);
   }
@@ -205,7 +213,7 @@ async function up(topology: Topology): Promise<void> {
   const config = JSON.parse(run(compose('config', '--format', 'json'), env, true)) as ComposeConfig;
   const services = appServices(config, topology);
   if (services.length === 0) throw new Error(`no compose service has the profile ${topology}`);
-  const apiPort = env.API_HOST_PORT ?? '3000';
+  const apiPort = env.API_HOST_PORT || '3000';
   console.info(
     `[check-topology] ${topology}: project ${project}, apps ${services.join(', ')}, API 127.0.0.1:${apiPort}`,
   );

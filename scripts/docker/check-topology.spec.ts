@@ -61,6 +61,16 @@ describe('projectName', () => {
     expect(projectName('monolith', { PROJECT: 'e-smoke' })).toBe('e-smoke');
     expect(() => projectName('monolith', { PROJECT: 'boilerplate' })).toThrow(/refusing/);
   });
+
+  it('treats an empty PROJECT as unset, never as the compose file name', () => {
+    expect(projectName('monolith', { PROJECT: '' })).toBe('bp-topology-monolith');
+  });
+
+  it('refuses names outside the compose project-name form', () => {
+    for (const PROJECT of ['Boilerplate', ' boilerplate', '-x', 'a b', 'a/b']) {
+      expect(() => projectName('monolith', { PROJECT })).toThrow(/refusing/);
+    }
+  });
 });
 
 describe('shiftedHostPorts', () => {
@@ -85,6 +95,12 @@ describe('shiftedHostPorts', () => {
       expect(Number(port)).toBeLessThanOrEqual(65_535);
     }
     expect(new Set(Object.values(ports)).size).toBe(Object.keys(ports).length);
+  });
+
+  it('treats an empty knob as unset and still shifts it', () => {
+    expect(shiftedHostPorts(COMPOSE, { API_HOST_PORT: '' })).toMatchObject({
+      API_HOST_PORT: '23000',
+    });
   });
 
   it('keeps a port the caller already set', () => {
