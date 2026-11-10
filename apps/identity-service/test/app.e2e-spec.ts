@@ -20,11 +20,11 @@ import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import {
   createGrpcClientOptions,
-  FakeKafkaProducer,
   GrpcCircuitBreakers,
   grpcCall,
   KafkaProducer,
 } from '@platform/transport';
+import { FakeKafkaProducer } from '@platform/transport/testing';
 import { getTableColumns } from 'drizzle-orm';
 import { lastValueFrom, type Observable } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';

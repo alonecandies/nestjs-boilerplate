@@ -2,7 +2,6 @@ import { BILLING_GRPC_PACKAGE } from '@domain/billing-contracts';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
 import { GrpcClientsModule } from '@platform/transport';
 import { BillingPort } from './application/ports/billing.port.js';
-import { BillingCoreModule } from './billing-core.module.js';
 import { BillingGrpcAdapter } from './infrastructure/adapters/grpc/billing-grpc.adapter.js';
 import { billingGrpcClientConfig } from './infrastructure/adapters/grpc/billing-grpc-client.config.js';
 import { BillingLocalAdapter } from './infrastructure/adapters/local/billing-local.adapter.js';
@@ -31,11 +30,10 @@ const presentation = (
  */
 @Module({})
 export class BillingApiModule {
-  /** Monolith: ports → CQRS buses in-process (imports `BillingCoreModule`). */
+  /** Monolith: ports → CQRS buses in-process. The app imports `BillingCoreModule` itself. */
   static forLocal(): DynamicModule {
     return {
       module: BillingApiModule,
-      imports: [BillingCoreModule],
       ...presentation(BillingLocalAdapter),
     };
   }

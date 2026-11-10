@@ -41,4 +41,3 @@ export * from './kafka/kafka-producer.module.js';
 export * from './kafka/kafka-producer.service.js';
 export * from './kafka/kafka-retry.interceptor.js';
 export * from './kafka/parse-event-envelope.pipe.js';
-export * from './kafka/testing/fake-kafka-producer.js';

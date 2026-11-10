@@ -5,7 +5,6 @@ import { NotificationsPort } from './application/ports/notifications.port.js';
 import { NotificationsGrpcAdapter } from './infrastructure/adapters/grpc/notifications-grpc.adapter.js';
 import { notificationsGrpcClientConfig } from './infrastructure/adapters/grpc/notifications-grpc-client.config.js';
 import { NotificationsLocalAdapter } from './infrastructure/adapters/local/notifications-local.adapter.js';
-import { NotificationsCoreModule } from './notifications-core.module.js';
 import { NotificationsResolver } from './presentation/graphql/notifications.resolver.js';
 import { NotificationsController } from './presentation/http/notifications.controller.js';
 import { NotificationPushConsumer } from './presentation/messaging/notification-push.consumer.js';
@@ -22,7 +21,8 @@ const PROVIDERS: Provider[] = [NotificationsResolver, NotificationsGateway];
  * the Kafka push consumer that fans `notification-created` events out to WebSocket rooms and
  * GraphQL subscriptions.
  *
- * - `forLocal()` (monolith): the port runs on the CQRS buses of `NotificationsCoreModule`.
+ * - `forLocal()` (monolith): the port runs on the CQRS buses of `NotificationsCoreModule`, which the
+ *   app imports itself.
  * - `forRemote()` (gateway): the port calls notifications-service over gRPC. The client URL
  *   (`NOTIFICATIONS_GRPC_URL`) is read when `forRemote()` is called.
  *
@@ -35,7 +35,7 @@ export class NotificationsApiModule {
   static forLocal(): DynamicModule {
     return {
       module: NotificationsApiModule,
-      imports: [NotificationsCoreModule, NotificationsRateLimitModule],
+      imports: [NotificationsRateLimitModule],
       controllers: CONTROLLERS,
       providers: [
         ...PROVIDERS,

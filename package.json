@@ -147,7 +147,7 @@
     "lint": "biome check . && eslint . --cache --cache-location node_modules/.cache/eslint/",
     "lint:fix": "biome check --write . && eslint . --fix --cache --cache-location node_modules/.cache/eslint/",
     "format": "biome format --write . && prettier --write --log-level=warn .",
-    "check": "biome ci . && eslint . --max-warnings=0 && prettier --check . && tsc -p tsconfig.json && node scripts/check-boundaries.mjs",
+    "check": "biome ci . && eslint . --max-warnings=0 && prettier --check . && tsc -p tsconfig.json && node scripts/check-boundaries.mjs && node scripts/check-api-subpaths.mjs --require-all",
     "check:boundaries": "node scripts/check-boundaries.mjs",
     "commit": "cz",
     "release": "lerna version --conventional-commits --yes --no-push",

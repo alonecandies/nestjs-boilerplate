@@ -19,6 +19,7 @@ to the S3, GCS or in-memory driver.
 ```
 src/
   files.constants.ts       USER_FILES_ROOT, UPLOAD_FILE_FIELD, content-type allow-list (+ regex), size ceilings
+  api/index.ts             the ./api entry: FilesModule + its config namespace (what the gateway imports)
   files.module.ts          FilesModule
   domain/                  files.errors.ts (FilesErrorCode + 4 DomainExceptions), file-content-type.ts (allow-list policy)
   application/             files.service.ts (use cases), file-key.ts (key building / ownership), file-access.policy.ts, files.types.ts
@@ -28,6 +29,9 @@ src/
 ```
 
 ## Wiring (gateway and monolith)
+
+Entry points: `@domain/files/api` (`FilesModule` and its config namespace; what the gateway and monolith import)
+and `@domain/files` (everything in `./api` plus the service, policies, DTOs and errors). No `./testing`.
 
 ```ts
 @Module({

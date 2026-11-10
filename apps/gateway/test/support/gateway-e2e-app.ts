@@ -1,6 +1,11 @@
 import { BillingPort } from '@domain/billing';
-import { AuthPort, refreshTokenConfig, TokenIssuer, UsersPort } from '@domain/identity';
-import { FakeAuthPort, FakeIdentityState, FakeUsersPort } from '@domain/identity/testing';
+import { AuthPort, refreshTokenConfig, UsersPort } from '@domain/identity';
+import {
+  FakeAuthPort,
+  FakeIdentityState,
+  FakeUsersPort,
+  TokenIssuer,
+} from '@domain/identity/testing';
 import { NotificationsPort } from '@domain/notifications';
 import { FakeNotificationsPort } from '@domain/notifications/testing';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
@@ -13,7 +18,8 @@ import { appConfig, authConfig } from '@platform/config';
 import { GRAPHQL_PUB_SUB } from '@platform/graphql';
 import { createL1Store, REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
-import { InMemoryStorageService, StorageService } from '@platform/storage';
+import { StorageService } from '@platform/storage';
+import { InMemoryStorageService } from '@platform/storage/testing';
 import { createFastifyTestApp } from '@platform/testing';
 import { createCache } from 'cache-manager';
 import { PubSub } from 'graphql-subscriptions';

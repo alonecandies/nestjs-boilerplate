@@ -1,7 +1,7 @@
 import { PAYMENT_SUCCEEDED_EVENT } from '@domain/billing-contracts';
 import { Logger } from '@nestjs/common';
 import { generateId } from '@platform/common';
-import { FakeKafkaProducer } from '@platform/transport';
+import { FakeKafkaProducer } from '@platform/transport/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PaymentSucceededEvent } from '../../domain/events/payment-succeeded.event.js';
 import { PaymentSucceededRelay } from './payment-succeeded.relay.js';
