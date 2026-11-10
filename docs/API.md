@@ -31,10 +31,19 @@ Conventions that apply to every HTTP response:
 - **Request ids**: every response carries `x-request-id` (this hop) and `x-correlation-id` (the whole flow). A valid
   incoming `x-request-id` is adopted. Otherwise the server creates a UUIDv7. The same id appears in logs, in traces and
   in problem documents (`requestId`).
-- **Rate limiting** (Redis-backed, shared by all replicas): `THROTTLE_LIMIT` requests per `THROTTLE_TTL_MS` (default
-  100 per 60 s). The limit is tracked per user when the request is authenticated and per IP otherwise. Register and
-  login use the stricter `THROTTLE_AUTH_LIMIT` / `THROTTLE_AUTH_TTL_MS` (default 10 per 60 s). GraphQL is throttled
-  too. Socket.IO messages are throttled per message. gRPC and Kafka traffic is not throttled.
+- **Rate limiting** (Redis-backed, shared by all replicas). Budgets:
+  - `ip`: `THROTTLE_IP_LIMIT`/`_TTL_MS`, default 600/60 s per client IP, counted before authentication.
+  - `user`: `THROTTLE_LIMIT`/`_TTL_MS`, default 300/60 s per user (per IP when anonymous), across all routes.
+  - Named route policies: `@RateLimit('<domain>.<name>')`, with limits from the domain's env.
+  - Register and login: `identity.credentials`, `IDENTITY_CREDENTIALS_LIMIT` per sha256(email)+IP, shared by REST
+    and GraphQL. There is also a per-account lockout after `IDENTITY_LOCKOUT_THRESHOLD` attempts without a success,
+    for `IDENTITY_LOCKOUT_MS`, answered exactly like any other 429.
+
+  Responses carry `RateLimit-Policy` and `RateLimit` (draft-ietf-httpapi-ratelimit-headers-11), also on 429 next to
+  `Retry-After`, and they are exposed through CORS. Socket.IO messages are limited per message; errors come back as
+  `{ ok: false, error }` acks or `exception` events. gRPC and Kafka are not throttled. When Redis is down, budgets
+  fail open and credential endpoints answer 503.
+
 - **Timeouts**: an HTTP or GraphQL handler that runs longer than 30 s fails with 504 `TIMEOUT`. The streaming upload
   opts out with `@Timeout(0)`.
 - **Metrics port**: `/metrics` is served on the same port as the public API. Putting it on a separate listener is a
@@ -288,6 +297,10 @@ a stable `code` and an HTTP status. Each transport turns that exception into its
 | `SERVICE_UNAVAILABLE`     | 503    | Maintenance mode, open circuit breaker, upstream unavailable                  |
 | `TIMEOUT`                 | 504    | Handler timeout (30 s) or gRPC deadline exceeded                              |
 | `INTERNAL`                | 500    | Anything unexpected                                                           |
+
+4xx domain errors carry their public context in `details` (plain JSON only), for example
+`details.requiredPermissions` on 403 and `{ entity, id }` on 404. GraphQL puts the same object in
+`extensions.details`.
 
 ### Domain codes
 

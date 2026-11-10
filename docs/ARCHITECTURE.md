@@ -383,7 +383,7 @@ See [API.md](API.md) for the client-facing contract of each error.
 
 ### 10.1 Register → welcome notification + email (monolith)
 
-`POST /v1/auth/register` (or the GraphQL `register` mutation) is `@Public()` and `@AuthThrottle()`. Everything runs in one process, but the welcome still goes through Kafka.
+`POST /v1/auth/register` (or the GraphQL `register` mutation) is `@Public()` and `@RateLimit('identity.credentials')`. Everything runs in one process, but the welcome still goes through Kafka.
 
 ```mermaid
 sequenceDiagram
@@ -457,7 +457,7 @@ If identity-service answers `ALREADY_EXISTS` with trailer `x-error-code: EMAIL_T
 
 ### 10.3 Stripe webhook → receipt
 
-`POST /v1/billing/webhooks/stripe` is `@Public()` and `@SkipThrottle()`. The app is created with `rawBody: true` because the signature covers the exact bytes. In the microservices topology, the gateway forwards the raw bytes and the `Stripe-Signature` header in `HandleStripeWebhookRequest { bytes payload; string signature }`; in the monolith, `BillingLocalAdapter` dispatches the same command in-process.
+`POST /v1/billing/webhooks/stripe` is `@Public()` and `@SkipRateLimit()`. The app is created with `rawBody: true` because the signature covers the exact bytes. In the microservices topology, the gateway forwards the raw bytes and the `Stripe-Signature` header in `HandleStripeWebhookRequest { bytes payload; string signature }`; in the monolith, `BillingLocalAdapter` dispatches the same command in-process.
 
 ```mermaid
 sequenceDiagram

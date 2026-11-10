@@ -95,8 +95,14 @@ session of the given `refreshToken`, or **every** session when the body omits it
   `@domain/identity` bounds the hashing cost of any input.
 - Login runs `verifyDummy` for unknown emails so response timing does not reveal which accounts
   exist; wrong password and unknown email share one 401 `INVALID_CREDENTIALS`.
-- Registration and login are throttled per IP by `@AuthThrottle()` (`THROTTLE_AUTH_LIMIT` = 10 per
-  `THROTTLE_AUTH_TTL_MS` = 60 s).
+- Register and login are limited by `identity.credentials`: per sha256(normalised email)+client IP, shared by REST
+  and GraphQL. A per-account lockout (`IDENTITY_LOCKOUT_*`) refuses an account after `IDENTITY_LOCKOUT_THRESHOLD`
+  failed attempts from any IP within one `IDENTITY_LOCKOUT_MS` window; a successful login before that resets the
+  count. A locked account answers like any 429, so the lockout does not reveal whether an account exists.
+  Trade-off (targeted lockout): the lockout is per account by design (spec §11), so anyone who knows an email can
+  keep that account locked by failing logins for it, from any IP, for `IDENTITY_LOCKOUT_MS` at a time. Keep
+  `IDENTITY_LOCKOUT_MS` short (minutes), keep the threshold high enough for real typos, and watch 429s on
+  `/v1/auth/login` per account; a per-IP-only lockout would not stop distributed guessing.
 - Argon2 runs on the libuv threadpool. Keep `UV_THREADPOOL_SIZE` **at or below the CPUs available to
   the container** (the image default is 4). Measured on the monolith capped at 2 CPUs: 4 threads gave
   p95 36 ms, 16 threads gave p95 304 ms and worse, because the extra busy threads get the whole cgroup
@@ -164,12 +170,13 @@ After that, admins manage roles through `PATCH /v1/users/:id/roles` or `updateUs
 [`libs/redis`](../libs/redis/README.md) `AppThrottlerModule` (global `AppThrottlerGuard`, Redis
 storage, one `EVALSHA` per request):
 
-| Setting                           | Default      | Applies to                                                                                                                       |
-| --------------------------------- | ------------ | -------------------------------------------------------------------------------------------------------------------------------- |
-| `THROTTLE_LIMIT` / `_TTL_MS`      | 100 per 60 s | every HTTP and GraphQL request                                                                                                   |
-| `THROTTLE_AUTH_LIMIT` / `_TTL_MS` | 10 per 60 s  | `@AuthThrottle()` routes: register, login (REST and GraphQL)                                                                     |
-| `WsThrottlerGuard`                | per handler  | Socket.IO `notifications.markRead`: 30 per 10 s                                                                                  |
-| exempt                            | —            | path prefixes `/health`, `/metrics`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/swagger`; the Stripe webhook (`@SkipThrottle`) |
+| Setting                                         | Default                                  | Applies to                                                                                                                        |
+| ----------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `THROTTLE_IP_LIMIT` / `_TTL_MS`                 | 600 per 60 s                             | every HTTP and GraphQL request, counted before authentication                                                                     |
+| `THROTTLE_LIMIT` / `_TTL_MS`                    | 300 per 60 s                             | per user (or IP when anonymous), all routes                                                                                       |
+| `IDENTITY_CREDENTIALS_*` / `IDENTITY_LOCKOUT_*` | 10 per 60 s; 10 failed attempts → 15 min | `identity.credentials` routes: register, login (REST and GraphQL)                                                                 |
+| `WsThrottlerGuard`                              | per handler                              | Socket.IO `notifications.markRead`: 30 per 10 s                                                                                   |
+| exempt                                          | —                                        | path prefixes `/health`, `/metrics`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/swagger`; the Stripe webhook (`@SkipRateLimit`) |
 
 - Tracker: `user:<id>` for authenticated requests (fair per account, NAT-proof), otherwise
   `ip:<address>` with IPv6 collapsed to its /64. `AuthModule` is imported **before**
@@ -266,7 +273,7 @@ are sanitised before they reach the client.
   `INVALID_WEBHOOK_SIGNATURE` before any I/O.
 - Exactly-once processing: `INSERT INTO billing.stripe_events … ON CONFLICT DO NOTHING` inside the same
   transaction as the payment update; duplicates answer `duplicate: true`.
-- `@Public()` and `@SkipThrottle()` (Stripe retries any non-2xx).
+- `@Public()` and `@SkipRateLimit()` (it skips every throttler; Stripe retries any non-2xx).
 - Checkout redirect URLs come only from `STRIPE_SUCCESS_URL`/`STRIPE_CANCEL_URL`, never from the
   REST client (no open redirect). Client `Idempotency-Key`s are mapped per user, never forwarded to
   Stripe verbatim.

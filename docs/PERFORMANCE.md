@@ -447,7 +447,7 @@ Sizing rules:
 - Memory: each in-flight hash holds `ARGON2_MEMORY_COST × ARGON2_PARALLELISM` KiB (~19 MiB), so
   `UV_THREADPOOL_SIZE` concurrent hashes need that much off-heap memory.
 - Login bursts: scale the identity path out (replicas) rather than up (threads). Auth routes are
-  also rate-limited per client (`THROTTLE_AUTH_LIMIT` per minute per IP), which caps the hashing an
+  also rate-limited per client (`IDENTITY_CREDENTIALS_LIMIT` per minute per email and IP), which caps the hashing an
   attacker can trigger.
 - Lowering the Argon2 cost to buy throughput weakens password storage; see
   [SECURITY.md](SECURITY.md) before touching it.
@@ -522,7 +522,7 @@ Compose maps the host variables on the left into the container; the rest are pas
 | `K6_OUT`                | `K6_OUT`            | `experimental-prometheus-rw` | Results → Prometheus remote write. Set `K6_OUT=` (empty) when the `observability` profile is not running |
 | `K6_UID`, `K6_GID`      | container user      | `1000`                       | Linux: `K6_UID=$(id -u) K6_GID=$(id -g)` so the report directory is writable                             |
 | —                       | `MAX_DROPPED_RATIO` | `0.01`                       | Allowed dropped iterations, as a share of the planned ones                                               |
-| —                       | `THROTTLE_LIMIT`    | `100`                        | The app's per-user `THROTTLE_LIMIT`; sizes the browse pool so no user exceeds it                         |
+| —                       | `THROTTLE_LIMIT`    | `300`                        | The app's per-user `THROTTLE_LIMIT`; sizes the browse pool so no user exceeds it                         |
 | —                       | `RUN_ID`            | current time, base 36        | Makes emails unique per run; reusing one against the same database fails the run (409)                   |
 | —                       | `PASSWORD`          | `k6-load-test-Passw0rd`      | Password of the generated users                                                                          |
 
@@ -570,18 +570,18 @@ Open `http://localhost:3300` (NestJS overview, see
 `$__rate_interval`, and Prometheus scrapes every 15 s, so give a run at least a minute before
 reading it.
 
-| Symptom on the dashboard                                                               | Likely cause                                                                     | Knob / action                                                                                                         |
-| -------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
-| p95 rises together with **Event-loop lag p99**, even on cached routes                  | The event loop is blocked or the cgroup is CPU-throttled                         | Check `UV_THREADPOOL_SIZE` ≤ CPU limit; look for sync work (big JSON, sync crypto); more replicas or CPUs             |
-| **CPU (cores)** flat at the container limit (e.g. 2.0 for the monolith)                | CPU-bound, usually Argon2 on register/login                                      | Scale out; compare with the `journey` vs `browse` mix; don't lower the Argon2 cost to "fix" a benchmark               |
-| **Top 10 slowest routes** dominated by `POST /v1/auth/register` / `login`, others fast | Expected: one Argon2id hash each                                                 | Judge the cached-read threshold (`GET /v1/users/<id>`) separately                                                     |
-| A read route slow while CPU and event-loop lag are low                                 | Waiting on I/O: Postgres pool, gRPC upstream, Redis                              | `pg_stat_statements`; `DATABASE_POOL_MAX`; gRPC deadline/breaker errors in the logs; Redis exporter panels            |
-| **Error ratio** 5xx > 0 with 503s                                                      | Circuit breaker open, upload capacity, readiness drain, or a dependency down     | Logs at `error`/`warn` filtered by `service`; `GET /health/ready`                                                     |
-| **Error ratio** 4xx high, mostly 429                                                   | The throttler: the load model hits `THROTTLE_LIMIT` / `THROTTLE_AUTH_LIMIT`      | Check k6's `X-Forwarded-For` / `TRUST_PROXY`, or the browse pool size (`THROTTLE_LIMIT` for the script)               |
-| **GC time per second** climbing with **heap used** near `--max-old-space-size`         | Heap too small for the load, or a leak                                           | Raise `NODE_OPTIONS=--max-old-space-size` with the container limit; compare RSS with heap (off-heap: uploads, Argon2) |
-| **Active handles** growing without bound                                               | Leaked sockets or timers                                                         | Heap snapshot / `--inspect` on a host run                                                                             |
-| k6 **dropped iterations** > 0 while server latency looks fine                          | The k6 container ran out of VUs or CPU                                           | Lower `K6_RATE`, or give k6 more CPU                                                                                  |
-| Server p95 (HTTP row) much lower than k6 p95                                           | Time spent before the app: network, Docker proxy, queueing in the accept backlog | Compare with `GET /health/live` latency; check Docker Desktop resources                                               |
+| Symptom on the dashboard                                                               | Likely cause                                                                       | Knob / action                                                                                                         |
+| -------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| p95 rises together with **Event-loop lag p99**, even on cached routes                  | The event loop is blocked or the cgroup is CPU-throttled                           | Check `UV_THREADPOOL_SIZE` ≤ CPU limit; look for sync work (big JSON, sync crypto); more replicas or CPUs             |
+| **CPU (cores)** flat at the container limit (e.g. 2.0 for the monolith)                | CPU-bound, usually Argon2 on register/login                                        | Scale out; compare with the `journey` vs `browse` mix; don't lower the Argon2 cost to "fix" a benchmark               |
+| **Top 10 slowest routes** dominated by `POST /v1/auth/register` / `login`, others fast | Expected: one Argon2id hash each                                                   | Judge the cached-read threshold (`GET /v1/users/<id>`) separately                                                     |
+| A read route slow while CPU and event-loop lag are low                                 | Waiting on I/O: Postgres pool, gRPC upstream, Redis                                | `pg_stat_statements`; `DATABASE_POOL_MAX`; gRPC deadline/breaker errors in the logs; Redis exporter panels            |
+| **Error ratio** 5xx > 0 with 503s                                                      | Circuit breaker open, upload capacity, readiness drain, or a dependency down       | Logs at `error`/`warn` filtered by `service`; `GET /health/ready`                                                     |
+| **Error ratio** 4xx high, mostly 429                                                   | The throttler: the load model hits `THROTTLE_LIMIT` / `IDENTITY_CREDENTIALS_LIMIT` | Check k6's `X-Forwarded-For` / `TRUST_PROXY`, or the browse pool size (`THROTTLE_LIMIT` for the script)               |
+| **GC time per second** climbing with **heap used** near `--max-old-space-size`         | Heap too small for the load, or a leak                                             | Raise `NODE_OPTIONS=--max-old-space-size` with the container limit; compare RSS with heap (off-heap: uploads, Argon2) |
+| **Active handles** growing without bound                                               | Leaked sockets or timers                                                           | Heap snapshot / `--inspect` on a host run                                                                             |
+| k6 **dropped iterations** > 0 while server latency looks fine                          | The k6 container ran out of VUs or CPU                                             | Lower `K6_RATE`, or give k6 more CPU                                                                                  |
+| Server p95 (HTTP row) much lower than k6 p95                                           | Time spent before the app: network, Docker proxy, queueing in the accept backlog   | Compare with `GET /health/live` latency; check Docker Desktop resources                                               |
 
 The server histogram measures from Fastify receiving the request to the response being sent, so
 the k6 p95 is always somewhat higher. Use both: the k6 row is what clients see, the HTTP row is

@@ -28,7 +28,9 @@ flowchart TB
 Every app has an e2e spec: `monolith`, `gateway`, `identity-service`, `notifications-service`,
 `billing-service`. Every app also has `test/env-example.spec.ts`, which checks that the app's
 `.env.example` passes every config namespace the app loads and pins its ports (the services do not
-reuse each other's ports).
+reuse each other's ports). The rate-limit proof lives in `apps/{monolith,gateway}/test/rate-limit.e2e-spec.ts`
+(real `AppModule`, in-memory Redis with the throttle script emulated), next to the guard-order smoke spec
+`libs/bootstrap/src/rate-limit-order.spec.ts`.
 
 The rule for e2e tests: **fake only at the network edge**. Swap the client or port that would open a
 socket, and keep repositories, CQRS handlers, enhancers and serialization real. For example,
