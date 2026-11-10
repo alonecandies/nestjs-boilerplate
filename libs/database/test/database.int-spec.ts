@@ -199,10 +199,10 @@ describe('@platform/database against PostgreSQL 18', () => {
     it('applies the platform set, then the given sets, and exits 0; a second run is a no-op', async () => {
       const url = await createDatabase('cli');
       const first = await cli(url);
-      expect(first.stdout).toContain('Done: 4 applied, 4 total (platform, widgets, gadgets)');
+      expect(first.stdout).toContain('Done: 5 applied, 5 total (platform, widgets, gadgets)');
       const second = await cli(url);
-      expect(second.stdout).toContain('Done: 0 applied, 4 total (platform, widgets, gadgets)');
-      expect(await migrationRows(url, platformMigrations)).toBe(1);
+      expect(second.stdout).toContain('Done: 0 applied, 5 total (platform, widgets, gadgets)');
+      expect(await migrationRows(url, platformMigrations)).toBe(2);
       expect(await migrationRows(url, widgetsMigrations)).toBe(2);
     });
 

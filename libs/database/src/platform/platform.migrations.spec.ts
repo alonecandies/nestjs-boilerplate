@@ -55,4 +55,24 @@ describe('platformMigrations', () => {
     expect(sql).toContain('CREATE SCHEMA IF NOT EXISTS "app";');
     expect(sql).toContain('CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;');
   });
+
+  it('0001_citus_helpers creates the Citus helpers and the tenant anchor, each a no-op without Citus', () => {
+    const sql = readFileSync(join(platformMigrations.folder, '0001_citus_helpers.sql'), 'utf8');
+    for (const signature of [
+      'app.citus_enabled() RETURNS boolean',
+      'app.citus_table_kind(t regclass) RETURNS text',
+      'app.distribute_by_tenant(t regclass) RETURNS void',
+      'app.distribute_by_user(t regclass) RETURNS void',
+      'app.make_reference(t regclass) RETURNS void',
+    ]) {
+      expect(sql).toContain(`CREATE OR REPLACE FUNCTION ${signature}`);
+    }
+    expect(sql).toContain(
+      'CREATE TABLE IF NOT EXISTS app.tenant_colocation (tenant_id uuid PRIMARY KEY);',
+    );
+    // citus_table_kind and the three procedures return before touching a Citus object.
+    expect(sql.match(/IF NOT app\.citus_enabled\(\) THEN/g)).toHaveLength(4);
+    // An explicit colocation everywhere: 'default' joins whatever group Citus picks (P-14).
+    expect(sql).not.toContain("colocate_with => 'default'");
+  });
 });

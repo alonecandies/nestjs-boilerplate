@@ -206,6 +206,48 @@ describe('runMigrations', () => {
     expect(sql.end).toHaveBeenCalledWith({ timeout: 5 });
   });
 
+  it('on Citus, pins local execution and sequential shard modification before the first set', async () => {
+    const orders = migrationSet('orders', ['0000_init']);
+    const events: string[] = [];
+    vi.mocked(migrate).mockImplementation(async () => {
+      events.push('migrate');
+    });
+    const sql = createFakeSql((query) => {
+      if (query.includes('pg_try_advisory_lock')) return [{ locked: true }];
+      if (query.includes("extname = 'citus'")) return [{ citus: true }];
+      if (query.startsWith('set citus.')) events.push(query);
+      return [];
+    });
+    vi.mocked(postgres).mockReturnValue(sql as never);
+    const logger = silentLogger();
+
+    await runMigrations(URL, { migrations: [orders], logger });
+
+    expect(events).toEqual([
+      'set citus.enable_local_execution to on',
+      "set citus.multi_shard_modify_mode to 'sequential'",
+      'migrate',
+    ]);
+    expect(logger.log).toHaveBeenCalledWith(
+      'Citus detected: migration session uses local execution and sequential shard modification',
+    );
+  });
+
+  it('without the citus extension, sends no Citus setting', async () => {
+    const orders = migrationSet('orders', ['0000_init']);
+    const sql = createFakeSql((query) => {
+      if (query.includes('pg_try_advisory_lock')) return [{ locked: true }];
+      if (query.includes("extname = 'citus'")) return [{ citus: false }];
+      return [];
+    });
+    vi.mocked(postgres).mockReturnValue(sql as never);
+
+    await runMigrations(URL, { migrations: [orders], logger: silentLogger() });
+
+    expect(sql.queries.some((query) => query.includes("extname = 'citus'"))).toBe(true);
+    expect(sql.queries.some((query) => query.startsWith('set citus.'))).toBe(false);
+  });
+
   it('stops at a failing set: names it, never attempts the next one, still unlocks and closes', async () => {
     const inventory = migrationSet('inventory', ['0000_init']);
     const pricing = migrationSet('pricing', ['0000_init']);

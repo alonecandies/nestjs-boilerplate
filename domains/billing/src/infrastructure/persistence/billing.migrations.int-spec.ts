@@ -91,6 +91,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing migrations on Postg
       where table_schema in ('app', 'billing', 'identity')`);
     expect(tables.map((row) => row.name).toSorted()).toEqual([
       'app.__drizzle_migrations',
+      'app.tenant_colocation',
       'billing.__drizzle_migrations',
       'billing.payments',
       'billing.stripe_events',

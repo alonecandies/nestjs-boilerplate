@@ -21,3 +21,15 @@ export const gadgetsMigrations: DatabaseMigrationSet = {
   migrationsSchema: 'gadgets',
   migrationsTable: MIGRATIONS_TABLE,
 };
+
+/**
+ * A hand-written, Citus-shaped history: an enum, a reference table and two colocated tenant tables,
+ * then their foreign keys, in one file (one transaction). It calls the platform set's helpers, so it
+ * runs after platformMigrations; on plain Postgres the helpers are no-ops and the tables stay local.
+ */
+export const catalogMigrations: DatabaseMigrationSet = {
+  name: 'catalog',
+  folder: join(import.meta.dirname, 'citus', 'migrations'),
+  migrationsSchema: 'catalog',
+  migrationsTable: MIGRATIONS_TABLE,
+};
