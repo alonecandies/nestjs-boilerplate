@@ -280,13 +280,13 @@ export interface SignedWebhook {
 export function signedEvent(
   type: string,
   object: object,
-  options: { id?: string; created?: number; secret?: string } = {},
+  options: { id?: string; created?: number; secret?: string; apiVersion?: string } = {},
 ): SignedWebhook {
   const event = {
     id: options.id ?? `evt_${generateId().replaceAll('-', '')}`,
     object: 'event',
     type,
-    api_version: Stripe.API_VERSION,
+    api_version: options.apiVersion ?? Stripe.API_VERSION,
     created: options.created ?? Math.floor(Date.now() / 1_000),
     livemode: false,
     pending_webhooks: 1,

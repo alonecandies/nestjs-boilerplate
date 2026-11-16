@@ -4,7 +4,7 @@ import { generateId } from '@platform/common';
 import { FakeKafkaProducer } from '@platform/transport/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PaymentSucceededEvent } from '../../domain/events/payment-succeeded.event.js';
-import { PaymentSucceededRelay } from './payment-succeeded.relay.js';
+import { PaymentSucceededRelay, toPaymentSucceededPayload } from './payment-succeeded.relay.js';
 
 describe('PaymentSucceededRelay', () => {
   let kafka: FakeKafkaProducer;
@@ -56,5 +56,29 @@ describe('PaymentSucceededRelay', () => {
       expect.stringContaining(`payment ${event.paymentId}`),
       expect.any(String),
     );
+  });
+});
+
+describe('toPaymentSucceededPayload', () => {
+  const build = (paymentIntentId: string | null) =>
+    new PaymentSucceededEvent(
+      generateId(),
+      generateId(),
+      generateId(),
+      'cs_test_1',
+      2_500,
+      'usd',
+      new Date('2026-09-04T08:30:00.000Z'),
+      paymentIntentId,
+    );
+
+  it('includes stripePaymentIntentId when the event carries it', () => {
+    expect(toPaymentSucceededPayload(build('pi_1'))).toMatchObject({
+      stripePaymentIntentId: 'pi_1',
+    });
+  });
+
+  it('omits the key when the event has none', () => {
+    expect(toPaymentSucceededPayload(build(null))).not.toHaveProperty('stripePaymentIntentId');
   });
 });

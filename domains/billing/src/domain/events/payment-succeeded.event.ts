@@ -19,5 +19,7 @@ export class PaymentSucceededEvent implements IEvent {
     /** ISO 4217, lowercase (Stripe convention). */
     readonly currency: string,
     readonly paidAt: Date,
+    /** Stripe PaymentIntent (`pi_…`), when Stripe reported one. */
+    readonly stripePaymentIntentId: string | null = null,
   ) {}
 }

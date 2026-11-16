@@ -53,6 +53,7 @@ x-env-base: &env-base
   KAFKA_ALLOW_INSECURE: "true"
   CASSANDRA_ALLOW_INSECURE: "true"
   CASSANDRA_ALLOW_SIMPLE_STRATEGY: "true"
+  IMMUDB_ALLOW_INSECURE: "true"
   SMTP_ALLOW_INSECURE: "true"
   STORAGE_ALLOW_INSECURE: "true"
   STRIPE_ALLOW_LOCAL_REDIRECTS: "true"
@@ -111,6 +112,18 @@ x-env-storage: &env-storage
 x-env-stripe: &env-stripe
   STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_compose_local_not_for_production}
   STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_compose_local_not_for_production}
+
+# immudb (ledger store). Wired into monolith and billing-service by ledger wave 2 (L-12). The app user
+# is provisioned by the apps' migrate step with SELECT + INSERT only; the admin password is immudb's
+# built-in default unless IMMUDB_ADMIN_PASSWORD was set before the volume was first created.
+# ChangeSQLPrivileges (re-applied by every migration run) ends the app user's open sessions; the
+# pools recover, but L-12 should migrate from one process (the migrate step) rather than every app.
+x-env-immudb: &env-immudb
+  IMMUDB_ADDRESS: immudb:3322
+  IMMUDB_DATABASE: ${IMMUDB_DATABASE:-app}
+  IMMUDB_PASSWORD: "${IMMUDB_PASSWORD:-Compose-local-App1!}"
+  IMMUDB_ADMIN_PASSWORD: ${IMMUDB_ADMIN_PASSWORD:-immudb}
+  IMMUDB_RUN_MIGRATIONS: "true"
 
 x-env-edge: &env-edge
   DOCS_ENABLED: ${DOCKER_DOCS_ENABLED:-true} # /docs (Scalar) + /openapi.json even in production mode
@@ -311,6 +324,42 @@ services:
       resources:
         limits: { cpus: "0.5", memory: 256M }
 
+  immudb:
+    image: codenotary/immudb:1.11.2
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    environment:
+      # gRPC only: the pg-wire server takes passwords in cleartext and ignores GRANT/REVOKE.
+      IMMUDB_PGSQL_SERVER: "false"
+      # Superuser password on first start of an empty volume (immudb's default is immudb).
+      IMMUDB_ADMIN_PASSWORD: ${IMMUDB_ADMIN_PASSWORD:-immudb}
+    ports: ["127.0.0.1:${IMMUDB_HOST_PORT:-3322}:3322"]
+    volumes: [immudb-data:/var/lib/immudb]
+    # Distroless image (no shell, no exec healthcheck): immudb-init polls GET :9497/readyz instead.
+    stop_grace_period: 30s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  immudb-init:
+    image: redis:8.10.2-alpine3.23 # any already-pulled image with busybox wget
+    restart: "no"
+    logging: *logging
+    networks: [backend]
+    depends_on:
+      immudb: { condition: service_started }
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        for i in $$(seq 1 60); do
+        wget -q -O /dev/null http://immudb:9497/readyz && echo 'immudb ready' && exit 0;
+        sleep 1; done; echo 'immudb not ready after 60s' >&2; exit 1
+    deploy:
+      resources:
+        limits: { cpus: "0.1", memory: 32M }
+
   kafka:
     image: apache/kafka:4.3.1 # JVM image: the native image has no CLI tools (healthcheck, init)
     hostname: kafka
@@ -486,7 +535,7 @@ services:
   # Sentinel: `docker compose up --wait` only treats a one-shot container that EXITED as success
   # when an enabled service depends on it with service_completed_successfully. Without an app
   # profile nothing would, and `--wait` would fail on "kafka-init exited (0)". This idle process
-  # also means "infra bootstrapped": it starts only after all three init jobs succeeded.
+  # also means "infra bootstrapped": it starts only after all four init jobs succeeded.
   infra-ready:
     image: redis:8.10.2-alpine3.23 # any already-pulled image with busybox `sleep`
     restart: unless-stopped
@@ -498,6 +547,7 @@ services:
       kafka-init: { condition: service_completed_successfully }
       cassandra-init: { condition: service_completed_successfully }
       storage-init: { condition: service_completed_successfully }
+      immudb-init: { condition: service_completed_successfully }
     deploy:
       resources:
         limits: { cpus: "0.05", memory: 16M }
@@ -909,6 +959,7 @@ volumes:
   pg-data:
   redis-data:
   cassandra-data:
+  immudb-data:
   kafka-data:
   mailpit-data:
   rustfs-data:

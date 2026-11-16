@@ -29,6 +29,8 @@ describe('HandleStripeWebhookHandler', () => {
   let handler: HandleStripeWebhookHandler;
   let payment: Payment;
   let paidWithoutCurrency: { inc: Mock<() => void> };
+  let amountMismatch: { inc: Mock<() => void> };
+  let apiVersionMismatch: { inc: Mock<() => void> };
 
   const deliver = (webhook: SignedWebhook) =>
     handler.execute(new HandleStripeWebhookCommand(webhook.payload, webhook.signature));
@@ -69,12 +71,16 @@ describe('HandleStripeWebhookHandler', () => {
       }),
     };
     paidWithoutCurrency = { inc: vi.fn<() => void>() };
+    amountMismatch = { inc: vi.fn<() => void>() };
+    apiVersionMismatch = { inc: vi.fn<() => void>() };
     handler = new HandleStripeWebhookHandler(
       createTestStripeService(),
       new InMemoryStripeEventsRepository(store),
       payments,
       new EventPublisher(eventBus as never),
       paidWithoutCurrency,
+      amountMismatch,
+      apiVersionMismatch,
     );
     payment = makePayment({
       stripeCheckoutSessionId: 'cs_paid_1',
@@ -283,5 +289,38 @@ describe('HandleStripeWebhookHandler', () => {
     await expect(deliver(webhook)).resolves.toMatchObject({ duplicate: false });
     expect(store.payment(payment.id)?.status).toBe(PaymentStatus.Succeeded);
     expect(published).toHaveLength(1);
+  });
+
+  it('counts and records a charge that differs from the quote (S-5)', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    await deliver(completed({ amount_total: 2_000 }, 'evt_amount_mismatch_1'));
+    expect(store.payment(payment.id)).toMatchObject({
+      status: PaymentStatus.Succeeded,
+      amountTotal: 2_000,
+    });
+    expect(amountMismatch.inc).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('quoted 2500 usd'));
+    warn.mockRestore();
+  });
+
+  it('does not count a charge equal to the quote', async () => {
+    await deliver(completed({}, 'evt_amount_equal_1'));
+    expect(amountMismatch.inc).not.toHaveBeenCalled();
+  });
+
+  it('counts events signed for another API version but still applies them (S-10)', async () => {
+    await deliver(
+      signedEvent(
+        'checkout.session.expired',
+        makeCheckoutSession({
+          id: 'cs_paid_1',
+          client_reference_id: payment.id,
+          status: 'expired',
+        }),
+        { id: 'evt_old_api_1', apiVersion: '2020-08-27' },
+      ),
+    );
+    expect(apiVersionMismatch.inc).toHaveBeenCalledTimes(1);
+    expect(store.payment(payment.id)).toMatchObject({ status: PaymentStatus.Expired });
   });
 });

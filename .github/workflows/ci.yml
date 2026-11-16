@@ -80,8 +80,8 @@ jobs:
           bun run proto:lint
           bun run db:generate
           bun run db:check
-          git diff --exit-code -- domains/*/contracts/src/generated libs/transport/test/fixtures/src/generated 'domains/*/src/infrastructure/persistence/migrations/*'
-          test -z "$(git status --porcelain -- domains/*/contracts/src/generated libs/transport/test/fixtures/src/generated 'domains/*/src/infrastructure/persistence/migrations/*')"
+          git diff --exit-code -- domains/*/contracts/src/generated libs/transport/test/fixtures/src/generated libs/immudb/src/generated libs/immudb/proto 'domains/*/src/infrastructure/persistence/migrations/*'
+          test -z "$(git status --porcelain -- domains/*/contracts/src/generated libs/transport/test/fixtures/src/generated libs/immudb/src/generated libs/immudb/proto 'domains/*/src/infrastructure/persistence/migrations/*')"
 
       # Releases (lerna --conventional-commits) derive versions and changelogs from commit messages;
       # husky's commit-msg hook is skipped by --no-verify and web edits, so validate the PR range.

@@ -149,6 +149,11 @@ export class Payment extends AggregateRoot {
     return this.state.quantity;
   }
 
+  /** Minor units; the quote until the payment completes, then what Stripe charged. */
+  get amountTotal(): number | null {
+    return this.state.amountTotal;
+  }
+
   get status(): PaymentStatus {
     return this.state.status;
   }
@@ -209,9 +214,10 @@ export class Payment extends AggregateRoot {
   /**
    * `pending` → `succeeded`, applying `PaymentSucceededEvent` (also from `failed`: an async
    * payment that was retried). Returns `false` for replays (already succeeded), expired payments,
-   * sessions that do not belong to this payment, and when no currency is known (neither Stripe's
-   * completion nor the stored pricing has one): `PaymentSucceededEvent` must carry a valid
-   * ISO 4217 code, so the payment is left untouched rather than announced with a blank currency.
+   * sessions that do not belong to this payment, and when no currency or no amount is known (neither
+   * Stripe's completion nor the stored pricing has one): `PaymentSucceededEvent` must carry a valid
+   * ISO 4217 code and a real amount, so the payment is left untouched rather than announced with a
+   * blank currency or a zero amount.
    */
   complete(completion: CheckoutCompletion, now: Date): boolean {
     const current = this.state.stripeCheckoutSessionId;
@@ -220,8 +226,9 @@ export class Payment extends AggregateRoot {
 
     const currency =
       normalizeCurrency(completion.currency) ?? normalizeCurrency(this.state.currency);
-    if (currency === null) return false;
-    const amountTotal = completion.amountTotal ?? this.state.amountTotal ?? 0;
+    // What Stripe charged wins over the quote; with neither, refuse rather than record 0.
+    const amountTotal = completion.amountTotal ?? this.state.amountTotal;
+    if (currency === null || amountTotal === null) return false;
     this.state = {
       ...this.state,
       status: PaymentStatus.Succeeded,
@@ -241,6 +248,7 @@ export class Payment extends AggregateRoot {
         amountTotal,
         currency,
         completion.paidAt,
+        this.state.stripePaymentIntentId,
       ),
     );
     return true;

@@ -58,6 +58,16 @@ export class CheckoutUrlMissingException extends ExternalServiceException {
   }
 }
 
+/** 409 — a replayed checkout request found its session `complete` or `expired`: never create a second one. */
+export class CheckoutSessionClosedException extends DomainConflictException {
+  constructor(paymentId: string, sessionStatus: string) {
+    super(`The Checkout Session of payment ${paymentId} is ${sessionStatus}`, {
+      code: BillingErrorCode.CHECKOUT_SESSION_CLOSED,
+      details: { paymentId, sessionStatus },
+    });
+  }
+}
+
 /** 422 — aggregate invariant violated (e.g. a non-positive quantity reaching the domain). */
 export class InvalidPaymentException extends DomainValidationException {
   constructor(issues: readonly ValidationIssue[]) {

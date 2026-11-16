@@ -206,6 +206,49 @@ describe('Payment aggregate', () => {
       expect(payment.getUncommittedEvents()).toHaveLength(1);
     });
 
+    it('refuses a paid completion when no amount is known (no ?? 0, S-5)', () => {
+      const payment = makePayment({
+        stripeCheckoutSessionId: 'cs_1',
+        amountTotal: null,
+        currency: 'usd',
+      });
+      const done = payment.complete(
+        {
+          sessionId: 'cs_1',
+          paymentIntentId: 'pi_1',
+          amountTotal: null,
+          currency: 'usd',
+          paidAt: new Date(),
+        },
+        new Date(),
+      );
+      expect(done).toBe(false);
+      expect(payment.status).toBe(PaymentStatus.Pending);
+      expect(payment.getUncommittedEvents()).toEqual([]);
+    });
+
+    it('records what Stripe charged and carries the PaymentIntent id on the event (S-5, S-8)', () => {
+      const payment = makePayment({
+        stripeCheckoutSessionId: 'cs_1',
+        amountTotal: 2_500,
+        currency: 'usd',
+      });
+      payment.complete(
+        {
+          sessionId: 'cs_1',
+          paymentIntentId: 'pi_9',
+          amountTotal: 2_000,
+          currency: 'usd',
+          paidAt: new Date(),
+        },
+        new Date(),
+      );
+      expect(payment.amountTotal).toBe(2_000);
+      expect(payment.getUncommittedEvents()).toEqual([
+        expect.objectContaining({ amountTotal: 2_000, stripePaymentIntentId: 'pi_9' }),
+      ]);
+    });
+
     it('binds the session when the creation response was never saved (crash after Stripe)', () => {
       const payment = makePayment();
       expect(

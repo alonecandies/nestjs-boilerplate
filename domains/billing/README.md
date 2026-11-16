@@ -107,7 +107,7 @@ and `KafkaProducerModule`. It imports its own Stripe adapter (`StripeModule.forR
 | `GET /payments`           | Bearer; `?all=true` needs `billing:read-all`    | zod query `{ all?: 'true'\|'false'\|'1'\|'0', limit?: 1..100 = 20, cursor?: string }`                                                             | `200 { items: Payment[], nextCursor: string \| null }` newest first, keyset-paginated (`amountTotal` = minor units, ISO dates) |
 
 Errors are RFC 9457 `application/problem+json`: 400 (validation, `errors[]`), 401, 403, 409
-(`IDEMPOTENCY_KEY_REUSED`, `PAYMENT_CONCURRENTLY_MODIFIED`), 422 (`INVALID_WEBHOOK_SIGNATURE`,
+(`IDEMPOTENCY_KEY_REUSED`, `PAYMENT_CONCURRENTLY_MODIFIED`, `CHECKOUT_IN_PROGRESS`, `CHECKOUT_SESSION_CLOSED`), 422 (`INVALID_WEBHOOK_SIGNATURE`,
 `INVALID_WEBHOOK_PAYLOAD`, `INVALID_CURSOR`), 502 (`PAYMENT_PROVIDER_ERROR`, `CHECKOUT_URL_MISSING`). Responses are enforced by
 `StandardSchemaSerializerInterceptor` (unknown fields are stripped) and documented in OpenAPI from the same zod schemas. Every billing code, the Stripe adapter's included, is a `BillingErrorCode` value.
 
@@ -195,13 +195,14 @@ handlers never see `Stripe.errors.*`. (It used to be the `@platform/payments` pa
 | `toPaymentDomainException(error): DomainException \| undefined` | function          | Stripe SDK error → `DomainException` (`undefined` for non-Stripe values).                                    |
 | `STRIPE_WEBHOOK_TOLERANCE_SEC` (300), `STRIPE_APP_INFO`         | constants         | Replay window for webhook timestamps; app info sent to Stripe.                                               |
 
-| Stripe error                | DomainException                                               | `BillingErrorCode`              |
-| --------------------------- | ------------------------------------------------------------- | ------------------------------- |
-| `StripeIdempotencyError`    | `DomainConflictException` (409)                               | `IDEMPOTENCY_KEY_REUSED`        |
-| `StripeCardError`           | `BusinessRuleViolationException` (422, `details.declineCode`) | `PAYMENT_DECLINED`              |
-| `StripeInvalidRequestError` | `DomainValidationException` (422, issue at `param`)           | `PAYMENT_REQUEST_INVALID`       |
-| `StripeRateLimitError`      | `ServiceUnavailableException` (503)                           | `PAYMENT_PROVIDER_RATE_LIMITED` |
-| anything else from Stripe   | `ExternalServiceException` (502, generic message)             | `PAYMENT_PROVIDER_ERROR`        |
+| Stripe error                                               | DomainException                                               | `BillingErrorCode`              |
+| ---------------------------------------------------------- | ------------------------------------------------------------- | ------------------------------- |
+| `StripeIdempotencyError`                                   | `DomainConflictException` (409)                               | `IDEMPOTENCY_KEY_REUSED`        |
+| `StripeAPIError` with `code: idempotency_key_in_use` (409) | `DomainConflictException` (409, `details.retryAfterSec`)      | `CHECKOUT_IN_PROGRESS`          |
+| `StripeCardError`                                          | `BusinessRuleViolationException` (422, `details.declineCode`) | `PAYMENT_DECLINED`              |
+| `StripeInvalidRequestError`                                | `DomainValidationException` (422, issue at `param`)           | `PAYMENT_REQUEST_INVALID`       |
+| `StripeRateLimitError`                                     | `ServiceUnavailableException` (503)                           | `PAYMENT_PROVIDER_RATE_LIMITED` |
+| anything else from Stripe                                  | `ExternalServiceException` (502, generic message)             | `PAYMENT_PROVIDER_ERROR`        |
 
 `details.stripeRequestId` is attached when Stripe returned one. Webhook verification fails with 422
 `INVALID_WEBHOOK_SIGNATURE` (missing, forged or stale signature) or `INVALID_WEBHOOK_PAYLOAD` (signed but not JSON).
@@ -215,8 +216,9 @@ by `CreateCheckoutSessionHandler`, not by the adapter.
   `rawBody: true` and pass `req.rawBody`; re-serialised JSON never verifies (a test covers this).
 - The webhook route must be `@Public()` and skip throttling. Reply 2xx fast and make processing idempotent by
   `event.id`: Stripe retries, and may deliver duplicates or deliver out of order.
-- `apiVersion` is left out on purpose: the SDK types it as its pinned literal, so the API version moves with SDK
-  upgrades. Pin the webhook endpoint in the dashboard to the same version.
+- `apiVersion` is pinned to `STRIPE_API_VERSION` (the SDK's literal, so an SDK upgrade that moves it fails `tsc`).
+  Pin the webhook endpoint in the dashboard to the same version; events signed for another version are still
+  applied but counted in `billing_stripe_api_version_mismatch_total`.
 - `constructWebhookEvent` is synchronous on purpose (node:crypto HMAC is the cheapest path).
 - The SDK keeps connections alive and retries 409/429/5xx/network errors, adding idempotency keys to retried
   POSTs; the handlers still pass their own business key (`checkout-<paymentId>`).
@@ -247,6 +249,9 @@ Unknown payments and impossible transitions are acknowledged with a warning (a r
 A paid session with no usable currency (none in the event, none stored) is one of them: the payment stays
 `pending` and is NOT announced (`billing.payment-succeeded.v1` requires an ISO 4217 code), the handler warns and
 increments `billing_checkout_paid_without_currency_total` — alert on it and reconcile in the Stripe dashboard.
+A paid session with no known amount is refused the same way. When Stripe charged an amount or currency other than
+the stored quote (promotion codes, tax), the charged values are recorded and `billing_checkout_amount_mismatch_total`
+increments.
 Infrastructure errors propagate, the transaction rolls back (forgetting the event id) and Stripe's retry is
 processed again. Old receipts are purged: see **Retention** below.
 
@@ -321,6 +326,18 @@ applies the platform set and billing's own history (schema `billing`), then chec
 tables and enum in `billing` and none of identity's, nothing in `public`, one bookkeeping row per journal
 entry in each set's own table, every index of the former migrations, the DB defaults (uuidv7 id, `pending`
 status) and a second boot that applies nothing.
+
+## Ledger (immudb)
+
+An append-only double-entry ledger in immudb (`@platform/immudb`), not Postgres. One entry per Stripe
+balance transaction (`sourceKey = stripe:txn:<id>`, entry id = uuidv5 of it), postings in minor units per
+currency, fees from the balance transaction (`application/ledger/posting-rules.ts`). `LedgerPort.post` is
+idempotent (`posted` / `replayed` / `conflict`) and validates the double-entry rules before any I/O. The
+immudb user may only `SELECT` and `INSERT`; every tenant read carries `tenant_id = @tenant` (immudb has no
+RLS). Tables: `infrastructure/ledger/migrations/001_ledger.sql` (`billingLedgerMigrations`). Not wired
+into the apps yet: the posting consumer, reconciliation and `LEDGER_ENABLED` arrive with the outbox
+(ledger waves 1-2). Tests: `InMemoryLedger` (`@domain/billing/testing`) and the adapter run the same
+contract spec (`src/testing/ledger.contract.test.ts`).
 
 ## Gotchas
 

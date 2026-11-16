@@ -1,0 +1,19 @@
+# ts-proto with full binary codecs and a grpc-js client. Output committed; never edit src/generated.
+version: v2
+clean: true
+plugins:
+  - local: protoc-gen-ts_proto
+    out: src/generated
+    strategy: all
+    opt:
+      - outputServices=grpc-js
+      - importSuffix=.js
+      - esModuleInterop=true
+      - env=node
+      - forceLong=string
+      - stringEnums=true
+      - useOptionals=messages
+      - fileSuffix=.pb
+      - oneof=unions-value
+inputs:
+  - directory: proto

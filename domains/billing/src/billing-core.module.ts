@@ -8,7 +8,11 @@ import { ListPaymentsHandler } from './application/queries/list-payments/list-pa
 import { PaymentSucceededRelay } from './application/relays/payment-succeeded.relay.js';
 import { PaymentsRepository } from './application/repositories/payments.repository.js';
 import { StripeEventsRepository } from './application/repositories/stripe-events.repository.js';
-import { PAID_WITHOUT_CURRENCY_METRIC } from './billing.constants.js';
+import {
+  AMOUNT_MISMATCH_METRIC,
+  API_VERSION_MISMATCH_METRIC,
+  PAID_WITHOUT_CURRENCY_METRIC,
+} from './billing.constants.js';
 import { DrizzlePaymentsRepository } from './infrastructure/persistence/drizzle-payments.repository.js';
 import { DrizzleStripeEventsRepository } from './infrastructure/persistence/drizzle-stripe-events.repository.js';
 import { PurgeStripeEventsCron } from './infrastructure/scheduling/purge-stripe-events.cron.js';
@@ -40,6 +44,14 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
     makeCounterProvider({
       name: PAID_WITHOUT_CURRENCY_METRIC,
       help: 'Paid Stripe Checkout Sessions left pending because no currency was known (no receipt sent)',
+    }),
+    makeCounterProvider({
+      name: AMOUNT_MISMATCH_METRIC,
+      help: 'Paid Stripe Checkout Sessions whose charged amount or currency differs from the quote',
+    }),
+    makeCounterProvider({
+      name: API_VERSION_MISMATCH_METRIC,
+      help: 'Stripe webhook events whose api_version differs from the pinned STRIPE_API_VERSION',
     }),
     { provide: PaymentsRepository, useClass: DrizzlePaymentsRepository },
     { provide: StripeEventsRepository, useClass: DrizzleStripeEventsRepository },

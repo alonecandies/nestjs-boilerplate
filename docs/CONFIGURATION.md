@@ -93,32 +93,33 @@ app listens on 3000 and every gRPC server on `0.0.0.0:50051` (see
 Derived from each `apps/*/src/app.module.ts` and the `ConfigModule.forFeature()` calls of the libs
 it imports. A process ignores (and does not validate) variables of namespaces it does not load.
 
-| Namespace                 | monolith |      gateway      | identity-service |  notifications-service  | billing-service | Loaded by                                                          |
-| ------------------------- | :------: | :---------------: | :--------------: | :---------------------: | :-------------: | ------------------------------------------------------------------ |
-| `app`                     |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `AppConfigModule.forRoot()` (global)                               |
-| `observability`           |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `AppConfigModule.forRoot()` (global)                               |
-| `database`                |    ✓     |                   |        ✓         |                         |        ✓        | `DatabaseModule`                                                   |
-| `cassandra`               |    ✓     |                   |                  |            ✓            |                 | `CassandraModule`                                                  |
-| `redis`                   |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `RedisModule`, `AppQueueModule`, `AppCacheModule`, GraphQL pub/sub |
-| `kafka`                   |    ✓     | ✓ (consumer only) |   ✓ (producer)   | ✓ (producer + consumer) |  ✓ (producer)   | `KafkaProducerModule`, `connectKafkaConsumer`                      |
-| `grpc`                    |          |    ✓ (clients)    |    ✓ (server)    |       ✓ (server)        |   ✓ (server)    | `GrpcClientsModule.register()`, app module + `connectGrpcServer`   |
-| `identityGrpcClient`      |          |         ✓         |                  |                         |                 | `IdentityApiModule.forRemote()`                                    |
-| `notificationsGrpcClient` |          |         ✓         |                  |                         |                 | `NotificationsApiModule.forRemote()`                               |
-| `billingGrpcClient`       |          |         ✓         |                  |                         |                 | `BillingApiModule.forRemote()`                                     |
-| `auth`                    |    ✓     |         ✓         |        ✓         |                         |                 | `AuthModule`, `IdentityCoreModule` (`TokenIssuer`)                 |
-| `password`                |    ✓     |                   |        ✓         |                         |                 | `IdentityCoreModule` (`@domain/identity`)                          |
-| `refreshToken`            |    ✓     |                   |        ✓         |                         |                 | `IdentityCoreModule` (`@domain/identity`)                          |
-| `throttle`                |    ✓     |         ✓         |                  |                         |                 | `AppThrottlerModule`                                               |
-| `identityRateLimit`       |    ✓     |         ✓         |                  |                         |                 | `IdentityApiModule` (`RateLimitModule.forFeature`)                 |
-| `notificationsRateLimit`  |    ✓     |         ✓         |                  |                         |                 | `NotificationsApiModule` (`RateLimitModule.forFeature`)            |
-| `cache`                   |    ✓     |         ✓         |                  |                         |                 | `AppCacheModule`                                                   |
-| `graphql`                 |    ✓     |         ✓         |                  |                         |                 | `AppGraphqlModule`                                                 |
-| `mail`                    |    ✓     |                   |                  |            ✓            |                 | `AppMailerModule`                                                  |
-| `storage`                 |    ✓     |         ✓         |                  |                         |                 | `StorageModule`                                                    |
-| `files`                   |    ✓     |         ✓         |                  |                         |                 | `FilesModule`                                                      |
-| `stripe`                  |    ✓     |                   |                  |                         |        ✓        | `StripeModule`, `BillingCoreModule`                                |
-| `monolith`                |    ✓     |                   |                  |                         |                 | `apps/monolith/src/main.ts`                                        |
-| `gateway`                 |          |         ✓         |                  |                         |                 | `apps/gateway/src/main.ts`                                         |
+| Namespace                 | monolith |      gateway      | identity-service |  notifications-service  | billing-service | Loaded by                                                                                            |
+| ------------------------- | :------: | :---------------: | :--------------: | :---------------------: | :-------------: | ---------------------------------------------------------------------------------------------------- |
+| `app`                     |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `AppConfigModule.forRoot()` (global)                                                                 |
+| `observability`           |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `AppConfigModule.forRoot()` (global)                                                                 |
+| `database`                |    ✓     |                   |        ✓         |                         |        ✓        | `DatabaseModule`                                                                                     |
+| `cassandra`               |    ✓     |                   |                  |            ✓            |                 | `CassandraModule`                                                                                    |
+| `immudb`                  |          |                   |                  |                         |                 | `ImmudbModule` (`@platform/immudb`); wired into monolith and billing-service in ledger wave 2 (L-12) |
+| `redis`                   |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `RedisModule`, `AppQueueModule`, `AppCacheModule`, GraphQL pub/sub                                   |
+| `kafka`                   |    ✓     | ✓ (consumer only) |   ✓ (producer)   | ✓ (producer + consumer) |  ✓ (producer)   | `KafkaProducerModule`, `connectKafkaConsumer`                                                        |
+| `grpc`                    |          |    ✓ (clients)    |    ✓ (server)    |       ✓ (server)        |   ✓ (server)    | `GrpcClientsModule.register()`, app module + `connectGrpcServer`                                     |
+| `identityGrpcClient`      |          |         ✓         |                  |                         |                 | `IdentityApiModule.forRemote()`                                                                      |
+| `notificationsGrpcClient` |          |         ✓         |                  |                         |                 | `NotificationsApiModule.forRemote()`                                                                 |
+| `billingGrpcClient`       |          |         ✓         |                  |                         |                 | `BillingApiModule.forRemote()`                                                                       |
+| `auth`                    |    ✓     |         ✓         |        ✓         |                         |                 | `AuthModule`, `IdentityCoreModule` (`TokenIssuer`)                                                   |
+| `password`                |    ✓     |                   |        ✓         |                         |                 | `IdentityCoreModule` (`@domain/identity`)                                                            |
+| `refreshToken`            |    ✓     |                   |        ✓         |                         |                 | `IdentityCoreModule` (`@domain/identity`)                                                            |
+| `throttle`                |    ✓     |         ✓         |                  |                         |                 | `AppThrottlerModule`                                                                                 |
+| `identityRateLimit`       |    ✓     |         ✓         |                  |                         |                 | `IdentityApiModule` (`RateLimitModule.forFeature`)                                                   |
+| `notificationsRateLimit`  |    ✓     |         ✓         |                  |                         |                 | `NotificationsApiModule` (`RateLimitModule.forFeature`)                                              |
+| `cache`                   |    ✓     |         ✓         |                  |                         |                 | `AppCacheModule`                                                                                     |
+| `graphql`                 |    ✓     |         ✓         |                  |                         |                 | `AppGraphqlModule`                                                                                   |
+| `mail`                    |    ✓     |                   |                  |            ✓            |                 | `AppMailerModule`                                                                                    |
+| `storage`                 |    ✓     |         ✓         |                  |                         |                 | `StorageModule`                                                                                      |
+| `files`                   |    ✓     |         ✓         |                  |                         |                 | `FilesModule`                                                                                        |
+| `stripe`                  |    ✓     |                   |                  |                         |        ✓        | `StripeModule`, `BillingCoreModule`                                                                  |
+| `monolith`                |    ✓     |                   |                  |                         |                 | `apps/monolith/src/main.ts`                                                                          |
+| `gateway`                 |          |         ✓         |                  |                         |                 | `apps/gateway/src/main.ts`                                                                           |
 
 The gateway holds no Postgres, Cassandra, SMTP or Stripe settings: it reaches those contexts over
 gRPC (`IdentityApiModule.forRemote()` etc.). The Stripe webhook is received by the gateway and
@@ -214,6 +215,27 @@ notifications-service
 | `CASSANDRA_RUN_MIGRATIONS`          | `true`        | Create the keyspace and apply the versioned CQL migrations at boot (LWT-locked).                                                                                                                                                      |
 | `CASSANDRA_ALLOW_INSECURE`          | `false`       | Production refuses plaintext (`CASSANDRA_SSL=false`) unless this is `true`: a mesh that encrypts node traffic, or the local compose stack.                                                                                            |
 | `CASSANDRA_ALLOW_SIMPLE_STRATEGY`   | `false`       | Local single node only. Production refuses to create the keyspace with SimpleStrategy (no `CASSANDRA_REPLICATION_DATACENTERS`) unless this is `true`; skipped when `CASSANDRA_RUN_MIGRATIONS=false`. The local compose stack sets it. |
+
+### `immudb` — append-only verifiable SQL store
+
+[`immudb.config.ts`](../libs/config/src/namespaces/immudb.config.ts) · not loaded by any app yet
+(ledger wave 2 wires monolith and billing-service)
+
+| Variable                           | Default               | Description                                                                                       |
+| ---------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------- |
+| `IMMUDB_ADDRESS`                   | `localhost:3322`      | gRPC `host:port` (pg-wire is never used).                                                         |
+| `IMMUDB_DATABASE`                  | `app`                 | Database (lowercase identifier); created by provisioning.                                         |
+| `IMMUDB_USERNAME`                  | `app_writer`          | Application user, provisioned with SQL `SELECT` and `INSERT` only.                                |
+| `IMMUDB_PASSWORD`                  | `Compose-local-App1!` | 8-32 chars with an uppercase letter, a digit and a symbol (immudb policy). Refused in production. |
+| `IMMUDB_ADMIN_USERNAME`            | `immudb`              | Superuser for provisioning and migrations.                                                        |
+| `IMMUDB_ADMIN_PASSWORD`            | —                     | Unset = this process never provisions or migrates. `immudb` is refused in production.             |
+| `IMMUDB_SESSION_POOL_SIZE`         | `4`                   | Sessions per process (server cap: 100 in total).                                                  |
+| `IMMUDB_TIMEOUT_MS`                | `5000`                | Deadline of every gRPC call.                                                                      |
+| `IMMUDB_KEEPALIVE_INTERVAL_MS`     | `60000`               | Session keepalive; must stay below the server's 3-minute inactivity limit (max 170000).           |
+| `IMMUDB_TLS`                       | `false`               | gRPC over TLS with the system roots.                                                              |
+| `IMMUDB_ALLOW_INSECURE`            | `false`               | Production opt-out of `IMMUDB_TLS`.                                                               |
+| `IMMUDB_SERVER_SIGNING_PUBLIC_KEY` | —                     | base64 PEM public key; when set, state signatures are verified.                                   |
+| `IMMUDB_RUN_MIGRATIONS`            | `false`               | Provision and migrate at boot.                                                                    |
 
 ### `redis` — cache, locks, throttling, BullMQ, socket.io adapter, GraphQL pub/sub
 
@@ -512,6 +534,7 @@ Cross-field rules live in each schema's `superRefine`; a violation stops the pro
 | Redis must be a lowercase `rediss://` URL with a password or ACL user and no `tls=` parameter (as ioredis reads it) unless `REDIS_ALLOW_INSECURE=true`                                                                       | `REDIS_URL`                                                                                                                         | `redis.config.ts`                           |
 | Kafka must use TLS (SASL never in plaintext) unless `KAFKA_ALLOW_INSECURE=true`                                                                                                                                              | `KAFKA_SSL`                                                                                                                         | `kafka.config.ts`                           |
 | Cassandra must use TLS unless `CASSANDRA_ALLOW_INSECURE=true`, and a process that creates the keyspace must use NetworkTopologyStrategy unless `CASSANDRA_ALLOW_SIMPLE_STRATEGY=true`                                        | `CASSANDRA_SSL`, `CASSANDRA_REPLICATION_DATACENTERS`                                                                                | `cassandra.config.ts`                       |
+| immudb must use TLS unless `IMMUDB_ALLOW_INSECURE=true`; the local app password and immudb's default admin password are publicly known values                                                                                | `IMMUDB_TLS`, `IMMUDB_PASSWORD`, `IMMUDB_ADMIN_PASSWORD`                                                                            | `immudb.config.ts`                          |
 | SMTP: not the Mailpit default (loopback on port 1025), no reserved sender domain, STARTTLS mandatory to a remote host, unless `SMTP_ALLOW_INSECURE=true`                                                                     | `SMTP_HOST`, `MAIL_FROM`, `SMTP_REQUIRE_TLS`                                                                                        | `mail.config.ts`                            |
 | Storage endpoints must be https and non-loopback (S3), or https Google endpoints (GCS, including `GCS_PUBLIC_ENDPOINT`), unless `STORAGE_ALLOW_INSECURE=true`                                                                | `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `GCS_API_ENDPOINT`, `GCS_PUBLIC_ENDPOINT`                                                      | `storage.config.ts`                         |
 | Stripe Checkout redirect URLs must be https and non-loopback unless `STRIPE_ALLOW_LOCAL_REDIRECTS=true`                                                                                                                      | `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`                                                                                           | `stripe.config.ts`                          |

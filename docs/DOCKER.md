@@ -30,32 +30,34 @@ Budget: the stack is sized for **4 CPUs / 4 GB** of Docker Desktop memory (see [
 
 ## Stack map
 
-| Service                 | Image                                             | Host port (127.0.0.1)        | Profile             | Purpose                                                           |
-| ----------------------- | ------------------------------------------------- | ---------------------------- | ------------------- | ----------------------------------------------------------------- |
-| `postgres`              | `citusdata/citus:14.2.0` (PostgreSQL 18.4, amd64) | 5432                         | —                   | identity + billing (Drizzle), Citus single node, db/user/pw `app` |
-| `redis`                 | `redis:8.10.2-alpine3.23`                         | 6379                         | —                   | cache, locks, throttling, BullMQ, pub/sub                         |
-| `cassandra`             | `cassandra:5.0.9`                                 | 9042                         | —                   | notifications inbox (DC `datacenter1`)                            |
-| `cassandra-init`        | `cassandra:5.0.9` (cqlsh)                         | —                            | —                   | one-shot: keyspace `$CASSANDRA_KEYSPACE`                          |
-| `kafka`                 | `apache/kafka:4.3.1` (KRaft, single node)         | 9094 (EXTERNAL listener)     | —                   | integration events                                                |
-| `kafka-init`            | `apache/kafka:4.3.1` (CLI)                        | —                            | —                   | one-shot: topics from `docker/kafka/topics.txt`                   |
-| `mailpit`               | `axllent/mailpit:v1.31.3`                         | 1025 (SMTP), 8025 (UI)       | —                   | catches every mail                                                |
-| `rustfs`                | `rustfs/rustfs:1.0.0`                             | 9000 (S3), 9001 (console)    | —                   | S3-compatible storage, `rustfsadmin`/`rustfsadmin`                |
-| `gcs`                   | `fsouza/fake-gcs-server:1.56.1`                   | 4443                         | —                   | GCS emulator (`STORAGE_DRIVER=gcs`)                               |
-| `storage-init`          | `rustfs/rustfs:1.0.0` (curl)                      | —                            | —                   | one-shot: bucket `uploads` in both                                |
-| `infra-ready`           | `redis:8.10.2-alpine3.23` (idle `sleep`)          | —                            | —                   | sentinel for `up --wait` (see below)                              |
-| `monolith`              | built (`APP=monolith`)                            | 3000                         | monolith            | everything in one process, alias `api`                            |
-| `gateway`               | built (`APP=gateway`)                             | 3000                         | microservices       | edge (REST/GraphQL/WS), alias `api`                               |
-| `identity-service`      | built (`APP=identity-service`)                    | 50051 (gRPC)                 | microservices       | AuthService + UsersService                                        |
-| `notifications-service` | built (`APP=notifications-service`)               | 50052 (gRPC)                 | microservices       | NotificationsService + Kafka consumers + mail                     |
-| `billing-service`       | built (`APP=billing-service`)                     | 50053 (gRPC)                 | microservices       | BillingService (Stripe)                                           |
-| `prometheus`            | `prom/prometheus:v3.15.0`                         | 9090                         | observability       | scrapes every app's `/metrics` + exporters                        |
-| `grafana`               | `grafana/grafana:13.2.2`                          | **3300**                     | observability, logs | dashboards (admin/admin, anonymous viewer)                        |
-| `jaeger`                | `jaegertracing/jaeger:2.20.0`                     | 16686 (UI), 4317/4318 (OTLP) | observability       | traces (in-memory)                                                |
-| `postgres-exporter`     | `prometheuscommunity/postgres-exporter:v0.20.1`   | —                            | observability       | Postgres metrics                                                  |
-| `redis-exporter`        | `oliver006/redis_exporter:v1.92.1-alpine`         | —                            | observability       | Redis metrics                                                     |
-| `loki` / `alloy`        | `grafana/loki:3.7.8` / `grafana/alloy:v1.20.0`    | 3100 / 12345                 | logs                | container logs → Loki (Grafana → Explore)                         |
-| `kafka-ui`              | `kafbat/kafka-ui:v1.5.0`                          | 8080                         | tools               | topics, consumer groups, lag                                      |
-| `k6`                    | `grafana/k6:2.3.0`                                | 5665 (live dashboard)        | loadtest            | load test, HTML report in `docker/k6/reports/`                    |
+| Service                 | Image                                             | Host port (127.0.0.1)        | Profile             | Purpose                                                                          |
+| ----------------------- | ------------------------------------------------- | ---------------------------- | ------------------- | -------------------------------------------------------------------------------- |
+| `postgres`              | `citusdata/citus:14.2.0` (PostgreSQL 18.4, amd64) | 5432                         | —                   | identity + billing (Drizzle), Citus single node, db/user/pw `app`                |
+| `redis`                 | `redis:8.10.2-alpine3.23`                         | 6379                         | —                   | cache, locks, throttling, BullMQ, pub/sub                                        |
+| `cassandra`             | `cassandra:5.0.9`                                 | 9042                         | —                   | notifications inbox (DC `datacenter1`)                                           |
+| `cassandra-init`        | `cassandra:5.0.9` (cqlsh)                         | —                            | —                   | one-shot: keyspace `$CASSANDRA_KEYSPACE`                                         |
+| `immudb`                | `codenotary/immudb:1.11.2` (distroless)           | 3322 (gRPC)                  | —                   | ledger store (append-only, verifiable SQL); pg-wire off; metrics 9497 in-network |
+| `immudb-init`           | `redis:8.10.2-alpine3.23` (busybox)               | —                            | —                   | one-shot: waits for immudb `/readyz`                                             |
+| `kafka`                 | `apache/kafka:4.3.1` (KRaft, single node)         | 9094 (EXTERNAL listener)     | —                   | integration events                                                               |
+| `kafka-init`            | `apache/kafka:4.3.1` (CLI)                        | —                            | —                   | one-shot: topics from `docker/kafka/topics.txt`                                  |
+| `mailpit`               | `axllent/mailpit:v1.31.3`                         | 1025 (SMTP), 8025 (UI)       | —                   | catches every mail                                                               |
+| `rustfs`                | `rustfs/rustfs:1.0.0`                             | 9000 (S3), 9001 (console)    | —                   | S3-compatible storage, `rustfsadmin`/`rustfsadmin`                               |
+| `gcs`                   | `fsouza/fake-gcs-server:1.56.1`                   | 4443                         | —                   | GCS emulator (`STORAGE_DRIVER=gcs`)                                              |
+| `storage-init`          | `rustfs/rustfs:1.0.0` (curl)                      | —                            | —                   | one-shot: bucket `uploads` in both                                               |
+| `infra-ready`           | `redis:8.10.2-alpine3.23` (idle `sleep`)          | —                            | —                   | sentinel for `up --wait` (see below)                                             |
+| `monolith`              | built (`APP=monolith`)                            | 3000                         | monolith            | everything in one process, alias `api`                                           |
+| `gateway`               | built (`APP=gateway`)                             | 3000                         | microservices       | edge (REST/GraphQL/WS), alias `api`                                              |
+| `identity-service`      | built (`APP=identity-service`)                    | 50051 (gRPC)                 | microservices       | AuthService + UsersService                                                       |
+| `notifications-service` | built (`APP=notifications-service`)               | 50052 (gRPC)                 | microservices       | NotificationsService + Kafka consumers + mail                                    |
+| `billing-service`       | built (`APP=billing-service`)                     | 50053 (gRPC)                 | microservices       | BillingService (Stripe)                                                          |
+| `prometheus`            | `prom/prometheus:v3.15.0`                         | 9090                         | observability       | scrapes every app's `/metrics` + exporters                                       |
+| `grafana`               | `grafana/grafana:13.2.2`                          | **3300**                     | observability, logs | dashboards (admin/admin, anonymous viewer)                                       |
+| `jaeger`                | `jaegertracing/jaeger:2.20.0`                     | 16686 (UI), 4317/4318 (OTLP) | observability       | traces (in-memory)                                                               |
+| `postgres-exporter`     | `prometheuscommunity/postgres-exporter:v0.20.1`   | —                            | observability       | Postgres metrics                                                                 |
+| `redis-exporter`        | `oliver006/redis_exporter:v1.92.1-alpine`         | —                            | observability       | Redis metrics                                                                    |
+| `loki` / `alloy`        | `grafana/loki:3.7.8` / `grafana/alloy:v1.20.0`    | 3100 / 12345                 | logs                | container logs → Loki (Grafana → Explore)                                        |
+| `kafka-ui`              | `kafbat/kafka-ui:v1.5.0`                          | 8080                         | tools               | topics, consumer groups, lag                                                     |
+| `k6`                    | `grafana/k6:2.3.0`                                | 5665 (live dashboard)        | loadtest            | load test, HTML report in `docker/k6/reports/`                                   |
 
 Every host port binds **127.0.0.1 only** and can be moved with a `*_HOST_PORT` variable (shell or root `.env`; also
 listed at the bottom of [`.env.example`](../.env.example)), e.g. `POSTGRES_HOST_PORT=15432 docker compose up -d` when
@@ -82,7 +84,7 @@ every app container listens on HTTP **3000** (API or health + metrics) and gRPC 
 
 ## Topologies & profiles
 
-- **No profile**: infrastructure only. The init jobs (`kafka-init`, `cassandra-init`, `storage-init`) run once per
+- **No profile**: infrastructure only. The init jobs (`kafka-init`, `cassandra-init`, `storage-init`, `immudb-init`) run once per
   `up`, idempotently, and exit 0.
 - **`monolith`** or **`microservices`**: never both. Each topology's edge app carries the network alias **`api`** and
   publishes host port 3000, so k6, docs and your browser don't care which one runs.
@@ -207,6 +209,16 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   answers browser CORS for the origins in `RUSTFS_CORS_ALLOWED_ORIGINS` (`DOCKER_S3_CORS_ORIGINS`, default
   `http://localhost:3000,http://localhost:5173` like the apps' `CORS_ORIGINS`), so a frontend can `PUT` to a
   presigned URL directly; `scripts/docker/check-infra.sh` asserts the preflight.
+- **immudb**: `immudb-init` only waits for readiness (the image has no shell, so no healthcheck; metrics and
+  `/readyz` are on port 9497, in-network only; pg-wire is off). The
+  database, the SELECT/INSERT-only application user and the tables come from the apps' migrate step
+  (`@platform/immudb` `runImmudbMigrations`, gRPC `ChangeSQLPrivileges`), wired in ledger wave 2. Data is
+  append-only and cannot be erased: back up the `immudb-data` volume (stop the service, snapshot the
+  volume) and never configure truncation for the ledger database. Licence: the server image is
+  BUSL-1.1 (`LICENSE` at v1.11.2: "Licensed Work: immudb Version 1.9DOM.2 or later"); its Additional
+  Use Grant allows production use unless the product offers immudb to third parties, hosted or
+  embedded, in competition with Codenotary's paid versions (internal use is not competitive). The
+  repo's verification port comes from Apache-2.0 `v1.9DOM.1` (`libs/immudb/THIRD_PARTY_NOTICES.md`).
 - **Postgres**: `docker/postgres/init/01-extensions.sql` (first start only) adds `pg_stat_statements` and `pg_trgm`.
   Tables come from the Drizzle migration sets, applied at boot under one advisory lock
   (`DATABASE_RUN_MIGRATIONS=true`): `@platform/database`'s platform set (schema `app`, `pg_trgm`), then the app's own
@@ -217,7 +229,7 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   replace only the default `CMD`. Release flow: [RELEASING.md](RELEASING.md).
 - **`infra-ready`**: `docker compose up --wait` only accepts a one-shot container that _exited_ when an enabled service
   depends on it with `service_completed_successfully`. Without an app profile nothing would, and `--wait` would fail
-  with `kafka-init exited (0)`. This idle 1 MB container depends on the three init jobs, and so means "infra bootstrapped".
+  with `kafka-init exited (0)`. This idle 1 MB container depends on the four init jobs, and so means "infra bootstrapped".
 
 `scripts/docker/check-infra.sh` boots the infra in an isolated project (`bp-infra-check`), asserts all of the above
 (topics + partitions + auto-create off, keyspace + DC, Citus + extensions + `uuidv7()`, password-less Redis from another

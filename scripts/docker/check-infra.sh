@@ -39,7 +39,7 @@ compose up -d --wait --wait-timeout "${WAIT_TIMEOUT}"
 log "stack healthy after $(($(date +%s) - start))s"
 
 log "one-shot init containers exited 0"
-for svc in kafka-init cassandra-init storage-init; do
+for svc in kafka-init cassandra-init storage-init immudb-init; do
   cid="$(compose ps -a -q "${svc}")"
   [ -n "${cid}" ] || fail "${svc} never ran"
   state="$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "${cid}")"
@@ -112,7 +112,7 @@ log "host ports (127.0.0.1) accept TCP connections"
 for pair in "postgres:${POSTGRES_HOST_PORT:-5432}" "redis:${REDIS_HOST_PORT:-6379}" \
   "cassandra:${CASSANDRA_HOST_PORT:-9042}" "kafka:${KAFKA_HOST_PORT:-9094}" \
   "mailpit-smtp:${MAILPIT_SMTP_HOST_PORT:-1025}" "mailpit-ui:${MAILPIT_UI_HOST_PORT:-8025}" \
-  "s3:${S3_HOST_PORT:-9000}" "gcs:${GCS_HOST_PORT:-4443}"; do
+  "s3:${S3_HOST_PORT:-9000}" "gcs:${GCS_HOST_PORT:-4443}" "immudb:${IMMUDB_HOST_PORT:-3322}"; do
   (exec 3<>"/dev/tcp/127.0.0.1/${pair#*:}") 2>/dev/null || fail "${pair%%:*} not reachable on 127.0.0.1:${pair#*:}"
   echo "  ${pair%%:*} 127.0.0.1:${pair#*:} open"
 done

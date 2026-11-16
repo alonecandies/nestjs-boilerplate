@@ -69,3 +69,9 @@ scrape_configs:
     static_configs:
       - targets: ["redis-exporter:9121"]
         labels: { service: redis }
+
+  # immudb's Prometheus endpoint (in-network only; infra service, always on).
+  - job_name: immudb
+    static_configs:
+      - targets: ["immudb:9497"]
+        labels: { service: immudb }

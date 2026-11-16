@@ -20,7 +20,11 @@ import { BillingPort } from '../src/application/ports/billing.port.js';
 import { PaymentSucceededRelay } from '../src/application/relays/payment-succeeded.relay.js';
 import { PaymentsRepository } from '../src/application/repositories/payments.repository.js';
 import { StripeEventsRepository } from '../src/application/repositories/stripe-events.repository.js';
-import { PAID_WITHOUT_CURRENCY_METRIC } from '../src/billing.constants.js';
+import {
+  AMOUNT_MISMATCH_METRIC,
+  API_VERSION_MISMATCH_METRIC,
+  PAID_WITHOUT_CURRENCY_METRIC,
+} from '../src/billing.constants.js';
 import { BILLING_RBAC } from '../src/billing.permissions.js';
 import { PaymentStatus } from '../src/domain/payment-status.enum.js';
 import { BillingLocalAdapter } from '../src/infrastructure/adapters/local/billing-local.adapter.js';
@@ -81,6 +85,8 @@ describe('Stripe webhook flow (raw body → signature → exactly-once → Kafka
         HandleStripeWebhookHandler,
         PaymentSucceededRelay,
         makeCounterProvider({ name: PAID_WITHOUT_CURRENCY_METRIC, help: 'test' }),
+        makeCounterProvider({ name: AMOUNT_MISMATCH_METRIC, help: 'test' }),
+        makeCounterProvider({ name: API_VERSION_MISMATCH_METRIC, help: 'test' }),
         { provide: StripeService, useValue: createTestStripeService() },
         { provide: PaymentsRepository, useValue: new InMemoryPaymentsRepository(store) },
         { provide: StripeEventsRepository, useValue: new InMemoryStripeEventsRepository(store) },

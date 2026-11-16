@@ -20,6 +20,7 @@ describe('CONFIG_NAMESPACES', () => {
       'observability',
       'database',
       'cassandra',
+      'immudb',
       'redis',
       'kafka',
       'grpc',
