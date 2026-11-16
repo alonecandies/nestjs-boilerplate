@@ -17,6 +17,7 @@
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
+    "@platform/auth": "workspace:*",
     "@platform/bootstrap": "workspace:*",
     "@platform/cassandra": "workspace:*",
     "@platform/common": "workspace:*",

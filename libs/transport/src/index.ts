@@ -22,6 +22,7 @@ export * from './grpc/grpc-health.js';
 export * from './grpc/grpc-metadata.js';
 export * from './grpc/grpc-metrics.interceptor.js';
 export * from './grpc/grpc-metrics.js';
+export * from './grpc/grpc-principal.js';
 export * from './grpc/grpc-server.options.js';
 export * from './grpc/grpc-status.mapping.js';
 export * from './grpc/grpc-tls.js';

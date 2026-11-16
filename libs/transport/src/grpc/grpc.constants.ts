@@ -12,6 +12,10 @@ export const GRPC_METADATA_KEYS = {
   USER_ID: 'x-user-id',
   /** Comma-separated roles of the caller. */
   USER_ROLES: 'x-user-roles',
+  /** The caller's active tenant (UUID), asserted by the gateway with USER_ID. Mesh-only trust. */
+  TENANT_ID: 'x-tenant-id',
+  /** `true` only for a staff switch-in principal; absent otherwise. */
+  STAFF: 'x-staff',
   /** Trailer: stable `DomainException.code` (e.g. `EMAIL_TAKEN`) that survives the hop. */
   ERROR_CODE: 'x-error-code',
   /** Trailer: JSON of the client-safe `DomainException.details` (issues, entity/id). */

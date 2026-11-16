@@ -47,10 +47,11 @@ function envelope(payload: unknown, overrides: Record<string, unknown> = {}) {
 }
 
 describe('defineEventContract', () => {
-  it('returns a frozen { topic, payload } pair', () => {
+  it('returns a frozen { topic, payload, tenantScoped } triple', () => {
     expect(ORDER_PLACED_EVENT).toEqual({
       topic: 'orders.order-placed.v1',
       payload: orderPlacedPayload,
+      tenantScoped: false,
     });
     expect(Object.isFrozen(ORDER_PLACED_EVENT)).toBe(true);
   });

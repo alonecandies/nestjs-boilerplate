@@ -733,7 +733,7 @@ rejecting them.
 Each topic has a dead-letter topic, `<topic>.dlq`. The record key is always `userId`, so all events of one user land on
 the same partition and are consumed in order.
 
-Consumer groups (`KAFKA_GROUP_ID` overrides each default):
+Consumer groups (`KAFKA_GROUP_ID` overrides the monolith's default and the gateway's `gateway-push`; notifications-service pins `notifications-service` in code, `NOTIFICATIONS_CONSUMER_GROUP`, so it ignores `KAFKA_GROUP_ID`):
 
 | Process                 | Default group           | Consumes                                                      |
 | ----------------------- | ----------------------- | ------------------------------------------------------------- |
@@ -774,9 +774,11 @@ The envelope fields:
 - `version`: the topic's major version.
 - `source`: the producer's `SERVICE_NAME`.
 - `correlationId`: optional. It comes from the originating request.
+- `tenantId`: optional UUID of the tenant the event belongs to; the nil UUID marks a platform event. Tenant-scoped contracts must set it when produced; consumers accept envelopes without it.
+- `actorId`: optional UUID of the user who caused the event, or `null` for system work. `tenantId` and `actorId` default to the producer's CLS principal, and consumers run as `{ userId: actorId, tenantId }` when both are usable.
 
 Record headers: `x-event-type` and `x-correlation-id`. Dead-lettered records also get `x-original-topic`,
-`x-error-message`, `x-error-type` and `x-failed-at`.
+`x-original-partition`, `x-original-offset`, `x-error-message`, `x-error-type` and `x-failed-at`.
 
 ### Delivery, retry and dead letters
 

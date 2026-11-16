@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 import { type EventEnvelope, type EventEnvelopeSchema, eventEnvelopeSchema } from './envelope.js';
 import { EVENT_TOPIC_PATTERN, isEventTopic, topicVersion } from './topics.js';
 
@@ -12,6 +12,14 @@ export interface EventContract<TPayload> {
   readonly topic: string;
   /** Payload schema: a tolerant reader (unknown keys are stripped, not rejected). */
   readonly payload: z.ZodType<TPayload>;
+  /** Producers must set the envelope tenantId. */
+  readonly tenantScoped: boolean;
+}
+
+/** Options of {@link defineEventContract}. */
+export interface EventContractOptions {
+  /** The envelope must carry `tenantId` when produced (consumers still accept legacy envelopes). */
+  tenantScoped?: boolean;
 }
 
 /** Payload type carried by an event contract. */
@@ -27,11 +35,12 @@ export type EventEnvelopeOf<C> = EventEnvelope<EventPayloadOf<C>>;
 export function defineEventContract<TPayload>(
   topic: string,
   payload: z.ZodType<TPayload>,
+  options: EventContractOptions = {},
 ): EventContract<TPayload> {
   if (!EVENT_TOPIC_PATTERN.test(topic)) {
     throw new Error(`Kafka topic "${topic}" must be named <context>.<event-name>.v<major>`);
   }
-  return Object.freeze({ topic, payload });
+  return Object.freeze({ topic, payload, tenantScoped: options.tenantScoped ?? false });
 }
 
 /** Narrows an unknown value (scripts scan whole module namespaces) to an event contract. */
@@ -87,6 +96,8 @@ export interface EventEnvelopeMeta {
   correlationId?: string | undefined;
   /** Defaults to now. */
   occurredAt?: Date | undefined;
+  tenantId?: string | undefined;
+  actorId?: string | null | undefined;
 }
 
 /**
@@ -98,6 +109,16 @@ export function createEventEnvelope<TPayload>(
   payload: NoInfer<TPayload>,
   meta: EventEnvelopeMeta,
 ): EventEnvelope<TPayload> {
+  if (contract.tenantScoped && meta.tenantId === undefined) {
+    throw new z.ZodError([
+      {
+        code: 'custom',
+        path: ['tenantId'],
+        message: `${contract.topic} is tenant-scoped: tenantId is required`,
+        input: undefined,
+      },
+    ]);
+  }
   return parseEventEnvelope(contract, {
     id: meta.id,
     type: contract.topic,
@@ -105,6 +126,8 @@ export function createEventEnvelope<TPayload>(
     occurredAt: (meta.occurredAt ?? new Date()).toISOString(),
     source: meta.source,
     ...(meta.correlationId === undefined ? {} : { correlationId: meta.correlationId }),
+    ...(meta.tenantId === undefined ? {} : { tenantId: meta.tenantId }),
+    ...(meta.actorId === undefined ? {} : { actorId: meta.actorId }),
     payload,
   });
 }

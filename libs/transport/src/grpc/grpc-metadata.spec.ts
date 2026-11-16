@@ -28,6 +28,7 @@ describe('caller metadata', () => {
       correlationId,
       userId: 'user-1',
       roles: ['admin', 'user'],
+      staff: false,
     });
   });
 
@@ -38,7 +39,7 @@ describe('caller metadata', () => {
       roles: [],
     });
     expect(metadata.toJSON()).toEqual({});
-    expect(readIncomingMetadata(metadata)).toEqual({ roles: [] });
+    expect(readIncomingMetadata(metadata)).toEqual({ roles: [], staff: false });
     expect(createOutgoingMetadata().toJSON()).toEqual({});
   });
 
@@ -47,8 +48,8 @@ describe('caller metadata', () => {
     metadata.set(GRPC_METADATA_KEYS.REQUEST_ID, 'x'.repeat(500));
     metadata.set(GRPC_METADATA_KEYS.CORRELATION_ID, 'a;b');
     metadata.set(GRPC_METADATA_KEYS.USER_ID, '  user-2  ');
-    expect(readIncomingMetadata(metadata)).toEqual({ userId: 'user-2', roles: [] });
-    expect(readIncomingMetadata(undefined)).toEqual({ roles: [] });
+    expect(readIncomingMetadata(metadata)).toEqual({ userId: 'user-2', roles: [], staff: false });
+    expect(readIncomingMetadata(undefined)).toEqual({ roles: [], staff: false });
   });
 
   it('recognises Metadata structurally', () => {

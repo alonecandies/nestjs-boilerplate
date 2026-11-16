@@ -3,10 +3,10 @@ import { Metadata } from '@grpc/grpc-js';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
 import { KafkaContext } from '@nestjs/microservices';
 import { type Span, trace } from '@opentelemetry/api';
-import { generateId } from '@platform/common';
+import { CLS_PRINCIPAL, createPrincipal, generateId } from '@platform/common';
 import { KAFKA_HEADERS } from '@platform/contracts';
 import { CLS_CORRELATION_ID, CLS_USER_ID, RequestContextService } from '@platform/observability';
-import { CLS_ID, CLS_REQ, ClsService } from 'nestjs-cls';
+import { CLS_ID, CLS_REQ, ClsService, ClsServiceManager } from 'nestjs-cls';
 import { defer, lastValueFrom, of } from 'rxjs';
 import { describe, expect, it, vi } from 'vitest';
 import { callerContextFromCls } from '../grpc/grpc-caller-context.js';
@@ -66,11 +66,12 @@ describe('GrpcContextInterceptor', () => {
   it('adopts request id, correlation id and caller from metadata', async () => {
     const cls = newCls();
     const requestId = generateId();
+    const userId = generateId();
     const metadata = createOutgoingMetadata({
       requestId,
       correlationId: 'corr-9',
-      userId: 'user-1',
-      roles: ['user'],
+      userId,
+      roles: ['member'],
     });
     await expect(
       seenBy(new GrpcContextInterceptor(cls), cls, rpcContext(metadata)),
@@ -78,22 +79,29 @@ describe('GrpcContextInterceptor', () => {
       active: true,
       id: requestId,
       correlationId: 'corr-9',
-      userId: 'user-1',
-      caller: { requestId, correlationId: 'corr-9', userId: 'user-1', roles: ['user'] },
+      // RPC_CLS_KEYS.USER_ID is no longer written: the caller travels as CLS_PRINCIPAL (B2-23).
+      userId: undefined,
+      caller: { requestId, correlationId: 'corr-9', userId, roles: ['member'], staff: false },
     });
   });
 
-  it("writes the keys @platform/observability's RequestContextService reads", async () => {
-    const cls = newCls();
+  it('RequestContextService reads the caller from the principal', async () => {
+    // getPrincipal() reads ClsServiceManager's store, so build everything on that one.
+    const cls = ClsServiceManager.getClsService();
     const context = new RequestContextService(cls);
-    const metadata = createOutgoingMetadata({ correlationId: 'corr-7', userId: 'user-7' });
+    const userId = generateId();
+    const metadata = createOutgoingMetadata({
+      correlationId: 'corr-7',
+      userId,
+      tenantId: generateId(),
+    });
     const next: CallHandler = {
       handle: () =>
         defer(() => of({ userId: context.userId, correlationId: context.correlationId })),
     };
     await expect(
       lastValueFrom(new GrpcContextInterceptor(cls).intercept(rpcContext(metadata), next)),
-    ).resolves.toEqual({ userId: 'user-7', correlationId: 'corr-7' });
+    ).resolves.toEqual({ userId, correlationId: 'corr-7' });
     expect(RPC_CLS_KEYS.USER_ID).toBe(CLS_USER_ID);
     expect(RPC_CLS_KEYS.CORRELATION_ID).toBe(CLS_CORRELATION_ID);
   });
@@ -217,18 +225,22 @@ describe('correlationIdFromCls / requestIdFromCls / callerContextFromCls', () =>
 
   it('builds the outgoing caller from the incoming gRPC caller, with overrides winning', () => {
     const cls = newCls();
+    const userId = generateId();
+    const tenantId = generateId();
     cls.run(() => {
       cls.set(CLS_ID, 'req-2');
-      cls.set(RPC_CLS_KEYS.CALLER, { userId: 'u-in', roles: ['admin'] });
+      cls.set(CLS_PRINCIPAL, createPrincipal({ userId, tenantId, roles: ['admin'] }));
       expect(callerContextFromCls(cls)).toEqual({
         requestId: 'req-2',
         correlationId: 'req-2',
-        userId: 'u-in',
+        userId,
+        tenantId,
         roles: ['admin'],
       });
-      expect(callerContextFromCls(cls, { userId: 'u-edge', roles: undefined })).toMatchObject({
-        userId: 'u-edge',
-        roles: ['admin'],
+      expect(callerContextFromCls(cls, { userId, roles: ['member'] })).toMatchObject({
+        userId,
+        tenantId,
+        roles: ['member'],
       });
     });
   });

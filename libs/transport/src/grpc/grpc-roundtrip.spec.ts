@@ -180,10 +180,11 @@ describe('gRPC round trip (in-process server + ClientGrpc)', () => {
   it('returns the message with Timestamp → Date and propagates caller metadata into nestjs-cls', async () => {
     const requestId = generateId();
     const correlationId = generateId();
+    const userId = generateId();
     const metadata = createOutgoingMetadata({
       requestId,
       correlationId,
-      userId: 'user-7',
+      userId,
       roles: ['admin', 'user'],
     });
 
@@ -195,7 +196,7 @@ describe('gRPC round trip (in-process server + ClientGrpc)', () => {
     expect(seen.at(-1)).toEqual({
       requestId,
       correlationId,
-      userId: 'user-7',
+      userId,
       roles: ['admin', 'user'],
     });
   });
