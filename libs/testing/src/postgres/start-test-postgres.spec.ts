@@ -4,6 +4,7 @@ import {
   TEST_POSTGRES_DEFAULT_STARTUP_TIMEOUT_MS,
   TEST_POSTGRES_IMAGE,
   testPostgresCommand,
+  testPostgresHealthCheck,
   testPostgresStartupTimeoutMs,
   urlWithLogin,
 } from './start-test-postgres.js';
@@ -77,6 +78,19 @@ describe('@platform/testing/postgres', () => {
       );
     },
   );
+
+  it('probes health slowly enough for emulated Citus, so Docker never kills a probe under PID 1', () => {
+    // testcontainers' default probe (every 250 ms, killed after 1 s) is slower than 1 s under amd64
+    // emulation; the killed probe is reaped by postgres (PID 1), which then restarts every backend.
+    const check = testPostgresHealthCheck();
+    expect(check.test).toEqual([
+      'CMD-SHELL',
+      'PGPASSWORD=app pg_isready --host localhost --username app --dbname app',
+    ]);
+    expect(check.timeout).toBeGreaterThanOrEqual(10_000);
+    expect(check.interval).toBeGreaterThanOrEqual(1_000);
+    expect(check.retries).toBeGreaterThan(0);
+  });
 
   it('urlWithLogin swaps only the login and percent-encodes it, so postgres.js decodes it back', () => {
     const password = 'p@ss:w/rd%41 é#?';

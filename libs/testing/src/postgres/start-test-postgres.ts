@@ -68,6 +68,27 @@ export function testPostgresCommand(
 }
 
 /**
+ * The container's health probe. testcontainers' default (every 250 ms, killed after 1 s) is slower
+ * than 1 s under amd64 emulation. Docker kills the probe, postgres (PID 1, no init) reaps it, sees an
+ * unknown child exit with code 2 and restarts every backend, so the container never turns healthy.
+ */
+export function testPostgresHealthCheck(): {
+  test: ['CMD-SHELL', string];
+  interval: number;
+  timeout: number;
+  retries: number;
+  startPeriod: number;
+} {
+  return {
+    test: ['CMD-SHELL', 'PGPASSWORD=app pg_isready --host localhost --username app --dbname app'],
+    interval: 2_000,
+    timeout: 15_000,
+    retries: 1_000,
+    startPeriod: 5_000,
+  };
+}
+
+/**
  * `url` with `role` / `password` as its login. The URL setters leave `%` alone, so each part is
  * `encodeURIComponent`-ed first; postgres.js decodes both (`decodeURIComponent`) when it connects.
  */
@@ -122,6 +143,7 @@ export async function startTestPostgres(options: TestPostgresOptions = {}): Prom
       .withUsername('app')
       .withPassword('app')
       .withCommand(testPostgresCommand(options))
+      .withHealthCheck(testPostgresHealthCheck())
       .withStartupTimeout(testPostgresStartupTimeoutMs())
       .start();
     url = container.getConnectionUri();
