@@ -8,6 +8,7 @@ import { PAYMENT_SUCCEEDED_EVENT } from '@domain/billing-contracts';
 import { CqrsModule } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
 import { AuthModule, RbacModule } from '@platform/auth';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { makeCounterProvider } from '@platform/observability';
@@ -111,6 +112,7 @@ describe('Stripe webhook flow (raw body → signature → exactly-once → Kafka
       payment_status: 'paid',
       amount_total: 4_900,
       currency: 'eur',
+      metadata: { paymentId: payment.id, userId: payment.userId, tenantId: TEST_TENANT_ID },
     }),
     { id: 'evt_flow_completed' },
   );

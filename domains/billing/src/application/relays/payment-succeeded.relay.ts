@@ -39,6 +39,8 @@ export class PaymentSucceededRelay implements IEventHandler<PaymentSucceededEven
       await this.kafka.publish(PAYMENT_SUCCEEDED_EVENT, toPaymentSucceededPayload(event), {
         key: event.userId,
         eventId: event.eventId,
+        tenantId: event.tenantId,
+        actorId: event.userId,
         occurredAt: event.paidAt,
       });
     } catch (error) {

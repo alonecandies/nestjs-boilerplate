@@ -5,6 +5,7 @@ import type { NewPaymentRow, PaymentRow } from './billing.schema.js';
 export function toPaymentRow(payment: Payment): NewPaymentRow & { id: string } {
   const s = payment.toSnapshot();
   return {
+    tenantId: s.tenantId,
     id: s.id,
     userId: s.userId,
     priceId: s.priceId,
@@ -15,6 +16,7 @@ export function toPaymentRow(payment: Payment): NewPaymentRow & { id: string } {
     stripeCheckoutSessionId: s.stripeCheckoutSessionId,
     stripePaymentIntentId: s.stripePaymentIntentId,
     idempotencyKey: s.idempotencyKey,
+    requestHash: s.requestHash,
     paidAt: s.paidAt,
     version: s.version,
     createdAt: s.createdAt,
@@ -25,6 +27,7 @@ export function toPaymentRow(payment: Payment): NewPaymentRow & { id: string } {
 /** Row → aggregate (no events). */
 export function fromPaymentRow(row: PaymentRow): Payment {
   return Payment.restore({
+    tenantId: row.tenantId,
     id: row.id,
     userId: row.userId,
     priceId: row.priceId,
@@ -35,6 +38,7 @@ export function fromPaymentRow(row: PaymentRow): Payment {
     stripeCheckoutSessionId: row.stripeCheckoutSessionId,
     stripePaymentIntentId: row.stripePaymentIntentId,
     idempotencyKey: row.idempotencyKey,
+    requestHash: row.requestHash,
     paidAt: row.paidAt,
     version: row.version,
     createdAt: row.createdAt,

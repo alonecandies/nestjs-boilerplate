@@ -2,6 +2,7 @@ import type { Payment } from '@domain/billing-contracts';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Test } from '@nestjs/testing';
 import { AuthModule, RbacModule } from '@platform/auth';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { DomainValidationException, generateId, provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { RATE_LIMIT_THROTTLERS } from '@platform/redis';
@@ -113,6 +114,7 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
       expect(res.statusCode).toBe(201);
       expect(res.json()).toEqual(session);
       expect(port.createCheckoutSession).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
         userId: user.id,
         customerEmail: user.email,
         priceId: 'price_1',
@@ -248,6 +250,7 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
   describe('GET /v1/billing/payments', () => {
     const payment: Payment = {
       id: generateId(),
+      tenantId: TEST_TENANT_ID,
       userId: generateId(),
       status: 'succeeded',
       amountTotal: '2500',
@@ -274,7 +277,11 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(port.listPayments).toHaveBeenCalledWith({ userId: user.id, limit: 20 });
+      expect(port.listPayments).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
+        userId: user.id,
+        limit: 20,
+      });
       expect(res.json()).toEqual({
         items: [
           {
@@ -305,6 +312,7 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
 
       expect(res.statusCode).toBe(200);
       expect(port.listPayments).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
         userId: user.id,
         limit: 1,
         cursor: 'cursor-1',
@@ -323,14 +331,15 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
       expect(port.listPayments).not.toHaveBeenCalled();
     });
 
-    it('403 for all=true even for an admin: billing:read-all is withheld until payments are tenant-scoped (B2-26)', async () => {
+    it("all=true lists the admin's active tenant (billing:read-all, B2-26)", async () => {
+      port.listPayments.mockResolvedValue({ items: [] });
       const res = await app.inject({
         method: 'GET',
         url: `${PAYMENTS_URL}?all=true&limit=5`,
         headers: { authorization: admin.authorization },
       });
-      expect(res.statusCode).toBe(403);
-      expect(port.listPayments).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(200);
+      expect(port.listPayments).toHaveBeenCalledWith({ tenantId: TEST_TENANT_ID, limit: 5 });
     });
 
     it.each(['limit=abc', 'limit=0', 'limit=1000', 'all=maybe', 'cursor='])(

@@ -3,6 +3,7 @@ import {
   DomainValidationException,
   EntityNotFoundException,
   ExternalServiceException,
+  PermissionDeniedException,
   type ValidationIssue,
 } from '@platform/common';
 import { BillingErrorCode } from '../billing.constants.js';
@@ -72,5 +73,14 @@ export class CheckoutSessionClosedException extends DomainConflictException {
 export class InvalidPaymentException extends DomainValidationException {
   constructor(issues: readonly ValidationIssue[]) {
     super('Invalid payment', { code: BillingErrorCode.INVALID_PAYMENT, issues });
+  }
+}
+
+/** 403 — the request names a tenant (or user) other than the caller's principal. */
+export class TenantMismatchException extends PermissionDeniedException {
+  constructor() {
+    super('The request does not belong to your active workspace', {
+      code: BillingErrorCode.TENANT_MISMATCH,
+    });
   }
 }

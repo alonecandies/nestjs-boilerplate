@@ -1,7 +1,7 @@
 import type { HandleStripeWebhookResponse } from '@domain/billing-contracts';
 import { Logger } from '@nestjs/common';
 import { CommandHandler, EventPublisher, type ICommandHandler } from '@nestjs/cqrs';
-import { isUuid } from '@platform/common';
+import { createPrincipal, isUuid, runWithPrincipal } from '@platform/common';
 import { Transactional } from '@platform/database';
 import { InjectMetric } from '@platform/observability';
 import type Stripe from 'stripe';
@@ -11,6 +11,7 @@ import {
   PAID_WITHOUT_CURRENCY_METRIC,
 } from '../../../billing.constants.js';
 import { normalizeCurrency, type Payment } from '../../../domain/payment.aggregate.js';
+import { type StripeOwner, stripeOwnerOf } from '../../../domain/stripe-owner.js';
 import { STRIPE_API_VERSION } from '../../../infrastructure/stripe/stripe.constants.js';
 import { StripeService } from '../../../infrastructure/stripe/stripe.service.js';
 import { PaymentsRepository } from '../../repositories/payments.repository.js';
@@ -50,6 +51,10 @@ const paymentIdOf = (session: Stripe.Checkout.Session): string | null => {
  * are acknowledged with a warning: retrying them could never succeed, and a thrown error would
  * make Stripe redeliver for days. Infrastructure errors DO throw — the transaction rolls back
  * (forgetting the event id) and Stripe's retry is processed again.
+ *
+ * A payment is only ever looked up inside the tenant named by the signed metadata: an event naming
+ * another tenant finds nothing and is acknowledged. Sessions created before B2 carry no tenant and
+ * resolve to the platform tenant, where `0001` moved their payments.
  */
 @CommandHandler(HandleStripeWebhookCommand)
 export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeWebhookCommand> {
@@ -76,7 +81,20 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
         `Stripe event ${event.id} uses API version ${event.api_version}, expected ${STRIPE_API_VERSION}: re-pin the webhook endpoint`,
       );
     }
-    const outcome = await this.applyOnce(event);
+    const owner = stripeOwnerOf(event.data.object);
+    const work = () => this.process(event, owner);
+    // Spec §9: act as the user and tenant Stripe signed; platform-level events have no user and run
+    // without a principal (B3-11 moves their writes to the system pool).
+    return owner.userId === null
+      ? work()
+      : runWithPrincipal(createPrincipal({ userId: owner.userId, tenantId: owner.tenantId }), work);
+  }
+
+  private async process(
+    event: Stripe.Event,
+    owner: StripeOwner,
+  ): Promise<HandleStripeWebhookResponse> {
+    const outcome = await this.applyOnce(event, owner);
     if (outcome.payment !== null) this.publisher.mergeObjectContext(outcome.payment).commit();
     return {
       received: true,
@@ -87,8 +105,12 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
   }
 
   @Transactional()
-  protected async applyOnce(event: Stripe.Event): Promise<WebhookOutcome> {
+  protected async applyOnce(event: Stripe.Event, owner: StripeOwner): Promise<WebhookOutcome> {
+    // `owner` comes from metadata Stripe signed (checkout put it there); events without one are
+    // platform-level and recorded under PLATFORM_TENANT_ID with a NULL user (spec §9, method 8).
     const firstDelivery = await this.stripeEvents.markProcessed({
+      tenantId: owner.tenantId,
+      userId: owner.userId,
       id: event.id,
       type: event.type,
     });
@@ -107,7 +129,7 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
           this.logger.debug(`Checkout Session ${session.id} completed, awaiting async payment`);
           return { duplicate: false, payment: null };
         }
-        const payment = await this.transition(event, session, (p, now) => {
+        const payment = await this.transition(event, owner, session, (p, now) => {
           if (
             normalizeCurrency(session.currency) === null &&
             normalizeCurrency(p.currency) === null
@@ -149,10 +171,10 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
         return { duplicate: false, payment };
       }
       case 'checkout.session.async_payment_failed':
-        await this.transition(event, event.data.object, (p, now) => p.markFailed(now));
+        await this.transition(event, owner, event.data.object, (p, now) => p.markFailed(now));
         return { duplicate: false, payment: null };
       case 'checkout.session.expired':
-        await this.transition(event, event.data.object, (p, now) => p.expire(now));
+        await this.transition(event, owner, event.data.object, (p, now) => p.expire(now));
         return { duplicate: false, payment: null };
       default:
         this.logger.debug(`Ignoring Stripe event ${event.id} (${event.type})`);
@@ -163,10 +185,12 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
   /** Loads the row-locked payment of `session`, applies `apply`, saves when it changed. */
   private async transition(
     event: Stripe.Event,
+    owner: StripeOwner,
     session: Stripe.Checkout.Session,
     apply: Transition,
   ): Promise<Payment | null> {
     const payment = await this.payments.findForCheckoutSession({
+      tenantId: owner.tenantId,
       paymentId: paymentIdOf(session),
       sessionId: session.id,
     });

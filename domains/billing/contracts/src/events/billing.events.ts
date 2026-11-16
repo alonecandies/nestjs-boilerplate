@@ -17,8 +17,12 @@ export const paymentSucceededPayload = z.object({
 
 export type PaymentSucceededPayload = z.infer<typeof paymentSucceededPayload>;
 
-/** A Checkout Session was paid. Produced by billing; notifications sends the receipt. */
+/**
+ * A Checkout Session was paid. Produced by billing; notifications sends the receipt.
+ * Tenant-scoped: the envelope carries the payment's tenantId and the payer as actorId.
+ */
 export const PAYMENT_SUCCEEDED_EVENT: EventContract<PaymentSucceededPayload> = defineEventContract(
   'billing.payment-succeeded.v1',
   paymentSucceededPayload,
+  { tenantScoped: true },
 );

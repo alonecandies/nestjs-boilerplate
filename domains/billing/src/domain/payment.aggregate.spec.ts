@@ -1,4 +1,5 @@
-import { DomainValidationException, generateId } from '@platform/common';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
+import { DomainValidationException, generateId, PLATFORM_TENANT_ID } from '@platform/common';
 import { describe, expect, it } from 'vitest';
 import { makePayment } from '../../test/billing-test.utils.js';
 import { CheckoutSessionMismatchException, InvalidPaymentException } from './billing.errors.js';
@@ -15,6 +16,7 @@ describe('Payment aggregate', () => {
       const id = generateId();
       const payment = Payment.initiate({
         id,
+        tenantId: TEST_TENANT_ID,
         userId: generateId(),
         priceId: '  price_pro  ',
         quantity: 3,
@@ -41,7 +43,14 @@ describe('Payment aggregate', () => {
     it('rejects invalid quantity / price / user with every issue at once', () => {
       const error = (() => {
         try {
-          Payment.initiate({ id: generateId(), userId: ' ', priceId: '', quantity: 0.5, now });
+          Payment.initiate({
+            id: generateId(),
+            tenantId: TEST_TENANT_ID,
+            userId: ' ',
+            priceId: '',
+            quantity: 0.5,
+            now,
+          });
         } catch (caught) {
           return caught;
         }
@@ -338,6 +347,34 @@ describe('Payment aggregate', () => {
       const payment = makePayment({ version: 4 });
       payment.markPersisted();
       expect(payment.version).toBe(5);
+    });
+  });
+
+  describe('tenant', () => {
+    const base = {
+      id: generateId(),
+      userId: generateId(),
+      priceId: 'price_pro',
+      quantity: 1,
+      now: new Date(),
+    };
+
+    it('belongs to the tenant it was initiated in and keeps the request hash', () => {
+      const payment = Payment.initiate({
+        ...base,
+        tenantId: TEST_TENANT_ID,
+        requestHash: 'a'.repeat(64),
+      });
+      expect(payment.tenantId).toBe(TEST_TENANT_ID);
+      expect(payment.requestHash).toBe('a'.repeat(64));
+      expect(payment.toSnapshot()).toMatchObject({
+        tenantId: TEST_TENANT_ID,
+        requestHash: 'a'.repeat(64),
+      });
+    });
+
+    it.each([PLATFORM_TENANT_ID, 'not-a-uuid', ''])('refuses tenant %j', (tenantId) => {
+      expect(() => Payment.initiate({ ...base, tenantId })).toThrow(InvalidPaymentException);
     });
   });
 });

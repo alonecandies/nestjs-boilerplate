@@ -107,7 +107,9 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing migrations on Postg
       from pg_enum e join pg_type t on t.oid = e.enumtypid
       join pg_namespace n on n.oid = t.typnamespace
       where n.nspname = 'billing' and t.typname = 'payment_status'`);
-    expect(status?.labels).toBe('pending,succeeded,failed,expired');
+    expect(status?.labels).toBe(
+      'pending,succeeded,failed,expired,refunded,partially_refunded,disputed',
+    );
   });
 
   it('puts no table and no payment_status type in public', async () => {
@@ -132,25 +134,25 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing migrations on Postg
     });
   });
 
-  it('carries every index of the former 0000 and 0002 migrations', async () => {
+  it('carries the tenant-leading keys of 0001 and the purge index', async () => {
     // billing.__drizzle_migrations (the migrator's SERIAL PRIMARY KEY) is not part of the history.
     const indexes = await db.execute<{ indexname: string }>(sql`
       select indexname from pg_indexes
       where schemaname = 'billing' and tablename in ('payments', 'stripe_events')`);
     expect(indexes.map((row) => row.indexname).toSorted()).toEqual([
-      'payments_pkey',
-      'payments_stripe_checkout_session_id_unique',
-      'payments_user_id_id_idx',
-      'payments_user_id_idempotency_key_uq',
-      'stripe_events_pkey',
+      'payments_tenant_id_id_pk',
+      'payments_tenant_id_stripe_checkout_session_id_uq',
+      'payments_tenant_id_user_id_id_idx',
+      'payments_tenant_id_user_id_idempotency_key_uq',
       'stripe_events_processed_at_idx',
+      'stripe_events_tenant_id_id_pk',
     ]);
   });
 
   it('the DB defaults (uuidv7 id, pending status) cover raw SQL inserts', async () => {
     const [row] = await db.execute<{ id: string; status: string }>(sql`
-      insert into billing.payments (user_id, price_id, quantity)
-      values (${generateId()}, 'price_int', 1) returning id, status`);
+      insert into billing.payments (tenant_id, user_id, price_id, quantity)
+      values (${generateId()}, ${generateId()}, 'price_int', 1) returning id, status`);
     expect(isUuidV7(row?.id)).toBe(true);
     expect(row?.status).toBe('pending');
   });

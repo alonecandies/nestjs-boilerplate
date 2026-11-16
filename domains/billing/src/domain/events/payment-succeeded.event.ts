@@ -1,4 +1,5 @@
 import type { IEvent } from '@nestjs/cqrs';
+import { PLATFORM_TENANT_ID } from '@platform/common';
 
 /**
  * A Checkout Session was paid. Applied by `Payment.complete()` and published on the CQRS event bus
@@ -21,5 +22,7 @@ export class PaymentSucceededEvent implements IEvent {
     readonly paidAt: Date,
     /** Stripe PaymentIntent (`pi_…`), when Stripe reported one. */
     readonly stripePaymentIntentId: string | null = null,
+    /** The payment's tenant (the Kafka envelope tenantId). */
+    readonly tenantId: string = PLATFORM_TENANT_ID,
   ) {}
 }

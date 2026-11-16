@@ -14,6 +14,11 @@ export enum PaymentStatus {
   Succeeded = 'succeeded',
   Failed = 'failed',
   Expired = 'expired',
+  /** Fully refunded (ledger design S-6; set by the refund webhooks of L-11). */
+  Refunded = 'refunded',
+  PartiallyRefunded = 'partially_refunded',
+  /** A dispute (chargeback) is open or lost. */
+  Disputed = 'disputed',
 }
 
 /** Ordered values, for the Postgres enum, zod and docs. */
@@ -22,6 +27,9 @@ export const PAYMENT_STATUSES = [
   PaymentStatus.Succeeded,
   PaymentStatus.Failed,
   PaymentStatus.Expired,
+  PaymentStatus.Refunded,
+  PaymentStatus.PartiallyRefunded,
+  PaymentStatus.Disputed,
 ] as const;
 
 export function isPaymentStatus(value: unknown): value is PaymentStatus {

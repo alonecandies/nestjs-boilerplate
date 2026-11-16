@@ -13,6 +13,7 @@ await vi.hoisted(async () => {
 
 import { PaymentStatus, payments } from '@domain/billing';
 import { GraphQLSchemaHost } from '@nestjs/graphql';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { generateId } from '@platform/common';
 import { getTableColumns } from 'drizzle-orm';
 import { printSchema } from 'graphql';
@@ -59,6 +60,7 @@ const AT = '2026-09-01T10:00:00.000Z';
 /** A paid `payments` row as postgres.js returns it: values in column order, int8 as a string. */
 function paymentRow(userId: string): FakeRows[number] {
   const values: Record<string, unknown> = {
+    tenantId: TEST_TENANT_ID,
     id: generateId(),
     userId,
     priceId: 'price_e2e',
@@ -70,6 +72,7 @@ function paymentRow(userId: string): FakeRows[number] {
     paidAt: AT,
     version: 1,
     createdAt: AT,
+    requestHash: null,
     updatedAt: AT,
   };
   return Object.fromEntries(

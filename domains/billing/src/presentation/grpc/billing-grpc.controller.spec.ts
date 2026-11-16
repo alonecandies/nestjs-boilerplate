@@ -1,6 +1,7 @@
 import { BILLING_SERVICE_NAME } from '@domain/billing-contracts';
 import type { CommandBus, QueryBus } from '@nestjs/cqrs';
-import { DomainValidationException, generateId } from '@platform/common';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
+import { DomainValidationException, generateId, PLATFORM_TENANT_ID } from '@platform/common';
 import { createMock } from '@platform/testing';
 import { ZodRpcValidationPipe } from '@platform/transport';
 import { describe, expect, it } from 'vitest';
@@ -44,6 +45,7 @@ describe('BillingGrpcController', () => {
     const session = { id: 'cs', url: 'https://x.test', paymentId: generateId() };
     commandBus.execute.mockResolvedValueOnce(session);
     const request = {
+      tenantId: TEST_TENANT_ID,
       userId: generateId(),
       customerEmail: 'a@b.co',
       priceId: 'price',
@@ -71,11 +73,11 @@ describe('BillingGrpcController', () => {
   it('ListPayments → ListPaymentsQuery', async () => {
     queryBus.execute.mockResolvedValueOnce({ items: [] });
 
-    await controller.listPayments({ limit: 0 });
+    await controller.listPayments({ tenantId: TEST_TENANT_ID, limit: 0 });
 
     const query = queryBus.execute.mock.calls.at(-1)?.[0] as ListPaymentsQuery;
     expect(query).toBeInstanceOf(ListPaymentsQuery);
-    expect(query.criteria).toEqual({ userId: undefined, limit: 0 });
+    expect(query.criteria).toEqual({ tenantId: TEST_TENANT_ID, userId: undefined, limit: 0 });
   });
 });
 
@@ -86,6 +88,7 @@ describe('billing gRPC payload schemas (ZodRpcValidationPipe)', () => {
 
     expect(
       pipe.transform({
+        tenantId: TEST_TENANT_ID,
         userId,
         customerEmail: 'a@b.co',
         priceId: ' price_1 ',
@@ -95,6 +98,7 @@ describe('billing gRPC payload schemas (ZodRpcValidationPipe)', () => {
         idempotencyKey: null,
       }),
     ).toEqual({
+      tenantId: TEST_TENANT_ID,
       userId,
       customerEmail: 'a@b.co',
       priceId: 'price_1',
@@ -108,12 +112,18 @@ describe('billing gRPC payload schemas (ZodRpcValidationPipe)', () => {
   it('rejects invalid requests with INVALID_ARGUMENT-mapped issues', () => {
     const pipe = new ZodRpcValidationPipe(createCheckoutSessionRpcSchema);
     try {
-      pipe.transform({ userId: 'nope', customerEmail: 'x', priceId: '', quantity: 0 });
+      pipe.transform({
+        tenantId: 'nope',
+        userId: 'nope',
+        customerEmail: 'x',
+        priceId: '',
+        quantity: 0,
+      });
       expect.unreachable();
     } catch (error) {
       expect(error).toBeInstanceOf(DomainValidationException);
       expect((error as DomainValidationException).issues.map((i) => i.path)).toEqual(
-        expect.arrayContaining(['userId', 'customerEmail', 'priceId', 'quantity']),
+        expect.arrayContaining(['tenantId', 'userId', 'customerEmail', 'priceId', 'quantity']),
       );
     }
   });
@@ -132,7 +142,31 @@ describe('billing gRPC payload schemas (ZodRpcValidationPipe)', () => {
 
   it('accepts an absent owner (all users) and bounds the limit', () => {
     const pipe = new ZodRpcValidationPipe(listPaymentsRpcSchema);
-    expect(pipe.transform({ userId: null, limit: 0 })).toEqual({ userId: undefined, limit: 0 });
-    expect(() => pipe.transform({ limit: 101 })).toThrow(DomainValidationException);
+    expect(pipe.transform({ tenantId: TEST_TENANT_ID, userId: null, limit: 0 })).toEqual({
+      tenantId: TEST_TENANT_ID,
+      userId: undefined,
+      limit: 0,
+    });
+    expect(() => pipe.transform({ tenantId: TEST_TENANT_ID, limit: 101 })).toThrow(
+      DomainValidationException,
+    );
   });
+
+  it.each([undefined, null, '', 'acme', PLATFORM_TENANT_ID])(
+    'requires a tenant UUID that is not the platform tenant (%j)',
+    (tenantId) => {
+      expect(() =>
+        new ZodRpcValidationPipe(listPaymentsRpcSchema).transform({ tenantId, limit: 1 }),
+      ).toThrow(DomainValidationException);
+      expect(() =>
+        new ZodRpcValidationPipe(createCheckoutSessionRpcSchema).transform({
+          tenantId,
+          userId: generateId(),
+          customerEmail: 'a@b.co',
+          priceId: 'price_1',
+          quantity: 1,
+        }),
+      ).toThrow(DomainValidationException);
+    },
+  );
 });

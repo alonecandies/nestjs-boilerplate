@@ -9,6 +9,6 @@ export type BillingPermission = (typeof BillingPermission)[keyof typeof BillingP
 export const BILLING_RBAC = defineRbacFeature({
   name: 'billing',
   permissions: Object.values(BillingPermission),
-  // billing:read-all is declared but granted to nobody until B2-26 scopes payment listing to the tenant (I-5).
-  grants: { member: [BillingPermission.Checkout] },
+  // billing:read-all lists every payment of the ACTIVE tenant (B2-26); never another tenant's.
+  grants: { member: [BillingPermission.Checkout], admin: [BillingPermission.ReadAll] },
 });

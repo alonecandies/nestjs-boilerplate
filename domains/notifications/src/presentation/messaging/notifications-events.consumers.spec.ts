@@ -21,6 +21,7 @@ const userRegistered = () =>
   );
 
 const PAYMENT_ID = '01920000-0000-7000-8000-0000000000aa';
+const TENANT_ID = '01920000-0000-7000-8000-0000000000ee';
 const paidAt = '2026-09-29T07:30:00.000Z';
 const paymentSucceeded = () =>
   createEventEnvelope(
@@ -33,7 +34,8 @@ const paymentSucceeded = () =>
       currency: 'usd',
       paidAt,
     },
-    { id: generateId(), source: 'billing-service' },
+    // billing.payment-succeeded.v1 is tenant-scoped (B2-26): the envelope carries the tenant and payer.
+    { id: generateId(), source: 'billing-service', tenantId: TENANT_ID, actorId: USER_ID },
   );
 
 describe('Kafka consumers (Nest RPC pipeline, in-memory broker)', () => {

@@ -55,6 +55,7 @@ export class BillingGrpcController implements BillingServiceController {
   ): Promise<PaymentList> {
     return this.queryBus.execute(
       new ListPaymentsQuery({
+        tenantId: request.tenantId,
         userId: request.userId,
         limit: request.limit,
         cursor: request.cursor,

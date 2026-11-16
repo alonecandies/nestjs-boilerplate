@@ -89,6 +89,7 @@ export class BillingController {
     @CurrentUser() user: AuthUser,
   ): Promise<CheckoutSessionResponse> {
     return this.billing.createCheckoutSession({
+      tenantId: user.tenantId,
       userId: user.id,
       customerEmail: user.email,
       priceId: body.priceId,
@@ -129,7 +130,7 @@ export class BillingController {
   @ApiOperation({
     summary: 'List payments',
     description:
-      "Newest first, keyset-paginated (`cursor` = the previous page's `nextCursor`). `all=true` lists every user's payments (requires billing:read-all).",
+      "Newest first, keyset-paginated (`cursor` = the previous page's `nextCursor`). `all=true` lists every payment of your active workspace (requires billing:read-all).",
   })
   @ApiOkResponse({ standardSchema: paymentListResponseSchema })
   @ApiBadRequestResponse({ description: 'Invalid query' })
@@ -142,6 +143,7 @@ export class BillingController {
     @CurrentUser() user: AuthUser,
   ): Promise<PaymentListResponse> {
     const list = await this.billing.listPayments({
+      tenantId: user.tenantId,
       userId: resolvePaymentsOwner(user, query.all),
       limit: query.limit,
       cursor: query.cursor,

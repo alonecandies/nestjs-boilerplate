@@ -1,3 +1,4 @@
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { generateId } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -15,6 +16,7 @@ import { DrizzleStripeEventsRepository } from './drizzle-stripe-events.repositor
 
 /** Real Drizzle SQL generation (snake_case casing) against a recording postgres.js fake. */
 describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
+  const tenantId = TEST_TENANT_ID;
   let answers: unknown[][][];
   let queries: RecordedQuery[];
   let repository: DrizzlePaymentsRepository;
@@ -32,7 +34,7 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
   const lastSql = (): string => queries.at(-1)?.sql ?? '';
 
   describe('create', () => {
-    it('inserts with ON CONFLICT (user_id, idempotency_key) DO NOTHING RETURNING', async () => {
+    it('inserts with ON CONFLICT (tenant_id, user_id, idempotency_key) DO NOTHING RETURNING', async () => {
       const payment = makePayment({ idempotencyKey: 'key-00001' });
       answers.push([paymentRowValues(payment)]);
 
@@ -40,7 +42,9 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
 
       expect(queries).toHaveLength(1);
       expect(lastSql()).toMatch(/^insert into "billing"\."payments" \(/);
-      expect(lastSql()).toContain('on conflict ("user_id","idempotency_key") do nothing returning');
+      expect(lastSql()).toContain(
+        'on conflict ("tenant_id","user_id","idempotency_key") do nothing returning',
+      );
       expect(result.created).toBe(true);
       expect(result.payment.toSnapshot()).toEqual(payment.toSnapshot());
     });
@@ -59,7 +63,7 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
       expect(result).toMatchObject({ created: false });
       expect(result.payment.id).toBe(existing.id);
       expect(queries[1]?.sql).toMatch(
-        /where \("billing"\."payments"\."user_id" = \$1 and "billing"\."payments"\."idempotency_key" = \$2\) limit \$3$/,
+        /where \("billing"\."payments"\."tenant_id" = \$1 and "billing"\."payments"\."user_id" = \$2 and "billing"\."payments"\."idempotency_key" = \$3\) limit \$4$/,
       );
     });
   });
@@ -69,15 +73,16 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
     answers.push([paymentRowValues(payment)]);
 
     const found = await repository.findForCheckoutSession({
+      tenantId,
       paymentId: payment.id,
       sessionId: 'cs_1',
     });
 
     expect(found?.id).toBe(payment.id);
     expect(lastSql()).toContain(
-      'where ("billing"."payments"."id" = $1 or "billing"."payments"."stripe_checkout_session_id" = $2)',
+      'where ("billing"."payments"."tenant_id" = $1 and ("billing"."payments"."id" = $2 or "billing"."payments"."stripe_checkout_session_id" = $3))',
     );
-    expect(lastSql()).toMatch(/limit \$3 for update$/);
+    expect(lastSql()).toMatch(/limit \$4 for update$/);
   });
 
   describe('save (optimistic lock)', () => {
@@ -89,7 +94,9 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
       await repository.save(payment);
 
       expect(lastSql()).toMatch(/^update "billing"\."payments" set .*"version" = \$\d+/);
-      expect(lastSql()).toContain('where ("billing"."payments"."id" = $');
+      expect(lastSql()).toContain('"billing"."payments"."tenant_id" = $');
+      expect(lastSql()).toContain('where ("billing"."payments"."tenant_id" = $');
+      expect(lastSql()).toContain('"billing"."payments"."id" = $');
       expect(lastSql()).toContain('"billing"."payments"."version" = $');
       expect(queries[0]?.params).toEqual(
         expect.arrayContaining([PaymentStatus.Failed, 3, payment.id, 2]),
@@ -113,19 +120,19 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
     const [a, b] = [makePayment({ userId }), makePayment({ userId })];
     answers.push([paymentRowValues(b), paymentRowValues(a)], []);
 
-    const mine = await repository.list({ userId, limit: 2 });
-    const all = await repository.list({ limit: 50 });
+    const mine = await repository.list({ tenantId, userId, limit: 2 });
+    const all = await repository.list({ tenantId, limit: 50 });
 
     expect(mine.items.map((p) => p.id)).toEqual([b.id, a.id]);
     expect(mine.nextCursor).toBeNull(); // 2 rows for limit 2: no look-ahead row → last page
     expect(all).toEqual({ items: [], nextCursor: null });
-    expect(queries[0]).toMatchObject({ params: [userId, 3] });
+    expect(queries[0]).toMatchObject({ params: [tenantId, userId, 3] });
     expect(queries[0]?.sql).toMatch(
-      /where "billing"\."payments"\."user_id" = \$1 order by "billing"\."payments"\."id" desc limit \$2$/,
+      /where \("billing"\."payments"\."tenant_id" = \$1 and "billing"\."payments"\."user_id" = \$2\) order by "billing"\."payments"\."id" desc limit \$3$/,
     );
-    expect(queries[1]).toMatchObject({ params: [51] });
+    expect(queries[1]).toMatchObject({ params: [tenantId, 51] });
     expect(queries[1]?.sql).toMatch(
-      /from "billing"\."payments" order by "billing"\."payments"\."id" desc limit \$1$/,
+      /where "billing"\."payments"\."tenant_id" = \$1 order by "billing"\."payments"\."id" desc limit \$2$/,
     );
   });
 
@@ -141,40 +148,43 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
       [],
     );
 
-    const first = await repository.list({ userId, limit: 2 });
+    const first = await repository.list({ tenantId, userId, limit: 2 });
     expect(first.items.map((p) => p.id)).toEqual([c.id, b.id]);
     const cursor = first.nextCursor ?? expect.fail('expected a next page');
 
-    const second = await repository.list({ userId, limit: 2, cursor });
+    const second = await repository.list({ tenantId, userId, limit: 2, cursor });
     expect(second).toMatchObject({ nextCursor: null });
     expect(second.items.map((p) => p.id)).toEqual([a.id]);
     expect(queries[1]?.sql).toMatch(
-      /where \("billing"\."payments"\."user_id" = \$1 and "billing"\."payments"\."id" < \$2\) order by "billing"\."payments"\."id" desc limit \$3$/,
+      /where \("billing"\."payments"\."tenant_id" = \$1 and "billing"\."payments"\."user_id" = \$2 and "billing"\."payments"\."id" < \$3\) order by "billing"\."payments"\."id" desc limit \$4$/,
     );
-    expect(queries[1]?.params).toEqual([userId, b.id, 3]);
+    expect(queries[1]?.params).toEqual([tenantId, userId, b.id, 3]);
 
-    // Admin listing: the primary key.
-    await repository.list({ limit: 2, cursor });
+    // The whole tenant (`billing:read-all`): the (tenant_id, id) primary key.
+    await repository.list({ tenantId, limit: 2, cursor });
     expect(queries[2]?.sql).toMatch(
-      /from "billing"\."payments" where "billing"\."payments"\."id" < \$1 order by "billing"\."payments"\."id" desc limit \$2$/,
+      /where \("billing"\."payments"\."tenant_id" = \$1 and "billing"\."payments"\."id" < \$2\) order by "billing"\."payments"\."id" desc limit \$3$/,
     );
-    expect(queries[2]?.params).toEqual([b.id, 3]);
+    expect(queries[2]?.params).toEqual([tenantId, b.id, 3]);
   });
 
   it('rejects a forged cursor with INVALID_CURSOR before any SQL', async () => {
-    await expect(repository.list({ limit: 2, cursor: 'not-a-cursor' })).rejects.toMatchObject({
+    await expect(
+      repository.list({ tenantId, limit: 2, cursor: 'not-a-cursor' }),
+    ).rejects.toMatchObject({
       code: 'INVALID_CURSOR',
     });
     expect(queries).toHaveLength(0);
   });
 
-  it('stripe_events: ON CONFLICT (id) DO NOTHING tells first delivery from duplicates', async () => {
+  it('stripe_events: ON CONFLICT (tenant_id, id) DO NOTHING tells first delivery from duplicates', async () => {
     answers.push([['evt_1']], []);
 
-    await expect(events.markProcessed({ id: 'evt_1', type: 'x' })).resolves.toBe(true);
-    await expect(events.markProcessed({ id: 'evt_1', type: 'x' })).resolves.toBe(false);
+    const receipt = { tenantId, userId: null, id: 'evt_1', type: 'x' };
+    await expect(events.markProcessed(receipt)).resolves.toBe(true);
+    await expect(events.markProcessed(receipt)).resolves.toBe(false);
     expect(lastSql()).toBe(
-      'insert into "billing"."stripe_events" ("id", "type", "processed_at") values ($1, $2, default) on conflict ("id") do nothing returning "id"',
+      'insert into "billing"."stripe_events" ("tenant_id", "id", "user_id", "type", "processed_at") values ($1, $2, $3, $4, default) on conflict ("tenant_id","id") do nothing returning "id"',
     );
   });
 

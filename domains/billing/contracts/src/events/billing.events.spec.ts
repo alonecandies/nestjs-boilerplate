@@ -1,4 +1,4 @@
-import { parseEventEnvelope, topicVersion } from '@platform/contracts';
+import { createEventEnvelope, parseEventEnvelope, topicVersion } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { PAYMENT_SUCCEEDED_EVENT, type PaymentSucceededPayload } from '../index.js';
@@ -36,6 +36,23 @@ describe('PAYMENT_SUCCEEDED_EVENT', () => {
   it('keeps its wire name (consumer offsets and docker/kafka/topics.txt depend on it)', () => {
     expect(PAYMENT_SUCCEEDED_EVENT.topic).toBe('billing.payment-succeeded.v1');
     expect(topicVersion(PAYMENT_SUCCEEDED_EVENT.topic)).toBe(1);
+  });
+
+  it('is tenant-scoped: an envelope is only created with the payment tenant (B2-26)', () => {
+    const tenantId = '0199a1b2-c3d4-7e5f-8a9b-000000000009';
+    const eventId = '0199a1b2-c3d4-7e5f-8a9b-000000000001';
+    expect(PAYMENT_SUCCEEDED_EVENT.tenantScoped).toBe(true);
+    expect(() =>
+      createEventEnvelope(PAYMENT_SUCCEEDED_EVENT, payload, { id: eventId, source: 'billing' }),
+    ).toThrow(/tenantId/);
+    expect(
+      createEventEnvelope(PAYMENT_SUCCEEDED_EVENT, payload, {
+        id: eventId,
+        source: 'billing',
+        tenantId,
+        actorId: payload.userId,
+      }),
+    ).toMatchObject({ tenantId, actorId: payload.userId });
   });
 
   it('parses a valid payload', () => {

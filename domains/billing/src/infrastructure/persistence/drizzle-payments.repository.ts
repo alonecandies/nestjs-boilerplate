@@ -32,43 +32,60 @@ const prepareStatements = (db: DrizzleDB) => ({
   byId: db
     .select()
     .from(payments)
-    .where(eq(payments.id, sql.placeholder('id')))
+    .where(
+      and(
+        eq(payments.tenantId, sql.placeholder('tenantId')),
+        eq(payments.id, sql.placeholder('id')),
+      ),
+    )
     .limit(1)
-    .prepare('billing_payment_by_id'),
-  // Keyset pages, newest first (uuidv7 ids = time order). Per user: payments_user_id_id_idx
-  // scanned backwards from `(user_id, $cursor)`; every user (admin): the primary key.
+    .prepare('billing_payment_by_tenant_id'),
+  // Keyset pages, newest first (uuidv7 ids = time order), always inside one tenant (router query
+  // on Citus): payments_tenant_id_user_id_id_idx for a user, the (tenant_id, id) PK for the tenant.
   byUser: db
     .select()
     .from(payments)
-    .where(eq(payments.userId, sql.placeholder('userId')))
+    .where(
+      and(
+        eq(payments.tenantId, sql.placeholder('tenantId')),
+        eq(payments.userId, sql.placeholder('userId')),
+      ),
+    )
     .orderBy(keysetOrder(payments.id))
     .limit(sql.placeholder('limit'))
-    .prepare('billing_payments_by_user'),
+    .prepare('billing_payments_by_tenant_user'),
   byUserAfter: db
     .select()
     .from(payments)
     .where(
       and(
+        eq(payments.tenantId, sql.placeholder('tenantId')),
         eq(payments.userId, sql.placeholder('userId')),
         lt(payments.id, sql.placeholder('cursorId')),
       ),
     )
     .orderBy(keysetOrder(payments.id))
     .limit(sql.placeholder('limit'))
-    .prepare('billing_payments_by_user_after'),
-  all: db
+    .prepare('billing_payments_by_tenant_user_after'),
+  byTenant: db
     .select()
     .from(payments)
+    .where(eq(payments.tenantId, sql.placeholder('tenantId')))
     .orderBy(keysetOrder(payments.id))
     .limit(sql.placeholder('limit'))
-    .prepare('billing_payments_all'),
-  allAfter: db
+    .prepare('billing_payments_by_tenant'),
+  byTenantAfter: db
     .select()
     .from(payments)
-    .where(lt(payments.id, sql.placeholder('cursorId')))
+    .where(
+      and(
+        eq(payments.tenantId, sql.placeholder('tenantId')),
+        lt(payments.id, sql.placeholder('cursorId')),
+      ),
+    )
     .orderBy(keysetOrder(payments.id))
     .limit(sql.placeholder('limit'))
-    .prepare('billing_payments_all_after'),
+    .prepare('billing_payments_by_tenant_after'),
 });
 
 @Injectable()
@@ -84,12 +101,13 @@ export class DrizzlePaymentsRepository implements PaymentsRepository {
 
   async create(payment: Payment): Promise<CreatePaymentResult> {
     const row = toPaymentRow(payment);
-    // One round trip on the happy path; the unique (user_id, idempotency_key) index turns a replayed
-    // key into a no-op instead of an error (NULL keys never conflict).
+    // The unique (tenant_id, user_id, idempotency_key) index turns a replayed key into a no-op.
     const [inserted] = await this.txHost.tx
       .insert(payments)
       .values(row)
-      .onConflictDoNothing({ target: [payments.userId, payments.idempotencyKey] })
+      .onConflictDoNothing({
+        target: [payments.tenantId, payments.userId, payments.idempotencyKey],
+      })
       .returning();
     if (inserted !== undefined) return { payment: fromPaymentRow(inserted), created: true };
 
@@ -99,7 +117,13 @@ export class DrizzlePaymentsRepository implements PaymentsRepository {
     const [existing] = await this.txHost.tx
       .select()
       .from(payments)
-      .where(and(eq(payments.userId, row.userId), eq(payments.idempotencyKey, row.idempotencyKey)))
+      .where(
+        and(
+          eq(payments.tenantId, row.tenantId),
+          eq(payments.userId, row.userId),
+          eq(payments.idempotencyKey, row.idempotencyKey),
+        ),
+      )
       .limit(1);
     if (existing === undefined) {
       // The conflicting row was deleted in between: extremely unlikely, safe to retry.
@@ -108,22 +132,27 @@ export class DrizzlePaymentsRepository implements PaymentsRepository {
     return { payment: fromPaymentRow(existing), created: false };
   }
 
-  async findById(id: string): Promise<Payment | null> {
-    const [row] = await this.statements.byId.execute({ id });
+  async findById(tenantId: string, id: string): Promise<Payment | null> {
+    const [row] = await this.statements.byId.execute({ tenantId, id });
     return row === undefined ? null : fromPaymentRow(row);
   }
 
   async findForCheckoutSession(ref: {
+    tenantId: string;
     paymentId: string | null;
     sessionId: string;
   }): Promise<Payment | null> {
     const bySession = eq(payments.stripeCheckoutSessionId, ref.sessionId);
-    // One statement (BitmapOr over the PK and the unique session index) + row lock, so concurrent
-    // deliveries of different events for one payment serialise.
+    // tenant_id equality first: FOR UPDATE needs the distribution column on Citus (sharding §2.1.6).
     const rows = await this.txHost.tx
       .select()
       .from(payments)
-      .where(ref.paymentId === null ? bySession : or(eq(payments.id, ref.paymentId), bySession))
+      .where(
+        and(
+          eq(payments.tenantId, ref.tenantId),
+          ref.paymentId === null ? bySession : or(eq(payments.id, ref.paymentId), bySession),
+        ),
+      )
       .limit(2)
       .for('update');
     const row = rows.find((r) => r.stripeCheckoutSessionId === ref.sessionId) ?? rows[0];
@@ -144,7 +173,13 @@ export class DrizzlePaymentsRepository implements PaymentsRepository {
         updatedAt: s.updatedAt,
         version: s.version + 1,
       })
-      .where(and(eq(payments.id, s.id), eq(payments.version, s.version)))
+      .where(
+        and(
+          eq(payments.tenantId, s.tenantId),
+          eq(payments.id, s.id),
+          eq(payments.version, s.version),
+        ),
+      )
       .returning({ id: payments.id });
     if (updated.length === 0) throw new PaymentConcurrentlyModifiedException(s.id);
     payment.markPersisted();
@@ -152,17 +187,17 @@ export class DrizzlePaymentsRepository implements PaymentsRepository {
 
   async list(criteria: ListPaymentsCriteria): Promise<CursorPage<Payment>> {
     // Decoded (and validated: a forged cursor is a 422, never SQL) before choosing the statement.
-    const { userId, cursor } = criteria;
+    const { tenantId, userId, cursor } = criteria;
     const cursorId = isNil(cursor) || cursor === '' ? undefined : decodeIdCursor(cursor).id;
     const limit = keysetFetchLimit(criteria.limit); // + 1 look-ahead row → is there a next page?
     const rows =
       userId === undefined
         ? cursorId === undefined
-          ? await this.statements.all.execute({ limit })
-          : await this.statements.allAfter.execute({ cursorId, limit })
+          ? await this.statements.byTenant.execute({ tenantId, limit })
+          : await this.statements.byTenantAfter.execute({ tenantId, cursorId, limit })
         : cursorId === undefined
-          ? await this.statements.byUser.execute({ userId, limit })
-          : await this.statements.byUserAfter.execute({ userId, cursorId, limit });
+          ? await this.statements.byUser.execute({ tenantId, userId, limit })
+          : await this.statements.byUserAfter.execute({ tenantId, userId, cursorId, limit });
     return keysetPage(rows.map(fromPaymentRow), criteria.limit);
   }
 }

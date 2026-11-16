@@ -1,5 +1,6 @@
 import { PAYMENT_SUCCEEDED_EVENT } from '@domain/billing-contracts';
 import { Logger } from '@nestjs/common';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { generateId } from '@platform/common';
 import { FakeKafkaProducer } from '@platform/transport/testing';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +18,8 @@ describe('PaymentSucceededRelay', () => {
     2_500,
     'usd',
     new Date('2026-09-04T08:30:00.000Z'),
+    null,
+    TEST_TENANT_ID,
   );
 
   beforeEach(() => {
@@ -34,6 +37,8 @@ describe('PaymentSucceededRelay', () => {
       type: PAYMENT_SUCCEEDED_EVENT.topic,
       source: 'billing-test',
       occurredAt: '2026-09-04T08:30:00.000Z',
+      tenantId: TEST_TENANT_ID,
+      actorId: event.userId,
       payload: {
         paymentId: event.paymentId,
         userId: event.userId,

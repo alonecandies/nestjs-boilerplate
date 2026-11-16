@@ -21,8 +21,15 @@ export interface CreateCheckoutSessionRequest {
   cancelUrl?:
     | string
     | undefined;
-  /** Forwarded as the Stripe idempotency key (defaults to `checkout-<paymentId>`). */
-  idempotencyKey?: string | undefined;
+  /** Client Idempotency-Key, unique per (tenant, user). Never sent to Stripe, which gets checkout-<payment id>. */
+  idempotencyKey?:
+    | string
+    | undefined;
+  /**
+   * The caller's active tenant (`req.user.tenantId`). The payment, its Idempotency-Key scope and the
+   * Stripe metadata belong to it.
+   */
+  tenantId: string;
 }
 
 export interface CheckoutSession {
@@ -50,7 +57,7 @@ export interface HandleStripeWebhookResponse {
 export interface Payment {
   id: string;
   userId: string;
-  /** "pending" | "succeeded" | "failed" | "expired". */
+  /** "pending" | "succeeded" | "failed" | "expired" | "refunded" | "partially_refunded" | "disputed". */
   status: string;
   /** Minor currency units (e.g. cents). A decimal string in TypeScript (int64, forceLong=string). */
   amountTotal: string;
@@ -61,14 +68,19 @@ export interface Payment {
   stripeCheckoutSessionId?: string | undefined;
   createdAt?: Date | undefined;
   updatedAt?: Date | undefined;
+  tenantId: string;
 }
 
 export interface ListPaymentsRequest {
-  /** Absent = all users (requires billing:read-all at the edge). */
+  /** Absent = every payment of tenant_id (billing:read-all). */
   userId?: string | undefined;
   limit: number;
   /** Opaque keyset cursor: the `next_cursor` of the previous page. Absent = first page. */
-  cursor?: string | undefined;
+  cursor?:
+    | string
+    | undefined;
+  /** Only this tenant's payments. */
+  tenantId: string;
 }
 
 export interface PaymentList {

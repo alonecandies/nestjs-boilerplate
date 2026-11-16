@@ -3,6 +3,7 @@
  * transaction snapshots, so rollback behaviour is observable), a TransactionHost wired to it,
  * a real StripeService with a test webhook secret and signed webhook builders.
  */
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { type CursorPage, generateId } from '@platform/common';
 import {
   type DrizzleDB,
@@ -55,6 +56,8 @@ interface StoreState {
   events: Map<string, StripeEventReceipt>;
 }
 
+const key = (tenantId: string, id: string): string => `${tenantId}:${id}`;
+
 export class InMemoryBillingStore {
   state: StoreState = { payments: new Map(), events: new Map() };
 
@@ -67,11 +70,15 @@ export class InMemoryBillingStore {
   }
 
   seed(...payments: Payment[]): void {
-    for (const payment of payments) this.state.payments.set(payment.id, payment.toSnapshot());
+    for (const payment of payments) {
+      const s = payment.toSnapshot();
+      this.state.payments.set(key(s.tenantId, s.id), s);
+    }
   }
 
+  /** The stored payment with this id, whatever its tenant (ids are uuidv7: unique). */
   payment(id: string): PaymentSnapshot | undefined {
-    return this.state.payments.get(id);
+    return [...this.state.payments.values()].find((p) => p.id === id);
   }
 }
 
@@ -82,43 +89,50 @@ export class InMemoryPaymentsRepository implements PaymentsRepository {
     const s = payment.toSnapshot();
     if (s.idempotencyKey !== null) {
       const existing = [...this.store.state.payments.values()].find(
-        (p) => p.userId === s.userId && p.idempotencyKey === s.idempotencyKey,
+        (p) =>
+          p.tenantId === s.tenantId &&
+          p.userId === s.userId &&
+          p.idempotencyKey === s.idempotencyKey,
       );
       if (existing) return { payment: Payment.restore(existing), created: false };
     }
-    this.store.state.payments.set(s.id, s);
+    this.store.state.payments.set(key(s.tenantId, s.id), s);
     return { payment: Payment.restore(s), created: true };
   }
 
-  async findById(id: string): Promise<Payment | null> {
-    const s = this.store.state.payments.get(id);
+  async findById(tenantId: string, id: string): Promise<Payment | null> {
+    const s = this.store.state.payments.get(key(tenantId, id));
     return s ? Payment.restore(s) : null;
   }
 
   async findForCheckoutSession(ref: {
+    tenantId: string;
     paymentId: string | null;
     sessionId: string;
   }): Promise<Payment | null> {
-    const all = [...this.store.state.payments.values()];
+    const inTenant = [...this.store.state.payments.values()].filter(
+      (p) => p.tenantId === ref.tenantId,
+    );
     const s =
-      all.find((p) => p.stripeCheckoutSessionId === ref.sessionId) ??
-      all.find((p) => p.id === ref.paymentId);
+      inTenant.find((p) => p.stripeCheckoutSessionId === ref.sessionId) ??
+      inTenant.find((p) => p.id === ref.paymentId);
     return s ? Payment.restore(s) : null;
   }
 
   async save(payment: Payment): Promise<void> {
     const s = payment.toSnapshot();
-    const stored = this.store.state.payments.get(s.id);
+    const stored = this.store.state.payments.get(key(s.tenantId, s.id));
     if (!stored || stored.version !== s.version) {
       throw new PaymentConcurrentlyModifiedException(s.id);
     }
-    this.store.state.payments.set(s.id, { ...s, version: s.version + 1 });
+    this.store.state.payments.set(key(s.tenantId, s.id), { ...s, version: s.version + 1 });
     payment.markPersisted();
   }
 
   async list(criteria: ListPaymentsCriteria): Promise<CursorPage<Payment>> {
     const after = isEmpty(criteria.cursor) ? undefined : decodeIdCursor(String(criteria.cursor)).id;
     const rows = [...this.store.state.payments.values()]
+      .filter((p) => p.tenantId === criteria.tenantId)
       .filter((p) => criteria.userId === undefined || p.userId === criteria.userId)
       .filter((p) => after === undefined || p.id < after)
       .sort((a, b) => b.id.localeCompare(a.id))
@@ -131,13 +145,14 @@ export class InMemoryPaymentsRepository implements PaymentsRepository {
 export class InMemoryStripeEventsRepository implements StripeEventsRepository {
   constructor(readonly store: InMemoryBillingStore) {}
 
-  /** `processed_at` per event id (kept apart so `state.events` stays `{ id, type }`). */
+  /** `processed_at` per `${tenantId}:${id}` (kept apart so `state.events` holds receipts only). */
   readonly processedAt = new Map<string, Date>();
 
   async markProcessed(event: StripeEventReceipt): Promise<boolean> {
-    if (this.store.state.events.has(event.id)) return false;
-    this.store.state.events.set(event.id, { ...event });
-    this.processedAt.set(event.id, new Date());
+    const k = key(event.tenantId, event.id);
+    if (this.store.state.events.has(k)) return false;
+    this.store.state.events.set(k, { ...event });
+    this.processedAt.set(k, new Date());
     return true;
   }
 
@@ -145,10 +160,10 @@ export class InMemoryStripeEventsRepository implements StripeEventsRepository {
     const expired = [...this.processedAt]
       .filter(([, at]) => at < cutoff)
       .slice(0, limit)
-      .map(([id]) => id);
-    for (const id of expired) {
-      this.store.state.events.delete(id);
-      this.processedAt.delete(id);
+      .map(([k]) => k);
+    for (const k of expired) {
+      this.store.state.events.delete(k);
+      this.processedAt.delete(k);
     }
     return expired.length;
   }
@@ -243,6 +258,7 @@ export function paymentRowValues(payment: Payment): unknown[] {
 export function makePayment(overrides: Partial<PaymentSnapshot> = {}): Payment {
   const base = Payment.initiate({
     id: overrides.id ?? generateId(),
+    tenantId: overrides.tenantId ?? TEST_TENANT_ID,
     userId: overrides.userId ?? generateId(),
     priceId: overrides.priceId ?? 'price_basic',
     quantity: overrides.quantity ?? 1,
