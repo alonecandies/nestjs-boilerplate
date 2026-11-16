@@ -157,4 +157,45 @@ describe('staff switch-in (monolith)', () => {
     });
     expect(nil.statusCode).toBe(404);
   });
+
+  it('switch-out revokes the switch-in token and records staff.switch_out; a normal token gets 403 STAFF_ONLY', async () => {
+    const owner = await register('owner.out@example.com');
+    const support = await register('support.out@example.com');
+    setStaff(support.user.id, true);
+    const switched = await inject({
+      method: 'POST',
+      url: `/v1/staff/tenants/${owner.tenantId}/switch-in`,
+      headers: bearer(support.accessToken),
+      payload: { reason: 'ticket #9' },
+    });
+    const staffToken = switched.json<{ accessToken: string }>().accessToken;
+
+    const normal = await inject({
+      method: 'POST',
+      url: '/v1/staff/switch-out',
+      headers: bearer(support.accessToken),
+    });
+    expect(normal.statusCode).toBe(403);
+    expect(normal.json<{ code: string }>().code).toBe('STAFF_ONLY');
+
+    const out = await inject({
+      method: 'POST',
+      url: '/v1/staff/switch-out',
+      headers: bearer(staffToken),
+    });
+    expect(out.statusCode, out.body).toBe(204);
+    const after = await inject({ method: 'GET', url: '/v1/auth/me', headers: bearer(staffToken) });
+    expect(after.statusCode).toBe(401);
+    expect(after.json<{ code: string }>().code).toBe('TOKEN_REVOKED');
+    expect(
+      e2e.identity.store.auditEvents
+        .filter((event) => event.tenantId === owner.tenantId)
+        .map((event) => event.type),
+    ).toEqual(['staff.switch_in', 'staff.switch_out']);
+    // The staff user's own token still works.
+    expect(
+      (await inject({ method: 'GET', url: '/v1/auth/me', headers: bearer(support.accessToken) }))
+        .statusCode,
+    ).toBe(200);
+  });
 });

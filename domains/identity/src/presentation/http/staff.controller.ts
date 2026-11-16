@@ -15,13 +15,14 @@ import {
   ApiBearerAuth,
   ApiCreatedResponse,
   ApiForbiddenResponse,
+  ApiNoContentResponse,
   ApiNotFoundResponse,
   ApiOperation,
   ApiParam,
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { type AuthUser, CurrentUser } from '@platform/auth';
+import { type AuthUser, CurrentUser, StaffOnly } from '@platform/auth';
 import type { RequestLike } from '@platform/common';
 import { AuthPort } from '../../application/ports/auth.port.js';
 import { StaffTokenNotAllowedException } from '../../domain/identity.errors.js';
@@ -30,7 +31,7 @@ import { StaffSwitchInDto } from './dto/staff-switch-in.dto.js';
 import { ProblemResponse } from './responses/problem.response.js';
 import { StaffAccessTokenResponse } from './responses/staff-access-token.response.js';
 
-/** Platform-staff support access (spec §5.2): switch-in here, switch-out in Task 16. */
+/** Platform-staff support access (spec §5.2): switch-in and switch-out (the first `@StaffOnly()` route). */
 @ApiTags('staff')
 @ApiBearerAuth()
 @ApiUnauthorizedResponse({ type: ProblemResponse })
@@ -72,5 +73,24 @@ export class StaffController {
       client: clientInfoOf(request),
     });
     return StaffAccessTokenResponse.from(token);
+  }
+
+  @Post('switch-out')
+  @StaffOnly()
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Leave the tenant (platform staff)',
+    description:
+      'Revokes the presented switch-in token and records `staff.switch_out`. Switch-in tokens only.',
+  })
+  @ApiNoContentResponse()
+  @ApiForbiddenResponse({ type: ProblemResponse, description: '`STAFF_ONLY`' })
+  async switchOut(@CurrentUser() user: AuthUser): Promise<void> {
+    await this.auth.staffSwitchOut({
+      staffUserId: user.id,
+      tenantId: user.tenantId,
+      accessTokenJti: user.jti,
+      accessTokenExp: String(user.exp),
+    });
   }
 }

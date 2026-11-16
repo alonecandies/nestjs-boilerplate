@@ -44,6 +44,7 @@ const authPort: PortFake<AuthPort> = {
   logout: vi.fn(),
   switchTenant: vi.fn(),
   staffSwitchIn: vi.fn(),
+  staffSwitchOut: vi.fn(),
 };
 const usersPort: PortFake<UsersPort> = {
   getUser: vi.fn(),

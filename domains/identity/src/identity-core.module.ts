@@ -8,6 +8,7 @@ import { PurgeExpiredSessionsHandler } from './application/commands/purge-expire
 import { RefreshSessionHandler } from './application/commands/refresh-session/refresh-session.handler.js';
 import { RegisterUserHandler } from './application/commands/register-user/register-user.handler.js';
 import { StaffSwitchInHandler } from './application/commands/staff-switch-in/staff-switch-in.handler.js';
+import { StaffSwitchOutHandler } from './application/commands/staff-switch-out/staff-switch-out.handler.js';
 import { SwitchTenantHandler } from './application/commands/switch-tenant/switch-tenant.handler.js';
 import { UserRegisteredRelay } from './application/event-handlers/user-registered.relay.js';
 import { AuditEventsRepository } from './application/persistence/audit-events.repository.js';
@@ -45,6 +46,7 @@ export const IDENTITY_COMMAND_HANDLERS = [
   LogoutHandler,
   SwitchTenantHandler,
   StaffSwitchInHandler,
+  StaffSwitchOutHandler,
   PurgeExpiredSessionsHandler,
 ];
 

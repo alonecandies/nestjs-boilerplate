@@ -6,6 +6,7 @@ import type {
   RegisterRequest,
   StaffAccessToken,
   StaffSwitchInRequest,
+  StaffSwitchOutRequest,
   SwitchTenantRequest,
 } from '@domain/identity-contracts';
 
@@ -49,4 +50,7 @@ export abstract class AuthPort {
    *   DomainValidationException (422; the REST DTO and the RPC schema answer 400 / INVALID_ARGUMENT first)
    */
   abstract staffSwitchIn(input: StaffSwitchInRequest): Promise<StaffAccessToken>;
+
+  /** Revokes a staff switch-in token and audits the exit (the edge ensures it is one: `@StaffOnly()`). */
+  abstract staffSwitchOut(input: StaffSwitchOutRequest): Promise<void>;
 }

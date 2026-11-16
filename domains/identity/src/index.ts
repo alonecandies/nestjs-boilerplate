@@ -20,6 +20,7 @@ export { RefreshSessionCommand } from './application/commands/refresh-session/re
 export { RegisterUserCommand } from './application/commands/register-user/register-user.command.js';
 // Application: commands/queries (for other in-process callers), persistence ports.
 export { StaffSwitchInCommand } from './application/commands/staff-switch-in/staff-switch-in.command.js';
+export { StaffSwitchOutCommand } from './application/commands/staff-switch-out/staff-switch-out.command.js';
 export { SwitchTenantCommand } from './application/commands/switch-tenant/switch-tenant.command.js';
 export type {
   AuditEventRecord,

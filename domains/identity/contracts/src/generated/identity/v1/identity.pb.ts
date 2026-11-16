@@ -96,6 +96,14 @@ export interface StaffSwitchInRequest {
   client?: ClientInfo | undefined;
 }
 
+export interface StaffSwitchOutRequest {
+  staffUserId: string;
+  tenantId: string;
+  accessTokenJti: string;
+  /** Switch-in token `exp` (epoch seconds); bounds the denylist entry TTL. */
+  accessTokenExp: string;
+}
+
 export interface StaffAccessToken {
   accessToken: string;
   /** Lifetime in seconds (STAFF_SWITCH_IN_TTL_SEC). */
@@ -189,6 +197,10 @@ export interface AuthServiceClient {
    */
 
   staffSwitchIn(request: StaffSwitchInRequest, metadata?: Metadata): Observable<StaffAccessToken>;
+
+  /** Platform staff leaves the tenant: denylists the switch-in token and audits the exit. */
+
+  staffSwitchOut(request: StaffSwitchOutRequest, metadata?: Metadata): Observable<Empty>;
 }
 
 /** Credential flows. Every successful flow returns a fresh access + refresh token pair. */
@@ -232,11 +244,23 @@ export interface AuthServiceController {
     request: StaffSwitchInRequest,
     metadata?: Metadata,
   ): Promise<StaffAccessToken> | Observable<StaffAccessToken> | StaffAccessToken;
+
+  /** Platform staff leaves the tenant: denylists the switch-in token and audits the exit. */
+
+  staffSwitchOut(request: StaffSwitchOutRequest, metadata?: Metadata): void | Promise<void>;
 }
 
 export function AuthServiceControllerMethods() {
   return function (constructor: Function) {
-    const grpcMethods: string[] = ["register", "login", "refreshTokens", "logout", "switchTenant", "staffSwitchIn"];
+    const grpcMethods: string[] = [
+      "register",
+      "login",
+      "refreshTokens",
+      "logout",
+      "switchTenant",
+      "staffSwitchIn",
+      "staffSwitchOut",
+    ];
     for (const method of grpcMethods) {
       const descriptor: any = Reflect.getOwnPropertyDescriptor(constructor.prototype, method);
       GrpcMethod("AuthService", method)(constructor.prototype[method], method, descriptor);

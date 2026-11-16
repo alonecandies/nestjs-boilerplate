@@ -8,6 +8,7 @@ import {
   type RegisterRequest,
   type StaffAccessToken,
   type StaffSwitchInRequest,
+  type StaffSwitchOutRequest,
   type SwitchTenantRequest,
 } from '@domain/identity-contracts';
 import { CommandBus } from '@nestjs/cqrs';
@@ -19,6 +20,7 @@ import {
   toRefreshSessionCommand,
   toRegisterUserCommand,
   toStaffSwitchInCommand,
+  toStaffSwitchOutCommand,
   toSwitchTenantCommand,
 } from '../../application/mappers/identity-request.mapper.js';
 import {
@@ -27,6 +29,7 @@ import {
   refreshTokensRequestSchema,
   registerRequestSchema,
   staffSwitchInRequestSchema,
+  staffSwitchOutRequestSchema,
   switchTenantRequestSchema,
 } from './identity-rpc.payloads.js';
 
@@ -76,5 +79,12 @@ export class AuthGrpcController implements AuthServiceController {
     @Payload(new ZodRpcValidationPipe(staffSwitchInRequestSchema)) request: StaffSwitchInRequest,
   ): Promise<StaffAccessToken> {
     return this.commandBus.execute(toStaffSwitchInCommand(request));
+  }
+
+  /** Resolves `undefined`, which serialises as `google.protobuf.Empty`. */
+  staffSwitchOut(
+    @Payload(new ZodRpcValidationPipe(staffSwitchOutRequestSchema)) request: StaffSwitchOutRequest,
+  ): Promise<void> {
+    return this.commandBus.execute(toStaffSwitchOutCommand(request));
   }
 }

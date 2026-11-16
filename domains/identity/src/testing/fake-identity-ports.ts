@@ -7,6 +7,7 @@ import type {
   RegisterRequest,
   StaffAccessToken,
   StaffSwitchInRequest,
+  StaffSwitchOutRequest,
   SwitchTenantRequest,
   User,
   UserPage,
@@ -241,6 +242,18 @@ export class FakeAuthPort extends AuthPort {
       tenantId: input.tenantId,
       auditEventId,
     };
+  }
+
+  async staffSwitchOut(input: StaffSwitchOutRequest): Promise<void> {
+    this.state.calls.push('AuthService.StaffSwitchOut');
+    await this.denylist.deny(input.accessTokenJti, Number(input.accessTokenExp));
+    this.state.auditEvents.push({
+      id: generateId(),
+      tenantId: input.tenantId,
+      actorId: input.staffUserId,
+      type: AUDIT_EVENT_TYPES.STAFF_SWITCH_OUT,
+      data: { accessTokenJti: input.accessTokenJti },
+    });
   }
 
   private async issue(user: User, tenantId: string): Promise<AuthTokens> {

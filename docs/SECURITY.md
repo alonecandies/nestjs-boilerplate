@@ -170,6 +170,8 @@ no refresh token and no session. Every switch-in writes a `staff.switch_in` row 
 (reason, token id, expiry, client) and an `IdentityAudit` log line. Staff never get `tenant:manage` (an owner
 grant). A switch-in token can neither switch tenants nor switch in again (`STAFF_TOKEN_NOT_ALLOWED`), so
 it cannot outlive its TTL; the flag is re-read on every switch-in, so a revocation stops new switch-ins at once.
+`POST /v1/staff/switch-out` (`@StaffOnly()`) revokes the switch-in token at once (denylist) and writes
+`staff.switch_out`; otherwise the token simply expires.
 
 ### The first admin
 

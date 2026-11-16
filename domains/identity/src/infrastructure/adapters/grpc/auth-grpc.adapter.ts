@@ -9,6 +9,7 @@ import {
   type RegisterRequest,
   type StaffAccessToken,
   type StaffSwitchInRequest,
+  type StaffSwitchOutRequest,
   type SwitchTenantRequest,
 } from '@domain/identity-contracts';
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
@@ -70,5 +71,11 @@ export class AuthGrpcAdapter implements AuthPort, OnModuleInit {
       this.auth.staffSwitchIn(input, metadata),
     );
     return normalizeStaffAccessToken(token);
+  }
+
+  async staffSwitchOut(input: StaffSwitchOutRequest): Promise<void> {
+    await this.caller.call(operation('StaffSwitchOut'), (metadata) =>
+      this.auth.staffSwitchOut(input, metadata),
+    );
   }
 }

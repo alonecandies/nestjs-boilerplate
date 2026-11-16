@@ -59,4 +59,40 @@ describe('staff switch-in through the gateway (fake identity-service)', () => {
     });
     expect(me.json()).toMatchObject({ tenantId, staff: true, tenantRoles: ['admin'] });
   });
+
+  it('switch-out through the gateway revokes the staff token in shared Redis', async () => {
+    const owner = await inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: { email: 'o.out.gw@example.com', password: PASSWORD, displayName: 'O' },
+    });
+    const support = await inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: { email: 's.out.gw@example.com', password: PASSWORD, displayName: 'S' },
+    });
+    const tenantId = owner.json<AuthTokensBody>().tenantId;
+    const s = support.json<AuthTokensBody>();
+    e2e.identity.grantStaff(s.user.id);
+    const switched = await inject({
+      method: 'POST',
+      url: `/v1/staff/tenants/${tenantId}/switch-in`,
+      headers: { authorization: `Bearer ${s.accessToken}` },
+      payload: { reason: 'ticket #8' },
+    });
+    const staffToken = switched.json<{ accessToken: string }>().accessToken;
+    const out = await inject({
+      method: 'POST',
+      url: '/v1/staff/switch-out',
+      headers: { authorization: `Bearer ${staffToken}` },
+    });
+    expect(out.statusCode, out.body).toBe(204);
+    expect(e2e.identity.calls).toContain('AuthService.StaffSwitchOut');
+    const after = await inject({
+      method: 'GET',
+      url: '/v1/auth/me',
+      headers: { authorization: `Bearer ${staffToken}` },
+    });
+    expect(after.statusCode).toBe(401);
+  });
 });

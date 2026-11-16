@@ -8,6 +8,7 @@ import type {
   RefreshTokensRequest,
   RegisterRequest,
   StaffSwitchInRequest,
+  StaffSwitchOutRequest,
   SwitchTenantRequest,
 } from '@domain/identity-contracts';
 import { MAX_CURSOR_LENGTH, MAX_PAGE_LIMIT } from '@platform/common';
@@ -128,3 +129,10 @@ export const staffSwitchInRequestSchema = z.object({
   reason: z.string().trim().min(1).max(IDENTITY_LIMITS.SWITCH_IN_REASON_MAX_LENGTH),
   client: clientInfo,
 }) satisfies z.ZodType<StaffSwitchInRequest>;
+
+export const staffSwitchOutRequestSchema = z.object({
+  staffUserId: z.uuid(),
+  tenantId: z.uuid(),
+  accessTokenJti: z.string().min(1).max(128),
+  accessTokenExp: z.string().regex(/^\d{1,12}$/, 'Expected epoch seconds'),
+}) satisfies z.ZodType<StaffSwitchOutRequest>;

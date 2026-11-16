@@ -5,6 +5,7 @@ import {
   listUsersRequestSchema,
   loginRequestSchema,
   staffSwitchInRequestSchema,
+  staffSwitchOutRequestSchema,
   switchTenantRequestSchema,
 } from './identity-rpc.payloads.js';
 
@@ -113,5 +114,21 @@ describe('staffSwitchInRequestSchema', () => {
     ['reason', 'x'.repeat(IDENTITY_LIMITS.SWITCH_IN_REASON_MAX_LENGTH + 1)],
   ])('rejects a bad %s', (field, value) => {
     expect(staffSwitchInRequestSchema.safeParse({ ...valid, [field]: value }).success).toBe(false);
+  });
+});
+
+describe('staffSwitchOutRequestSchema', () => {
+  it('requires UUIDs and epoch seconds', () => {
+    const valid = {
+      staffUserId: '0190f3b2-0000-7000-8000-000000000001',
+      tenantId: '0190f3b2-0000-7000-8000-0000000000aa',
+      accessTokenJti: 'j',
+      accessTokenExp: '1900000000',
+    };
+    expect(staffSwitchOutRequestSchema.safeParse(valid).success).toBe(true);
+    expect(staffSwitchOutRequestSchema.safeParse({ ...valid, tenantId: 'x' }).success).toBe(false);
+    expect(
+      staffSwitchOutRequestSchema.safeParse({ ...valid, accessTokenExp: 'soon' }).success,
+    ).toBe(false);
   });
 });

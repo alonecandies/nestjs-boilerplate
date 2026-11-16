@@ -38,6 +38,7 @@ describe('staff REST API (Fastify, real JWT guards, fake port)', () => {
 
   beforeEach(() => {
     authPort.staffSwitchIn.mockReset();
+    authPort.staffSwitchOut.mockReset();
   });
 
   it('201: caller, tenant, trimmed reason and client reach the port; the body is the staff token', async () => {
@@ -131,5 +132,63 @@ describe('staff REST API (Fastify, real JWT guards, fake port)', () => {
     });
     expect(anonymous.statusCode).toBe(401);
     expect(authPort.staffSwitchIn).not.toHaveBeenCalled();
+  });
+});
+
+describe('POST /v1/staff/switch-out (@StaffOnly)', () => {
+  let app: App;
+  let caller: TestPrincipal;
+  let switchedIn: TestPrincipal;
+
+  beforeAll(async () => {
+    const builder = Test.createTestingModule({
+      imports: AUTH_TEST_IMPORTS,
+      controllers: [StaffController],
+      providers: [{ provide: AuthPort, useValue: authPort }, ...provideCommonEnhancers()],
+    });
+    app = await createFastifyTestApp(builder, undefined, { appOptions: { logger: false } });
+    caller = await principal(app, ['member']);
+    switchedIn = await principal(app, ['admin'], undefined, TENANT, true);
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  beforeEach(() => {
+    authPort.staffSwitchOut.mockReset();
+  });
+
+  it('204 for a switch-in token: its jti/exp and tenant reach the port', async () => {
+    authPort.staffSwitchOut.mockResolvedValue(undefined);
+    const res = await app.inject({
+      method: 'POST',
+      url: '/v1/staff/switch-out',
+      headers: bearer(switchedIn),
+    });
+    expect(res.statusCode, res.body).toBe(204);
+    expect(authPort.staffSwitchOut).toHaveBeenCalledWith({
+      staffUserId: switchedIn.id,
+      tenantId: TENANT,
+      accessTokenJti: switchedIn.jti,
+      accessTokenExp: String(switchedIn.exp),
+    });
+  });
+
+  it('403 STAFF_ONLY for a normal token, owner included (Review Focus 5); 401 anonymous', async () => {
+    const owner = await principal(app, ['owner']);
+    for (const who of [caller, owner]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/staff/switch-out',
+        headers: bearer(who),
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ code: 'STAFF_ONLY' });
+    }
+    expect((await app.inject({ method: 'POST', url: '/v1/staff/switch-out' })).statusCode).toBe(
+      401,
+    );
+    expect(authPort.staffSwitchOut).not.toHaveBeenCalled();
   });
 });

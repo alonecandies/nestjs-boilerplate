@@ -22,6 +22,8 @@ service AuthService {
   // Platform staff enters a tenant for support: an access token only (admin + staff, short TTL), audited
   // in the tenant. Not staff → PERMISSION_DENIED / STAFF_ONLY; unknown tenant → NOT_FOUND.
   rpc StaffSwitchIn(StaffSwitchInRequest) returns (StaffAccessToken);
+  // Platform staff leaves the tenant: denylists the switch-in token and audits the exit.
+  rpc StaffSwitchOut(StaffSwitchOutRequest) returns (google.protobuf.Empty);
 }
 
 // User queries and administration.
@@ -111,6 +113,14 @@ message StaffSwitchInRequest {
   // Why staff enters (audited), 1..1000 characters.
   string reason = 3;
   ClientInfo client = 4;
+}
+
+message StaffSwitchOutRequest {
+  string staff_user_id = 1;
+  string tenant_id = 2;
+  string access_token_jti = 3;
+  // Switch-in token `exp` (epoch seconds); bounds the denylist entry TTL.
+  int64 access_token_exp = 4;
 }
 
 message StaffAccessToken {
