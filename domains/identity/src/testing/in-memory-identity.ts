@@ -140,8 +140,9 @@ export class InMemorySessionsRepository extends SessionsRepository {
     });
   }
 
-  async findById(id: string): Promise<SessionRecord | null> {
-    return this.store.sessions.get(id) ?? null;
+  async findById(userId: string, id: string): Promise<SessionRecord | null> {
+    const session = this.store.sessions.get(id);
+    return session?.userId === userId ? session : null;
   }
 
   async revokeForRotation(input: RotateSessionInput): Promise<boolean> {

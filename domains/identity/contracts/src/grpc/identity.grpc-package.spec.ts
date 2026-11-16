@@ -101,6 +101,8 @@ describe('identity.v1 wire format (proto-loader semantics + generated types)', (
       refreshToken: 'r',
       expiresIn: 900,
       tokenType: 'Bearer',
+      tenantId: '0190f3b2-0000-7000-8000-0000000000aa',
+      tenantRoles: ['owner'],
     };
     expect(wireRoundTrip(root, 'identity.v1.AuthTokens', tokens)).toEqual({
       ...tokens,

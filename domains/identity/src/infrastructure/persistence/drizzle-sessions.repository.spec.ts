@@ -20,20 +20,26 @@ function setup(handler?: FakeQueryHandler) {
 }
 
 describe('DrizzleSessionsRepository', () => {
-  const ids = { session: generateId(), user: generateId(), successor: generateId() };
+  const ids = {
+    session: generateId(),
+    user: generateId(),
+    tenant: generateId(),
+    successor: generateId(),
+  };
 
   it('create inserts the hashed session', async () => {
     const { repository, executed } = setup();
     await repository.create({
       id: ids.session,
       userId: ids.user,
+      tenantId: ids.tenant,
       refreshTokenHash: 'h'.repeat(64),
       userAgent: 'ua',
       ip: null,
       expiresAt: NOW,
     });
     expect(executed[0]?.sql).toMatch(
-      /^insert into "identity"\."sessions" \("id", "user_id", "refresh_token_hash", "user_agent", "ip", "expires_at", "revoked_at", "replaced_by_id", "created_at"\)/,
+      /^insert into "identity"\."sessions" \("id", "user_id", "tenant_id", "refresh_token_hash", "user_agent", "ip", "expires_at", "revoked_at", "replaced_by_id", "created_at"\)/,
     );
   });
 
@@ -94,6 +100,7 @@ describe('DrizzleSessionsRepository', () => {
       {
         id: ids.session,
         user_id: ids.user,
+        tenant_id: ids.tenant,
         refresh_token_hash: 'h',
         user_agent: null,
         ip: null,
@@ -103,13 +110,14 @@ describe('DrizzleSessionsRepository', () => {
         created_at: NOW.toISOString(),
       },
     ]);
-    await expect(repository.findById(ids.session)).resolves.toMatchObject({
+    await expect(repository.findById(ids.user, ids.session)).resolves.toMatchObject({
       id: ids.session,
       userId: ids.user,
+      tenantId: ids.tenant,
       expiresAt: NOW,
       revokedAt: null,
     });
-    await expect(setup(() => []).repository.findById(ids.session)).resolves.toBeNull();
+    await expect(setup(() => []).repository.findById(ids.user, ids.session)).resolves.toBeNull();
   });
 });
 

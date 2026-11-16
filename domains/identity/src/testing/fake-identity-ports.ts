@@ -10,12 +10,18 @@ import type {
   UserPage,
 } from '@domain/identity-contracts';
 import { type AccessTokenDenylist, isRole } from '@platform/auth';
-import { EntityNotFoundException, generateId } from '@platform/common';
+import {
+  EntityNotFoundException,
+  generateId,
+  normalizeTenantRoles,
+  type TenantRole,
+} from '@platform/common';
 import {
   AuthPort,
   EmailAlreadyTakenException,
   InvalidCredentialsException,
   InvalidRefreshTokenException,
+  MembershipRevokedException,
   normalizeEmail,
   UsersPort,
 } from '../index.js';
@@ -40,6 +46,43 @@ interface StoredUser {
 export class FakeIdentityState {
   readonly users = new Map<string, StoredUser>();
   readonly calls: string[] = [];
+  readonly tenants = new Map<string, { id: string; name: string; personal: boolean }>();
+  readonly memberships: {
+    tenantId: string;
+    userId: string;
+    roles: TenantRole[];
+    lastActiveAt: number;
+  }[] = [];
+  /** Refresh-token session id → its user and tenant. */
+  readonly sessions = new Map<string, { userId: string; tenantId: string }>();
+
+  membership(tenantId: string, userId: string) {
+    return this.memberships.find((m) => m.tenantId === tenantId && m.userId === userId);
+  }
+
+  /** Most recently active first. */
+  membershipsOf(userId: string) {
+    return this.memberships
+      .filter((m) => m.userId === userId)
+      .sort((a, b) => b.lastActiveAt - a.lastActiveAt);
+  }
+
+  addMembership(tenantId: string, userId: string, roles: TenantRole[]): void {
+    if (!this.tenants.has(tenantId)) {
+      this.tenants.set(tenantId, { id: tenantId, name: tenantId, personal: false });
+    }
+    this.memberships.push({
+      tenantId,
+      userId,
+      roles: normalizeTenantRoles(roles),
+      lastActiveAt: 0,
+    });
+  }
+
+  removeMembership(tenantId: string, userId: string): void {
+    const index = this.memberships.findIndex((m) => m.tenantId === tenantId && m.userId === userId);
+    if (index >= 0) this.memberships.splice(index, 1);
+  }
 
   byEmail(email: string): StoredUser | undefined {
     return [...this.users.values()].find((entry) => entry.user.email === email);
@@ -75,14 +118,29 @@ export class FakeAuthPort extends AuthPort {
       updatedAt: now,
     };
     this.state.users.set(user.id, { user, password: input.password });
-    return this.issue(user);
+    const tenantId = generateId();
+    this.state.tenants.set(tenantId, {
+      id: tenantId,
+      name: `${user.displayName}'s workspace`,
+      personal: true,
+    });
+    this.state.memberships.push({
+      tenantId,
+      userId: user.id,
+      roles: ['owner'],
+      lastActiveAt: Date.now(),
+    });
+    return this.issue(user, tenantId);
   }
 
   async login(input: LoginRequest): Promise<AuthTokens> {
     this.state.calls.push('AuthService.Login');
     const entry = this.state.byEmail(normalizeEmail(input.email));
     if (entry?.password !== input.password) throw new InvalidCredentialsException();
-    return this.issue(entry.user);
+    const membership = this.state.membershipsOf(entry.user.id)[0];
+    if (!membership) throw new InvalidCredentialsException();
+    membership.lastActiveAt = Date.now();
+    return this.issue(entry.user, membership.tenantId);
   }
 
   async refreshTokens(input: RefreshTokensRequest): Promise<AuthTokens> {
@@ -92,7 +150,13 @@ export class FakeAuthPort extends AuthPort {
     });
     const entry = this.state.users.get(claims.sub);
     if (!entry) throw new InvalidRefreshTokenException();
-    return this.issue(entry.user);
+    const session = this.state.sessions.get(claims.jti);
+    if (!session || session.userId !== entry.user.id) throw new InvalidRefreshTokenException();
+    this.state.sessions.delete(claims.jti);
+    if (!this.state.membership(session.tenantId, entry.user.id)) {
+      throw new MembershipRevokedException();
+    }
+    return this.issue(entry.user, session.tenantId);
   }
 
   async logout(input: LogoutRequest): Promise<void> {
@@ -101,22 +165,23 @@ export class FakeAuthPort extends AuthPort {
     await this.denylist.deny(input.accessTokenJti, Number(input.accessTokenExp));
   }
 
-  private async issue(user: User): Promise<AuthTokens> {
+  private async issue(user: User, tenantId: string): Promise<AuthTokens> {
     const access = await this.tokens.issueAccessToken({
       id: user.id,
       email: user.email,
       roles: user.roles.filter(isRole),
     });
-    const refresh = await this.tokens.issueRefreshToken({
-      userId: user.id,
-      sessionId: generateId(),
-    });
+    const sessionId = generateId();
+    this.state.sessions.set(sessionId, { userId: user.id, tenantId });
+    const refresh = await this.tokens.issueRefreshToken({ userId: user.id, sessionId });
     return {
       accessToken: access.token,
       refreshToken: refresh.token,
       expiresIn: access.expiresIn,
       tokenType: 'Bearer',
       user,
+      tenantId,
+      tenantRoles: [...(this.state.membership(tenantId, user.id)?.roles ?? [])],
     };
   }
 }

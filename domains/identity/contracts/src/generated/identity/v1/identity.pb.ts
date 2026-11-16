@@ -29,7 +29,13 @@ export interface AuthTokens {
   expiresIn: number;
   /** Always "Bearer". */
   tokenType: string;
-  user?: User | undefined;
+  user?:
+    | User
+    | undefined;
+  /** The session's tenant: the access token's active tenant. */
+  tenantId: string;
+  /** The user's roles in tenant_id: "owner" | "admin" | "member". */
+  tenantRoles: string[];
 }
 
 /** Client fingerprint stored on the session (audit / theft investigation). */

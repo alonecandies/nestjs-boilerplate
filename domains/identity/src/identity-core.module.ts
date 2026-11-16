@@ -23,6 +23,7 @@ import { ListUsersHandler } from './application/queries/list-users/list-users.ha
 import { PersonalWorkspaces } from './application/services/personal-workspaces.service.js';
 import { SessionTokensService } from './application/services/session-tokens.service.js';
 import { TenantAuditLog } from './application/services/tenant-audit-log.service.js';
+import { TenantSelection } from './application/services/tenant-selection.service.js';
 import { DrizzleAuditEventsRepository } from './infrastructure/persistence/drizzle-audit-events.repository.js';
 import { DrizzleInvitationsRepository } from './infrastructure/persistence/drizzle-invitations.repository.js';
 import { DrizzleMembershipsRepository } from './infrastructure/persistence/drizzle-memberships.repository.js';
@@ -89,6 +90,7 @@ const PERSISTENCE: Provider[] = [
     TokenIssuer,
     SessionTokensService,
     PersonalWorkspaces,
+    TenantSelection,
     TenantAuditLog,
     PurgeExpiredSessionsCron,
   ],

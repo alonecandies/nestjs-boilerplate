@@ -64,4 +64,13 @@ describe('identityMigrations', () => {
     );
     expect(sql).toContain('CONSTRAINT "tenants_slug_unique" UNIQUE("slug")');
   });
+
+  it('0005_tenant_sessions empties sessions first and re-keys them (user_id, id)', () => {
+    const sql = readFileSync(join(identityMigrations.folder, '0005_tenant_sessions.sql'), 'utf8');
+    const statements = sql.split('--> statement-breakpoint').map((statement) => statement.trim());
+    expect(statements[0]).toMatch(/DELETE FROM "identity"\."sessions";$/);
+    expect(sql).toContain('DROP CONSTRAINT "sessions_pkey"');
+    expect(sql).toContain('ADD CONSTRAINT "sessions_user_id_id_pk" PRIMARY KEY("user_id","id")');
+    expect(sql).not.toMatch(/^-- ALTER TABLE/m);
+  });
 });

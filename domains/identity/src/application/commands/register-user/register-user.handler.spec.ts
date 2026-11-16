@@ -85,10 +85,14 @@ describe('RegisterUserHandler', () => {
       expect.objectContaining({ id: inserted.id, email: 'ada@example.com', displayName: 'Ada' }),
       inserted.toSnapshot().createdAt,
     );
-    const [record, client] = sessionTokens.open.mock.calls[0] ?? [];
-    expect(record).not.toHaveProperty('passwordHash');
-    expect(record).toMatchObject({ id: inserted.id, email: 'ada@example.com' });
-    expect(client).toEqual({ userAgent: 'jest' });
+    const [input] = sessionTokens.open.mock.calls[0] ?? [];
+    expect(input?.user).not.toHaveProperty('passwordHash');
+    expect(input).toMatchObject({
+      user: { id: inserted.id, email: 'ada@example.com' },
+      tenantId: 'tenant-1',
+      roles: ['owner'],
+      client: { userAgent: 'jest' },
+    });
 
     expect(events.published).toHaveLength(1);
     expect(events.published[0]).toBeInstanceOf(UserRegisteredEvent);

@@ -40,6 +40,8 @@ export const IdentityErrorCode = {
   INVALID_USER: 'INVALID_USER',
   TENANT_SLUG_TAKEN: 'TENANT_SLUG_TAKEN',
   MEMBERSHIP_EXISTS: 'MEMBERSHIP_EXISTS',
+  TENANT_ACCESS_DENIED: 'TENANT_ACCESS_DENIED',
+  MEMBERSHIP_REVOKED: 'MEMBERSHIP_REVOKED',
 } as const;
 export type IdentityErrorCode = (typeof IdentityErrorCode)[keyof typeof IdentityErrorCode];
 

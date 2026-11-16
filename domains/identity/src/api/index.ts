@@ -25,6 +25,7 @@ export { AuthPayloadModel } from '../presentation/graphql/models/auth-payload.mo
 export { UserModel } from '../presentation/graphql/models/user.model.js';
 export { UserConnectionModel } from '../presentation/graphql/models/user-connection.model.js';
 export { RoleEnum } from '../presentation/graphql/role.enum.js';
+export { TenantRoleEnum } from '../presentation/graphql/tenant-role.enum.js';
 // Loads the `GraphqlLoaders['users']` augmentation for every importer of this entry.
 export { UsersLoaderRegistrar } from '../presentation/graphql/users-loader.registrar.js';
 export { UserResponse } from '../presentation/http/responses/user.response.js';

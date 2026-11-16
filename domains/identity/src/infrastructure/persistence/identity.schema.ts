@@ -74,31 +74,6 @@ export const users = identityPgSchema.table(
   ],
 );
 
-export const sessions = identityPgSchema.table(
-  'sessions',
-  {
-    /** = the refresh token's `jti`. */
-    id: uuid().primaryKey(),
-    userId: uuid()
-      .notNull()
-      .references(() => users.id, { onDelete: 'cascade' }),
-    /** sha256 hex of the refresh token (never the token itself). */
-    refreshTokenHash: text().notNull(),
-    userAgent: text(),
-    ip: text(),
-    expiresAt: timestamptz().notNull(),
-    revokedAt: timestamptz(),
-    replacedById: uuid(),
-    createdAt: timestamptz().notNull().defaultNow(),
-  },
-  (t) => [
-    // "revoke all sessions of a user" (reuse detection, sign-out everywhere) + FK cascade.
-    index('sessions_user_id_idx').on(t.userId),
-    // hourly purge `WHERE expires_at <= now()`.
-    index('sessions_expires_at_idx').on(t.expiresAt),
-  ],
-);
-
 // citus: reference (users, tenants and memberships are reference tables: sharding design §2.2)
 export const tenants = identityPgSchema.table(
   'tenants',
@@ -115,6 +90,36 @@ export const tenants = identityPgSchema.table(
   // purpose: drizzle-kit loads this file without workspace packages (identity.migrations.spec pins it).
   () => [
     check('tenants_id_not_platform', sql`"id" <> '00000000-0000-0000-0000-000000000000'::uuid`),
+  ],
+);
+
+// citus: user (PK leads with user_id; refresh looks up (user_id = sub, id = jti): a router query)
+export const sessions = identityPgSchema.table(
+  'sessions',
+  {
+    /** = the refresh token's `jti` (no default: the app generates it before signing). */
+    id: uuid().notNull(),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** A session (and its refresh token) belongs to exactly one tenant. */
+    tenantId: uuid()
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    /** sha256 hex of the refresh token (never the token itself). */
+    refreshTokenHash: text().notNull(),
+    userAgent: text(),
+    ip: text(),
+    expiresAt: timestamptz().notNull(),
+    revokedAt: timestamptz(),
+    replacedById: uuid(),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  (t) => [
+    // Also serves "revoke all sessions of a user" (leading column) and the FK cascade.
+    primaryKey({ name: 'sessions_user_id_id_pk', columns: [t.userId, t.id] }),
+    // hourly purge `WHERE expires_at <= now()` (a multi-shard system DELETE once distributed).
+    index('sessions_expires_at_idx').on(t.expiresAt),
   ],
 );
 

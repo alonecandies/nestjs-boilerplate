@@ -56,9 +56,14 @@ export { GetUsersByIdsQuery } from './application/queries/get-users-by-ids/get-u
 export { ListUsersQuery } from './application/queries/list-users/list-users.query.js';
 export { PersonalWorkspaces } from './application/services/personal-workspaces.service.js';
 export {
+  type OpenSessionInput,
+  SessionTokensService,
+} from './application/services/session-tokens.service.js';
+export {
   type TenantAuditEntry,
   TenantAuditLog,
 } from './application/services/tenant-audit-log.service.js';
+export { TenantSelection } from './application/services/tenant-selection.service.js';
 // Domain.
 export { normalizeEmail } from './domain/email.js';
 export { UserRegisteredEvent } from './domain/events/user-registered.event.js';
@@ -72,8 +77,10 @@ export {
   InvalidRolesException,
   InvalidUserException,
   MembershipAlreadyExistsException,
+  MembershipRevokedException,
   RefreshTokenReuseDetectedException,
   SessionExpiredException,
+  TenantAccessDeniedException,
   TenantSlugTakenException,
 } from './domain/identity.errors.js';
 export {

@@ -27,6 +27,8 @@ export function normalizeAuthTokens(tokens: Wire<AuthTokens>): AuthTokens {
     expiresIn: tokens.expiresIn ?? 0,
     tokenType: tokens.tokenType ?? '',
     user: tokens.user ? normalizeUser(tokens.user) : undefined,
+    tenantId: tokens.tenantId ?? '',
+    tenantRoles: tokens.tenantRoles ?? [],
   };
 }
 

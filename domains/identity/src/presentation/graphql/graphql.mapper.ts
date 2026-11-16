@@ -1,5 +1,5 @@
 import type { AuthTokens, User, UserPage } from '@domain/identity-contracts';
-import { ExternalServiceException } from '@platform/common';
+import { ExternalServiceException, normalizeTenantRoles } from '@platform/common';
 import { toUserView } from '../shared/user-view.js';
 import { AuthPayloadModel } from './models/auth-payload.model.js';
 import { UserModel } from './models/user.model.js';
@@ -17,6 +17,8 @@ export function toAuthPayloadModel(tokens: AuthTokens): AuthPayloadModel {
     expiresIn: tokens.expiresIn,
     tokenType: tokens.tokenType,
     user: toUserModel(tokens.user),
+    tenantId: tokens.tenantId,
+    tenantRoles: normalizeTenantRoles(tokens.tenantRoles),
   });
 }
 

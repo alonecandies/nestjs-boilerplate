@@ -45,8 +45,13 @@ export class RegisterUserHandler implements ICommandHandler<RegisterUserCommand>
     const tokens = await this.transaction.run(async () => {
       await this.users.insert(user);
       const snapshot = user.toSnapshot();
-      await this.workspaces.create(snapshot, now);
-      return this.sessionTokens.open(toUserRecord(snapshot), command.client);
+      const membership = await this.workspaces.create(snapshot, now);
+      return this.sessionTokens.open({
+        user: toUserRecord(snapshot),
+        tenantId: membership.tenantId,
+        roles: membership.roles,
+        client: command.client,
+      });
     });
 
     // Publish UserRegisteredEvent only once the row is committed (the relay then goes to Kafka).

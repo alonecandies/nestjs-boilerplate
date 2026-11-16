@@ -1,4 +1,6 @@
-import { Field, Int, ObjectType } from '@nestjs/graphql';
+import { Field, ID, Int, ObjectType } from '@nestjs/graphql';
+import type { TenantRole } from '@platform/common';
+import { TenantRoleEnum } from '../tenant-role.enum.js';
 import { UserModel } from './user.model.js';
 
 @ObjectType('AuthPayload', { description: 'A fresh token pair and the authenticated user' })
@@ -17,4 +19,10 @@ export class AuthPayloadModel {
 
   @Field(() => UserModel)
   user: UserModel;
+
+  @Field(() => ID, { description: "The session's tenant" })
+  tenantId: string;
+
+  @Field(() => [TenantRoleEnum], { description: 'Your roles in that tenant' })
+  tenantRoles: TenantRole[];
 }
