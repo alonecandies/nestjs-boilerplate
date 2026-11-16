@@ -1,8 +1,10 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap, Optional } from '@nestjs/common';
 import {
+  CLS_PRINCIPAL,
   ExternalServiceException,
   generateId,
   isDomainException,
+  isPrincipal,
   type RetryOptions,
   retry,
 } from '@platform/common';
@@ -36,6 +38,10 @@ export interface KafkaPublishOptions {
   eventId?: string | undefined;
   /** When the fact happened. Default: now. */
   occurredAt?: Date | undefined;
+  /** Envelope tenantId. Default: the CLS principal's tenant. */
+  tenantId?: string | undefined;
+  /** Envelope actorId. Default: the CLS principal's user; `null` = system work, no actor. */
+  actorId?: string | null | undefined;
 }
 
 /** The record handed to `ClientKafka.emit()`. Nest's serializer JSON-encodes `value`. */
@@ -133,12 +139,16 @@ export class KafkaProducer implements OnApplicationBootstrap {
     payload: NoInfer<TPayload>,
     options: KafkaPublishOptions = {},
   ): EventEnvelope<TPayload> {
+    const principal = this.cls?.isActive() ? this.cls.get<unknown>(CLS_PRINCIPAL) : undefined;
+    const fromCls = isPrincipal(principal) ? principal : undefined;
     try {
       return createEventEnvelope(contract, payload, {
         id: options.eventId ?? generateId(),
         source: this.options.source,
         correlationId: options.correlationId ?? correlationIdFromCls(this.cls),
         occurredAt: options.occurredAt,
+        tenantId: options.tenantId ?? fromCls?.tenantId ?? undefined,
+        actorId: 'actorId' in options ? options.actorId : fromCls?.userId,
       });
     } catch (error) {
       if (error instanceof z.core.$ZodError) {

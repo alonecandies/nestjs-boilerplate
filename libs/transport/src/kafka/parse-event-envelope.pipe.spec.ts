@@ -77,8 +77,9 @@ describe('ParseEventEnvelopePipe', () => {
   });
 
   it('fails fast for a contract whose topic has no version suffix', () => {
-    expect(() => new ParseEventEnvelopePipe({ topic: 'nope', payload: z.object({}) })).toThrow(
-      /no "\.v<major>" suffix/,
-    );
+    expect(
+      () =>
+        new ParseEventEnvelopePipe({ topic: 'nope', payload: z.object({}), tenantScoped: false }),
+    ).toThrow(/no "\.v<major>" suffix/);
   });
 });

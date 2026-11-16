@@ -11,6 +11,10 @@ const envelopeShape = {
   occurredAt: z.iso.datetime(),
   source: z.string().min(1),
   correlationId: z.string().min(1).optional(),
+  /** The tenant the event belongs to; the nil UUID for platform-level events (spec §7). */
+  tenantId: z.uuid().optional(),
+  /** The user who caused the event; null for system work. */
+  actorId: z.uuid().nullable().optional(),
 };
 
 /** zod schema type of an envelope wrapping payload schema `T`. */
@@ -40,5 +44,9 @@ export interface EventEnvelope<T> {
   source: string;
   /** Request/correlation id of the operation that caused the event, for cross-service tracing. */
   correlationId?: string | undefined;
+  /** Tenant of the event (`PLATFORM_TENANT_ID` for platform events). Required for tenant-scoped contracts. */
+  tenantId?: string | undefined;
+  /** User who caused the event; `null` for system work. Consumers act as `{ userId: actorId, tenantId }`. */
+  actorId?: string | null | undefined;
   payload: T;
 }
