@@ -1,4 +1,3 @@
-import { Role } from '@platform/auth';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   bearer,
@@ -24,7 +23,7 @@ describe('NotificationsController (Fastify, real guards, fake port)', () => {
 
   beforeAll(async () => {
     app = await createEdgeTestApp({ port, controllers: [NotificationsController] });
-    userToken = await bearer(app, { id: USER_ID, roles: [Role.User] });
+    userToken = await bearer(app, { id: USER_ID, roles: ['member'] });
   });
 
   afterAll(async () => {

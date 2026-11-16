@@ -2,7 +2,7 @@ import { Reflector } from '@nestjs/core';
 import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context-host.js';
 import { GraphQLSchemaBuilderModule, GraphQLSchemaFactory, Query, Resolver } from '@nestjs/graphql';
 import { Test } from '@nestjs/testing';
-import { PERMISSIONS_KEY, PermissionsGuard, Role } from '@platform/auth';
+import { PERMISSIONS_KEY, PermissionsGuard } from '@platform/auth';
 import { createTestRbacRegistry, makeAuthUser } from '@platform/auth/testing';
 import { PermissionDeniedException } from '@platform/common';
 import { InMemoryStorageService } from '@platform/storage/testing';
@@ -85,7 +85,7 @@ describe('FilesResolver', () => {
   });
 
   describe('createUploadUrl', () => {
-    const user = makeAuthUser({ roles: [Role.User] }, rbac);
+    const user = makeAuthUser({ roles: ['member'] }, rbac);
     const config = filesConfig.parse({ STORAGE_MAX_UPLOAD_BYTES: '1024' });
     const resolver = new FilesResolver(new FilesService(new InMemoryStorageService(), config));
 
@@ -150,7 +150,7 @@ describe('FilesResolver', () => {
     });
 
     it('lets users through and rejects a user without files:write (403)', () => {
-      expect(guard.canActivate(graphqlContext(makeAuthUser({ roles: [Role.User] }, rbac)))).toBe(
+      expect(guard.canActivate(graphqlContext(makeAuthUser({ roles: ['member'] }, rbac)))).toBe(
         true,
       );
       expect(() => guard.canActivate(graphqlContext(makeAuthUser({ roles: [] }, rbac)))).toThrow(

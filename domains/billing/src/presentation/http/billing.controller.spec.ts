@@ -10,7 +10,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   FakeRedisModule,
   loginAs,
-  Role,
   type TestPrincipal,
 } from '../../../test/billing-http-test.utils.js';
 import { BillingPort } from '../../application/ports/billing.port.js';
@@ -51,8 +50,8 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
       appOptions: { rawBody: true, logger: false },
     });
     [user, admin, moderator] = await Promise.all([
-      loginAs(app, Role.User),
-      loginAs(app, Role.Admin),
+      loginAs(app, 'member'),
+      loginAs(app, 'admin'),
       loginAs(app),
     ]);
   });
@@ -324,17 +323,14 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
       expect(port.listPayments).not.toHaveBeenCalled();
     });
 
-    it('all=true lists every user for an admin', async () => {
-      port.listPayments.mockResolvedValue({ items: [] });
-
+    it('403 for all=true even for an admin: billing:read-all is withheld until payments are tenant-scoped (B2-26)', async () => {
       const res = await app.inject({
         method: 'GET',
         url: `${PAYMENTS_URL}?all=true&limit=5`,
         headers: { authorization: admin.authorization },
       });
-
-      expect(res.statusCode).toBe(200);
-      expect(port.listPayments).toHaveBeenCalledWith({ userId: undefined, limit: 5 });
+      expect(res.statusCode).toBe(403);
+      expect(port.listPayments).not.toHaveBeenCalled();
     });
 
     it.each(['limit=abc', 'limit=0', 'limit=1000', 'all=maybe', 'cursor='])(

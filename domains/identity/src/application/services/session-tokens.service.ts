@@ -35,7 +35,7 @@ export class SessionTokensService {
     // Signing is CPU-only (HS256): both tokens in parallel, then a single INSERT.
     const [refresh, access] = await Promise.all([
       this.tokens.issueRefreshToken({ userId: input.user.id, sessionId }),
-      this.tokens.issueAccessToken(toAccessTokenSubject(input.user)),
+      this.tokens.issueAccessToken(toAccessTokenSubject(input.user, input.tenantId, input.roles)),
     ]);
     await this.sessions.create({
       id: sessionId,

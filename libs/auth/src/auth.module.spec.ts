@@ -12,8 +12,8 @@ import { AuthModule } from './auth.module.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { PermissionsGuard } from './guards/permissions.guard.js';
 import { RolesGuard } from './guards/roles.guard.js';
-import { Role } from './rbac/role.enum.js';
 import { signTestAccessToken } from './testing/sign-test-access-token.js';
+import { TEST_TENANT_ID } from './testing/test-tenant.js';
 import { AccessTokenDenylist } from './tokens/access-token-denylist.service.js';
 import { TokenService } from './tokens/token.service.js';
 
@@ -46,7 +46,7 @@ describe('AuthModule (DI wiring)', () => {
 
     const tokens = app.get(TokenService);
     // Signed with the `auth` namespace of process.env: the config this module loaded.
-    const issued = await signTestAccessToken({ id: 'u-1', email: 'a@b.c', roles: [Role.Admin] });
+    const issued = await signTestAccessToken({ id: 'u-1', email: 'a@b.c', roles: ['admin'] });
     await expect(tokens.verifyAccessToken(issued.token)).resolves.toMatchObject({ sub: 'u-1' });
 
     const denylist = app.get(AccessTokenDenylist);
@@ -60,7 +60,8 @@ describe('AuthModule (DI wiring)', () => {
     const stray = await jwt.signAsync({
       sub: 'u-1',
       email: 'a@b.c',
-      roles: [Role.Admin],
+      tid: TEST_TENANT_ID,
+      roles: ['admin'],
       typ: 'access',
       jti: generateId(),
       iat: now,

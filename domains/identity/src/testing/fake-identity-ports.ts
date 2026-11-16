@@ -9,7 +9,7 @@ import type {
   User,
   UserPage,
 } from '@domain/identity-contracts';
-import { type AccessTokenDenylist, isRole } from '@platform/auth';
+import type { AccessTokenDenylist } from '@platform/auth';
 import {
   EntityNotFoundException,
   generateId,
@@ -83,6 +83,12 @@ export class FakeIdentityState {
   removeMembership(tenantId: string, userId: string): void {
     const index = this.memberships.findIndex((m) => m.tenantId === tenantId && m.userId === userId);
     if (index >= 0) this.memberships.splice(index, 1);
+  }
+
+  /** Replaces a member's roles in one tenant (tests promote or demote; B2-13 adds the real API). */
+  setMembershipRoles(tenantId: string, userId: string, roles: TenantRole[]): void {
+    const membership = this.membership(tenantId, userId);
+    if (membership) membership.roles = normalizeTenantRoles(roles);
   }
 
   byEmail(email: string): StoredUser | undefined {
@@ -173,10 +179,12 @@ export class FakeAuthPort extends AuthPort {
   }
 
   private async issue(user: User, tenantId: string): Promise<AuthTokens> {
+    const roles = [...(this.state.membership(tenantId, user.id)?.roles ?? [])];
     const access = await this.tokens.issueAccessToken({
       id: user.id,
       email: user.email,
-      roles: user.roles.filter(isRole),
+      tenantId,
+      roles,
     });
     const sessionId = generateId();
     this.state.sessions.set(sessionId, { userId: user.id, tenantId });
@@ -188,7 +196,7 @@ export class FakeAuthPort extends AuthPort {
       tokenType: 'Bearer',
       user,
       tenantId,
-      tenantRoles: [...(this.state.membership(tenantId, user.id)?.roles ?? [])],
+      tenantRoles: roles,
     };
   }
 }

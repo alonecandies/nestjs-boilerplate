@@ -1,16 +1,16 @@
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
-import { Public, UnauthenticatedException } from '@platform/common';
+import { Public, type TenantRole, UnauthenticatedException } from '@platform/common';
 import { authConfig, redisConfig } from '@platform/config';
 import { RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createJwtModuleOptions } from '../auth.module.js';
-import { Role } from '../rbac/role.enum.js';
 import { JwtStrategy } from '../strategies/jwt.strategy.js';
 import { makeAuthUser } from '../testing/auth-test.utils.js';
 import { createTestRbacRegistry } from '../testing/rbac-test.utils.js';
 import { signTestAccessToken } from '../testing/sign-test-access-token.js';
+import { TEST_TENANT_ID } from '../testing/test-tenant.js';
 import { AccessTokenDenylist } from '../tokens/access-token-denylist.service.js';
 import { TokenService } from '../tokens/token.service.js';
 import { executionContext, type Transport } from './execution-context.test.js';
@@ -47,7 +47,9 @@ const target = (handler: () => void = Controller.prototype.secured) => ({
   handler,
   cls: Controller,
 });
-const bearer = async (roles = [Role.User]): Promise<{ token: string; jti: string; exp: number }> =>
+const bearer = async (
+  roles: TenantRole[] = ['member'],
+): Promise<{ token: string; jti: string; exp: number }> =>
   signTestAccessToken({ id: 'u-1', email: 'a@b.c', roles }, { config });
 
 async function failureCode(promise: Promise<unknown>): Promise<string> {
@@ -68,15 +70,20 @@ describe('JwtAuthGuard', () => {
     const { token, jti } = await bearer();
     const req: Record<string, unknown> = { headers: { authorization: `Bearer ${token}` } };
     await expect(guard.canActivate(executionContext('http', target(), req))).resolves.toBe(true);
-    expect(req.user).toMatchObject({ id: 'u-1', roles: [Role.User], jti });
+    expect(req.user).toMatchObject({
+      id: 'u-1',
+      roles: ['member'],
+      tenantId: TEST_TENANT_ID,
+      jti,
+    });
     expect(strategy.name).toBe('jwt');
   });
 
   it('authenticates GraphQL operations through ctx.req', async () => {
-    const { token } = await bearer([Role.Admin]);
+    const { token } = await bearer(['admin']);
     const req: Record<string, unknown> = { headers: { authorization: `Bearer ${token}` } };
     await expect(guard.canActivate(executionContext('graphql', target(), req))).resolves.toBe(true);
-    expect(req.user).toMatchObject({ roles: [Role.Admin] });
+    expect(req.user).toMatchObject({ roles: ['admin'] });
   });
 
   it('verifies a GraphQL operation once, not once per root field', async () => {

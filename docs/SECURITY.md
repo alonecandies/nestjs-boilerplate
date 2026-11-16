@@ -134,22 +134,22 @@ services trust the edge (see [Internal gRPC](#internal-grpc-mtls-reflection)).
 
 Each domain declares its permissions and default grants (`domains/<x>/src/<x>.permissions.ts`,
 `RbacModule.forFeature`); `AuthModule` assembles the map at boot and fails the boot on an undeclared
-permission. Until Task 10 of the B2 core plan, tokens still carry global roles: `user` and `moderator`
-resolve as `member`, `admin` as `admin`. Grants are cumulative: owner ⊇ admin ⊇ member (✓ = effective).
+permission. Access tokens carry the roles of the active tenant (`tid`); permissions are resolved from
+them at verification. Grants are cumulative: owner ⊇ admin ⊇ member (✓ = effective).
 
-| Domain        | Permission            | `member` | `admin` | `owner` | Used by                                                       |
-| ------------- | --------------------- | :------: | :-----: | :-----: | ------------------------------------------------------------- |
-| identity      | `users:read`          |          |    ✓    |    ✓    | `GET /v1/users`, another user's `GET /v1/users/:id`, `users`  |
-| identity      | `users:manage-roles`  |          |    ✓    |    ✓    | `PATCH /v1/users/:id/roles`, `updateUserRoles`                |
-| identity      | `members:manage`      |          |    ✓    |    ✓    | reserved                                                      |
-| identity      | `tenant:manage`       |          |         |    ✓    | reserved                                                      |
-| billing       | `billing:checkout`    |    ✓     |    ✓    |    ✓    | `POST /v1/billing/checkout-sessions`, `createCheckoutSession` |
-| billing       | `billing:read-all`    |          |    ✓    |    ✓    | `GET /v1/billing/payments?all=true`, `payments(all: true)`    |
-| notifications | `notifications:read`  |    ✓     |    ✓    |    ✓    | notifications REST, GraphQL, Socket.IO                        |
-| notifications | `notifications:write` |          |    ✓    |    ✓    | reserved                                                      |
-| files         | `files:read`          |    ✓     |    ✓    |    ✓    | `GET /v1/files/download-url` (own files)                      |
-| files         | `files:write`         |    ✓     |    ✓    |    ✓    | upload, presign, delete (own files)                           |
-| files         | `files:manage`        |          |    ✓    |    ✓    | download/delete any user's file (each use is logged)          |
+| Domain        | Permission            | `member` | `admin` | `owner` | Used by                                                                                                                         |
+| ------------- | --------------------- | :------: | :-----: | :-----: | ------------------------------------------------------------------------------------------------------------------------------- |
+| identity      | `users:read`          |          |    ✓    |    ✓    | `GET /v1/users`, another user's `GET /v1/users/:id`, `users`                                                                    |
+| identity      | `users:manage-roles`  |          |    ✓    |    ✓    | `PATCH /v1/users/:id/roles`, `updateUserRoles`                                                                                  |
+| identity      | `members:manage`      |          |    ✓    |    ✓    | reserved                                                                                                                        |
+| identity      | `tenant:manage`       |          |         |    ✓    | reserved                                                                                                                        |
+| billing       | `billing:checkout`    |    ✓     |    ✓    |    ✓    | `POST /v1/billing/checkout-sessions`, `createCheckoutSession`                                                                   |
+| billing       | `billing:read-all`    |          |         |         | `GET /v1/billing/payments?all=true`, `payments(all: true)`: declared, granted to nobody until the data is tenant-scoped (B2-26) |
+| notifications | `notifications:read`  |    ✓     |    ✓    |    ✓    | notifications REST, GraphQL, Socket.IO                                                                                          |
+| notifications | `notifications:write` |          |    ✓    |    ✓    | reserved                                                                                                                        |
+| files         | `files:read`          |    ✓     |    ✓    |    ✓    | `GET /v1/files/download-url` (own files)                                                                                        |
+| files         | `files:write`         |    ✓     |    ✓    |    ✓    | upload, presign, delete (own files)                                                                                             |
+| files         | `files:manage`        |          |         |         | download/delete any user's file: declared, granted to nobody until the data is tenant-scoped (B4-3)                             |
 
 Ownership rules that are **not** permissions, enforced by the handlers:
 

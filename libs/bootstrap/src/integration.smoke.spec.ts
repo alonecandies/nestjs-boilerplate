@@ -35,7 +35,6 @@ import {
   defineRbacFeature,
   RbacModule,
   RequirePermissions,
-  Role,
   TokenService,
 } from '@platform/auth';
 import { signTestAccessToken } from '@platform/auth/testing';
@@ -50,6 +49,7 @@ import {
   type ProblemDetails,
   Public,
   provideCommonEnhancersAsync,
+  type TenantRole,
 } from '@platform/common';
 import { type AppConfig, AppConfigModule, appConfig } from '@platform/config';
 import { ObservabilityModule, RequestContextService } from '@platform/observability';
@@ -93,7 +93,11 @@ class SmokeController {
   }
 
   @Get('me')
-  me(@CurrentUser() user: AuthUser): { id: string; roles: Role[]; requestId: string | undefined } {
+  me(@CurrentUser() user: AuthUser): {
+    id: string;
+    roles: TenantRole[];
+    requestId: string | undefined;
+  } {
     return { id: user.id, roles: user.roles, requestId: this.context.requestId };
   }
 
@@ -170,7 +174,7 @@ describe('infrastructure libs compose into one Fastify app (no infrastructure)',
   let app: NestFastifyApplication;
   let tokens: TokenService;
 
-  const bearer = async (roles: Role[] = [Role.User]) => {
+  const bearer = async (roles: TenantRole[] = ['member']) => {
     // Signed with the `auth` namespace of process.env, which the app's AuthModule verifies with.
     const issued = await signTestAccessToken({
       id: generateId(),
@@ -267,7 +271,7 @@ describe('infrastructure libs compose into one Fastify app (no infrastructure)',
     });
 
     it('accepts a signed access token (verified locally): 200 with req.user', async () => {
-      const { authorization, token } = await bearer([Role.User]);
+      const { authorization, token } = await bearer(['member']);
       const claims = await tokens.verifyAccessToken(token);
       const response = await app.inject({
         method: 'GET',
@@ -275,7 +279,7 @@ describe('infrastructure libs compose into one Fastify app (no infrastructure)',
         headers: { authorization },
       });
       expect(response.statusCode).toBe(200);
-      expect(response.json()).toMatchObject({ id: claims.sub, roles: [Role.User] });
+      expect(response.json()).toMatchObject({ id: claims.sub, roles: ['member'] });
     });
 
     it('rejects a token denylisted in (fake) Redis: 401 TOKEN_REVOKED', async () => {
@@ -293,7 +297,7 @@ describe('infrastructure libs compose into one Fastify app (no infrastructure)',
     });
 
     it('enforces RBAC after authentication: user → 403 FORBIDDEN, admin → 200', async () => {
-      const user = await bearer([Role.User]);
+      const user = await bearer(['member']);
       const denied = await app.inject({
         method: 'GET',
         url: '/v1/smoke/admin',
@@ -301,7 +305,7 @@ describe('infrastructure libs compose into one Fastify app (no infrastructure)',
       });
       expectProblem(denied, 403, 'FORBIDDEN');
 
-      const admin = await bearer([Role.Admin]);
+      const admin = await bearer(['admin']);
       const allowed = await app.inject({
         method: 'GET',
         url: '/v1/smoke/admin',

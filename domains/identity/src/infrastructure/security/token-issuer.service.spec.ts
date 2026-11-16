@@ -1,5 +1,5 @@
 import { JwtService } from '@nestjs/jwt';
-import { createJwtModuleOptions, defineRbacFeature, Role, TokenService } from '@platform/auth';
+import { createJwtModuleOptions, defineRbacFeature, TokenService } from '@platform/auth';
 import { createTestRbacRegistry } from '@platform/auth/testing';
 import { isUuidV7, UnauthenticatedException } from '@platform/common';
 import { authConfig } from '@platform/config';
@@ -23,7 +23,13 @@ const verifier = new TokenService(
     }),
   ),
 );
-const user = { id: '0190f3b2-0000-7000-8000-000000000001', email: 'a@b.c', roles: [Role.User] };
+const TENANT = '0190f3b2-0000-7000-8000-0000000000aa';
+const user = {
+  id: '0190f3b2-0000-7000-8000-000000000001',
+  email: 'a@b.c',
+  tenantId: TENANT,
+  roles: ['owner'] as const,
+};
 
 async function authErrorOf(promise: Promise<unknown>): Promise<UnauthenticatedException> {
   const error: unknown = await promise.then(
@@ -54,7 +60,9 @@ describe('TokenIssuer', () => {
     expect(claims).toEqual({
       sub: user.id,
       email: 'a@b.c',
-      roles: [Role.User],
+      tid: TENANT,
+      roles: ['owner'],
+      staff: false,
       typ: 'access',
       jti: issued.jti,
       iat: now,
@@ -64,6 +72,8 @@ describe('TokenIssuer', () => {
     });
     expect(verifier.toAuthUser(claims)).toMatchObject({
       id: user.id,
+      tenantId: TENANT,
+      staff: false,
       jti: issued.jti,
       exp: issued.exp,
       permissions: ['orders:read'],

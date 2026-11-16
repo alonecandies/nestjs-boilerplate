@@ -203,4 +203,28 @@ describe('tenancy: workspaces and tenant-bound sessions (monolith)', () => {
     expect(wrong.statusCode).toBe(401);
     expect(wrong.json<{ code: string }>().code).toBe('INVALID_CREDENTIALS');
   });
+
+  it('the access token carries tid and the tenant roles; GET /v1/auth/me shows them', async () => {
+    const tok = await register('tok.tenancy@example.com', 'Tok');
+    const [, payload] = tok.accessToken.split('.');
+    const claims = JSON.parse(Buffer.from(payload ?? '', 'base64url').toString('utf8')) as Record<
+      string,
+      unknown
+    >;
+    expect(claims).toMatchObject({ sub: tok.user.id, tid: tok.tenantId, roles: ['owner'] });
+    expect(claims).not.toHaveProperty('staff');
+    const me = await inject({
+      method: 'GET',
+      url: '/v1/auth/me',
+      headers: { authorization: `Bearer ${tok.accessToken}` },
+    });
+    expect(me.statusCode, me.body).toBe(200);
+    expect(me.json()).toMatchObject({
+      id: tok.user.id,
+      email: 'tok.tenancy@example.com',
+      tenantId: tok.tenantId,
+      tenantRoles: ['owner'],
+      staff: false,
+    });
+  });
 });

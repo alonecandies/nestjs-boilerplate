@@ -3,6 +3,7 @@ import { generateId } from '@platform/common';
 import { type AuthConfig, authConfig } from '@platform/config';
 import { JWT_ALGORITHM } from '../auth.constants.js';
 import type { AccessTokenSubject, IssuedAccessToken } from '../types/auth-user.js';
+import { TEST_TENANT_ID } from './test-tenant.js';
 
 export interface SignTestAccessTokenOptions {
   /**
@@ -11,6 +12,9 @@ export interface SignTestAccessTokenOptions {
    */
   readonly config?: Pick<AuthConfig, 'accessSecret' | 'accessTtlSec' | 'issuer' | 'audience'>;
 }
+
+/** A test subject: the tenant defaults to `TEST_TENANT_ID`. */
+export type TestAccessTokenSubject = Omit<AccessTokenSubject, 'tenantId'> & { tenantId?: string };
 
 const jwt = new JwtService();
 
@@ -21,7 +25,7 @@ const jwt = new JwtService();
  * never imports `@platform/auth/testing`.
  */
 export async function signTestAccessToken(
-  claims: AccessTokenSubject,
+  claims: TestAccessTokenSubject,
   options: SignTestAccessTokenOptions = {},
 ): Promise<IssuedAccessToken> {
   const config = options.config ?? authConfig.parse();
@@ -31,7 +35,10 @@ export async function signTestAccessToken(
   const payload = {
     sub: claims.id,
     email: claims.email,
+    tid: claims.tenantId ?? TEST_TENANT_ID,
     roles: [...claims.roles],
+    // Like TokenIssuer: the claim exists only on staff switch-in tokens.
+    ...(claims.staff === true ? { staff: true } : {}),
     typ: 'access',
     jti,
     iat,

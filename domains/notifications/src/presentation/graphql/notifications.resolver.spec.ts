@@ -1,6 +1,5 @@
 import type { NotificationCreatedPayload } from '@domain/notifications-contracts';
 import { GraphQLSchemaHost } from '@nestjs/graphql';
-import { Role } from '@platform/auth';
 import { type GqlContext, GRAPHQL_PUB_SUB, type GraphqlPubSub } from '@platform/graphql';
 import { type ExecutionResult, parse, printSchema, subscribe } from 'graphql';
 import { PubSub } from 'graphql-subscriptions';
@@ -72,7 +71,7 @@ describe('NotificationsResolver (Apollo on Fastify, real guards, fake port)', ()
 
   beforeAll(async () => {
     app = await createEdgeTestApp({ port, providers: [NotificationsResolver], graphql: true });
-    userToken = await bearer(app, { id: USER_ID, roles: [Role.User] });
+    userToken = await bearer(app, { id: USER_ID, roles: ['member'] });
   });
 
   afterAll(async () => {

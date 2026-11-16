@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { Role } from '@platform/auth';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { EntityNotFoundException, generateId, provideCommonEnhancers } from '@platform/common';
 import { AppCacheService, RATE_LIMIT_POLICY_KEY } from '@platform/redis';
 import { createFastifyTestApp, createMock } from '@platform/testing';
@@ -52,9 +52,9 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
     });
     app = await createFastifyTestApp(builder, undefined, { appOptions: { logger: false } });
     [user, moderator, admin] = await Promise.all([
-      principal(app, [Role.User]),
-      principal(app, [Role.Admin]),
-      principal(app, [Role.Admin]),
+      principal(app, ['member']),
+      principal(app, ['admin']),
+      principal(app, ['admin']),
     ]);
   });
 
@@ -285,7 +285,12 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
     usersPort.getUser.mockResolvedValue(makeUser({ id: user.id }));
     const res = await app.inject({ method: 'GET', url: '/v1/auth/me', headers: bearer(user) });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ id: user.id });
+    expect(res.json()).toMatchObject({
+      id: user.id,
+      tenantId: TEST_TENANT_ID,
+      tenantRoles: ['member'],
+      staff: false,
+    });
     expect(usersPort.getUser).toHaveBeenCalledWith(user.id);
   });
 

@@ -40,7 +40,7 @@ interface PaymentsBody {
 const PASSWORD = 'a very long passphrase';
 const PAYMENTS_QUERY = /* GraphQL */ `
   query Payments {
-    payments(all: true, limit: 10) {
+    payments(limit: 10) {
       items {
         id
         userId
@@ -74,7 +74,7 @@ describe('Payment.user in the gateway (app-level resolver over the remote ports)
   let e2e: GatewayE2e;
   let grace: AuthTokensBody;
   let alan: AuthTokensBody;
-  let adminToken: string;
+  let callerToken: string;
 
   const inject = (...args: Parameters<GatewayE2e['app']['inject']>) => e2e.app.inject(...args);
 
@@ -89,7 +89,7 @@ describe('Payment.user in the gateway (app-level resolver over the remote ports)
   };
 
   const queryPayments = async (): Promise<PaymentsBody> => {
-    const response = await inject(graphql(PAYMENTS_QUERY, undefined, bearer(adminToken)));
+    const response = await inject(graphql(PAYMENTS_QUERY, undefined, bearer(callerToken)));
     expect(response.statusCode, response.body).toBe(200);
     return response.json<PaymentsBody>();
   };
@@ -98,15 +98,7 @@ describe('Payment.user in the gateway (app-level resolver over the remote ports)
     e2e = await createGatewayE2eApp({ billing });
     grace = await register('grace@example.com', 'Grace');
     alan = await register('alan@example.com', 'Alan');
-    // payments(all: true) needs billing:read-all: promote Grace in the fake identity-service.
-    e2e.identity.setRoles(grace.user.id, ['admin']);
-    const login = await inject({
-      method: 'POST',
-      url: '/v1/auth/login',
-      payload: { email: 'grace@example.com', password: PASSWORD },
-    });
-    expect(login.statusCode, login.body).toBe(200);
-    adminToken = login.json<AuthTokensBody>().accessToken;
+    callerToken = grace.accessToken;
   });
 
   afterAll(async () => {
@@ -133,7 +125,7 @@ describe('Payment.user in the gateway (app-level resolver over the remote ports)
     const body = await queryPayments();
 
     expect(body.errors).toBeUndefined();
-    expect(billing.listPayments).toHaveBeenCalledWith({ userId: undefined, limit: 10 });
+    expect(billing.listPayments).toHaveBeenCalledWith({ userId: grace.user.id, limit: 10 });
     const items = body.data?.payments.items ?? [];
     expect(items.map((item) => item.user?.email)).toEqual([
       'grace@example.com',

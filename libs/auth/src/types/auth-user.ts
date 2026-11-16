@@ -1,13 +1,19 @@
-import type { Role } from '../rbac/role.enum.js';
+import type { TenantRole } from '@platform/common';
 
 /**
  * The authenticated principal attached to `req.user` (HTTP / GraphQL) and `socket.data.user` (WS).
  * Built from verified access-token claims only — no DB lookup per request.
  */
 export interface AuthUser {
+  /** The user id (`sub`). */
   id: string;
   email: string;
-  roles: Role[];
+  /** The active tenant (`tid`): every request runs in exactly one tenant. */
+  tenantId: string;
+  /** The user's roles in `tenantId` (owner ⊇ admin ⊇ member). */
+  roles: TenantRole[];
+  /** true only for a platform-staff switch-in token. */
+  staff: boolean;
   /** Resolved from `roles` by `RbacRegistry` when the token is verified; never in the token. */
   permissions: string[];
   /** Access-token id (uuidv7) — what logout puts on the denylist. */
@@ -22,7 +28,12 @@ export type TokenType = 'access' | 'refresh';
 export interface AccessTokenClaims {
   sub: string;
   email: string;
-  roles: Role[];
+  /** Active tenant: a UUID, never PLATFORM_TENANT_ID. Required. */
+  tid: string;
+  /** Roles in `tid`; unknown values dropped when parsed. */
+  roles: TenantRole[];
+  /** On the wire only as `staff: true` (switch-in tokens); anything else parses as false. */
+  staff: boolean;
   jti: string;
   typ: 'access';
   iat: number;
@@ -46,7 +57,10 @@ export interface RefreshTokenClaims {
 export interface AccessTokenSubject {
   id: string;
   email: string;
-  roles: readonly Role[];
+  tenantId: string;
+  roles: readonly TenantRole[];
+  /** Only a staff switch-in token sets it. */
+  staff?: boolean;
 }
 
 export interface IssuedAccessToken {

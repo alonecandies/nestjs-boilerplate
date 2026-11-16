@@ -6,23 +6,22 @@ import {
   RequirePermissions,
 } from '../decorators/require-permissions.decorator.js';
 import { Roles } from '../decorators/roles.decorator.js';
-import { Role } from '../rbac/role.enum.js';
 import { makeAuthUser } from '../testing/auth-test.utils.js';
 import { createTestRbacRegistry, TEST_RBAC_FEATURE } from '../testing/rbac-test.utils.js';
 import { executionContext, type Transport } from './execution-context.test.js';
 import { PermissionsGuard } from './permissions.guard.js';
 import { RolesGuard } from './roles.guard.js';
 
-@Roles(Role.Moderator, Role.Admin)
+@Roles('admin')
 @RequirePermissions('orders:read')
-class UsersController {
+class OrdersController {
   list(): void {
     // inherits the class-level requirements
   }
 
-  @Roles(Role.Admin)
-  @RequirePermissions('orders:approve')
-  updateRoles(): void {
+  @Roles('owner')
+  @RequirePermissions('orders:approve', 'alerts:write')
+  approve(): void {
     // handler-level metadata overrides the class
   }
 
@@ -46,41 +45,32 @@ const ctx = (
   handler: () => void,
   user?: unknown,
   type: Transport = 'http',
-  cls: abstract new (...args: never[]) => unknown = UsersController,
+  cls: abstract new (...args: never[]) => unknown = OrdersController,
 ) => executionContext(type, { handler, cls }, { headers: {}, user });
 
 const rbac = createTestRbacRegistry(TEST_RBAC_FEATURE);
-// Explicit permissions: the legacy moderator role resolves to a plain member (I-3).
-const moderator = makeAuthUser({
-  roles: [Role.Moderator],
-  permissions: ['alerts:read', 'orders:read'],
-});
-const admin = makeAuthUser({ roles: [Role.Admin] }, rbac);
-const user = makeAuthUser({ roles: [Role.User] }, rbac);
-const { list, updateRoles, cleanup } = UsersController.prototype;
+const member = makeAuthUser({ roles: ['member'] }, rbac);
+const admin = makeAuthUser({ roles: ['admin'] }, rbac);
+const owner = makeAuthUser({ roles: ['owner'] }, rbac);
+const { list, approve, cleanup } = OrdersController.prototype;
 
 describe('RolesGuard', () => {
-  it('passes when the user has ANY required role (class-level metadata)', () => {
-    expect(rolesGuard.canActivate(ctx(list, moderator))).toBe(true);
+  it('passes when the user holds a required role (class-level metadata)', () => {
     expect(rolesGuard.canActivate(ctx(list, admin))).toBe(true);
   });
 
   it('handler metadata overrides class metadata', () => {
-    expect(() => rolesGuard.canActivate(ctx(updateRoles, moderator))).toThrow(
-      PermissionDeniedException,
-    );
-    expect(rolesGuard.canActivate(ctx(updateRoles, admin))).toBe(true);
+    expect(() => rolesGuard.canActivate(ctx(approve, admin))).toThrow(PermissionDeniedException);
+    expect(rolesGuard.canActivate(ctx(approve, owner))).toBe(true);
   });
 
   it('403s with the required roles, 401s without a user', () => {
     try {
-      rolesGuard.canActivate(ctx(list, user));
+      rolesGuard.canActivate(ctx(list, member));
       throw new Error('expected a rejection');
     } catch (error) {
       expect(error).toBeInstanceOf(PermissionDeniedException);
-      expect((error as PermissionDeniedException).details).toEqual({
-        requiredRoles: [Role.Moderator, Role.Admin],
-      });
+      expect((error as PermissionDeniedException).details).toEqual({ requiredRoles: ['admin'] });
     }
     expect(() => rolesGuard.canActivate(ctx(list, undefined))).toThrow(UnauthenticatedException);
   });
@@ -95,19 +85,21 @@ describe('RolesGuard', () => {
 
 describe('PermissionsGuard', () => {
   it("'all' mode: every permission is required", () => {
-    expect(permissionsGuard.canActivate(ctx(list, moderator))).toBe(true);
-    expect(() => permissionsGuard.canActivate(ctx(list, user))).toThrow(PermissionDeniedException);
-    expect(() => permissionsGuard.canActivate(ctx(updateRoles, moderator))).toThrow(
+    expect(permissionsGuard.canActivate(ctx(list, admin))).toBe(true);
+    expect(() => permissionsGuard.canActivate(ctx(list, member))).toThrow(
       PermissionDeniedException,
     );
-    expect(permissionsGuard.canActivate(ctx(updateRoles, admin))).toBe(true);
+    expect(permissionsGuard.canActivate(ctx(approve, admin))).toBe(true);
+    expect(() =>
+      permissionsGuard.canActivate(ctx(approve, makeAuthUser({ permissions: ['orders:approve'] }))),
+    ).toThrow(PermissionDeniedException);
   });
 
   it("'any' mode: one matching permission is enough", () => {
     const custom = makeAuthUser({ permissions: ['orders:write'] });
     expect(permissionsGuard.canActivate(ctx(cleanup, custom))).toBe(true);
     try {
-      permissionsGuard.canActivate(ctx(cleanup, moderator));
+      permissionsGuard.canActivate(ctx(cleanup, member));
       throw new Error('expected a rejection');
     } catch (error) {
       expect((error as PermissionDeniedException).details).toEqual({
@@ -121,7 +113,7 @@ describe('PermissionsGuard', () => {
     expect(permissionsGuard.canActivate(ctx(list, admin, 'graphql'))).toBe(true);
     expect(
       permissionsGuard.canActivate(
-        executionContext('ws', { handler: list, cls: UsersController }, { data: { user: admin } }),
+        executionContext('ws', { handler: list, cls: OrdersController }, { data: { user: admin } }),
       ),
     ).toBe(true);
   });

@@ -1,6 +1,5 @@
 import { Readable } from 'node:stream';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
-import { Role } from '@platform/auth';
 import { generateId, isUuidV7 } from '@platform/common';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { UPLOADED_BY_METADATA_KEY } from '../../application/files.service.js';
@@ -38,9 +37,9 @@ describe('FilesController (Fastify e2e, in-memory storage)', () => {
 
   beforeAll(async () => {
     t = await createFilesTestApp({ maxUploadBytes: MAX_UPLOAD_BYTES });
-    alice = await t.tokenFor([Role.User], aliceId);
-    bob = await t.tokenFor([Role.User], bobId);
-    admin = await t.tokenFor([Role.Admin]);
+    alice = await t.tokenFor(['member'], aliceId);
+    bob = await t.tokenFor(['member'], bobId);
+    admin = await t.tokenFor(['admin']);
     // A valid token whose roles grant nothing (e.g. an unknown role dropped at verification).
     nobody = await t.tokenFor([]);
   });
@@ -177,7 +176,7 @@ describe('FilesController (Fastify e2e, in-memory storage)', () => {
         maxUploadBytes: MAX_UPLOAD_BYTES,
         maxConcurrentUploads: 1,
       });
-      token = await busy.tokenFor([Role.User]);
+      token = await busy.tokenFor(['member']);
     });
     afterAll(async () => busy.app.close());
 
@@ -368,9 +367,11 @@ describe('FilesController (Fastify e2e, in-memory storage)', () => {
       expect((await downloadUrl(alice, key)).statusCode).toBe(403);
     });
 
-    it("lets files:manage (admin) presign any user's file", async () => {
+    it("an admin cannot presign another user's file: files:manage is withheld until B4-3", async () => {
       const key = await storedFileOf(bobId);
-      expect((await downloadUrl(admin, key)).statusCode).toBe(200);
+      const res = await downloadUrl(admin, key);
+      expect(res.statusCode).toBe(403);
+      expect(res.json<ProblemBody>()).toMatchObject({ code: 'FILE_ACCESS_DENIED' });
     });
 
     it('404s for a missing own key', async () => {
@@ -430,10 +431,10 @@ describe('FilesController (Fastify e2e, in-memory storage)', () => {
       expect(t.storage.getObject(key)).toBeDefined();
     });
 
-    it("lets files:manage (admin) delete any user's file", async () => {
+    it("an admin cannot delete another user's file: files:manage is withheld until B4-3", async () => {
       const key = await storedFileOf(bobId);
-      expect((await remove(admin, key)).statusCode).toBe(204);
-      expect(t.storage.getObject(key)).toBeUndefined();
+      expect((await remove(admin, key)).statusCode).toBe(403);
+      expect(t.storage.getObject(key)).toBeDefined();
     });
 
     it('403s without files:write or files:manage', async () => {

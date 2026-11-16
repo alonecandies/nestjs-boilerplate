@@ -2,6 +2,7 @@ import type { ExecutionContext } from '@nestjs/common';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
 import { AccessTokenDenylist, AuthModule } from '@platform/auth';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { AllExceptionsFilter, UnauthenticatedException } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { beforeAll, describe, expect, it } from 'vitest';
@@ -22,7 +23,9 @@ function wsContext(user: unknown, type = 'ws'): ExecutionContext {
 const userWith = (jti: string) => ({
   id: USER_ID,
   email: 'a@b.io',
+  tenantId: TEST_TENANT_ID,
   roles: [],
+  staff: false,
   permissions: [],
   jti,
   exp: nowSec() + 900,

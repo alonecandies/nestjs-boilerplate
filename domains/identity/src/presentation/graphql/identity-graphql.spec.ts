@@ -1,5 +1,4 @@
 import { Test } from '@nestjs/testing';
-import { Role } from '@platform/auth';
 import { generateId, provideCommonEnhancers } from '@platform/common';
 import { AppGraphqlModule, DataLoaderRegistry } from '@platform/graphql';
 import { AppCacheService } from '@platform/redis';
@@ -84,7 +83,7 @@ describe('identity GraphQL API (Apollo on Fastify, global guards, fake ports)', 
       ],
     });
     app = await createFastifyTestApp(builder, undefined, { appOptions: { logger: false } });
-    [user, admin] = await Promise.all([principal(app, [Role.User]), principal(app, [Role.Admin])]);
+    [user, admin] = await Promise.all([principal(app, ['member']), principal(app, ['admin'])]);
   });
 
   afterAll(async () => {

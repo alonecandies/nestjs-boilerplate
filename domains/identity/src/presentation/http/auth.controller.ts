@@ -37,8 +37,8 @@ import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
 import { LoginRequestGuard } from './guards/login-request.guard.js';
 import { AuthTokensResponse } from './responses/auth-tokens.response.js';
+import { MeResponse } from './responses/me.response.js';
 import { ProblemResponse } from './responses/problem.response.js';
-import { UserResponse } from './responses/user.response.js';
 
 /** `req.user` after `LocalAuthGuard`: the token pair produced by `LocalStrategy`. */
 interface AuthenticatedLoginRequest extends RequestLike {
@@ -141,9 +141,9 @@ export class AuthController {
   @Get('me')
   @ApiBearerAuth()
   @ApiOperation({ summary: 'The authenticated user' })
-  @ApiOkResponse({ type: UserResponse })
+  @ApiOkResponse({ type: MeResponse })
   @ApiUnauthorizedResponse({ type: ProblemResponse })
-  async me(@CurrentUser('id') userId: string): Promise<UserResponse> {
-    return UserResponse.from(await this.users.getUser(userId));
+  async me(@CurrentUser() principal: AuthUser): Promise<MeResponse> {
+    return MeResponse.forPrincipal(await this.users.getUser(principal.id), principal);
   }
 }

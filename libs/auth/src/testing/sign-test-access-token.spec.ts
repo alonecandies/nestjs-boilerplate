@@ -1,12 +1,12 @@
 import { JwtService } from '@nestjs/jwt';
-import { isUuidV7 } from '@platform/common';
+import { isUuidV7, type TenantRole } from '@platform/common';
 import { type AuthConfig, authConfig } from '@platform/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createJwtModuleOptions } from '../auth.module.js';
-import { Role } from '../rbac/role.enum.js';
 import { TokenService } from '../tokens/token.service.js';
 import { createTestRbacRegistry } from './rbac-test.utils.js';
 import { signTestAccessToken } from './sign-test-access-token.js';
+import { TEST_TENANT_ID } from './test-tenant.js';
 
 const config = authConfig.parse({ NODE_ENV: 'test', JWT_ACCESS_TTL_SEC: '600' });
 const verifierFor = (settings: AuthConfig): TokenService =>
@@ -18,7 +18,7 @@ const verifierFor = (settings: AuthConfig): TokenService =>
 const subject = {
   id: '0190f3b2-0000-7000-8000-000000000001',
   email: 'a@b.c',
-  roles: [Role.Admin],
+  roles: ['admin'] satisfies TenantRole[],
 };
 
 describe('signTestAccessToken', () => {
@@ -38,13 +38,25 @@ describe('signTestAccessToken', () => {
     await expect(verifierFor(config).verifyAccessToken(issued.token)).resolves.toEqual({
       sub: subject.id,
       email: 'a@b.c',
-      roles: [Role.Admin],
+      tid: TEST_TENANT_ID,
+      roles: ['admin'],
+      staff: false,
       typ: 'access',
       jti: issued.jti,
       iat: now,
       exp: now + 600,
       iss: 'nestjs-boilerplate',
       aud: 'nestjs-boilerplate',
+    });
+  });
+
+  it('writes tenantId when given', async () => {
+    const issued = await signTestAccessToken(
+      { ...subject, tenantId: '0190f3b2-0000-7000-8000-0000000000aa' },
+      { config },
+    );
+    await expect(verifierFor(config).verifyAccessToken(issued.token)).resolves.toMatchObject({
+      tid: '0190f3b2-0000-7000-8000-0000000000aa',
     });
   });
 

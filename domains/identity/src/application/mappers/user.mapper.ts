@@ -1,5 +1,6 @@
 import type { User } from '@domain/identity-contracts';
-import { type AccessTokenSubject, isRole } from '@platform/auth';
+import type { AccessTokenSubject } from '@platform/auth';
+import type { TenantRole } from '@platform/common';
 import type { UserSnapshot } from '../../domain/user.aggregate.js';
 import type { UserRecord } from '../persistence/users.repository.js';
 
@@ -30,7 +31,11 @@ export function toUserRecord(user: UserSnapshot): UserRecord {
   };
 }
 
-/** What goes into the access token (roles are the RBAC `Role` enum values). */
-export function toAccessTokenSubject(user: UserRecord): AccessTokenSubject {
-  return { id: user.id, email: user.email, roles: user.roles.filter(isRole) };
+/** What goes into the access token: the user, the session's tenant and the roles held there. */
+export function toAccessTokenSubject(
+  user: UserRecord,
+  tenantId: string,
+  roles: readonly TenantRole[],
+): AccessTokenSubject {
+  return { id: user.id, email: user.email, tenantId, roles: [...roles] };
 }

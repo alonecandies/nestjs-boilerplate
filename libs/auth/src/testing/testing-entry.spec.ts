@@ -5,6 +5,7 @@ describe('@platform/auth entry points', () => {
   it('ships makeAuthUser only on ./testing', () => {
     expect(Object.keys(testing).sort()).toEqual([
       'TEST_RBAC_FEATURE',
+      'TEST_TENANT_ID',
       'createTestRbacRegistry',
       'makeAuthUser',
       'signTestAccessToken',

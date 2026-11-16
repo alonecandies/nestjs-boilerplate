@@ -247,25 +247,42 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
       expectProblem(response, 401, 'INVALID_TOKEN');
     });
 
-    it('RBAC: GET /v1/users needs users:read → 403 for a user, 200 once promoted to admin', async () => {
+    it('RBAC: GET /v1/users needs users:read → 403 for a workspace member, 200 for its admin', async () => {
+      const registered = await inject({
+        method: 'POST',
+        url: '/v1/auth/register',
+        payload: {
+          email: 'member.rbac@example.com',
+          password: GRACE.password,
+          displayName: 'Member',
+        },
+      });
+      const body = registered.json<AuthTokensBody & { tenantId: string }>();
+      const loginAs = async () =>
+        (
+          await inject({
+            method: 'POST',
+            url: '/v1/auth/login',
+            payload: { email: 'member.rbac@example.com', password: GRACE.password },
+          })
+        ).json<AuthTokensBody>().accessToken;
+
+      e2e.identity.setMembershipRoles(body.tenantId, body.user.id, ['member']);
       const denied = await inject({
         method: 'GET',
         url: '/v1/users',
-        headers: bearer(tokens.accessToken),
+        headers: bearer(await loginAs()),
       });
       expectProblem(denied, 403, 'FORBIDDEN');
       expect(e2e.identity.calls).not.toContain('UsersService.ListUsers');
 
-      e2e.identity.setRoles(tokens.user.id, ['admin']);
-      const admin = await login();
+      e2e.identity.setMembershipRoles(body.tenantId, body.user.id, ['admin']);
       const allowed = await inject({
         method: 'GET',
         url: '/v1/users',
-        headers: bearer(admin.accessToken),
+        headers: bearer(await loginAs()),
       });
       expect(allowed.statusCode, allowed.body).toBe(200);
-      expect(allowed.json()).toMatchObject({ items: [{ id: tokens.user.id }] });
-      e2e.identity.setRoles(tokens.user.id, ['user']);
     });
 
     it('class-validator body validation → 400 with per-field errors (no upstream call)', async () => {

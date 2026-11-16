@@ -35,6 +35,12 @@ describe('SessionTokensService', () => {
     });
 
     expect(tokens.issueRefreshToken).toHaveBeenCalledWith({ userId: user.id, sessionId: 'sid-1' });
+    expect(tokens.issueAccessToken).toHaveBeenCalledWith({
+      id: user.id,
+      email: user.email,
+      tenantId: TENANT,
+      roles: ['owner'],
+    });
     expect(sessions.create).toHaveBeenCalledWith({
       id: 'sid-1',
       userId: user.id,

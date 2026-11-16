@@ -3,7 +3,6 @@ import { JwtService, type JwtVerifyOptions } from '@nestjs/jwt';
 import { UnauthenticatedException } from '@platform/common';
 import { type AuthConfig, authConfig } from '@platform/config';
 import { AuthErrorCode, JWT_ALGORITHM, JWT_CLOCK_TOLERANCE_SEC } from '../auth.constants.js';
-import { legacyTenantRoles } from '../rbac/legacy-tenant-roles.js';
 import { RbacRegistry } from '../rbac/rbac.registry.js';
 import type { AccessTokenClaims, AuthUser } from '../types/auth-user.js';
 import { parseAccessTokenClaims, toAuthUser } from './token-claims.js';
@@ -56,7 +55,7 @@ export class TokenService {
   }
 
   toAuthUser(claims: AccessTokenClaims): AuthUser {
-    return toAuthUser(claims, this.rbac.resolve(legacyTenantRoles(claims.roles)));
+    return toAuthUser(claims, this.rbac.resolve(claims.roles));
   }
 
   /** What verifiers must enforce to accept exactly the tokens signed for this deployment. */

@@ -2,7 +2,6 @@ import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
 import { Global, Module } from '@nestjs/common';
 import { CqrsModule } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
-import { Role } from '@platform/auth';
 import { provideCommonEnhancers } from '@platform/common';
 import { DRIZZLE, TransactionHost } from '@platform/database';
 import { AppCacheService } from '@platform/redis';
@@ -113,7 +112,7 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
 
     expect(res.statusCode).toBe(201);
     const body = res.json<{ accessToken: string; user: { id: string; roles: string[] } }>();
-    expect(body.user.roles).toEqual([Role.User]);
+    expect(body.user.roles).toEqual(['user']);
     const statements = database.executed.map((query) => query.sql.split(' (')[0]);
     expect(statements).toEqual([
       'select "id" from "identity"."users" where "identity"."users"."email" = $1 limit $2',
@@ -184,7 +183,7 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
   });
 
   it('GET /v1/users/:id reads through QueryBus → repository for users:read holders', async () => {
-    const moderator = await principal(app, [Role.Admin]);
+    const moderator = await principal(app, ['admin']);
     const res = await app.inject({
       method: 'GET',
       url: '/v1/users/01994f6c-1c3a-7b4e-9f00-5d1e2a3b4c5d',

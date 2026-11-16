@@ -25,11 +25,12 @@ describe('user mappers', () => {
     });
   });
 
-  it('builds the access-token subject from id, email and RBAC roles', () => {
-    expect(toAccessTokenSubject(snapshot)).toEqual({
+  it('builds the access-token subject from the user, the tenant and the tenant roles (never global roles)', () => {
+    expect(toAccessTokenSubject(snapshot, 'tenant-1', ['owner'])).toEqual({
       id: snapshot.id,
       email: snapshot.email,
-      roles: ['admin', 'user'],
+      tenantId: 'tenant-1',
+      roles: ['owner'],
     });
   });
 });

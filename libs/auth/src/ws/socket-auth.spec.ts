@@ -1,13 +1,13 @@
 import { JwtService } from '@nestjs/jwt';
-import { UnauthenticatedException } from '@platform/common';
+import { type TenantRole, UnauthenticatedException } from '@platform/common';
 import { authConfig, redisConfig } from '@platform/config';
 import { RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import { describe, expect, it } from 'vitest';
 import { createJwtModuleOptions } from '../auth.module.js';
-import { Role } from '../rbac/role.enum.js';
 import { createTestRbacRegistry } from '../testing/rbac-test.utils.js';
 import { signTestAccessToken } from '../testing/sign-test-access-token.js';
+import { TEST_TENANT_ID } from '../testing/test-tenant.js';
 import { AccessTokenDenylist } from '../tokens/access-token-denylist.service.js';
 import { TokenService } from '../tokens/token.service.js';
 import { authenticateSocket, extractBearerToken, extractSocketToken } from './socket-auth.js';
@@ -53,13 +53,15 @@ describe('extractSocketToken', () => {
 });
 
 describe('authenticateSocket', () => {
-  const user = { id: 'u-1', email: 'a@b.c', roles: [Role.Moderator] };
+  const user = { id: 'u-1', email: 'a@b.c', roles: ['admin'] satisfies TenantRole[] };
 
   it('returns the AuthUser for a valid, non-revoked token', async () => {
     const { token, jti } = await signTestAccessToken(user, { config });
     await expect(authenticateSocket(tokens, denylist, `Bearer ${token}`)).resolves.toMatchObject({
       id: 'u-1',
-      roles: [Role.Moderator],
+      roles: ['admin'],
+      tenantId: TEST_TENANT_ID,
+      staff: false,
       jti,
     });
   });
