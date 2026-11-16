@@ -1,5 +1,15 @@
 import { relations, sql } from 'drizzle-orm';
-import { boolean, check, index, pgSchema, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  check,
+  index,
+  pgSchema,
+  primaryKey,
+  text,
+  timestamp,
+  uuid,
+} from 'drizzle-orm/pg-core';
+import { TENANT_ROLE_VALUES } from '../../domain/tenant-role.js';
 import { USER_ROLES } from '../../domain/user-role.js';
 
 /*
@@ -32,6 +42,9 @@ const timestamptz = () => timestamp({ withTimezone: true, precision: 3, mode: 'd
 
 /** RBAC roles (values = @platform/auth `Role`). */
 export const userRole = identityPgSchema.enum('user_role', USER_ROLES);
+
+/** Tenant roles (values = @platform/common `TENANT_ROLES`). */
+export const tenantRole = identityPgSchema.enum('tenant_role', TENANT_ROLE_VALUES);
 
 export const users = identityPgSchema.table(
   'users',
@@ -103,6 +116,30 @@ export const tenants = identityPgSchema.table(
   ],
 );
 
+// citus: reference (a STABLE policy helper reads it on every node: sharding design §2.2)
+export const memberships = identityPgSchema.table(
+  'memberships',
+  {
+    tenantId: uuid()
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Canonical order (owner, admin, member), deduplicated, never empty. */
+    roles: tenantRole().array().notNull(),
+    /** Set by register, login and switch (a replicated write on Citus), never by refresh. */
+    lastActiveAt: timestamptz(),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'memberships_tenant_id_user_id_pk', columns: [t.tenantId, t.userId] }),
+    // "most recently active membership" at login (MembershipsRepository.findMostRecentForUser).
+    index('memberships_user_id_last_active_at_idx').on(t.userId, t.lastActiveAt.desc().nullsLast()),
+    check('memberships_roles_not_empty', sql`cardinality("roles") > 0`),
+  ],
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
 }));
@@ -117,9 +154,11 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
  */
 export const identitySchema = {
   userRole,
+  tenantRole,
   users,
   sessions,
   tenants,
+  memberships,
   usersRelations,
   sessionsRelations,
 };
@@ -130,3 +169,4 @@ export type NewUserRow = typeof users.$inferInsert;
 export type SessionRow = typeof sessions.$inferSelect;
 export type NewSessionRow = typeof sessions.$inferInsert;
 export type TenantRow = typeof tenants.$inferSelect;
+export type MembershipRow = typeof memberships.$inferSelect;

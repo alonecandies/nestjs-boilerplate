@@ -21,6 +21,12 @@ export { RefreshSessionCommand } from './application/commands/refresh-session/re
 export { RegisterUserCommand } from './application/commands/register-user/register-user.command.js';
 export { UpdateUserRolesCommand } from './application/commands/update-user-roles/update-user-roles.command.js';
 export type {
+  MembershipRecord,
+  NewMembership,
+  TenantMembership,
+} from './application/persistence/memberships.repository.js';
+export { MembershipsRepository } from './application/persistence/memberships.repository.js';
+export type {
   NewSession,
   RotateSessionInput,
   SessionRecord,
@@ -46,10 +52,12 @@ export {
   InvalidRefreshTokenException,
   InvalidRolesException,
   InvalidUserException,
+  MembershipAlreadyExistsException,
   RefreshTokenReuseDetectedException,
   SessionExpiredException,
   TenantSlugTakenException,
 } from './domain/identity.errors.js';
+export { TENANT_ROLE_VALUES } from './domain/tenant-role.js';
 export {
   deriveTenantSlug,
   personalWorkspaceName,
@@ -71,8 +79,10 @@ export { identityMigrations } from './infrastructure/persistence/identity.migrat
 export {
   type IdentitySchema,
   identitySchema,
+  memberships,
   sessions,
   sessionsRelations,
+  tenantRole,
   tenants,
   userRole,
   users,

@@ -107,3 +107,13 @@ export class TenantSlugTakenException extends DomainConflictException {
     });
   }
 }
+
+/** 409 — the user is already a member of this tenant. */
+export class MembershipAlreadyExistsException extends DomainConflictException {
+  constructor(options?: { cause?: unknown }) {
+    super('The user is already a member of this workspace', {
+      code: IdentityErrorCode.MEMBERSHIP_EXISTS,
+      cause: options?.cause,
+    });
+  }
+}
