@@ -35,6 +35,7 @@ import {
   defineRbacFeature,
   RbacModule,
   RequirePermissions,
+  Roles,
   TokenService,
 } from '@platform/auth';
 import { signTestAccessToken } from '@platform/auth/testing';
@@ -104,6 +105,18 @@ class SmokeController {
   @Get('admin')
   @RequirePermissions('orders:approve')
   admin(): { ok: true } {
+    return { ok: true };
+  }
+
+  @Get('tenant-admin')
+  @Roles('admin')
+  tenantAdmin(): { ok: true } {
+    return { ok: true };
+  }
+
+  @Get('tenant-owner')
+  @Roles('owner')
+  tenantOwner(): { ok: true } {
     return { ok: true };
   }
 
@@ -312,6 +325,19 @@ describe('infrastructure libs compose into one Fastify app (no infrastructure)',
         headers: { authorization: admin.authorization },
       });
       expect(allowed.statusCode).toBe(200);
+    });
+
+    it('applies @Roles with the tenant-role hierarchy through the global guards (owner ⊇ admin ⊇ member)', async () => {
+      const status = async (url: string, roles: TenantRole[]): Promise<number> => {
+        const { authorization } = await bearer(roles);
+        return (await app.inject({ method: 'GET', url, headers: { authorization } })).statusCode;
+      };
+      expect(await status('/v1/smoke/tenant-admin', ['member'])).toBe(403);
+      expect(await status('/v1/smoke/tenant-admin', ['admin'])).toBe(200);
+      expect(await status('/v1/smoke/tenant-admin', ['owner'])).toBe(200);
+      expect(await status('/v1/smoke/tenant-owner', ['admin'])).toBe(403);
+      expect(await status('/v1/smoke/tenant-owner', ['owner'])).toBe(200);
+      expect(await status('/v1/smoke/tenant-owner', [])).toBe(403);
     });
   });
 

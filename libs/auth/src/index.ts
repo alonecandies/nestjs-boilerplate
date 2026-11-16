@@ -11,7 +11,9 @@ export {
   JWT_STRATEGY,
   LOCAL_STRATEGY,
   PERMISSIONS_KEY,
+  RbacErrorCode,
   ROLES_KEY,
+  STAFF_ONLY_KEY,
 } from './auth.constants.js';
 export { AuthModule, type AuthModuleSetup, createJwtModuleOptions } from './auth.module.js';
 export { Auth } from './decorators/auth.decorator.js';
@@ -22,11 +24,13 @@ export {
   RequirePermissions,
 } from './decorators/require-permissions.decorator.js';
 export { Roles } from './decorators/roles.decorator.js';
+export { StaffOnly } from './decorators/staff-only.decorator.js';
 export { requireAuthUser } from './guards/current-auth-user.js';
 export { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 export { LocalAuthGuard } from './guards/local-auth.guard.js';
 export { PermissionsGuard } from './guards/permissions.guard.js';
 export { RolesGuard } from './guards/roles.guard.js';
+export { StaffOnlyGuard } from './guards/staff-only.guard.js';
 export { hasPermissions, type PermissionMatchMode } from './rbac/permission-match.js';
 export { RbacModule } from './rbac/rbac.module.js';
 export { RbacRegistry } from './rbac/rbac.registry.js';

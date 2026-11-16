@@ -120,15 +120,17 @@ session of the given `refreshToken`, or **every** session when the body omits it
 Global guards, registered by `AuthModule.forRootAsync()` in this order: `JwtAuthGuard` →
 `RolesGuard` → `PermissionsGuard`. They branch on the context type, so the same decorators work on
 REST controllers, GraphQL resolvers and WebSocket handlers. `rpc` handlers (gRPC, Kafka) bypass them:
-services trust the edge (see [Internal gRPC](#internal-grpc-mtls-reflection)).
+services trust the edge (see [Internal gRPC](#internal-grpc-mtls-reflection)). `@StaffOnly()` adds
+`StaffOnlyGuard` on its route, after them.
 
-| Decorator                                               | Meaning                                                    |
-| ------------------------------------------------------- | ---------------------------------------------------------- |
-| `@Public()` (`@platform/common`)                        | skip authentication                                        |
-| `@RequirePermissions(...p)` / `@RequireAnyPermission()` | all / any of the permissions                               |
-| `@Roles(...roles)`                                      | any of the roles (prefer permissions)                      |
-| `@Auth(...p)`                                           | alias of `@RequirePermissions(...p)`                       |
-| `@CurrentUser(field?)`                                  | the `AuthUser` (401 when absent, even on `@Public` routes) |
+| Decorator                                               | Meaning                                                                                         |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `@Public()` (`@platform/common`)                        | skip authentication                                                                             |
+| `@RequirePermissions(...p)` / `@RequireAnyPermission()` | all / any of the permissions                                                                    |
+| `@Roles(...roles)`                                      | any of the tenant roles, owner ⊇ admin ⊇ member; only for owner-only rules (prefer permissions) |
+| `@StaffOnly()`                                          | platform-staff switch-in tokens only (403 `STAFF_ONLY`)                                         |
+| `@Auth(...p)`                                           | alias of `@RequirePermissions(...p)`                                                            |
+| `@CurrentUser(field?)`                                  | the `AuthUser` (401 when absent, even on `@Public` routes)                                      |
 
 ### Matrix (default grants)
 

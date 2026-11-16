@@ -130,3 +130,27 @@ describe('PermissionsGuard', () => {
     );
   });
 });
+
+describe('RolesGuard: tenant-role hierarchy (owner ⊇ admin ⊇ member)', () => {
+  @Roles('member')
+  class MembersOnly {
+    read(): void {
+      // any member of the tenant
+    }
+  }
+  const read = MembersOnly.prototype.read;
+  const at = (user: unknown) => ctx(read, user, 'http', MembersOnly);
+
+  it('an owner satisfies @Roles("admin"); an admin and an owner satisfy @Roles("member")', () => {
+    expect(rolesGuard.canActivate(ctx(list, owner))).toBe(true);
+    expect(rolesGuard.canActivate(at(admin))).toBe(true);
+    expect(rolesGuard.canActivate(at(owner))).toBe(true);
+    expect(rolesGuard.canActivate(at(member))).toBe(true);
+  });
+
+  it('no role at all satisfies nothing', () => {
+    expect(() => rolesGuard.canActivate(at(makeAuthUser({ roles: [] })))).toThrow(
+      PermissionDeniedException,
+    );
+  });
+});
