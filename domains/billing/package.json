@@ -39,6 +39,7 @@
     "@domain/billing-contracts": "workspace:*",
     "@platform/database": "workspace:*",
     "@platform/graphql": "workspace:*",
+    "@platform/immudb": "workspace:*",
     "@platform/observability": "workspace:*",
     "@platform/redis": "workspace:*",
     "@platform/transport": "workspace:*",
@@ -66,6 +67,7 @@
     "@platform/testing": "workspace:*",
     "@nestjs/testing": "catalog:",
     "@testcontainers/postgresql": "catalog:",
+    "testcontainers": "catalog:",
     "@types/lodash-es": "catalog:",
     "drizzle-kit": "catalog:"
   }

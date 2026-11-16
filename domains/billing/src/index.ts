@@ -41,6 +41,8 @@ export * from './domain/ledger/ledger.invariant.js';
 export * from './domain/ledger/ledger.types.js';
 export * from './domain/payment.aggregate.js';
 // Infrastructure
+export * from './infrastructure/ledger/billing-ledger.migrations.js';
+export * from './infrastructure/ledger/immudb-ledger.adapter.js';
 export { billingMigrations } from './infrastructure/persistence/billing.migrations.js';
 export {
   type BillingSchema,

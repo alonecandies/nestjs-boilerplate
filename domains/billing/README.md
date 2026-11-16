@@ -327,6 +327,18 @@ tables and enum in `billing` and none of identity's, nothing in `public`, one bo
 entry in each set's own table, every index of the former migrations, the DB defaults (uuidv7 id, `pending`
 status) and a second boot that applies nothing.
 
+## Ledger (immudb)
+
+An append-only double-entry ledger in immudb (`@platform/immudb`), not Postgres. One entry per Stripe
+balance transaction (`sourceKey = stripe:txn:<id>`, entry id = uuidv5 of it), postings in minor units per
+currency, fees from the balance transaction (`application/ledger/posting-rules.ts`). `LedgerPort.post` is
+idempotent (`posted` / `replayed` / `conflict`) and validates the double-entry rules before any I/O. The
+immudb user may only `SELECT` and `INSERT`; every tenant read carries `tenant_id = @tenant` (immudb has no
+RLS). Tables: `infrastructure/ledger/migrations/001_ledger.sql` (`billingLedgerMigrations`). Not wired
+into the apps yet: the posting consumer, reconciliation and `LEDGER_ENABLED` arrive with the outbox
+(ledger waves 1-2). Tests: `InMemoryLedger` (`@domain/billing/testing`) and the adapter run the same
+contract spec (`src/testing/ledger.contract.test.ts`).
+
 ## Gotchas
 
 - The webhook route's raw-body, `@Public()` and `@SkipRateLimit()` requirements: see **Stripe adapter** above.
