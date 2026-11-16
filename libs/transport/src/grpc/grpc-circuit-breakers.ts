@@ -10,6 +10,7 @@ import { GrpcStatus } from '@nestjs/microservices';
 import { isDomainException } from '@platform/common';
 import CircuitBreaker from 'opossum';
 import { GRPC_CIRCUIT_BREAKER_OPTIONS } from './grpc.constants.js';
+import { trackCircuitBreakerStates } from './grpc-metrics.js';
 import { isGrpcServiceError } from './grpc-status.mapping.js';
 
 /** The unit of work a breaker runs: one upstream call. */
@@ -79,6 +80,8 @@ export class GrpcCircuitBreakers implements OnApplicationShutdown {
   private readonly logger = new Logger(GrpcCircuitBreakers.name);
   private readonly breakers = new Map<string, GrpcCircuitBreaker>();
   private readonly options: GrpcCircuitBreakerOptions;
+  /** Feeds `grpc_client_circuit_breaker_state` until shutdown. */
+  private readonly untrackStates = trackCircuitBreakerStates(() => this.states());
 
   constructor(
     @Optional()
@@ -103,7 +106,7 @@ export class GrpcCircuitBreakers implements OnApplicationShutdown {
     return breaker;
   }
 
-  /** State of every breaker created so far (diagnostics / debug endpoints). */
+  /** State of every breaker so far (the grpc_client_circuit_breaker_state gauge, diagnostics). */
   states(): Record<string, 'open' | 'half-open' | 'closed'> {
     return Object.fromEntries(
       [...this.breakers].map(([name, breaker]) => [
@@ -114,6 +117,7 @@ export class GrpcCircuitBreakers implements OnApplicationShutdown {
   }
 
   onApplicationShutdown(): void {
+    this.untrackStates();
     for (const breaker of this.breakers.values()) breaker.shutdown();
     this.breakers.clear();
   }

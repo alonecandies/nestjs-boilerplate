@@ -1,5 +1,6 @@
 import {
   getOrCreateCounter,
+  getOrCreateGauge,
   getOrCreateHistogram,
   HTTP_DURATION_BUCKETS,
 } from '@platform/observability';
@@ -67,4 +68,36 @@ export function recordGrpcCall(
   const labels = { grpc_service: target.service, grpc_method: target.method };
   handled(side).inc({ ...labels, grpc_code: code });
   handling(side).observe(labels, seconds);
+}
+
+export const GRPC_CIRCUIT_BREAKER_STATE = 'grpc_client_circuit_breaker_state';
+
+export type CircuitState = 'open' | 'half-open' | 'closed';
+const CIRCUIT_STATES: readonly CircuitState[] = ['closed', 'half-open', 'open'];
+const breakerSources = new Set<() => Record<string, CircuitState>>();
+
+/**
+ * Adds a source of breaker states (one per `GrpcCircuitBreakers` instance) to
+ * `grpc_client_circuit_breaker_state{upstream, state}`; returns its removal. Read on every scrape.
+ */
+export function trackCircuitBreakerStates(states: () => Record<string, CircuitState>): () => void {
+  getOrCreateGauge({
+    name: GRPC_CIRCUIT_BREAKER_STATE,
+    help: 'gRPC client circuit breaker state per upstream: 1 for the current state (closed, half_open, open)',
+    labelNames: ['upstream', 'state'],
+    collect() {
+      this.reset();
+      for (const source of breakerSources) {
+        for (const [upstream, current] of Object.entries(source())) {
+          for (const state of CIRCUIT_STATES) {
+            this.set({ upstream, state: state.replace('-', '_') }, state === current ? 1 : 0);
+          }
+        }
+      }
+    },
+  });
+  breakerSources.add(states);
+  return () => {
+    breakerSources.delete(states);
+  };
 }
