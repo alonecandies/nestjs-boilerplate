@@ -1,8 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { MultipartModule, type MultipartModuleOptions } from '@nestjs/platform-fastify/multipart';
+import { RbacModule } from '@platform/auth';
 import { FilesService } from './application/files.service.js';
 import { type FilesConfig, filesConfig } from './files.config.js';
+import { FILES_RBAC } from './files.permissions.js';
 import { FilesResolver } from './presentation/graphql/files.resolver.js';
 import { FilesController } from './presentation/http/files.controller.js';
 
@@ -19,6 +21,8 @@ import { FilesController } from './presentation/http/files.controller.js';
   imports: [
     // The files context's own namespace (upload limits); storage settings belong to StorageModule.
     ConfigModule.forFeature(filesConfig),
+    // The files vocabulary: its permissions and default tenant-role grants.
+    RbacModule.forFeature(FILES_RBAC),
     // Module-wide default of every upload interceptor declared in this module: the per-file
     // byte limit comes from config (a decorator argument can't read it).
     MultipartModule.registerAsync({

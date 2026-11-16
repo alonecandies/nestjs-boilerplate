@@ -6,13 +6,18 @@ import { InMemoryRedis } from '@platform/redis/testing';
 import { describe, expect, it } from 'vitest';
 import { createJwtModuleOptions } from '../auth.module.js';
 import { Role } from '../rbac/role.enum.js';
+import { createTestRbacRegistry } from '../testing/rbac-test.utils.js';
 import { signTestAccessToken } from '../testing/sign-test-access-token.js';
 import { AccessTokenDenylist } from '../tokens/access-token-denylist.service.js';
 import { TokenService } from '../tokens/token.service.js';
 import { authenticateSocket, extractBearerToken, extractSocketToken } from './socket-auth.js';
 
 const config = authConfig.parse({ NODE_ENV: 'test' });
-const tokens = new TokenService(new JwtService(createJwtModuleOptions(config)), config);
+const tokens = new TokenService(
+  new JwtService(createJwtModuleOptions(config)),
+  config,
+  createTestRbacRegistry(),
+);
 const denylist = new AccessTokenDenylist(
   new InMemoryRedis().asRedis(),
   new RedisKeyService(redisConfig.parse({})),

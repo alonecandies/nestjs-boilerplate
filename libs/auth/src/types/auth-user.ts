@@ -1,4 +1,3 @@
-import type { Permission } from '../rbac/permission.enum.js';
 import type { Role } from '../rbac/role.enum.js';
 
 /**
@@ -9,8 +8,8 @@ export interface AuthUser {
   id: string;
   email: string;
   roles: Role[];
-  /** Resolved from `roles` via `ROLE_PERMISSIONS` when the token is verified. */
-  permissions: Permission[];
+  /** Resolved from `roles` by `RbacRegistry` when the token is verified; never in the token. */
+  permissions: string[];
   /** Access-token id (uuidv7) — what logout puts on the denylist. */
   jti: string;
   /** Access-token expiry, epoch seconds. */

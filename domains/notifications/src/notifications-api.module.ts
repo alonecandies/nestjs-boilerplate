@@ -1,10 +1,12 @@
 import { NOTIFICATIONS_GRPC_PACKAGE } from '@domain/notifications-contracts';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
+import { RbacModule } from '@platform/auth';
 import { GrpcClientsModule } from '@platform/transport';
 import { NotificationsPort } from './application/ports/notifications.port.js';
 import { NotificationsGrpcAdapter } from './infrastructure/adapters/grpc/notifications-grpc.adapter.js';
 import { notificationsGrpcClientConfig } from './infrastructure/adapters/grpc/notifications-grpc-client.config.js';
 import { NotificationsLocalAdapter } from './infrastructure/adapters/local/notifications-local.adapter.js';
+import { NOTIFICATIONS_RBAC } from './notifications.permissions.js';
 import { NotificationsResolver } from './presentation/graphql/notifications.resolver.js';
 import { NotificationsController } from './presentation/http/notifications.controller.js';
 import { NotificationPushConsumer } from './presentation/messaging/notification-push.consumer.js';
@@ -35,7 +37,7 @@ export class NotificationsApiModule {
   static forLocal(): DynamicModule {
     return {
       module: NotificationsApiModule,
-      imports: [NotificationsRateLimitModule],
+      imports: [NotificationsRateLimitModule, RbacModule.forFeature(NOTIFICATIONS_RBAC)],
       controllers: CONTROLLERS,
       providers: [
         ...PROVIDERS,
@@ -53,7 +55,11 @@ export class NotificationsApiModule {
     };
     return {
       module: NotificationsApiModule,
-      imports: [GrpcClientsModule.register(target), NotificationsRateLimitModule],
+      imports: [
+        GrpcClientsModule.register(target),
+        NotificationsRateLimitModule,
+        RbacModule.forFeature(NOTIFICATIONS_RBAC),
+      ],
       controllers: CONTROLLERS,
       providers: [...PROVIDERS, { provide: NotificationsPort, useClass: NotificationsGrpcAdapter }],
       exports: [NotificationsPort],

@@ -36,7 +36,6 @@ import {
 import {
   type AuthUser,
   CurrentUser,
-  Permission,
   RequireAnyPermission,
   RequirePermissions,
 } from '@platform/auth';
@@ -47,6 +46,7 @@ import {
   UploadCapacityExceededException,
 } from '../../domain/files.errors.js';
 import { UPLOAD_FILE_FIELD } from '../../files.constants.js';
+import { FilesPermission } from '../../files.permissions.js';
 import { ApiMultipartFileBody } from './api-multipart-file-body.decorator.js';
 import {
   FILE_UPLOAD_MULTIPART_OPTIONS,
@@ -96,7 +96,7 @@ export class FilesController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @RequirePermissions(Permission.FilesWrite)
+  @RequirePermissions(FilesPermission.Write)
   // Bounded by Fastify's requestTimeout and the storage client's own timeouts instead: a 504 from
   // the interceptor would race a client that is still sending the body.
   @Timeout(0)
@@ -153,7 +153,7 @@ export class FilesController {
 
   @Post('presigned-uploads')
   @HttpCode(HttpStatus.CREATED)
-  @RequirePermissions(Permission.FilesWrite)
+  @RequirePermissions(FilesPermission.Write)
   @SerializeOptions({ schema: PresignedUploadResponseSchema })
   @ApiOperation({
     summary: 'Create a presigned upload URL',
@@ -178,7 +178,7 @@ export class FilesController {
   }
 
   @Get('download-url')
-  @RequireAnyPermission(Permission.FilesRead, Permission.FilesManage)
+  @RequireAnyPermission(FilesPermission.Read, FilesPermission.Manage)
   @SerializeOptions({ schema: DownloadUrlResponseSchema })
   @ApiOperation({
     summary: 'Create a presigned download URL',
@@ -199,7 +199,7 @@ export class FilesController {
 
   @Delete()
   @HttpCode(HttpStatus.NO_CONTENT)
-  @RequireAnyPermission(Permission.FilesWrite, Permission.FilesManage)
+  @RequireAnyPermission(FilesPermission.Write, FilesPermission.Manage)
   @ApiOperation({
     summary: 'Delete a file',
     description: 'Own files only, unless the caller holds files:manage. Idempotent.',

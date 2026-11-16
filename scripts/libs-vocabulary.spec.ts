@@ -8,8 +8,8 @@ const SKIPPED_DIRS = new Set(['node_modules', 'dist', 'coverage', 'generated']);
 /** Spec files, and everything under a test/ or testing/ folder (fixtures, doubles). */
 const TEST_FILE = /(?:^|\/)(?:test|testing)\/.+\.ts$|\.(?:spec|int-spec|e2e-spec)\.ts$/;
 
-/** Rewritten by phase B2 (B2-18, B2-20, B2-22). B2-20 deletes this entry with the Permission enum. */
-const EXEMPT_PREFIXES: readonly string[] = ['libs/auth/'];
+/** Paths exempt from the check (none: B2-20 removed the libs/auth exemption with the Permission enum). */
+const EXEMPT_PREFIXES: readonly string[] = [];
 /** A line may name a domain only to assert that libs do NOT contain it. */
 const ALLOW_MARKER = 'vocabulary-allow';
 

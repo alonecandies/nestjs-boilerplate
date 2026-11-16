@@ -4,6 +4,8 @@ import * as root from '../index.js';
 import * as api from './index.js';
 
 const API_VALUES = [
+  'BILLING_RBAC',
+  'BillingPermission',
   'BILLING_GRPC_UPSTREAM',
   'BILLING_LIMITS',
   'BILLING_LOG_REDACT_PATHS',

@@ -1,7 +1,7 @@
 import type { Payment } from '@domain/billing-contracts';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import { Test } from '@nestjs/testing';
-import { AuthModule } from '@platform/auth';
+import { AuthModule, RbacModule } from '@platform/auth';
 import { DomainValidationException, generateId, provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { RATE_LIMIT_THROTTLERS } from '@platform/redis';
@@ -14,6 +14,7 @@ import {
   type TestPrincipal,
 } from '../../../test/billing-http-test.utils.js';
 import { BillingPort } from '../../application/ports/billing.port.js';
+import { BILLING_RBAC } from '../../billing.permissions.js';
 import { IdempotencyKeyReusedException } from '../../domain/billing.errors.js';
 import { BillingController } from './billing.controller.js';
 
@@ -34,7 +35,12 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
   beforeAll(async () => {
     port = createMock<BillingPort>();
     const builder = Test.createTestingModule({
-      imports: [AppConfigModule.forRoot(), FakeRedisModule, AuthModule.forRootAsync()],
+      imports: [
+        AppConfigModule.forRoot(),
+        FakeRedisModule,
+        AuthModule.forRootAsync(),
+        RbacModule.forFeature(BILLING_RBAC),
+      ],
       controllers: [BillingController],
       providers: [
         { provide: BillingPort, useValue: port },
@@ -47,7 +53,7 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
     [user, admin, moderator] = await Promise.all([
       loginAs(app, Role.User),
       loginAs(app, Role.Admin),
-      loginAs(app, Role.Moderator),
+      loginAs(app),
     ]);
   });
 
@@ -80,7 +86,7 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
       expect(port.createCheckoutSession).not.toHaveBeenCalled();
     });
 
-    it('403 without billing:checkout (moderator)', async () => {
+    it('403 without billing:checkout (no role)', async () => {
       const res = await app.inject({
         method: 'POST',
         url: CHECKOUT_URL,

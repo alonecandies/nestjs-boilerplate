@@ -8,6 +8,7 @@ import { JWT_ALGORITHM, JWT_CLOCK_TOLERANCE_SEC } from './auth.constants.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { PermissionsGuard } from './guards/permissions.guard.js';
 import { RolesGuard } from './guards/roles.guard.js';
+import { RbacModule } from './rbac/rbac.module.js';
 import { JwtStrategy } from './strategies/jwt.strategy.js';
 import { AccessTokenDenylist } from './tokens/access-token-denylist.service.js';
 import { TokenService } from './tokens/token.service.js';
@@ -61,6 +62,7 @@ export class AuthModule {
       module: AuthModule,
       global: true,
       imports: [
+        RbacModule.forRoot(),
         ConfigModule.forFeature(authConfig),
         PassportModule.register({ session: false }),
         JwtModule.registerAsync({
@@ -85,6 +87,7 @@ export class AuthModule {
         RolesGuard,
         PermissionsGuard,
         PassportModule,
+        RbacModule,
       ],
     };
   }

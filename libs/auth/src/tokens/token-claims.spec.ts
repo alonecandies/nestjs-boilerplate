@@ -1,6 +1,5 @@
 import { UnauthenticatedException } from '@platform/common';
 import { describe, expect, it } from 'vitest';
-import { Permission } from '../rbac/permission.enum.js';
 import { Role } from '../rbac/role.enum.js';
 import { makeAuthUser } from '../testing/auth-test.utils.js';
 import {
@@ -74,13 +73,15 @@ describe('parseRefreshTokenClaims', () => {
 });
 
 describe('toAuthUser / isAuthUser', () => {
-  it('maps claims to the principal with resolved permissions', () => {
-    const user = toAuthUser(parseAccessTokenClaims({ ...access, roles: ['moderator'] }));
+  it('maps claims and the resolved permissions to the principal', () => {
+    const user = toAuthUser(parseAccessTokenClaims({ ...access, roles: ['moderator'] }), [
+      'orders:read',
+    ]);
     expect(user).toEqual({
       id: 'u1',
       email: 'a@b.c',
       roles: [Role.Moderator],
-      permissions: expect.arrayContaining([Permission.UsersRead, Permission.NotificationsWrite]),
+      permissions: ['orders:read'],
       jti: 'j1',
       exp: 1_000,
     });

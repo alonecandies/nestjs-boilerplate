@@ -26,11 +26,12 @@ import {
   ApiUnauthorizedResponse,
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
-import { type AuthUser, CurrentUser, Permission, RequirePermissions } from '@platform/auth';
+import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
 import { Public } from '@platform/common';
 import { SkipRateLimit } from '@platform/redis';
 import { BillingPort } from '../../application/ports/billing.port.js';
 import { BILLING_LIMITS, STRIPE_SIGNATURE_HEADER } from '../../billing.constants.js';
+import { BillingPermission } from '../../billing.permissions.js';
 import { resolvePaymentsOwner } from '../payments-scope.js';
 import {
   type CheckoutSessionResponse,
@@ -63,7 +64,7 @@ export class BillingController {
   constructor(private readonly billing: BillingPort) {}
 
   @Post('checkout-sessions')
-  @RequirePermissions(Permission.BillingCheckout)
+  @RequirePermissions(BillingPermission.Checkout)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Start a Stripe Checkout',

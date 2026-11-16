@@ -1,9 +1,8 @@
 import { UnauthenticatedException } from '@platform/common';
 import { isArray, isInteger, isString } from 'lodash-es';
 import { AuthErrorCode } from '../auth.constants.js';
-import { isPermission } from '../rbac/permission.enum.js';
+import { isPermissionName } from '../rbac/rbac-feature.js';
 import { isRole } from '../rbac/role.enum.js';
-import { resolvePermissions } from '../rbac/role-permissions.js';
 import type {
   AccessTokenClaims,
   AuthUser,
@@ -81,13 +80,13 @@ export function parseRefreshTokenClaims(payload: unknown): RefreshTokenClaims {
   };
 }
 
-/** Builds `req.user` from verified claims (permissions resolved from roles, once per request). */
-export function toAuthUser(claims: AccessTokenClaims): AuthUser {
+/** Builds `req.user` from verified claims and the permissions their roles resolve to. */
+export function toAuthUser(claims: AccessTokenClaims, permissions: readonly string[]): AuthUser {
   return {
     id: claims.sub,
     email: claims.email,
     roles: [...claims.roles],
-    permissions: resolvePermissions(claims.roles),
+    permissions: [...permissions],
     jti: claims.jti,
     exp: claims.exp,
   };
@@ -103,7 +102,7 @@ export function isAuthUser(value: unknown): value is AuthUser {
     isArray(user.roles) &&
     user.roles.every(isRole) &&
     isArray(user.permissions) &&
-    user.permissions.every(isPermission) &&
+    user.permissions.every(isPermissionName) &&
     isString(user.jti) &&
     isInteger(user.exp)
   );

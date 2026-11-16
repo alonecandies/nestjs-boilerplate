@@ -1,5 +1,6 @@
-import { hasPermissions, Permission } from '@platform/auth';
+import { hasPermissions } from '@platform/auth';
 import { assertStorageKey } from '@platform/storage';
+import { FilesPermission } from '../files.permissions.js';
 import { isFileKeyOwnedBy } from './file-key.js';
 import type { FileAccess, FileActor } from './files.types.js';
 
@@ -12,5 +13,5 @@ import type { FileAccess, FileActor } from './files.types.js';
 export function resolveFileAccess(actor: FileActor, key: string): FileAccess {
   assertStorageKey(key);
   if (isFileKeyOwnedBy(key, actor.id)) return 'owner';
-  return hasPermissions(actor.permissions, [Permission.FilesManage]) ? 'manager' : 'denied';
+  return hasPermissions(actor.permissions, [FilesPermission.Manage]) ? 'manager' : 'denied';
 }

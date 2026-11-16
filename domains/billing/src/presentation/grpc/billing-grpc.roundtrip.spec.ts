@@ -4,6 +4,7 @@ import { type INestMicroservice, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { RbacModule } from '@platform/auth';
 import { DomainValidationException, generateId } from '@platform/common';
 import { AppConfigModule, grpcConfig } from '@platform/config';
 import { createGrpcServerStrategy } from '@platform/transport';
@@ -75,7 +76,7 @@ describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () =
     await server.listen();
 
     gateway = await Test.createTestingModule({
-      imports: [AppConfigModule.forRoot(), BillingApiModule.forRemote()],
+      imports: [AppConfigModule.forRoot(), RbacModule.forRoot(), BillingApiModule.forRemote()],
     }).compile();
     gateway.useLogger(false);
     await gateway.init();

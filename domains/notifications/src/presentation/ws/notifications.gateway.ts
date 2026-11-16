@@ -16,7 +16,6 @@ import {
   authenticateSocket,
   CurrentUser,
   extractSocketToken,
-  Permission,
   RequirePermissions,
   TokenService,
 } from '@platform/auth';
@@ -29,6 +28,7 @@ import {
   NOTIFICATIONS_WS_NAMESPACE,
   userRoom,
 } from '../../notifications.constants.js';
+import { NotificationsPermission } from '../../notifications.permissions.js';
 import type { NotificationResponse } from '../http/notifications.dto.js';
 import { NOTIFICATIONS_RATE_LIMITS } from './notifications-rate-limit.js';
 import {
@@ -194,7 +194,7 @@ export class NotificationsGateway
 
   /** Marks a notification read; the return value is the socket.io ack. */
   @SubscribeMessage(NOTIFICATIONS_WS_EVENTS.MARK_READ)
-  @RequirePermissions(Permission.NotificationsRead)
+  @RequirePermissions(NotificationsPermission.Read)
   @RateLimit(NOTIFICATIONS_RATE_LIMITS.MARK_READ)
   async markRead(
     @MessageBody({ schema: markReadMessageSchema }) body: MarkReadMessage,

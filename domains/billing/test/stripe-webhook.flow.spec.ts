@@ -7,7 +7,7 @@
 import { PAYMENT_SUCCEEDED_EVENT } from '@domain/billing-contracts';
 import { CqrsModule } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
-import { AuthModule } from '@platform/auth';
+import { AuthModule, RbacModule } from '@platform/auth';
 import { provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { makeCounterProvider } from '@platform/observability';
@@ -21,6 +21,7 @@ import { PaymentSucceededRelay } from '../src/application/relays/payment-succeed
 import { PaymentsRepository } from '../src/application/repositories/payments.repository.js';
 import { StripeEventsRepository } from '../src/application/repositories/stripe-events.repository.js';
 import { PAID_WITHOUT_CURRENCY_METRIC } from '../src/billing.constants.js';
+import { BILLING_RBAC } from '../src/billing.permissions.js';
 import { PaymentStatus } from '../src/domain/payment-status.enum.js';
 import { BillingLocalAdapter } from '../src/infrastructure/adapters/local/billing-local.adapter.js';
 import { StripeService } from '../src/infrastructure/stripe/stripe.service.js';
@@ -71,6 +72,7 @@ describe('Stripe webhook flow (raw body → signature → exactly-once → Kafka
         AppConfigModule.forRoot(),
         FakeRedisModule,
         AuthModule.forRootAsync(),
+        RbacModule.forFeature(BILLING_RBAC),
         CqrsModule.forRoot(),
       ],
       controllers: [BillingController],

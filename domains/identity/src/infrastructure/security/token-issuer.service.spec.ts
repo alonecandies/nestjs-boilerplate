@@ -1,5 +1,6 @@
 import { JwtService } from '@nestjs/jwt';
-import { createJwtModuleOptions, Permission, Role, TokenService } from '@platform/auth';
+import { createJwtModuleOptions, defineRbacFeature, Role, TokenService } from '@platform/auth';
+import { createTestRbacRegistry } from '@platform/auth/testing';
 import { isUuidV7, UnauthenticatedException } from '@platform/common';
 import { authConfig } from '@platform/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -11,7 +12,17 @@ const refresh = refreshTokenConfig.parse({ NODE_ENV: 'test', JWT_REFRESH_TTL_SEC
 const jwt = new JwtService();
 const issuer = new TokenIssuer(jwt, access, refresh);
 /** The verifier every edge runs (JwtStrategy and the WS/subscription helpers share its settings). */
-const verifier = new TokenService(new JwtService(createJwtModuleOptions(access)), access);
+const verifier = new TokenService(
+  new JwtService(createJwtModuleOptions(access)),
+  access,
+  createTestRbacRegistry(
+    defineRbacFeature({
+      name: 'test',
+      permissions: ['orders:read'],
+      grants: { member: ['orders:read'] },
+    }),
+  ),
+);
 const user = { id: '0190f3b2-0000-7000-8000-000000000001', email: 'a@b.c', roles: [Role.User] };
 
 async function authErrorOf(promise: Promise<unknown>): Promise<UnauthenticatedException> {
@@ -55,7 +66,7 @@ describe('TokenIssuer', () => {
       id: user.id,
       jti: issued.jti,
       exp: issued.exp,
-      permissions: expect.arrayContaining([Permission.BillingCheckout]),
+      permissions: ['orders:read'],
     });
   });
 

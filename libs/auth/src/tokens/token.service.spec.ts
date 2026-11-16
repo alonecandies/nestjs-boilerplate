@@ -3,14 +3,14 @@ import { UnauthenticatedException } from '@platform/common';
 import { authConfig } from '@platform/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createJwtModuleOptions } from '../auth.module.js';
-import { Permission } from '../rbac/permission.enum.js';
 import { Role } from '../rbac/role.enum.js';
+import { createTestRbacRegistry, TEST_RBAC_FEATURE } from '../testing/rbac-test.utils.js';
 import { signTestAccessToken } from '../testing/sign-test-access-token.js';
 import { TokenService, toUnauthenticated } from './token.service.js';
 
 const config = authConfig.parse({ NODE_ENV: 'test', JWT_ACCESS_TTL_SEC: '900' });
 const jwt = new JwtService(createJwtModuleOptions(config));
-const tokens = new TokenService(jwt, config);
+const tokens = new TokenService(jwt, config, createTestRbacRegistry(TEST_RBAC_FEATURE));
 const user = { id: '0190f3b2-0000-7000-8000-000000000001', email: 'a@b.c', roles: [Role.User] };
 const sign = () => signTestAccessToken(user, { config });
 
@@ -57,7 +57,7 @@ describe('TokenService', () => {
       id: user.id,
       jti: issued.jti,
       exp: issued.exp,
-      permissions: expect.arrayContaining([Permission.BillingCheckout]),
+      permissions: expect.arrayContaining(['catalog:buy']),
     });
   });
 

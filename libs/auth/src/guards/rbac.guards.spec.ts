@@ -6,27 +6,27 @@ import {
   RequirePermissions,
 } from '../decorators/require-permissions.decorator.js';
 import { Roles } from '../decorators/roles.decorator.js';
-import { Permission } from '../rbac/permission.enum.js';
 import { Role } from '../rbac/role.enum.js';
 import { makeAuthUser } from '../testing/auth-test.utils.js';
+import { createTestRbacRegistry, TEST_RBAC_FEATURE } from '../testing/rbac-test.utils.js';
 import { executionContext, type Transport } from './execution-context.test.js';
 import { PermissionsGuard } from './permissions.guard.js';
 import { RolesGuard } from './roles.guard.js';
 
 @Roles(Role.Moderator, Role.Admin)
-@RequirePermissions(Permission.UsersRead)
+@RequirePermissions('orders:read')
 class UsersController {
   list(): void {
     // inherits the class-level requirements
   }
 
   @Roles(Role.Admin)
-  @RequirePermissions(Permission.UsersManageRoles)
+  @RequirePermissions('orders:approve')
   updateRoles(): void {
     // handler-level metadata overrides the class
   }
 
-  @RequireAnyPermission(Permission.FilesManage, Permission.UsersWrite)
+  @RequireAnyPermission('files:manage', 'orders:write')
   cleanup(): void {
     // any-of requirement
   }
@@ -49,9 +49,14 @@ const ctx = (
   cls: abstract new (...args: never[]) => unknown = UsersController,
 ) => executionContext(type, { handler, cls }, { headers: {}, user });
 
-const moderator = makeAuthUser({ roles: [Role.Moderator] });
-const admin = makeAuthUser({ roles: [Role.Admin] });
-const user = makeAuthUser({ roles: [Role.User] });
+const rbac = createTestRbacRegistry(TEST_RBAC_FEATURE);
+// Explicit permissions: the legacy moderator role resolves to a plain member (I-3).
+const moderator = makeAuthUser({
+  roles: [Role.Moderator],
+  permissions: ['alerts:read', 'orders:read'],
+});
+const admin = makeAuthUser({ roles: [Role.Admin] }, rbac);
+const user = makeAuthUser({ roles: [Role.User] }, rbac);
 const { list, updateRoles, cleanup } = UsersController.prototype;
 
 describe('RolesGuard', () => {
@@ -99,14 +104,14 @@ describe('PermissionsGuard', () => {
   });
 
   it("'any' mode: one matching permission is enough", () => {
-    const custom = makeAuthUser({ permissions: [Permission.UsersWrite] });
+    const custom = makeAuthUser({ permissions: ['orders:write'] });
     expect(permissionsGuard.canActivate(ctx(cleanup, custom))).toBe(true);
     try {
       permissionsGuard.canActivate(ctx(cleanup, moderator));
       throw new Error('expected a rejection');
     } catch (error) {
       expect((error as PermissionDeniedException).details).toEqual({
-        requiredPermissions: [Permission.FilesManage, Permission.UsersWrite],
+        requiredPermissions: ['files:manage', 'orders:write'],
         mode: 'any',
       });
     }

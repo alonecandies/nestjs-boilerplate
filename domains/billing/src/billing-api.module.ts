@@ -1,7 +1,9 @@
 import { BILLING_GRPC_PACKAGE } from '@domain/billing-contracts';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
+import { RbacModule } from '@platform/auth';
 import { GrpcClientsModule } from '@platform/transport';
 import { BillingPort } from './application/ports/billing.port.js';
+import { BILLING_RBAC } from './billing.permissions.js';
 import { BillingGrpcAdapter } from './infrastructure/adapters/grpc/billing-grpc.adapter.js';
 import { billingGrpcClientConfig } from './infrastructure/adapters/grpc/billing-grpc-client.config.js';
 import { BillingLocalAdapter } from './infrastructure/adapters/local/billing-local.adapter.js';
@@ -34,6 +36,7 @@ export class BillingApiModule {
   static forLocal(): DynamicModule {
     return {
       module: BillingApiModule,
+      imports: [RbacModule.forFeature(BILLING_RBAC)],
       ...presentation(BillingLocalAdapter),
     };
   }
@@ -50,7 +53,7 @@ export class BillingApiModule {
     };
     return {
       module: BillingApiModule,
-      imports: [GrpcClientsModule.register(target)],
+      imports: [GrpcClientsModule.register(target), RbacModule.forFeature(BILLING_RBAC)],
       ...presentation(BillingGrpcAdapter),
     };
   }

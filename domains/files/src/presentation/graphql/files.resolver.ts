@@ -1,6 +1,7 @@
 import { Args, Mutation, Resolver } from '@nestjs/graphql';
-import { type AuthUser, CurrentUser, Permission, RequirePermissions } from '@platform/auth';
+import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
 import { FilesService } from '../../application/files.service.js';
+import { FilesPermission } from '../../files.permissions.js';
 import { CreateUploadUrlInput } from './create-upload-url.input.js';
 import { toPresignedUploadModel } from './files-graphql.mapper.js';
 import { PresignedUploadModel } from './presigned-upload.model.js';
@@ -17,7 +18,7 @@ export class FilesResolver {
   @Mutation(() => PresignedUploadModel, {
     description: 'Presigned PUT URL for a direct client → bucket upload (requires files:write)',
   })
-  @RequirePermissions(Permission.FilesWrite)
+  @RequirePermissions(FilesPermission.Write)
   async createUploadUrl(
     @CurrentUser() user: AuthUser,
     @Args('input') input: CreateUploadUrlInput,

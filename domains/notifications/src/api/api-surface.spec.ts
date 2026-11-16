@@ -4,6 +4,8 @@ import { NotificationsCoreModule } from '../notifications-core.module.js';
 import * as api from './index.js';
 
 const API_VALUES = [
+  'NOTIFICATIONS_RBAC',
+  'NotificationsPermission',
   'DEFAULT_NOTIFICATIONS_PAGE_SIZE',
   'MAX_NOTIFICATIONS_PAGE_SIZE',
   'NOTIFICATIONS_WS_EVENTS',

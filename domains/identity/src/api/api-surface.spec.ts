@@ -6,6 +6,8 @@ import * as api from './index.js';
 
 /** Runtime values of `@domain/identity/api` (types are erased). */
 const API_VALUES = [
+  'IDENTITY_RBAC',
+  'IdentityPermission',
   'AuthPayloadModel',
   'AuthPort',
   'IDENTITY_LIMITS',

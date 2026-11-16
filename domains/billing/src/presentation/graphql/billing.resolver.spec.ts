@@ -1,7 +1,7 @@
 import type { Payment } from '@domain/billing-contracts';
 import { GraphQLSchemaHost } from '@nestjs/graphql';
 import { Test } from '@nestjs/testing';
-import { AuthModule } from '@platform/auth';
+import { AuthModule, RbacModule } from '@platform/auth';
 import { generateId, provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { AppGraphqlModule } from '@platform/graphql';
@@ -15,6 +15,7 @@ import {
   type TestPrincipal,
 } from '../../../test/billing-http-test.utils.js';
 import { BillingPort } from '../../application/ports/billing.port.js';
+import { BILLING_RBAC } from '../../billing.permissions.js';
 import { BillingResolver } from './billing.resolver.js';
 
 /** `NestFastifyApplication`, typed through @platform/testing (billing does not depend on platform-fastify). */
@@ -96,6 +97,7 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
         AppConfigModule.forRoot(),
         FakeRedisModule,
         AuthModule.forRootAsync(),
+        RbacModule.forFeature(BILLING_RBAC),
         AppGraphqlModule.forRootAsync(),
       ],
       providers: [
@@ -108,7 +110,7 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
     [user, admin, moderator] = await Promise.all([
       loginAs(app, Role.User),
       loginAs(app, Role.Admin),
-      loginAs(app, Role.Moderator),
+      loginAs(app),
     ]);
   }, 60_000);
 
@@ -216,7 +218,7 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
       });
     });
 
-    it('is FORBIDDEN without billing:checkout (moderator)', async () => {
+    it('is FORBIDDEN without billing:checkout (no role)', async () => {
       const body = await gql(CHECKOUT_MUTATION, { input: { priceId: 'price_1' } }, moderator);
 
       expect(body.errors?.[0]?.extensions).toMatchObject({ code: 'FORBIDDEN', status: 403 });

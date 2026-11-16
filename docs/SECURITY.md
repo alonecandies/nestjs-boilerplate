@@ -130,20 +130,26 @@ services trust the edge (see [Internal gRPC](#internal-grpc-mtls-reflection)).
 | `@Auth(...p)`                                           | alias of `@RequirePermissions(...p)`                       |
 | `@CurrentUser(field?)`                                  | the `AuthUser` (401 when absent, even on `@Public` routes) |
 
-### Matrix (`libs/auth/src/rbac/role-permissions.ts`)
+### Matrix (default grants)
 
-| Permission            | `admin` | `moderator` | `user` | Used by                                                       |
-| --------------------- | :-----: | :---------: | :----: | ------------------------------------------------------------- |
-| `users:read`          |    ✓    |      ✓      |        | `GET /v1/users`, another user's `GET /v1/users/:id`, `users`  |
-| `users:write`         |    ✓    |             |        | reserved                                                      |
-| `users:manage-roles`  |    ✓    |             |        | `PATCH /v1/users/:id/roles`, `updateUserRoles`                |
-| `notifications:read`  |    ✓    |      ✓      |   ✓    | notifications REST, GraphQL, Socket.IO                        |
-| `notifications:write` |    ✓    |      ✓      |        | reserved                                                      |
-| `billing:checkout`    |    ✓    |             |   ✓    | `POST /v1/billing/checkout-sessions`, `createCheckoutSession` |
-| `billing:read-all`    |    ✓    |             |        | `GET /v1/billing/payments?all=true`, `payments(all: true)`    |
-| `files:read`          |    ✓    |      ✓      |   ✓    | `GET /v1/files/download-url` (own files)                      |
-| `files:write`         |    ✓    |      ✓      |   ✓    | upload, presign, delete (own files)                           |
-| `files:manage`        |    ✓    |             |        | download/delete any user's file (each use is logged)          |
+Each domain declares its permissions and default grants (`domains/<x>/src/<x>.permissions.ts`,
+`RbacModule.forFeature`); `AuthModule` assembles the map at boot and fails the boot on an undeclared
+permission. Until Task 10 of the B2 core plan, tokens still carry global roles: `user` and `moderator`
+resolve as `member`, `admin` as `admin`. Grants are cumulative: owner ⊇ admin ⊇ member (✓ = effective).
+
+| Domain        | Permission            | `member` | `admin` | `owner` | Used by                                                       |
+| ------------- | --------------------- | :------: | :-----: | :-----: | ------------------------------------------------------------- |
+| identity      | `users:read`          |          |    ✓    |    ✓    | `GET /v1/users`, another user's `GET /v1/users/:id`, `users`  |
+| identity      | `users:manage-roles`  |          |    ✓    |    ✓    | `PATCH /v1/users/:id/roles`, `updateUserRoles`                |
+| identity      | `members:manage`      |          |    ✓    |    ✓    | reserved                                                      |
+| identity      | `tenant:manage`       |          |         |    ✓    | reserved                                                      |
+| billing       | `billing:checkout`    |    ✓     |    ✓    |    ✓    | `POST /v1/billing/checkout-sessions`, `createCheckoutSession` |
+| billing       | `billing:read-all`    |          |    ✓    |    ✓    | `GET /v1/billing/payments?all=true`, `payments(all: true)`    |
+| notifications | `notifications:read`  |    ✓     |    ✓    |    ✓    | notifications REST, GraphQL, Socket.IO                        |
+| notifications | `notifications:write` |          |    ✓    |    ✓    | reserved                                                      |
+| files         | `files:read`          |    ✓     |    ✓    |    ✓    | `GET /v1/files/download-url` (own files)                      |
+| files         | `files:write`         |    ✓     |    ✓    |    ✓    | upload, presign, delete (own files)                           |
+| files         | `files:manage`        |          |    ✓    |    ✓    | download/delete any user's file (each use is logged)          |
 
 Ownership rules that are **not** permissions, enforced by the handlers:
 

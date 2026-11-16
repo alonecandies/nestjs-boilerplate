@@ -1,6 +1,7 @@
 import { Global, type INestApplicationContext, Module } from '@nestjs/common';
 import { CqrsModule, QueryBus } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
+import { RbacModule } from '@platform/auth';
 import { AppConfigModule } from '@platform/config';
 import { DRIZZLE, TransactionHost } from '@platform/database';
 import { KafkaProducer } from '@platform/transport';
@@ -73,6 +74,7 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
     const moduleRef = await Test.createTestingModule({
       imports: [
         AppConfigModule.forRoot(),
+        RbacModule.forRoot(),
         CqrsModule.forRoot(),
         infra.module,
         BillingCoreModule,
@@ -89,7 +91,7 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
 
   it('gateway: BillingApiModule.forRemote() binds BillingPort to gRPC and needs no core', async () => {
     const moduleRef = await Test.createTestingModule({
-      imports: [AppConfigModule.forRoot(), BillingApiModule.forRemote()],
+      imports: [AppConfigModule.forRoot(), RbacModule.forRoot(), BillingApiModule.forRemote()],
     }).compile();
     context = await moduleRef.init();
 

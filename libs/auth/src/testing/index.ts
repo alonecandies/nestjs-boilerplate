@@ -4,4 +4,5 @@
  */
 
 export { makeAuthUser } from './auth-test.utils.js';
+export { createTestRbacRegistry, TEST_RBAC_FEATURE } from './rbac-test.utils.js';
 export { type SignTestAccessTokenOptions, signTestAccessToken } from './sign-test-access-token.js';

@@ -1,7 +1,7 @@
 import { Global, Module, type Provider, type Type } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
-import { AuthModule, type Role } from '@platform/auth';
+import { AuthModule, RbacModule, type Role } from '@platform/auth';
 import { signTestAccessToken } from '@platform/auth/testing';
 import { provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule, type AuthConfig, authConfig, redisConfig } from '@platform/config';
@@ -10,6 +10,7 @@ import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import { createFastifyTestApp } from '@platform/testing';
 import { NotificationsPort } from '../../src/application/ports/notifications.port.js';
+import { NOTIFICATIONS_RBAC } from '../../src/notifications.permissions.js';
 
 /** Stands in for the global RedisModule (auth denylist) — no connection. */
 @Global()
@@ -40,6 +41,7 @@ export async function createEdgeTestApp(options: EdgeTestAppOptions): Promise<Ed
       AppConfigModule.forRoot(),
       FakeRedisModule,
       AuthModule.forRootAsync(),
+      RbacModule.forFeature(NOTIFICATIONS_RBAC),
       ...(options.graphql
         ? [AppGraphqlModule.forRootAsync(), GraphqlPubSubModule.forRootAsync({ inMemory: true })]
         : []),

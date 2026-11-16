@@ -15,6 +15,7 @@ export {
   USERS_LOADER,
   userCacheKey,
 } from '../identity.constants.js';
+export { IDENTITY_RBAC, IdentityPermission } from '../identity.permissions.js';
 export { IdentityApiModule } from '../identity-api.module.js';
 export {
   type IdentityGrpcClientConfig,
