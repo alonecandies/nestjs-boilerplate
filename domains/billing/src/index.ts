@@ -16,7 +16,10 @@ export * from './api/index.js';
 // Application
 export * from './application/commands/create-checkout-session/create-checkout-session.command.js';
 export * from './application/commands/handle-stripe-webhook/handle-stripe-webhook.command.js';
+// Ledger (model)
+export * from './application/ledger/posting-rules.js';
 export * from './application/mappers/payment.mapper.js';
+export * from './application/ports/ledger.port.js';
 export * from './application/queries/list-payments/list-payments.query.js';
 // Modules and core constants
 export {
@@ -31,7 +34,7 @@ export * from './billing-grpc.module.js';
 // Domain
 export * from './domain/billing.errors.js';
 export * from './domain/events/payment-succeeded.event.js';
-// Ledger (model)
+export * from './domain/ledger/ledger.accounts.js';
 export * from './domain/ledger/ledger.errors.js';
 export * from './domain/ledger/ledger.ids.js';
 export * from './domain/ledger/ledger.invariant.js';
