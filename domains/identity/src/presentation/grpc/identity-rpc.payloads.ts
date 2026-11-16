@@ -7,7 +7,6 @@ import type {
   LogoutRequest,
   RefreshTokensRequest,
   RegisterRequest,
-  UpdateUserRolesRequest,
 } from '@domain/identity-contracts';
 import { MAX_CURSOR_LENGTH, MAX_PAGE_LIMIT } from '@platform/common';
 import { z } from 'zod';
@@ -95,6 +94,7 @@ export const logoutRequestSchema = z.object({
 
 export const getUserRequestSchema = z.object({
   id: z.uuid(),
+  tenantId: optionalUuid,
 }) satisfies z.ZodType<GetUserRequest>;
 
 export const getUsersByIdsRequestSchema = z.object({
@@ -107,11 +107,6 @@ export const listUsersRequestSchema = z.object({
   limit: z.number().int().min(0).max(MAX_PAGE_LIMIT),
   cursor: optionalString(MAX_CURSOR_LENGTH),
   search: searchTerm,
+  /** Required here although the generated field is optional: the directory is never global. */
+  tenantId: z.uuid(),
 }) satisfies z.ZodType<ListUsersRequest>;
-
-export const updateUserRolesRequestSchema = z.object({
-  id: z.uuid(),
-  // Role names are validated by the aggregate (one error model for every transport).
-  roles: z.array(z.string().max(32)).max(10),
-  actorId: z.uuid(),
-}) satisfies z.ZodType<UpdateUserRolesRequest>;

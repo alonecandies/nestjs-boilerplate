@@ -13,14 +13,12 @@ describe('IDENTITY_RBAC', () => {
     expect(rbac.resolve(['member'])).toEqual([]);
   });
 
-  it('grants user and member administration to admins (users:manage-roles goes in Task 11)', () => {
-    expect(rbac.resolve(['admin'])).toEqual(
-      [
-        IdentityPermission.MembersManage,
-        IdentityPermission.UsersManageRoles,
-        IdentityPermission.UsersRead,
-      ].sort(),
-    );
+  it('declares no global role administration permission', () => {
+    expect(rbac.permissions()).toEqual(['members:manage', 'tenant:manage', 'users:read']);
+  });
+
+  it('grants user and member administration to admins', () => {
+    expect(rbac.resolve(['admin'])).toEqual(['members:manage', 'users:read']);
   });
 
   it('adds tenant:manage for owners only', () => {

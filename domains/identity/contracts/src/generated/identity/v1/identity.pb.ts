@@ -16,7 +16,7 @@ export interface User {
   id: string;
   email: string;
   displayName: string;
-  /** Role names: "admin" | "moderator" | "user". */
+  /** Always empty since B2: roles are per tenant (AuthTokens.tenant_roles). */
   roles: string[];
   createdAt?: Date | undefined;
   updatedAt?: Date | undefined;
@@ -80,6 +80,8 @@ export interface LogoutRequest {
 
 export interface GetUserRequest {
   id: string;
+  /** Scope: only a member of this tenant is found (else NOT_FOUND). Absent: any user (own profile, internal). */
+  tenantId?: string | undefined;
 }
 
 export interface GetUsersByIdsRequest {
@@ -97,7 +99,11 @@ export interface ListUsersRequest {
     | string
     | undefined;
   /** Case-insensitive substring match on email / display name. */
-  search?: string | undefined;
+  search?:
+    | string
+    | undefined;
+  /** Required since B2: list the members of this tenant only (INVALID_ARGUMENT when absent). */
+  tenantId?: string | undefined;
 }
 
 export interface UserPage {
@@ -109,7 +115,7 @@ export interface UserPage {
 export interface UpdateUserRolesRequest {
   id: string;
   roles: string[];
-  /** The admin performing the change (an actor cannot remove their own admin role). */
+  /** Unused since B2. */
   actorId: string;
 }
 
@@ -197,6 +203,8 @@ export interface UsersServiceClient {
 
   listUsers(request: ListUsersRequest, metadata?: Metadata): Observable<UserPage>;
 
+  /** Retired in B2 (global roles removed): always FAILED_PRECONDITION / GLOBAL_ROLES_REMOVED. */
+
   updateUserRoles(request: UpdateUserRolesRequest, metadata?: Metadata): Observable<User>;
 }
 
@@ -215,6 +223,8 @@ export interface UsersServiceController {
   /** Keyset-paginated listing (uuidv7 ids, newest first). */
 
   listUsers(request: ListUsersRequest, metadata?: Metadata): Promise<UserPage> | Observable<UserPage> | UserPage;
+
+  /** Retired in B2 (global roles removed): always FAILED_PRECONDITION / GLOBAL_ROLES_REMOVED. */
 
   updateUserRoles(request: UpdateUserRolesRequest, metadata?: Metadata): Promise<User> | Observable<User> | User;
 }

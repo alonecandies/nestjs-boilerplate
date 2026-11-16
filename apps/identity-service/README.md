@@ -32,16 +32,16 @@ composition root.
 `startAllMicroservices()` → `listen(app)`. The HTTP port opens last, so readiness probes only see
 the pod once gRPC accepts calls.
 
-| RPC                            | Dispatches                            |
-| ------------------------------ | ------------------------------------- |
-| `AuthService.Register`         | `RegisterUserCommand`                 |
-| `AuthService.Login`            | `LoginCommand`                        |
-| `AuthService.RefreshTokens`    | `RefreshSessionCommand`               |
-| `AuthService.Logout`           | `LogoutCommand`                       |
-| `UsersService.GetUser`         | `GetUserByIdQuery`                    |
-| `UsersService.GetUsersByIds`   | `GetUsersByIdsQuery` (one `IN` query) |
-| `UsersService.ListUsers`       | `ListUsersQuery` (keyset pagination)  |
-| `UsersService.UpdateUserRoles` | `UpdateUserRolesCommand`              |
+| RPC                            | Dispatches                                                  |
+| ------------------------------ | ----------------------------------------------------------- |
+| `AuthService.Register`         | `RegisterUserCommand`                                       |
+| `AuthService.Login`            | `LoginCommand`                                              |
+| `AuthService.RefreshTokens`    | `RefreshSessionCommand`                                     |
+| `AuthService.Logout`           | `LogoutCommand`                                             |
+| `UsersService.GetUser`         | `GetUserByIdQuery`                                          |
+| `UsersService.GetUsersByIds`   | `GetUsersByIdsQuery` (one `IN` query)                       |
+| `UsersService.ListUsers`       | `ListUsersQuery` (keyset pagination)                        |
+| `UsersService.UpdateUserRoles` | retired in B2: `FAILED_PRECONDITION` `GLOBAL_ROLES_REMOVED` |
 
 Errors cross the wire as gRPC statuses plus an `x-error-code` trailer (`NOT_FOUND`, `EMAIL_TAKEN` →
 `ALREADY_EXISTS`, `INVALID_CREDENTIALS` → `UNAUTHENTICATED`, zod payload errors →

@@ -6,9 +6,8 @@
 
 import { Global, type INestApplication, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { Role } from '@platform/auth';
 import { signTestAccessToken } from '@platform/auth/testing';
-import { generateId } from '@platform/common';
+import { generateId, type TenantRole } from '@platform/common';
 import { type AuthConfig, authConfig, redisConfig } from '@platform/config';
 import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
@@ -29,7 +28,10 @@ export interface TestPrincipal {
 }
 
 /** A real access token for a user with `roles` (permissions derived like production). */
-export async function loginAs(app: INestApplication, ...roles: Role[]): Promise<TestPrincipal> {
+export async function loginAs(
+  app: INestApplication,
+  ...roles: TenantRole[]
+): Promise<TestPrincipal> {
   const id = generateId();
   const email = `${roles.join('-') || 'nobody'}-${id.slice(-6)}@example.com`;
   const { token } = await signTestAccessToken(
@@ -38,5 +40,3 @@ export async function loginAs(app: INestApplication, ...roles: Role[]): Promise<
   );
   return { id, email, authorization: `Bearer ${token}` };
 }
-
-export { Role };

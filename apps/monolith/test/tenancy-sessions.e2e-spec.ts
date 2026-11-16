@@ -203,4 +203,62 @@ describe('tenancy: workspaces and tenant-bound sessions (monolith)', () => {
     expect(wrong.statusCode).toBe(401);
     expect(wrong.json<{ code: string }>().code).toBe('INVALID_CREDENTIALS');
   });
+
+  it('the access token carries tid and the tenant roles; GET /v1/auth/me shows them', async () => {
+    const tok = await register('tok.tenancy@example.com', 'Tok');
+    const [, payload] = tok.accessToken.split('.');
+    const claims = JSON.parse(Buffer.from(payload ?? '', 'base64url').toString('utf8')) as Record<
+      string,
+      unknown
+    >;
+    expect(claims).toMatchObject({ sub: tok.user.id, tid: tok.tenantId, roles: ['owner'] });
+    expect(claims).not.toHaveProperty('staff');
+    const me = await inject({
+      method: 'GET',
+      url: '/v1/auth/me',
+      headers: { authorization: `Bearer ${tok.accessToken}` },
+    });
+    expect(me.statusCode, me.body).toBe(200);
+    expect(me.json()).toMatchObject({
+      id: tok.user.id,
+      email: 'tok.tenancy@example.com',
+      tenantId: tok.tenantId,
+      tenantRoles: ['owner'],
+      staff: false,
+    });
+  });
+
+  it("the user directory shows the active tenant's members only; other users are 404", async () => {
+    const boss = await register('boss.dir@example.com', 'Boss');
+    const peer = await register('peer.dir@example.com', 'Peer');
+    const stranger = await register('stranger.dir@example.com', 'Stranger');
+    e2e.identity.store.memberships.set(`${boss.tenantId}:${peer.user.id}`, {
+      tenantId: boss.tenantId,
+      userId: peer.user.id,
+      roles: ['member'],
+      lastActiveAt: null,
+      createdAt: new Date(),
+    });
+    const auth = { authorization: `Bearer ${boss.accessToken}` };
+
+    const list = await inject({ method: 'GET', url: '/v1/users?limit=100', headers: auth });
+    expect(list.statusCode, list.body).toBe(200);
+    const ids = list.json<{ items: { id: string }[] }>().items.map((user) => user.id);
+    expect(ids.sort()).toEqual([boss.user.id, peer.user.id].sort());
+
+    const one = await inject({ method: 'GET', url: `/v1/users/${peer.user.id}`, headers: auth });
+    expect(one.statusCode).toBe(200);
+    const hidden = await inject({
+      method: 'GET',
+      url: `/v1/users/${stranger.user.id}`,
+      headers: auth,
+    });
+    expect(hidden.statusCode).toBe(404);
+
+    const gql = await inject(graphql('{ users(limit: 100) { items { id } } }', undefined, auth));
+    const gqlIds = gql
+      .json<{ data: { users: { items: { id: string }[] } } }>()
+      .data.users.items.map((u) => u.id);
+    expect(gqlIds.sort()).toEqual([boss.user.id, peer.user.id].sort());
+  });
 });

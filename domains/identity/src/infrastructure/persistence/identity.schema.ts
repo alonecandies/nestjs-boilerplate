@@ -12,7 +12,6 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { TENANT_ROLE_VALUES } from '../../domain/tenant-role.js';
-import { USER_ROLES } from '../../domain/user-role.js';
 
 /*
  * Identity tables (drizzle-kit reads this file: ONLY drizzle-orm imports + dependency-free
@@ -42,12 +41,10 @@ export const identityPgSchema = pgSchema('identity');
 
 const timestamptz = () => timestamp({ withTimezone: true, precision: 3, mode: 'date' });
 
-/** RBAC roles (values = @platform/auth `Role`). */
-export const userRole = identityPgSchema.enum('user_role', USER_ROLES);
-
 /** Tenant roles (values = @platform/common `TENANT_ROLES`). */
 export const tenantRole = identityPgSchema.enum('tenant_role', TENANT_ROLE_VALUES);
 
+// citus: reference (global directory, joined by memberships)
 export const users = identityPgSchema.table(
   'users',
   {
@@ -56,8 +53,8 @@ export const users = identityPgSchema.table(
     email: text().notNull().unique('users_email_unique'),
     passwordHash: text().notNull(),
     displayName: text().notNull(),
-    // Qualified: the cast is resolved when CREATE TABLE runs, and `identity` is not on search_path.
-    roles: userRole().array().notNull().default(sql`ARRAY['user']::identity.user_role[]`),
+    /** Platform staff (B2-11 switch-in). Set only by the `staff:grant` CLI (Task 19), never over the API. */
+    isPlatformStaff: boolean().notNull().default(false),
     createdAt: timestamptz().notNull().defaultNow(),
     updatedAt: timestamptz()
       .notNull()
@@ -210,7 +207,6 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
  * spreads it with the other contexts: `{ ...identitySchema, ...billingSchema }` (keys are unique).
  */
 export const identitySchema = {
-  userRole,
   tenantRole,
   users,
   sessions,

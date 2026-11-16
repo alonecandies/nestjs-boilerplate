@@ -1,4 +1,3 @@
-import { Role } from '@platform/auth';
 import { createTestRbacRegistry, makeAuthUser } from '@platform/auth/testing';
 import { DomainValidationException, generateId } from '@platform/common';
 import { describe, expect, it } from 'vitest';
@@ -7,9 +6,9 @@ import { resolveFileAccess } from './file-access.policy.js';
 
 describe('resolveFileAccess', () => {
   const rbac = createTestRbacRegistry(FILES_RBAC);
-  const owner = makeAuthUser({ roles: [Role.User] }, rbac);
-  const other = makeAuthUser({ roles: [Role.Moderator] }, rbac);
-  const admin = makeAuthUser({ roles: [Role.Admin] }, rbac);
+  const owner = makeAuthUser({ roles: ['member'] }, rbac);
+  const other = makeAuthUser({ roles: ['member'] }, rbac);
+  const admin = makeAuthUser({ roles: ['admin'], permissions: [FilesPermission.Manage] });
   const key = `users/${owner.id}/${generateId()}-a.txt`;
 
   it('grants owners, then files:manage holders, and denies everyone else', () => {

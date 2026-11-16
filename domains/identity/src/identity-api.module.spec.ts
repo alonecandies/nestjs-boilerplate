@@ -2,7 +2,7 @@ import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
 import { Global, Module } from '@nestjs/common';
 import { CqrsModule } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
-import { Role } from '@platform/auth';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { provideCommonEnhancers } from '@platform/common';
 import { DRIZZLE, TransactionHost } from '@platform/database';
 import { AppCacheService } from '@platform/redis';
@@ -40,6 +40,16 @@ const database = createFakePostgres((sql, params): FakeResult => {
   if (sql.startsWith('select "id", "email", "password_hash"')) {
     return [...users.values()].filter((row) => row['email'] === params[0]);
   }
+  // Scoped read (a member of the caller's tenant): users inner join memberships on tenant_id = $1.
+  if (sql.startsWith('select "identity"."users"."id", "identity"."users"."email"')) {
+    if (!sql.includes('inner join "identity"."memberships"') || params[0] !== TEST_TENANT_ID) {
+      return [];
+    }
+    const row = users.get(String(params[1]));
+    if (!row) return [];
+    const { password_hash: _hash, ...rest } = row;
+    return [rest];
+  }
   if (sql.startsWith('select "id", "email", "display_name"')) {
     const row = users.get(String(params[0]));
     if (!row) return [];
@@ -47,13 +57,13 @@ const database = createFakePostgres((sql, params): FakeResult => {
     return [rest];
   }
   if (sql.startsWith('insert into "identity"."users"')) {
-    const [id, email, passwordHash, displayName, roles, createdAt, updatedAt] = params;
+    const [id, email, passwordHash, displayName, isPlatformStaff, createdAt, updatedAt] = params;
     users.set(String(id), {
       id,
       email,
       password_hash: passwordHash,
       display_name: displayName,
-      roles,
+      is_platform_staff: isPlatformStaff,
       created_at: createdAt,
       updated_at: updatedAt,
     });
@@ -112,8 +122,8 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
     });
 
     expect(res.statusCode).toBe(201);
-    const body = res.json<{ accessToken: string; user: { id: string; roles: string[] } }>();
-    expect(body.user.roles).toEqual([Role.User]);
+    const body = res.json<{ accessToken: string; user: { id: string } }>();
+    expect(body.user).not.toHaveProperty('roles');
     const statements = database.executed.map((query) => query.sql.split(' (')[0]);
     expect(statements).toEqual([
       'select "id" from "identity"."users" where "identity"."users"."email" = $1 limit $2',
@@ -151,7 +161,7 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
       email: 'alan@example.com',
       password_hash: hash,
       display_name: 'Alan',
-      roles: '{admin}',
+      is_platform_staff: false,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -162,7 +172,7 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
       payload: { email: 'ALAN@example.com', password: 'open sesame' },
     });
     expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toMatchObject({ user: { id, roles: ['admin'] } });
+    expect(ok.json()).toMatchObject({ user: { id } });
 
     const bad = await app.inject({
       method: 'POST',
@@ -184,13 +194,13 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
   });
 
   it('GET /v1/users/:id reads through QueryBus → repository for users:read holders', async () => {
-    const moderator = await principal(app, [Role.Admin]);
+    const moderator = await principal(app, ['admin']);
     const res = await app.inject({
       method: 'GET',
       url: '/v1/users/01994f6c-1c3a-7b4e-9f00-5d1e2a3b4c5d',
       headers: bearer(moderator),
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ email: 'alan@example.com', roles: ['admin'] });
+    expect(res.json()).toMatchObject({ email: 'alan@example.com' });
   });
 });

@@ -8,7 +8,7 @@ import { GetUserByIdQuery } from './get-user-by-id.query.js';
 
 describe('GetUserByIdHandler', () => {
   it('returns the contract user', async () => {
-    const user = makeUserRecord({ roles: ['moderator'] });
+    const user = makeUserRecord();
     const users = mockOf<UsersRepository>({ findById: async () => user });
     await expect(
       new GetUserByIdHandler(users).execute(new GetUserByIdQuery(user.id)),
@@ -16,7 +16,7 @@ describe('GetUserByIdHandler', () => {
       id: user.id,
       email: user.email,
       displayName: user.displayName,
-      roles: ['moderator'],
+      roles: [],
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     });
@@ -31,5 +31,23 @@ describe('GetUserByIdHandler', () => {
       constructor: EntityNotFoundException,
       details: { entity: 'User', id },
     });
+  });
+
+  it('with a tenant: only a member of that tenant is found; anyone else is 404', async () => {
+    const tenantId = '0190f3b2-0000-7000-8000-0000000000aa';
+    const member = makeUserRecord();
+    const users = mockOf<UsersRepository>({
+      findById: async () => member,
+      findByIdInTenant: async (id: string) => (id === member.id ? member : null),
+    });
+    const handler = new GetUserByIdHandler(users);
+    await expect(handler.execute(new GetUserByIdQuery(member.id, tenantId))).resolves.toMatchObject(
+      { id: member.id },
+    );
+    expect(users.findByIdInTenant).toHaveBeenCalledWith(member.id, tenantId);
+    await expect(
+      handler.execute(new GetUserByIdQuery('0190f3b2-0000-7000-8000-00000000dead', tenantId)),
+    ).rejects.toBeInstanceOf(EntityNotFoundException);
+    expect(users.findById).not.toHaveBeenCalled();
   });
 });

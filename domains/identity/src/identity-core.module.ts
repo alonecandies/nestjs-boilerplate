@@ -7,9 +7,7 @@ import { LogoutHandler } from './application/commands/logout/logout.handler.js';
 import { PurgeExpiredSessionsHandler } from './application/commands/purge-expired-sessions/purge-expired-sessions.handler.js';
 import { RefreshSessionHandler } from './application/commands/refresh-session/refresh-session.handler.js';
 import { RegisterUserHandler } from './application/commands/register-user/register-user.handler.js';
-import { UpdateUserRolesHandler } from './application/commands/update-user-roles/update-user-roles.handler.js';
 import { UserRegisteredRelay } from './application/event-handlers/user-registered.relay.js';
-import { UserRolesChangedAuditHandler } from './application/event-handlers/user-roles-changed-audit.handler.js';
 import { AuditEventsRepository } from './application/persistence/audit-events.repository.js';
 import { InvitationsRepository } from './application/persistence/invitations.repository.js';
 import { MembershipsRepository } from './application/persistence/memberships.repository.js';
@@ -42,13 +40,12 @@ export const IDENTITY_COMMAND_HANDLERS = [
   LoginHandler,
   RefreshSessionHandler,
   LogoutHandler,
-  UpdateUserRolesHandler,
   PurgeExpiredSessionsHandler,
 ];
 
 export const IDENTITY_QUERY_HANDLERS = [GetUserByIdHandler, GetUsersByIdsHandler, ListUsersHandler];
 
-export const IDENTITY_EVENT_HANDLERS = [UserRegisteredRelay, UserRolesChangedAuditHandler];
+export const IDENTITY_EVENT_HANDLERS = [UserRegisteredRelay];
 
 /** Persistence bindings (the only place that knows it is Drizzle/Postgres). */
 const PERSISTENCE: Provider[] = [

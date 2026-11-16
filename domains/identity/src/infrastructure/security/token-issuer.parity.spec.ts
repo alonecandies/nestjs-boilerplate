@@ -1,5 +1,4 @@
 import { JwtService } from '@nestjs/jwt';
-import { Role } from '@platform/auth';
 import { signTestAccessToken } from '@platform/auth/testing';
 import { authConfig } from '@platform/config';
 import { describe, expect, it } from 'vitest';
@@ -23,25 +22,39 @@ const issuer = new TokenIssuer(jwt, access, refreshTokenConfig.parse({ NODE_ENV:
 const subject = {
   id: '0190f3b2-0000-7000-8000-000000000001',
   email: 'a@b.c',
-  roles: [Role.Admin, Role.User],
+  tenantId: '0190f3b2-0000-7000-8000-0000000000aa',
+  roles: ['owner', 'member'] as const,
 };
 
 type DecodedClaims = Record<string, unknown> & { iat: number; exp: number };
 
 describe('signTestAccessToken parity with TokenIssuer', () => {
-  it('signs the claims production issues: same keys; same sub, iss, aud, typ, email, roles and TTL', async () => {
+  it('signs the claims production issues: same keys; same sub, iss, aud, typ, email, tid, roles and TTL', async () => {
     const issued = jwt.decode<DecodedClaims>((await issuer.issueAccessToken(subject)).token);
     const signed = jwt.decode<DecodedClaims>(
       (await signTestAccessToken(subject, { config: access })).token,
     );
 
     expect(Object.keys(signed).sort()).toEqual(Object.keys(issued).sort());
-    for (const claim of ['sub', 'iss', 'aud', 'typ', 'email', 'roles']) {
+    expect(issued).not.toHaveProperty('staff');
+    for (const claim of ['sub', 'iss', 'aud', 'typ', 'email', 'tid', 'roles']) {
       expect(signed[claim], claim).toEqual(issued[claim]);
     }
-    // The configured TTL (600 s, not the 900 s default) reached both tokens.
     expect(issued.exp - issued.iat).toBe(600);
     expect(signed.exp - signed.iat).toBe(issued.exp - issued.iat);
     expect(issued).toMatchObject({ iss: 'parity-issuer', aud: 'parity-audience' });
+  });
+
+  it('both write `staff: true` for a staff subject, and the issuer honours a shorter ttlSec', async () => {
+    const staffSubject = { ...subject, roles: ['admin'] as const, staff: true };
+    const issued = await issuer.issueAccessToken(staffSubject, { ttlSec: 120 });
+    const decoded = jwt.decode<DecodedClaims>(issued.token);
+    const signed = jwt.decode<DecodedClaims>(
+      (await signTestAccessToken(staffSubject, { config: access })).token,
+    );
+    expect(decoded.staff).toBe(true);
+    expect(signed.staff).toBe(true);
+    expect(decoded.exp - decoded.iat).toBe(120);
+    expect(issued.expiresIn).toBe(120);
   });
 });

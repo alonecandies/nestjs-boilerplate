@@ -5,11 +5,10 @@ import type {
   LogoutRequest,
   RefreshTokensRequest,
   RegisterRequest,
-  UpdateUserRolesRequest,
   User,
   UserPage,
 } from '@domain/identity-contracts';
-import { type AccessTokenDenylist, isRole } from '@platform/auth';
+import type { AccessTokenDenylist } from '@platform/auth';
 import {
   EntityNotFoundException,
   generateId,
@@ -85,14 +84,14 @@ export class FakeIdentityState {
     if (index >= 0) this.memberships.splice(index, 1);
   }
 
-  byEmail(email: string): StoredUser | undefined {
-    return [...this.users.values()].find((entry) => entry.user.email === email);
+  /** Replaces a member's roles in one tenant (tests promote or demote; B2-13 adds the real API). */
+  setMembershipRoles(tenantId: string, userId: string, roles: TenantRole[]): void {
+    const membership = this.membership(tenantId, userId);
+    if (membership) membership.roles = normalizeTenantRoles(roles);
   }
 
-  /** Replaces a user's roles directly (e.g. an admin for positive RBAC checks). */
-  setRoles(id: string, roles: string[]): void {
-    const entry = this.users.get(id);
-    if (entry) entry.user = { ...entry.user, roles, updatedAt: new Date() };
+  byEmail(email: string): StoredUser | undefined {
+    return [...this.users.values()].find((entry) => entry.user.email === email);
   }
 }
 
@@ -114,7 +113,7 @@ export class FakeAuthPort extends AuthPort {
       id: generateId(),
       email,
       displayName: input.displayName.trim(),
-      roles: ['user'],
+      roles: [],
       createdAt: now,
       updatedAt: now,
     };
@@ -173,10 +172,12 @@ export class FakeAuthPort extends AuthPort {
   }
 
   private async issue(user: User, tenantId: string): Promise<AuthTokens> {
+    const roles = [...(this.state.membership(tenantId, user.id)?.roles ?? [])];
     const access = await this.tokens.issueAccessToken({
       id: user.id,
       email: user.email,
-      roles: user.roles.filter(isRole),
+      tenantId,
+      roles,
     });
     const sessionId = generateId();
     this.state.sessions.set(sessionId, { userId: user.id, tenantId });
@@ -188,7 +189,7 @@ export class FakeAuthPort extends AuthPort {
       tokenType: 'Bearer',
       user,
       tenantId,
-      tenantRoles: [...(this.state.membership(tenantId, user.id)?.roles ?? [])],
+      tenantRoles: roles,
     };
   }
 }
@@ -198,10 +199,13 @@ export class FakeUsersPort extends UsersPort {
     super();
   }
 
-  async getUser(id: string): Promise<User> {
+  async getUser(id: string, scope?: { tenantId: string }): Promise<User> {
     this.state.calls.push('UsersService.GetUser');
     const entry = this.state.users.get(id);
     if (!entry) throw new EntityNotFoundException('User', id);
+    if (scope !== undefined && this.state.membership(scope.tenantId, id) === undefined) {
+      throw new EntityNotFoundException('User', id);
+    }
     return entry.user;
   }
 
@@ -216,16 +220,10 @@ export class FakeUsersPort extends UsersPort {
   async listUsers(query: ListUsersRequest): Promise<UserPage> {
     this.state.calls.push('UsersService.ListUsers');
     const items = [...this.state.users.values()]
+      .filter((entry) => this.state.membership(query.tenantId ?? '', entry.user.id) !== undefined)
       .map((entry) => entry.user)
       .sort((a, b) => b.id.localeCompare(a.id))
       .slice(0, query.limit);
     return { items };
-  }
-
-  async updateUserRoles(input: UpdateUserRolesRequest): Promise<User> {
-    this.state.calls.push('UsersService.UpdateUserRoles');
-    if (!this.state.users.has(input.id)) throw new EntityNotFoundException('User', input.id);
-    this.state.setRoles(input.id, input.roles);
-    return this.getUser(input.id);
   }
 }

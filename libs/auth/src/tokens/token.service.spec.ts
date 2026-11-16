@@ -1,17 +1,21 @@
 import { JwtService } from '@nestjs/jwt';
-import { UnauthenticatedException } from '@platform/common';
+import { type TenantRole, UnauthenticatedException } from '@platform/common';
 import { authConfig } from '@platform/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createJwtModuleOptions } from '../auth.module.js';
-import { Role } from '../rbac/role.enum.js';
 import { createTestRbacRegistry, TEST_RBAC_FEATURE } from '../testing/rbac-test.utils.js';
 import { signTestAccessToken } from '../testing/sign-test-access-token.js';
+import { TEST_TENANT_ID } from '../testing/test-tenant.js';
 import { TokenService, toUnauthenticated } from './token.service.js';
 
 const config = authConfig.parse({ NODE_ENV: 'test', JWT_ACCESS_TTL_SEC: '900' });
 const jwt = new JwtService(createJwtModuleOptions(config));
 const tokens = new TokenService(jwt, config, createTestRbacRegistry(TEST_RBAC_FEATURE));
-const user = { id: '0190f3b2-0000-7000-8000-000000000001', email: 'a@b.c', roles: [Role.User] };
+const user = {
+  id: '0190f3b2-0000-7000-8000-000000000001',
+  email: 'a@b.c',
+  roles: ['member'] satisfies TenantRole[],
+};
 const sign = () => signTestAccessToken(user, { config });
 
 async function expectAuthError(promise: Promise<unknown>, code: string): Promise<void> {
@@ -45,7 +49,9 @@ describe('TokenService', () => {
     expect(claims).toEqual({
       sub: user.id,
       email: 'a@b.c',
-      roles: [Role.User],
+      tid: TEST_TENANT_ID,
+      roles: ['member'],
+      staff: false,
       typ: 'access',
       jti: issued.jti,
       iat: now,
@@ -55,6 +61,8 @@ describe('TokenService', () => {
     });
     expect(tokens.toAuthUser(claims)).toMatchObject({
       id: user.id,
+      tenantId: TEST_TENANT_ID,
+      staff: false,
       jti: issued.jti,
       exp: issued.exp,
       permissions: expect.arrayContaining(['catalog:buy']),

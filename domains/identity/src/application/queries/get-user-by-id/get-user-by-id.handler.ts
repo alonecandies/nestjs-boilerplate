@@ -10,7 +10,10 @@ export class GetUserByIdHandler implements IQueryHandler<GetUserByIdQuery> {
   constructor(private readonly users: UsersRepository) {}
 
   async execute(query: GetUserByIdQuery): Promise<User> {
-    const user = await this.users.findById(query.id);
+    const user =
+      query.tenantId === undefined
+        ? await this.users.findById(query.id)
+        : await this.users.findByIdInTenant(query.id, query.tenantId);
     if (!user) throw new EntityNotFoundException('User', query.id);
     return toUserContract(user);
   }

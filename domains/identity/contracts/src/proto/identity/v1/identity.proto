@@ -25,6 +25,7 @@ service UsersService {
   rpc GetUsersByIds(GetUsersByIdsRequest) returns (UserList);
   // Keyset-paginated listing (uuidv7 ids, newest first).
   rpc ListUsers(ListUsersRequest) returns (UserPage);
+  // Retired in B2 (global roles removed): always FAILED_PRECONDITION / GLOBAL_ROLES_REMOVED.
   rpc UpdateUserRoles(UpdateUserRolesRequest) returns (User);
 }
 
@@ -32,7 +33,7 @@ message User {
   string id = 1;
   string email = 2;
   string display_name = 3;
-  // Role names: "admin" | "moderator" | "user".
+  // Always empty since B2: roles are per tenant (AuthTokens.tenant_roles).
   repeated string roles = 4;
   google.protobuf.Timestamp created_at = 5;
   google.protobuf.Timestamp updated_at = 6;
@@ -90,6 +91,8 @@ message LogoutRequest {
 
 message GetUserRequest {
   string id = 1;
+  // Scope: only a member of this tenant is found (else NOT_FOUND). Absent: any user (own profile, internal).
+  optional string tenant_id = 2;
 }
 
 message GetUsersByIdsRequest {
@@ -106,6 +109,8 @@ message ListUsersRequest {
   optional string cursor = 2;
   // Case-insensitive substring match on email / display name.
   optional string search = 3;
+  // Required since B2: list the members of this tenant only (INVALID_ARGUMENT when absent).
+  optional string tenant_id = 4;
 }
 
 message UserPage {
@@ -117,6 +122,6 @@ message UserPage {
 message UpdateUserRolesRequest {
   string id = 1;
   repeated string roles = 2;
-  // The admin performing the change (an actor cannot remove their own admin role).
+  // Unused since B2.
   string actor_id = 3;
 }

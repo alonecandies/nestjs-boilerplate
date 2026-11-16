@@ -1,5 +1,6 @@
 import type { CursorPage } from '@platform/common';
 import { decodeIdCursor, keysetPage } from '@platform/database';
+import type { UserAggregate } from '../index.js';
 import {
   type AuditEventRecord,
   EmailAlreadyTakenException,
@@ -12,9 +13,7 @@ import {
   SessionsRepository,
   type TenantRecord,
   TransactionRunner,
-  UserAggregate,
   type UserRecord,
-  type UserRole,
   type UserSnapshot,
   UsersRepository,
 } from '../index.js';
@@ -23,6 +22,7 @@ import {
   InMemoryInvitationsRepository,
   InMemoryMembershipsRepository,
   InMemoryTenantsRepository,
+  membershipKey,
 } from './in-memory-tenancy.js';
 
 /**
@@ -67,6 +67,11 @@ export class InMemoryUsersRepository extends UsersRepository {
     return user ? toRecord(user) : null;
   }
 
+  async findByIdInTenant(id: string, tenantId: string): Promise<UserRecord | null> {
+    if (!this.store.memberships.has(membershipKey(tenantId, id))) return null;
+    return this.findById(id);
+  }
+
   async findByIds(ids: readonly string[]): Promise<UserRecord[]> {
     return ids.flatMap((id) => {
       const user = this.store.users.get(id);
@@ -78,13 +83,8 @@ export class InMemoryUsersRepository extends UsersRepository {
     return [...this.store.users.values()].find((user) => user.email === email) ?? null;
   }
 
-  async findAggregate(id: string): Promise<UserAggregate | null> {
-    const user = this.store.users.get(id);
-    return user ? UserAggregate.restore(user) : null;
-  }
-
-  async countAdmins(): Promise<number> {
-    return [...this.store.users.values()].filter((user) => user.roles.includes('admin')).length;
+  async isPlatformStaff(id: string): Promise<boolean> {
+    return this.store.users.get(id)?.isPlatformStaff === true;
   }
 
   async existsByEmail(email: string): Promise<boolean> {
@@ -95,6 +95,7 @@ export class InMemoryUsersRepository extends UsersRepository {
     const after = criteria.cursor === undefined ? undefined : decodeIdCursor(criteria.cursor).id;
     const search = criteria.search?.toLowerCase();
     const rows = [...this.store.users.values()]
+      .filter((user) => this.store.memberships.has(membershipKey(criteria.tenantId, user.id)))
       .filter((user) => after === undefined || user.id < after)
       .filter(
         (user) =>
@@ -113,11 +114,6 @@ export class InMemoryUsersRepository extends UsersRepository {
     const snapshot = user.toSnapshot();
     if (await this.existsByEmail(snapshot.email)) throw new EmailAlreadyTakenException();
     this.store.users.set(snapshot.id, snapshot);
-  }
-
-  async updateRoles(id: string, roles: readonly UserRole[], updatedAt: Date): Promise<void> {
-    const user = this.store.users.get(id);
-    if (user) this.store.users.set(id, { ...user, roles: [...roles], updatedAt });
   }
 
   async updatePasswordHash(id: string, passwordHash: string, updatedAt: Date): Promise<void> {

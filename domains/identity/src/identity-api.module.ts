@@ -34,7 +34,7 @@ const PORT_EXPORTS = [AuthPort, UsersPort];
 
 /**
  * Edge API of the identity context: REST (`/v1/auth`, `/v1/users`), GraphQL (me, user, users,
- * register, login, refreshTokens, updateUserRoles), the passport-local strategy and the `users`
+ * register, login, refreshTokens), the passport-local strategy and the `users`
  * DataLoader. Presentation depends only on `AuthPort` / `UsersPort`; the binding decides the
  * topology:
  * - `forLocal()` (monolith): ports → CommandBus/QueryBus. The app imports `IdentityCoreModule` itself

@@ -1,8 +1,8 @@
 import { Global, type INestApplication, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { AuthModule, RbacModule, type Role } from '@platform/auth';
-import { signTestAccessToken } from '@platform/auth/testing';
-import { generateId } from '@platform/common';
+import { AuthModule, RbacModule } from '@platform/auth';
+import { signTestAccessToken, TEST_TENANT_ID } from '@platform/auth/testing';
+import { generateId, type TenantRole } from '@platform/common';
 import { AppConfigModule, type AuthConfig, authConfig, redisConfig } from '@platform/config';
 import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
@@ -36,14 +36,15 @@ export interface TestPrincipal {
   exp: number;
 }
 
-/** A real access token for a user with `roles`, signed with the app's `auth` config. */
+/** A real access token for a user with `roles` in `tenantId`, signed with the app's `auth` config. */
 export async function principal(
   app: INestApplication,
-  roles: Role[],
+  roles: TenantRole[],
   id: string = generateId(),
+  tenantId: string = TEST_TENANT_ID,
 ): Promise<TestPrincipal> {
   const issued = await signTestAccessToken(
-    { id, email: 'p@example.com', roles },
+    { id, email: 'p@example.com', tenantId, roles },
     { config: app.get<AuthConfig>(authConfig.KEY) },
   );
   return { id, token: issued.token, jti: issued.jti, exp: issued.exp };

@@ -11,7 +11,6 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import {
   FakeRedisModule,
   loginAs,
-  Role,
   type TestPrincipal,
 } from '../../../test/billing-http-test.utils.js';
 import { BillingPort } from '../../application/ports/billing.port.js';
@@ -108,8 +107,8 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
     });
     app = await createFastifyTestApp(builder, undefined, { appOptions: { logger: false } });
     [user, admin, moderator] = await Promise.all([
-      loginAs(app, Role.User),
-      loginAs(app, Role.Admin),
+      loginAs(app, 'member'),
+      loginAs(app, 'admin'),
       loginAs(app),
     ]);
   }, 60_000);
@@ -162,13 +161,10 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
       expect(port.listPayments).not.toHaveBeenCalled();
     });
 
-    it('all: true lists every user for an admin', async () => {
-      port.listPayments.mockResolvedValue({ items: [] });
-
+    it('all: true is FORBIDDEN even for an admin (billing:read-all withheld until B2-26)', async () => {
       const body = await gql(PAYMENTS_QUERY, { all: true }, admin);
-
-      expect(body.errors).toBeUndefined();
-      expect(port.listPayments).toHaveBeenCalledWith({ userId: undefined, limit: 10 });
+      expect(body.errors?.[0]?.extensions).toMatchObject({ code: 'FORBIDDEN', status: 403 });
+      expect(port.listPayments).not.toHaveBeenCalled();
     });
 
     it('pages: cursor in, nextCursor out', async () => {

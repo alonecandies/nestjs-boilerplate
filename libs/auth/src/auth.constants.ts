@@ -37,3 +37,13 @@ export const AuthErrorCode = {
   MISSING_CREDENTIALS: 'MISSING_CREDENTIALS',
 } as const;
 export type AuthErrorCode = (typeof AuthErrorCode)[keyof typeof AuthErrorCode];
+
+/** Route metadata written by `@StaffOnly()` (also read by docs and the B2-23 gRPC edge). */
+export const STAFF_ONLY_KEY = 'auth:staff-only';
+
+/** Stable `code`s of RBAC 403s that clients act on. */
+export const RbacErrorCode = {
+  /** The route needs a platform-staff switch-in token (`@StaffOnly()`). */
+  STAFF_ONLY: 'STAFF_ONLY',
+} as const;
+export type RbacErrorCode = (typeof RbacErrorCode)[keyof typeof RbacErrorCode];

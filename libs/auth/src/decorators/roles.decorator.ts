@@ -1,10 +1,11 @@
 import { type CustomDecorator, SetMetadata } from '@nestjs/common';
+import type { TenantRole } from '@platform/common';
 import { ROLES_KEY } from '../auth.constants.js';
-import type { Role } from '../rbac/role.enum.js';
 
 /**
- * Requires ANY of `roles` (checked by `RolesGuard`; a handler-level decorator overrides the
- * class-level one). Prefer `@RequirePermissions` — roles are coarse and change more often.
+ * Requires ANY of `roles` in the active tenant, with the hierarchy owner ⊇ admin ⊇ member
+ * (`@Roles('admin')` admits owners). Use it only when the role itself is the requirement (spec §6:
+ * owner-only operations); otherwise declare a permission and use `@RequirePermissions`.
  */
-export const Roles = (...roles: Role[]): CustomDecorator<string> =>
+export const Roles = (...roles: TenantRole[]): CustomDecorator<string> =>
   SetMetadata(ROLES_KEY, Object.freeze([...roles]));

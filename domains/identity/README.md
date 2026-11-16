@@ -9,12 +9,12 @@ presentation classes run in the monolith (in-process) and in the gateway (over g
 
 ```
 src/
-├── domain/                 UserAggregate, UserRegisteredEvent, UserRolesChangedEvent, session rules,
-│                           identity errors, USER_ROLES, normalizeEmail (pure TS: @nestjs/cqrs, @platform/common, lodash)
+├── domain/                 UserAggregate, UserRegisteredEvent, session rules,
+│                           identity errors, tenant roles, normalizeEmail (pure TS: @nestjs/cqrs, @platform/common, lodash)
 ├── application/
-│   ├── commands/           RegisterUser, Login, RefreshSession, Logout, UpdateUserRoles, PurgeExpiredSessions
+│   ├── commands/           RegisterUser, Login, RefreshSession, Logout, PurgeExpiredSessions
 │   ├── queries/            GetUserById, GetUsersByIds, ListUsers
-│   ├── event-handlers/     UserRegisteredRelay (→ Kafka), UserRolesChangedAuditHandler
+│   ├── event-handlers/     UserRegisteredRelay (→ Kafka)
 │   ├── ports/              AuthPort, UsersPort (abstract classes, @domain/identity-contracts types)
 │   ├── persistence/        UsersRepository, SessionsRepository, TransactionRunner (abstractions)
 │   ├── services/           SessionTokensService (open session + issue the token pair)
@@ -130,28 +130,21 @@ revoked_at IS NULL AND expires_at > now RETURNING id` (compare-and-set: concurre
   rotation transaction, so the following throw cannot roll it back) → 401 `REFRESH_TOKEN_REUSED`.
 - **Logout**: denylist the access `jti` in Redis for its remaining lifetime, then revoke the
   session of `refreshToken`, or every session when it is omitted ("sign out everywhere").
-- **Role change**: one transaction: `SELECT … FOR UPDATE` of the user (concurrent changes of one
-  user queue, so `previousRoles` in the event is always what was really replaced) →
-  `UserAggregate.changeRoles()` (known roles, non-empty, an admin cannot drop their own admin
-  role) → on a demotion, `pg_advisory_xact_lock` + count admins (two concurrent demotions cannot
-  leave zero admins → 422 `CANNOT_REMOVE_LAST_ADMIN`) → `UPDATE identity.users SET roles` → after commit,
-  `UserRolesChangedEvent` (audit log). Takes effect on the user's next refresh (≤ access TTL). The edge cache entry `user:{id}` is evicted.
 - **Purge**: hourly `PurgeExpiredSessionsCron` (`@WithLock('identity:purge-sessions', 60 s)`)
   deletes expired sessions in batches of 5 000. Revoked-but-unexpired sessions are kept on
   purpose: they make reuse detectable until the token itself expires.
 
 ## REST (URI version `v1`, problem+json errors)
 
-| Method | Path                  | Auth                                            | Body / query                               | Success                                      | Errors                                                                         |
-| ------ | --------------------- | ----------------------------------------------- | ------------------------------------------ | -------------------------------------------- | ------------------------------------------------------------------------------ |
-| POST   | `/v1/auth/register`   | `@Public`, `@RateLimit('identity.credentials')` | `{ email, password (8–128), displayName }` | 201 `AuthTokensResponse`                     | 400, 409 `EMAIL_TAKEN`, 429                                                    |
-| POST   | `/v1/auth/login`      | `@Public`, `@RateLimit('identity.credentials')` | `{ email, password }` (passport-local)     | 200 `AuthTokensResponse`                     | 400, 401 `INVALID_CREDENTIALS` / `MISSING_CREDENTIALS`, 429                    |
-| POST   | `/v1/auth/refresh`    | `@Public`                                       | `{ refreshToken }` (JWT)                   | 200 `AuthTokensResponse`                     | 400, 401 `INVALID_REFRESH_TOKEN` / `SESSION_EXPIRED` / `REFRESH_TOKEN_REUSED`  |
-| POST   | `/v1/auth/logout`     | bearer                                          | `{ refreshToken? }`                        | 204                                          | 401                                                                            |
-| GET    | `/v1/auth/me`         | bearer                                          | –                                          | 200 `UserResponse`                           | 401                                                                            |
-| GET    | `/v1/users`           | `users:read`                                    | `?limit (1–100)&cursor&search (3–100)`     | 200 `UserPageResponse`                       | 400, 401, 403, 422 `INVALID_CURSOR`                                            |
-| GET    | `/v1/users/:id`       | self, or `users:read`                           | `:id` uuidv7 (`ParseUUIDPipe`)             | 200 `UserResponse` (cached `user:{id}` 30 s) | 400, 401, 403, 404                                                             |
-| PATCH  | `/v1/users/:id/roles` | `users:manage-roles`                            | `{ roles: Role[] }`                        | 200 `UserResponse` (evicts the cache)        | 400, 401, 403, 404, 422 `CANNOT_REVOKE_OWN_ADMIN` / `CANNOT_REMOVE_LAST_ADMIN` |
+| Method | Path                | Auth                                            | Body / query                               | Success                                      | Errors                                                                        |
+| ------ | ------------------- | ----------------------------------------------- | ------------------------------------------ | -------------------------------------------- | ----------------------------------------------------------------------------- |
+| POST   | `/v1/auth/register` | `@Public`, `@RateLimit('identity.credentials')` | `{ email, password (8–128), displayName }` | 201 `AuthTokensResponse`                     | 400, 409 `EMAIL_TAKEN`, 429                                                   |
+| POST   | `/v1/auth/login`    | `@Public`, `@RateLimit('identity.credentials')` | `{ email, password }` (passport-local)     | 200 `AuthTokensResponse`                     | 400, 401 `INVALID_CREDENTIALS` / `MISSING_CREDENTIALS`, 429                   |
+| POST   | `/v1/auth/refresh`  | `@Public`                                       | `{ refreshToken }` (JWT)                   | 200 `AuthTokensResponse`                     | 400, 401 `INVALID_REFRESH_TOKEN` / `SESSION_EXPIRED` / `REFRESH_TOKEN_REUSED` |
+| POST   | `/v1/auth/logout`   | bearer                                          | `{ refreshToken? }`                        | 204                                          | 401                                                                           |
+| GET    | `/v1/auth/me`       | bearer                                          | –                                          | 200 `UserResponse`                           | 401                                                                           |
+| GET    | `/v1/users`         | `users:read`                                    | `?limit (1–100)&cursor&search (3–100)`     | 200 `UserPageResponse`                       | 400, 401, 403, 422 `INVALID_CURSOR`                                           |
+| GET    | `/v1/users/:id`     | self, or `users:read`                           | `:id` uuidv7 (`ParseUUIDPipe`)             | 200 `UserResponse` (cached `user:{id}` 30 s) | 400, 401, 403, 404                                                            |
 
 DTOs are class-validator classes with `@ApiProperty` and `@Transform` normalisation (trimmed,
 lowercased email; trimmed names/search, blank search = no filter). Responses are `@Exclude()`/`@Expose()` allow-list
@@ -167,24 +160,22 @@ classes serialised by a controller-level (HTTP-only) `ClassSerializerInterceptor
 | `mutation register(input: RegisterInput!)`                     | public, auth throttle | `AuthPayload`    |
 | `mutation login(input: LoginInput!)`                           | public, auth throttle | `AuthPayload`    |
 | `mutation refreshTokens(input: RefreshTokensInput!)`           | public                | `AuthPayload`    |
-| `mutation updateUserRoles(input: UpdateUserRolesInput!)`       | `users:manage-roles`  | `User`           |
 
-Types: `User { id: UUID!, email, displayName, roles: [Role!]!, createdAt: DateTime!, updatedAt: DateTime! }`,
-`AuthPayload`, `UserConnection { items, nextCursor }`, `enum Role { ADMIN MODERATOR USER }` (internal
-values = `@platform/auth` `Role`). Every input field carries class-validator decorators.
+Types: `User { id: UUID!, email, displayName, createdAt: DateTime!, updatedAt: DateTime! }`,
+`AuthPayload`, `UserConnection { items, nextCursor }`, `enum TenantRole { OWNER ADMIN MEMBER }` (values =
+`@platform/common` `TenantRole`). Every input field carries class-validator decorators.
 
 ## gRPC (`identity.v1`, served by identity-service)
 
-| Service        | RPC               | Dispatches                  |
-| -------------- | ----------------- | --------------------------- |
-| `AuthService`  | `Register`        | `RegisterUserCommand`       |
-|                | `Login`           | `LoginCommand`              |
-|                | `RefreshTokens`   | `RefreshSessionCommand`     |
-|                | `Logout`          | `LogoutCommand` (→ `Empty`) |
-| `UsersService` | `GetUser`         | `GetUserByIdQuery`          |
-|                | `GetUsersByIds`   | `GetUsersByIdsQuery`        |
-|                | `ListUsers`       | `ListUsersQuery`            |
-|                | `UpdateUserRoles` | `UpdateUserRolesCommand`    |
+| Service        | RPC             | Dispatches                  |
+| -------------- | --------------- | --------------------------- |
+| `AuthService`  | `Register`      | `RegisterUserCommand`       |
+|                | `Login`         | `LoginCommand`              |
+|                | `RefreshTokens` | `RefreshSessionCommand`     |
+|                | `Logout`        | `LogoutCommand` (→ `Empty`) |
+| `UsersService` | `GetUser`       | `GetUserByIdQuery`          |
+|                | `GetUsersByIds` | `GetUsersByIdsQuery`        |
+|                | `ListUsers`     | `ListUsersQuery`            |
 
 Controllers use `@GrpcController()` + the generated `…ServiceControllerMethods()` and validate
 payloads with `ZodRpcValidationPipe` (`INVALID_ARGUMENT` + issues). Domain codes survive the hop
@@ -203,10 +194,9 @@ close the "committed but not published" window; it is not implemented.
 
 ## Data model (`identity.schema.ts` → `identitySchema`)
 
-- `user_role` enum: `admin`, `moderator`, `user`.
 - `users`: `id uuid PK DEFAULT uuidv7()` (the app supplies uuidv7 ids), `email text UNIQUE`
   (`users_email_unique`, stored normalised), `password_hash`, `display_name`,
-  `roles user_role[] DEFAULT ARRAY['user']`, `created_at`, `updated_at` (`$onUpdate`).
+  `is_platform_staff boolean DEFAULT false` (set only by `staff:grant`), `created_at`, `updated_at` (`$onUpdate`).
 - `sessions`: `id uuid PK` (= refresh `jti`), `user_id → users ON DELETE CASCADE`,
   `refresh_token_hash`, `user_agent`, `ip`, `expires_at`, `revoked_at`, `replaced_by_id`,
   `created_at`; indexes `sessions_user_id_idx`, `sessions_expires_at_idx`.
@@ -216,7 +206,7 @@ close the "committed but not published" window; it is not implemented.
   every transport rejects a shorter search term (`IDENTITY_LIMITS.SEARCH_MIN_LENGTH`; a blank one
   means "no filter").
 
-The tables and the `user_role` enum live in the `identity` Postgres schema (`identityPgSchema`); raw SQL qualifies
+The tables and the `tenant_role` enum live in the `identity` Postgres schema (`identityPgSchema`); raw SQL qualifies
 them (`identity.users`). The schema file imports only `drizzle-orm` and a dependency-free relative file, so
 drizzle-kit can load it. Identity owns its migration history: `drizzle.config.ts` generates
 `src/infrastructure/persistence/migrations` (`bun run --filter @domain/identity db:generate`), bookkeeping in
@@ -258,8 +248,8 @@ Integration (Docker): `INTEGRATION=1 bunx vitest run --project identity:int` run
 existing throwaway database via `INTEGRATION_DATABASE_URL`). It boots the real `DatabaseModule`, which
 applies the platform set and identity's own history (schema `identity`), then covers the repositories: the hash-free
 projection, `users_email_unique` → `EMAIL_TAKEN`, `findByIds`, keyset + literal ILIKE search,
-`user_role[]` updates, DB defaults, the session FK cascade and compare-and-set rotation, the row
-lock of `findAggregate` and the admin-count lock (a concurrent caller waits), server-side prepared
+the `isPlatformStaff` fresh read, DB defaults, the session FK cascade and compare-and-set rotation,
+server-side prepared
 statements (`pg_prepared_statements`, one statement for every `findByIds` batch size) and the
 trigram search index (`EXPLAIN` → `Bitmap Index Scan on users_search_trgm_idx`).
 

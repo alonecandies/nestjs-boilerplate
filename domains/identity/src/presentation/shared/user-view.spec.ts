@@ -18,7 +18,7 @@ describe('user view', () => {
     expect(view.updatedAt).toEqual(view.createdAt);
   });
 
-  it('drops role names the RBAC enum does not know', () => {
-    expect(toUserView(makeUser({ roles: ['admin', 'root'] })).roles).toEqual(['admin']);
+  it('renders no roles: global roles are gone', () => {
+    expect(toUserView(makeUser({ roles: ['admin', 'root'] }))).not.toHaveProperty('roles');
   });
 });

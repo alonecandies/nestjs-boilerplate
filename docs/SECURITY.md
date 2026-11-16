@@ -123,45 +123,43 @@ session of the given `refreshToken`, or **every** session when the body omits it
 Global guards, registered by `AuthModule.forRootAsync()` in this order: `JwtAuthGuard` →
 `RolesGuard` → `PermissionsGuard`. They branch on the context type, so the same decorators work on
 REST controllers, GraphQL resolvers and WebSocket handlers. `rpc` handlers (gRPC, Kafka) bypass them:
-services trust the edge (see [Internal gRPC](#internal-grpc-mtls-reflection)).
+services trust the edge (see [Internal gRPC](#internal-grpc-mtls-reflection)). `@StaffOnly()` adds
+`StaffOnlyGuard` on its route, after them.
 
-| Decorator                                               | Meaning                                                    |
-| ------------------------------------------------------- | ---------------------------------------------------------- |
-| `@Public()` (`@platform/common`)                        | skip authentication                                        |
-| `@RequirePermissions(...p)` / `@RequireAnyPermission()` | all / any of the permissions                               |
-| `@Roles(...roles)`                                      | any of the roles (prefer permissions)                      |
-| `@Auth(...p)`                                           | alias of `@RequirePermissions(...p)`                       |
-| `@CurrentUser(field?)`                                  | the `AuthUser` (401 when absent, even on `@Public` routes) |
+| Decorator                                               | Meaning                                                                                         |
+| ------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `@Public()` (`@platform/common`)                        | skip authentication                                                                             |
+| `@RequirePermissions(...p)` / `@RequireAnyPermission()` | all / any of the permissions                                                                    |
+| `@Roles(...roles)`                                      | any of the tenant roles, owner ⊇ admin ⊇ member; only for owner-only rules (prefer permissions) |
+| `@StaffOnly()`                                          | platform-staff switch-in tokens only (403 `STAFF_ONLY`)                                         |
+| `@Auth(...p)`                                           | alias of `@RequirePermissions(...p)`                                                            |
+| `@CurrentUser(field?)`                                  | the `AuthUser` (401 when absent, even on `@Public` routes)                                      |
 
 ### Matrix (default grants)
 
 Each domain declares its permissions and default grants (`domains/<x>/src/<x>.permissions.ts`,
 `RbacModule.forFeature`); `AuthModule` assembles the map at boot and fails the boot on an undeclared
-permission. Until Task 10 of the B2 core plan, tokens still carry global roles: `user` and `moderator`
-resolve as `member`, `admin` as `admin`. Grants are cumulative: owner ⊇ admin ⊇ member (✓ = effective).
+permission. Access tokens carry the roles of the active tenant (`tid`); permissions are resolved from
+them at verification. Grants are cumulative: owner ⊇ admin ⊇ member (✓ = effective).
 
-| Domain        | Permission            | `member` | `admin` | `owner` | Used by                                                       |
-| ------------- | --------------------- | :------: | :-----: | :-----: | ------------------------------------------------------------- |
-| identity      | `users:read`          |          |    ✓    |    ✓    | `GET /v1/users`, another user's `GET /v1/users/:id`, `users`  |
-| identity      | `users:manage-roles`  |          |    ✓    |    ✓    | `PATCH /v1/users/:id/roles`, `updateUserRoles`                |
-| identity      | `members:manage`      |          |    ✓    |    ✓    | reserved                                                      |
-| identity      | `tenant:manage`       |          |         |    ✓    | reserved                                                      |
-| billing       | `billing:checkout`    |    ✓     |    ✓    |    ✓    | `POST /v1/billing/checkout-sessions`, `createCheckoutSession` |
-| billing       | `billing:read-all`    |          |    ✓    |    ✓    | `GET /v1/billing/payments?all=true`, `payments(all: true)`    |
-| notifications | `notifications:read`  |    ✓     |    ✓    |    ✓    | notifications REST, GraphQL, Socket.IO                        |
-| notifications | `notifications:write` |          |    ✓    |    ✓    | reserved                                                      |
-| files         | `files:read`          |    ✓     |    ✓    |    ✓    | `GET /v1/files/download-url` (own files)                      |
-| files         | `files:write`         |    ✓     |    ✓    |    ✓    | upload, presign, delete (own files)                           |
-| files         | `files:manage`        |          |    ✓    |    ✓    | download/delete any user's file (each use is logged)          |
+| Domain        | Permission            | `member` | `admin` | `owner` | Used by                                                                                                                         |
+| ------------- | --------------------- | :------: | :-----: | :-----: | ------------------------------------------------------------------------------------------------------------------------------- |
+| identity      | `users:read`          |          |    ✓    |    ✓    | `GET /v1/users`, another user's `GET /v1/users/:id`, `users`                                                                    |
+| identity      | `members:manage`      |          |    ✓    |    ✓    | reserved                                                                                                                        |
+| identity      | `tenant:manage`       |          |         |    ✓    | reserved                                                                                                                        |
+| billing       | `billing:checkout`    |    ✓     |    ✓    |    ✓    | `POST /v1/billing/checkout-sessions`, `createCheckoutSession`                                                                   |
+| billing       | `billing:read-all`    |          |         |         | `GET /v1/billing/payments?all=true`, `payments(all: true)`: declared, granted to nobody until the data is tenant-scoped (B2-26) |
+| notifications | `notifications:read`  |    ✓     |    ✓    |    ✓    | notifications REST, GraphQL, Socket.IO                                                                                          |
+| notifications | `notifications:write` |          |    ✓    |    ✓    | reserved                                                                                                                        |
+| files         | `files:read`          |    ✓     |    ✓    |    ✓    | `GET /v1/files/download-url` (own files)                                                                                        |
+| files         | `files:write`         |    ✓     |    ✓    |    ✓    | upload, presign, delete (own files)                                                                                             |
+| files         | `files:manage`        |          |         |         | download/delete any user's file: declared, granted to nobody until the data is tenant-scoped (B4-3)                             |
 
 Ownership rules that are **not** permissions, enforced by the handlers:
 
 - A user can always read their own profile (`GET /v1/users/:id`, `user(id)`).
 - Files are scoped to the key prefix `users/{userId}/`; access is checked before existence (403 before 404) so keys of other users cannot be probed.
 - Notifications and payments always use the user id from the token, never from the request.
-- Role changes run under `SELECT … FOR UPDATE` plus an advisory lock: an admin cannot drop their own
-  admin role (`CANNOT_REVOKE_OWN_ADMIN`) and the last admin cannot be removed
-  (`CANNOT_REMOVE_LAST_ADMIN`).
 
 ### The first admin
 

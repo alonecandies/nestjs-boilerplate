@@ -13,7 +13,6 @@ const API_VALUES = [
   'IDENTITY_LIMITS',
   'IdentityApiModule',
   'IdentityErrorCode',
-  'RoleEnum',
   'TenantRoleEnum',
   'USERS_LOADER',
   'USER_CACHE_TTL_MS',

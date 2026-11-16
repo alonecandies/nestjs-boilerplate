@@ -21,7 +21,6 @@ import { freePort } from '../../../test/free-port.js';
 import { InMemoryAppCache } from '../../../test/in-memory-app-cache.js';
 import { LogoutCommand } from '../../application/commands/logout/logout.command.js';
 import { RegisterUserCommand } from '../../application/commands/register-user/register-user.command.js';
-import { UpdateUserRolesCommand } from '../../application/commands/update-user-roles/update-user-roles.command.js';
 import { AuthPort } from '../../application/ports/auth.port.js';
 import { UsersPort } from '../../application/ports/users.port.js';
 import { GetUserByIdQuery } from '../../application/queries/get-user-by-id/get-user-by-id.query.js';
@@ -45,6 +44,8 @@ import { UsersGrpcController } from './users-grpc.controller.js';
  * Covers payload validation, request→command mapping, null normalisation and the error hop
  * (DomainException → status + trailers → DomainException with the same code).
  */
+
+const TENANT = '0190f3b2-0000-7000-8000-0000000000aa';
 
 const commandBus = { execute: vi.fn() };
 const queryBus = { execute: vi.fn() };
@@ -141,27 +142,15 @@ describe('identity over gRPC (forRemote adapters ↔ gRPC controllers)', () => {
     queryBus.execute.mockResolvedValueOnce([a, b]).mockResolvedValueOnce({ items: [a] });
 
     await expect(users.getUsersByIds([a.id, b.id])).resolves.toEqual([a, b]);
-    const page = await users.listUsers({ limit: 0 });
+    const page = await users.listUsers({ limit: 0, tenantId: TENANT });
 
     expect(queryBus.execute).toHaveBeenNthCalledWith(1, new GetUsersByIdsQuery([a.id, b.id]));
     expect(queryBus.execute).toHaveBeenNthCalledWith(
       2,
-      new ListUsersQuery(0, undefined, undefined),
+      new ListUsersQuery(TENANT, 0, undefined, undefined),
     );
     expect(page).toEqual({ items: [a] });
     expect(page).not.toHaveProperty('nextCursor');
-  });
-
-  it('UpdateUserRoles → UpdateUserRolesCommand', async () => {
-    const [id, actorId] = [generateId(), generateId()];
-    queryBus.execute.mockReset();
-    commandBus.execute.mockResolvedValue(makeUser({ id, roles: ['moderator'] }));
-    await expect(
-      users.updateUserRoles({ id, roles: ['moderator'], actorId }),
-    ).resolves.toMatchObject({ id, roles: ['moderator'] });
-    expect(commandBus.execute).toHaveBeenCalledWith(
-      new UpdateUserRolesCommand(id, ['moderator'], actorId),
-    );
   });
 
   it('Register: payload validated + normalised, tokens (with nested user) normalised back', async () => {

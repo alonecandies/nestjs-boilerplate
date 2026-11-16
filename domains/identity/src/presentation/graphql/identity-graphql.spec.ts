@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { Role } from '@platform/auth';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { generateId, provideCommonEnhancers } from '@platform/common';
 import { AppGraphqlModule, DataLoaderRegistry } from '@platform/graphql';
 import { AppCacheService } from '@platform/redis';
@@ -47,7 +47,6 @@ const usersPort: PortFake<UsersPort> = {
   getUser: vi.fn(),
   getUsersByIds: vi.fn(),
   listUsers: vi.fn(),
-  updateUserRoles: vi.fn(),
 };
 
 describe('identity GraphQL API (Apollo on Fastify, global guards, fake ports)', () => {
@@ -84,7 +83,7 @@ describe('identity GraphQL API (Apollo on Fastify, global guards, fake ports)', 
       ],
     });
     app = await createFastifyTestApp(builder, undefined, { appOptions: { logger: false } });
-    [user, admin] = await Promise.all([principal(app, [Role.User]), principal(app, [Role.Admin])]);
+    [user, admin] = await Promise.all([principal(app, ['member']), principal(app, ['admin'])]);
   });
 
   afterAll(async () => {
@@ -97,16 +96,15 @@ describe('identity GraphQL API (Apollo on Fastify, global guards, fake ports)', 
     usersPort.getUser.mockReset();
     usersPort.getUsersByIds.mockReset();
     usersPort.listUsers.mockReset();
-    usersPort.updateUserRoles.mockReset();
   });
 
-  const USER_FIELDS = 'id email displayName roles createdAt updatedAt';
+  const USER_FIELDS = 'id email displayName createdAt updatedAt';
 
-  it('register (public): AuthPayload with the Role enum in SCREAMING_CASE', async () => {
-    const tokens = makeAuthTokens({ user: makeUser({ roles: ['user'] }) });
+  it('register (public): AuthPayload with the user', async () => {
+    const tokens = makeAuthTokens({ user: makeUser() });
     authPort.register.mockResolvedValue(tokens);
 
-    const res = await gql<{ register: { accessToken: string; user: { roles: string[] } } }>(
+    const res = await gql<{ register: { accessToken: string; user: { id: string } } }>(
       `mutation($input: RegisterInput!) { register(input: $input) { accessToken expiresIn user { ${USER_FIELDS} } } }`,
       { input: { email: ' Ada@Example.com ', password: 'correct horse', displayName: 'Ada' } },
     );
@@ -114,7 +112,7 @@ describe('identity GraphQL API (Apollo on Fastify, global guards, fake ports)', 
     expect(res.errors).toBeUndefined();
     expect(res.data?.register).toMatchObject({
       accessToken: tokens.accessToken,
-      user: { roles: ['USER'], id: tokens.user?.id },
+      user: { id: tokens.user?.id },
     });
     expect(authPort.register).toHaveBeenCalledWith(
       expect.objectContaining({ email: 'ada@example.com', password: 'correct horse' }),
@@ -153,10 +151,10 @@ describe('identity GraphQL API (Apollo on Fastify, global guards, fake ports)', 
     const denied = await gql(`{ users { items { id } } }`, {}, bearer(user));
     expect(denied.errors?.[0]?.extensions).toMatchObject({ code: 'FORBIDDEN', status: 403 });
 
-    const listed = makeUser({ roles: ['admin', 'user'] });
+    const listed = makeUser();
     usersPort.listUsers.mockResolvedValue({ items: [listed] });
     const res = await gql<{
-      users: { items: { id: string; roles: string[] }[]; nextCursor: null };
+      users: { items: { id: string }[]; nextCursor: null };
     }>(
       `query($limit: Int, $search: String) { users(limit: $limit, search: $search) { items { ${USER_FIELDS} } nextCursor } }`,
       { limit: 5, search: ' ada ' },
@@ -164,10 +162,11 @@ describe('identity GraphQL API (Apollo on Fastify, global guards, fake ports)', 
     );
     expect(res.errors).toBeUndefined();
     expect(res.data?.users).toEqual({
-      items: [expect.objectContaining({ id: listed.id, roles: ['ADMIN', 'USER'] })],
+      items: [expect.objectContaining({ id: listed.id })],
       nextCursor: null,
     });
     expect(usersPort.listUsers).toHaveBeenCalledWith({
+      tenantId: TEST_TENANT_ID,
       limit: 5,
       cursor: undefined,
       search: 'ada',
@@ -184,20 +183,17 @@ describe('identity GraphQL API (Apollo on Fastify, global guards, fake ports)', 
     expect(usersPort.listUsers).not.toHaveBeenCalled();
   });
 
-  it('updateUserRoles maps enum names to Role values and uses the caller as actor', async () => {
-    const target = generateId();
-    usersPort.updateUserRoles.mockResolvedValue(makeUser({ id: target, roles: ['moderator'] }));
-    const res = await gql<{ updateUserRoles: { roles: string[] } }>(
-      'mutation($input: UpdateUserRolesInput!) { updateUserRoles(input: $input) { id roles } }',
-      { input: { id: target, roles: ['MODERATOR'] } },
-      bearer(admin),
+  it('the schema has no global roles: no User.roles, no enum Role, no updateUserRoles', async () => {
+    const body = await gql<{ __type: { fields: { name: string }[] } | null }>(
+      '{ __type(name: "User") { fields { name } } }',
     );
-    expect(res.data?.updateUserRoles.roles).toEqual(['MODERATOR']);
-    expect(usersPort.updateUserRoles).toHaveBeenCalledWith({
-      id: target,
-      roles: ['moderator'],
-      actorId: admin.id,
-    });
+    expect(body.data?.__type?.fields.map((field) => field.name)).not.toContain('roles');
+    const role = await gql<{ __type: unknown }>('{ __type(name: "Role") { name } }');
+    expect(role.data?.__type).toBeNull();
+    const mutation = await gql(
+      'mutation { updateUserRoles(input: { id: "x", roles: [] }) { id } }',
+    );
+    expect(mutation.errors?.[0]?.message).toMatch(/updateUserRoles/);
   });
 
   it('registers the `users` DataLoader: N loads in one operation → ONE getUsersByIds', async () => {

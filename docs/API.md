@@ -99,7 +99,6 @@ Roles only group permissions. Endpoints check permissions (`@RequirePermissions`
 | --------------------- | :-----: | :---------: | :----: |
 | `users:read`          |   yes   |     yes     |        |
 | `users:write`         |   yes   |             |        |
-| `users:manage-roles`  |   yes   |             |        |
 | `notifications:read`  |   yes   |     yes     |  yes   |
 | `notifications:write` |   yes   |     yes     |        |
 | `billing:checkout`    |   yes   |             |  yes   |
@@ -138,9 +137,8 @@ A bad request returns 400 `VALIDATION_FAILED` with `errors[]`, whichever validat
 | `POST`   | `/v1/auth/refresh`              | Public                                                  | class-validator | 200     | Rotate the refresh token (`{ refreshToken }`). 401 `INVALID_REFRESH_TOKEN`, `SESSION_EXPIRED` or `REFRESH_TOKEN_REUSED`                                                                                                                                                |
 | `POST`   | `/v1/auth/logout`               | Bearer                                                  | class-validator | 204     | Denylists the access token. Revokes the session of `refreshToken`, or every session when it is omitted. Discard both tokens: refreshing with the logged-out token is reuse (401 `REFRESH_TOKEN_REUSED`, all sessions revoked)                                          |
 | `GET`    | `/v1/auth/me`                   | Bearer                                                  | none            | 200     | The authenticated user                                                                                                                                                                                                                                                 |
-| `GET`    | `/v1/users`                     | `users:read`                                            | class-validator | 200     | Keyset page of users, newest first. Query: `limit` (1-100, default 20), `cursor`, `search` (3-100 chars)                                                                                                                                                               |
-| `GET`    | `/v1/users/:id`                 | Bearer (yourself) or `users:read`                       | `ParseUUIDPipe` | 200     | One user. `:id` must be a UUIDv7                                                                                                                                                                                                                                       |
-| `PATCH`  | `/v1/users/:id/roles`           | `users:manage-roles`                                    | class-validator | 200     | Replace a user's roles. 422 `CANNOT_REVOKE_OWN_ADMIN` or `CANNOT_REMOVE_LAST_ADMIN`                                                                                                                                                                                    |
+| `GET`    | `/v1/users`                     | `users:read`                                            | class-validator | 200     | Members of your active tenant (keyset pagination, newest first). Needs `users:read` (admin, owner). Query: `limit` (1-100, default 20), `cursor`, `search` (3-100 chars)                                                                                               |
+| `GET`    | `/v1/users/:id`                 | Bearer (yourself) or `users:read`                       | `ParseUUIDPipe` | 200     | Yourself, or a member of your active tenant with `users:read`; anyone else is 404. `:id` must be a UUIDv7                                                                                                                                                              |
 | `GET`    | `/v1/notifications`             | `notifications:read`                                    | zod             | 200     | My inbox, newest first. Query: `limit` (1-100, default 20), `pageState`                                                                                                                                                                                                |
 | `POST`   | `/v1/notifications/:id/read`    | `notifications:read`                                    | zod             | 204     | Mark one of my notifications read. Idempotent. 404 `NOTIFICATION_NOT_FOUND` outside my inbox                                                                                                                                                                           |
 | `POST`   | `/v1/billing/checkout-sessions` | `billing:checkout`                                      | zod             | 201     | Create a Stripe Checkout Session and a `pending` payment. Body: `priceId`, `quantity` (1-100). Accepts `Idempotency-Key`                                                                                                                                               |
@@ -233,7 +231,6 @@ The `AuthTokens` response looks like this:
     "id": "01994f6c-1c3a-7b4e-9f00-5d1e2a3b4c5d",
     "email": "ada@example.com",
     "displayName": "Ada Lovelace",
-    "roles": ["user"],
     "createdAt": "2026-09-30T10:00:00.000Z",
     "updatedAt": "2026-09-30T10:00:00.000Z"
   }
@@ -311,7 +308,7 @@ a stable `code` and an HTTP status. Each transport turns that exception into its
 | `TENANT_ACCESS_DENIED`                                                                    | 403    | identity (login or switch to a tenant you are not a member of; unknown and nil ids included)                                                                                            |
 | `MEMBERSHIP_REVOKED`                                                                      | 401    | identity (refresh of a session whose membership was removed)                                                                                                                            |
 | `EMAIL_TAKEN`                                                                             | 409    | identity                                                                                                                                                                                |
-| `CANNOT_REVOKE_OWN_ADMIN`, `CANNOT_REMOVE_LAST_ADMIN`                                     | 422    | identity                                                                                                                                                                                |
+| `GLOBAL_ROLES_REMOVED`                                                                    | 422    | identity (the retired gRPC `UpdateUserRoles`)                                                                                                                                           |
 | `INVALID_ROLES`, `INVALID_USER`                                                           | 422    | identity                                                                                                                                                                                |
 | `NOTIFICATION_NOT_FOUND`                                                                  | 404    | notifications                                                                                                                                                                           |
 | `PAYMENT_NOT_FOUND`                                                                       | 404    | billing                                                                                                                                                                                 |
@@ -392,14 +389,13 @@ HTTP POST, and subscriptions go over **graphql-ws** on the same path. Authentica
 | Kind         | Field                                                       | Auth / permission                            | Returns                   | Notes                                                                                |
 | ------------ | ----------------------------------------------------------- | -------------------------------------------- | ------------------------- | ------------------------------------------------------------------------------------ |
 | Query        | `me`                                                        | Bearer                                       | `User!`                   |                                                                                      |
-| Query        | `user(id: UUID!)`                                           | Bearer (yourself) or `users:read`            | `User!`                   |                                                                                      |
-| Query        | `users(limit, cursor, search)`                              | `users:read`                                 | `UserConnection!`         | Complexity 10                                                                        |
+| Query        | `user(id: UUID!)`                                           | Bearer (yourself) or `users:read`            | `User!`                   | Yourself, or a member of your active tenant; anyone else is not found                |
+| Query        | `users(limit, cursor, search)`                              | `users:read`                                 | `UserConnection!`         | Members of your active tenant. Complexity 10                                         |
 | Query        | `notifications(limit, pageState)`                           | `notifications:read`                         | `NotificationConnection!` | Complexity 5                                                                         |
 | Query        | `payments(all, limit, cursor)`                              | Bearer. `all: true` needs `billing:read-all` | `PaymentConnection!`      | Complexity 10. `Payment.user` is batched through a DataLoader (complexity 5, no N+1) |
 | Mutation     | `register(input: RegisterInput!)`                           | Public, auth throttle                        | `AuthPayload!`            |                                                                                      |
 | Mutation     | `login(input: LoginInput!)`                                 | Public, auth throttle                        | `AuthPayload!`            | `LoginInput.tenantId: ID` (optional)                                                 |
 | Mutation     | `refreshTokens(input: RefreshTokensInput!)`                 | Public                                       | `AuthPayload!`            | Single-use rotation, the same as REST                                                |
-| Mutation     | `updateUserRoles(input: UpdateUserRolesInput!)`             | `users:manage-roles`                         | `User!`                   |                                                                                      |
 | Mutation     | `markNotificationRead(input: MarkNotificationReadInput!)`   | `notifications:read`                         | `Boolean!`                | Idempotent. `NOTIFICATION_NOT_FOUND` outside my inbox                                |
 | Mutation     | `createCheckoutSession(input: CreateCheckoutSessionInput!)` | `billing:checkout`                           | `CheckoutSession!`        | `idempotencyKey` in the input                                                        |
 | Mutation     | `createUploadUrl(input: CreateUploadUrlInput!)`             | `files:write`                                | `PresignedUpload!`        | Presigned PUT (the same as `POST /v1/files/presigned-uploads`)                       |
@@ -423,7 +419,6 @@ mutation Login($input: LoginInput!) {
     user {
       id
       email
-      roles
     }
   }
 }
@@ -486,7 +481,7 @@ that header, or without `apollo-require-preflight`, is rejected.
 
 ```bash
 curl -s "$API/graphql" -H 'content-type: application/json' -H "authorization: Bearer $TOKEN" \
-  -d '{"query":"{ me { id email roles } }"}'
+  -d '{"query":"{ me { id email } }"}'
 ```
 
 ### Subscriptions (graphql-ws)
@@ -625,7 +620,7 @@ flowchart LR
 | `identity.v1.UsersService`              | `GetUser`               | `GetUserRequest` → `User`                                                 |           yes            |
 |                                         | `GetUsersByIds`         | `GetUsersByIdsRequest` → `UserList` (DataLoader backend, at most 500 ids) |           yes            |
 |                                         | `ListUsers`             | `ListUsersRequest` → `UserPage`                                           |           yes            |
-|                                         | `UpdateUserRoles`       | `UpdateUserRolesRequest` → `User`                                         |                          |
+|                                         | `UpdateUserRoles`       | `UpdateUserRolesRequest` → `User` (retired: always `FAILED_PRECONDITION`) |                          |
 | `notifications.v1.NotificationsService` | `ListNotifications`     | `ListNotificationsRequest` → `NotificationPage`                           |           yes            |
 |                                         | `MarkNotificationRead`  | `MarkNotificationReadRequest` → `google.protobuf.Empty`                   |                          |
 | `billing.v1.BillingService`             | `CreateCheckoutSession` | `CreateCheckoutSessionRequest` → `CheckoutSession`                        |                          |
@@ -699,7 +694,7 @@ statuses (5xx-class and `CANCELLED`) are replaced by a generic message, so inter
 | Not implemented                                                   | `UNIMPLEMENTED`       | 501 `NOT_IMPLEMENTED`                                                          |
 
 The `x-error-code` trailer keeps the specific code when there is one (`EMAIL_TAKEN`, `NOTIFICATION_NOT_FOUND`,
-`CANNOT_REMOVE_LAST_ADMIN`). So a client of the gateway sees the same `code` as a client of the monolith. A 502 from the
+`TENANT_ACCESS_DENIED`). So a client of the gateway sees the same `code` as a client of the monolith. A 502 from the
 service is deliberately mapped to `INTERNAL`, not `UNAVAILABLE`, because clients retry `UNAVAILABLE` automatically and a
 failed side effect must not be replayed.
 

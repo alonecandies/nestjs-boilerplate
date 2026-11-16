@@ -1,9 +1,9 @@
 import { Global, Module, type Provider, type Type } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { Test } from '@nestjs/testing';
-import { AuthModule, RbacModule, type Role } from '@platform/auth';
+import { AuthModule, RbacModule } from '@platform/auth';
 import { signTestAccessToken } from '@platform/auth/testing';
-import { provideCommonEnhancers } from '@platform/common';
+import { provideCommonEnhancers, type TenantRole } from '@platform/common';
 import { AppConfigModule, type AuthConfig, authConfig, redisConfig } from '@platform/config';
 import { AppGraphqlModule, GraphqlPubSubModule } from '@platform/graphql';
 import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
@@ -59,7 +59,7 @@ export async function createEdgeTestApp(options: EdgeTestAppOptions): Promise<Ed
 /** A real access token (signed with the app's `auth` config) for `user`. */
 export async function bearer(
   app: EdgeTestApp,
-  user: { id: string; roles: Role[]; email?: string },
+  user: { id: string; roles: TenantRole[]; email?: string },
 ): Promise<string> {
   const issued = await signTestAccessToken(
     { id: user.id, email: user.email ?? 'ada@example.com', roles: user.roles },

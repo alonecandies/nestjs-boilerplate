@@ -1,7 +1,7 @@
 import { Global, Module } from '@nestjs/common';
 import { CqrsModule } from '@nestjs/cqrs';
 import { Test, type TestingModule } from '@nestjs/testing';
-import { AuthModule, Role, TokenService } from '@platform/auth';
+import { AuthModule, TokenService } from '@platform/auth';
 import { AppConfigModule } from '@platform/config';
 import { DRIZZLE, TransactionHost } from '@platform/database';
 import { KafkaProducer } from '@platform/transport';
@@ -24,7 +24,7 @@ const database = createFakePostgres((sql) =>
           id: USER_ID,
           email: 'ada@example.com',
           display_name: 'Ada',
-          roles: '{user}',
+          is_platform_staff: false,
           created_at: NOW.toISOString(),
           updated_at: NOW.toISOString(),
         },
@@ -75,7 +75,7 @@ describe('IdentityGrpcModule (identity-service wiring)', () => {
       id: USER_ID,
       email: 'ada@example.com',
       displayName: 'Ada',
-      roles: ['user'],
+      roles: [],
       createdAt: NOW,
       updatedAt: NOW,
     });
@@ -95,7 +95,8 @@ describe('IdentityGrpcModule (identity-service wiring)', () => {
     const access = await issuer.issueAccessToken({
       id: USER_ID,
       email: 'ada@example.com',
-      roles: [Role.User],
+      tenantId: '0190f3b2-0000-7000-8000-0000000000aa',
+      roles: ['member'],
     });
     await expect(
       moduleRef.get(TokenService).verifyAccessToken(access.token),

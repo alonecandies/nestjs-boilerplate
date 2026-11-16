@@ -6,7 +6,6 @@ import { LoginCommand } from '../../../application/commands/login/login.command.
 import { LogoutCommand } from '../../../application/commands/logout/logout.command.js';
 import { RefreshSessionCommand } from '../../../application/commands/refresh-session/refresh-session.command.js';
 import { RegisterUserCommand } from '../../../application/commands/register-user/register-user.command.js';
-import { UpdateUserRolesCommand } from '../../../application/commands/update-user-roles/update-user-roles.command.js';
 import { GetUserByIdQuery } from '../../../application/queries/get-user-by-id/get-user-by-id.query.js';
 import { GetUsersByIdsQuery } from '../../../application/queries/get-users-by-ids/get-users-by-ids.query.js';
 import { ListUsersQuery } from '../../../application/queries/list-users/list-users.query.js';
@@ -36,20 +35,19 @@ describe('local adapters (monolith: port → CQRS bus)', () => {
     expect(commands[3]).toEqual(new LogoutCommand('u', 'j', 42, undefined));
   });
 
-  it('UsersLocalAdapter routes reads to the QueryBus and writes to the CommandBus', async () => {
-    const adapter = new UsersLocalAdapter(queryBus, commandBus);
+  it('UsersLocalAdapter routes every read to the QueryBus', async () => {
+    const adapter = new UsersLocalAdapter(queryBus);
     await adapter.getUser('u-1');
+    await adapter.getUser('u-1', { tenantId: 't' });
     await adapter.getUsersByIds(['u-1', 'u-2']);
-    await adapter.listUsers({ limit: 10, search: 'ada' });
-    await adapter.updateUserRoles({ id: 'u-1', roles: ['admin'], actorId: 'a' });
+    await adapter.listUsers({ limit: 10, search: 'ada', tenantId: 't' });
 
     expect(queryBus.execute.mock.calls.map(([query]) => query)).toEqual([
-      new GetUserByIdQuery('u-1'),
+      new GetUserByIdQuery('u-1', undefined),
+      new GetUserByIdQuery('u-1', 't'),
       new GetUsersByIdsQuery(['u-1', 'u-2']),
-      new ListUsersQuery(10, undefined, 'ada'),
+      new ListUsersQuery('t', 10, undefined, 'ada'),
     ]);
-    expect(commandBus.execute).toHaveBeenCalledWith(
-      new UpdateUserRolesCommand('u-1', ['admin'], 'a'),
-    );
+    expect(commandBus.execute).not.toHaveBeenCalled();
   });
 });

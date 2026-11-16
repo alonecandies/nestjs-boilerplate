@@ -44,7 +44,7 @@ interface PaymentsBody {
 const PASSWORD = 'correct horse battery staple';
 const PAYMENTS_QUERY = /* GraphQL */ `
   query Payments {
-    payments(all: true, limit: 10) {
+    payments(limit: 10) {
       items {
         id
         userId
@@ -82,7 +82,7 @@ describe('Payment.user in the monolith (app-level resolver over the local ports)
   let paymentRows: FakeRows = [];
   let ada: AuthTokensBody;
   let alan: AuthTokensBody;
-  let adminToken: string;
+  let callerToken: string;
 
   const inject = (...args: Parameters<MonolithE2e['app']['inject']>) => e2e.app.inject(...args);
 
@@ -97,7 +97,7 @@ describe('Payment.user in the monolith (app-level resolver over the local ports)
   };
 
   const queryPayments = async (): Promise<PaymentsBody> => {
-    const response = await inject(graphql(PAYMENTS_QUERY, undefined, bearer(adminToken)));
+    const response = await inject(graphql(PAYMENTS_QUERY, undefined, bearer(callerToken)));
     expect(response.statusCode, response.body).toBe(200);
     return response.json<PaymentsBody>();
   };
@@ -109,17 +109,7 @@ describe('Payment.user in the monolith (app-level resolver over the local ports)
     });
     ada = await register('ada@example.com', 'Ada');
     alan = await register('alan@example.com', 'Alan');
-    // payments(all: true) needs billing:read-all: promote Ada, then log in again for the new roles.
-    const stored = e2e.identity.store.users.get(ada.user.id);
-    if (stored === undefined) throw new Error('Ada was not persisted');
-    e2e.identity.store.users.set(ada.user.id, { ...stored, roles: ['admin'] });
-    const login = await inject({
-      method: 'POST',
-      url: '/v1/auth/login',
-      payload: { email: 'ada@example.com', password: PASSWORD },
-    });
-    expect(login.statusCode, login.body).toBe(200);
-    adminToken = login.json<AuthTokensBody>().accessToken;
+    callerToken = ada.accessToken;
   });
 
   afterAll(async () => {

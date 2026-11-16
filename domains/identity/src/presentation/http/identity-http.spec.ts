@@ -1,5 +1,5 @@
 import { Test } from '@nestjs/testing';
-import { Role } from '@platform/auth';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { EntityNotFoundException, generateId, provideCommonEnhancers } from '@platform/common';
 import { AppCacheService, RATE_LIMIT_POLICY_KEY } from '@platform/redis';
 import { createFastifyTestApp, createMock } from '@platform/testing';
@@ -15,7 +15,6 @@ import { InMemoryAppCache } from '../../../test/in-memory-app-cache.js';
 import { AuthPort } from '../../application/ports/auth.port.js';
 import { UsersPort } from '../../application/ports/users.port.js';
 import {
-  CannotRevokeOwnAdminRoleException,
   EmailAlreadyTakenException,
   InvalidCredentialsException,
   TenantAccessDeniedException,
@@ -52,9 +51,9 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
     });
     app = await createFastifyTestApp(builder, undefined, { appOptions: { logger: false } });
     [user, moderator, admin] = await Promise.all([
-      principal(app, [Role.User]),
-      principal(app, [Role.Admin]),
-      principal(app, [Role.Admin]),
+      principal(app, ['member']),
+      principal(app, ['admin']),
+      principal(app, ['admin']),
     ]);
   });
 
@@ -69,7 +68,6 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
     authPort.logout.mockReset();
     usersPort.getUser.mockReset();
     usersPort.listUsers.mockReset();
-    usersPort.updateUserRoles.mockReset();
     cache.store.clear();
     cache.loads.length = 0;
   });
@@ -107,7 +105,7 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
         refreshToken: tokens.refreshToken,
         expiresIn: 900,
         tokenType: 'Bearer',
-        user: { id: tokens.user?.id, email: 'ada@example.com', roles: ['user'] },
+        user: { id: tokens.user?.id, email: 'ada@example.com' },
       });
       expect(json['user']).not.toHaveProperty('passwordHash');
       expect((json['user'] as { createdAt: string }).createdAt).toBe(
@@ -285,7 +283,12 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
     usersPort.getUser.mockResolvedValue(makeUser({ id: user.id }));
     const res = await app.inject({ method: 'GET', url: '/v1/auth/me', headers: bearer(user) });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ id: user.id });
+    expect(res.json()).toMatchObject({
+      id: user.id,
+      tenantId: TEST_TENANT_ID,
+      tenantRoles: ['member'],
+      staff: false,
+    });
     expect(usersPort.getUser).toHaveBeenCalledWith(user.id);
   });
 
@@ -308,7 +311,12 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(usersPort.listUsers).toHaveBeenCalledWith({ limit: 5, cursor: 'c1', search: 'ada' });
+      expect(usersPort.listUsers).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
+        limit: 5,
+        cursor: 'c1',
+        search: 'ada',
+      });
       expect(res.json()).toEqual({
         items: [expect.objectContaining({ id: listed.id })],
         nextCursor: 'c2',
@@ -332,6 +340,7 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
       expect(blank.statusCode).toBe(200);
       expect(usersPort.listUsers).toHaveBeenCalledTimes(1);
       expect(usersPort.listUsers).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
         limit: 20,
         cursor: undefined,
         search: undefined,
@@ -345,6 +354,23 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
         headers: bearer(admin),
       });
       expect(res.statusCode).toBe(400);
+    });
+
+    it('PATCH /v1/users/:id/roles no longer exists (404) and responses carry no roles', async () => {
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/v1/users/${user.id}/roles`,
+        headers: bearer(admin),
+        payload: { roles: ['admin'] },
+      });
+      expect(res.statusCode).toBe(404);
+      usersPort.getUser.mockResolvedValue(makeUser({ id: user.id }));
+      const me = await app.inject({
+        method: 'GET',
+        url: `/v1/users/${user.id}`,
+        headers: bearer(user),
+      });
+      expect(me.json()).not.toHaveProperty('roles');
     });
   });
 
@@ -379,77 +405,28 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
       expect(other.statusCode).toBe(403);
     });
 
-    it('users:read holders read anyone; unknown ids are 404', async () => {
-      usersPort.getUser.mockRejectedValue(new EntityNotFoundException('User', admin.id));
-      const res = await app.inject({
+    it('users:read holders read members of their active tenant (scoped, uncached); others are 404', async () => {
+      const target = generateId();
+      usersPort.getUser.mockResolvedValue(makeUser({ id: target }));
+      const ok = await app.inject({
         method: 'GET',
-        url: `/v1/users/${admin.id}`,
+        url: `/v1/users/${target}`,
         headers: bearer(moderator),
       });
-      expect(res.statusCode).toBe(404);
-      expect(res.json()).toMatchObject({ code: 'NOT_FOUND' });
-    });
-  });
+      expect(ok.statusCode).toBe(200);
+      expect(usersPort.getUser).toHaveBeenLastCalledWith(target, { tenantId: TEST_TENANT_ID });
+      await app.inject({ method: 'GET', url: `/v1/users/${target}`, headers: bearer(moderator) });
+      expect(usersPort.getUser).toHaveBeenCalledTimes(2);
+      expect(cache.loads).toHaveLength(0);
 
-  describe('PATCH /v1/users/:id/roles', () => {
-    const target = generateId();
-
-    it('403 for a member (needs users:manage-roles)', async () => {
-      const res = await app.inject({
-        method: 'PATCH',
-        url: `/v1/users/${target}/roles`,
-        headers: bearer(user),
-        payload: { roles: ['moderator'] },
+      usersPort.getUser.mockRejectedValue(new EntityNotFoundException('User', target));
+      const missing = await app.inject({
+        method: 'GET',
+        url: `/v1/users/${target}`,
+        headers: bearer(moderator),
       });
-      expect(res.statusCode).toBe(403);
-    });
-
-    it('400 for unknown / duplicate / empty roles', async () => {
-      for (const roles of [['root'], ['user', 'user'], []]) {
-        const res = await app.inject({
-          method: 'PATCH',
-          url: `/v1/users/${target}/roles`,
-          headers: bearer(admin),
-          payload: { roles },
-        });
-        expect(res.statusCode).toBe(400);
-      }
-      expect(usersPort.updateUserRoles).not.toHaveBeenCalled();
-    });
-
-    it('200 for an admin: actor id from the token, and the cached profile is invalidated', async () => {
-      usersPort.getUser.mockResolvedValue(makeUser({ id: target, roles: ['user'] }));
-      usersPort.updateUserRoles.mockResolvedValue(makeUser({ id: target, roles: ['moderator'] }));
-      await app.inject({ method: 'GET', url: `/v1/users/${target}`, headers: bearer(admin) });
-      expect(cache.store.has(`user:${target}`)).toBe(true);
-
-      const res = await app.inject({
-        method: 'PATCH',
-        url: `/v1/users/${target}/roles`,
-        headers: bearer(admin),
-        payload: { roles: ['moderator'] },
-      });
-
-      expect(res.statusCode).toBe(200);
-      expect(res.json()).toMatchObject({ id: target, roles: ['moderator'] });
-      expect(usersPort.updateUserRoles).toHaveBeenCalledWith({
-        id: target,
-        roles: ['moderator'],
-        actorId: admin.id,
-      });
-      expect(cache.store.has(`user:${target}`)).toBe(false);
-    });
-
-    it('422 CANNOT_REVOKE_OWN_ADMIN from the domain', async () => {
-      usersPort.updateUserRoles.mockRejectedValue(new CannotRevokeOwnAdminRoleException());
-      const res = await app.inject({
-        method: 'PATCH',
-        url: `/v1/users/${admin.id}/roles`,
-        headers: bearer(admin),
-        payload: { roles: ['user'] },
-      });
-      expect(res.statusCode).toBe(422);
-      expect(res.json()).toMatchObject({ code: 'CANNOT_REVOKE_OWN_ADMIN' });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json()).toMatchObject({ code: 'NOT_FOUND' });
     });
   });
 });

@@ -3,7 +3,7 @@ import { Global, type INestApplicationContext, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { NestFactory } from '@nestjs/core';
 import { GRAPHQL_MODULE_OPTIONS, Query, Resolver } from '@nestjs/graphql';
-import { AccessTokenDenylist, AuthModule, RevocationSweeper, Role } from '@platform/auth';
+import { AccessTokenDenylist, AuthModule, RevocationSweeper } from '@platform/auth';
 import { signTestAccessToken } from '@platform/auth/testing';
 import { AppConfigModule, redisConfig } from '@platform/config';
 import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
@@ -108,7 +108,7 @@ describe('AppGraphqlModule — graphql-ws revocation sweeper', () => {
     const issued = await signTestAccessToken({
       id: '0199a3c1-7b2e-7cc0-8f1e-2f7c3b4d5e6f',
       email: 'jane@example.com',
-      roles: [Role.User],
+      roles: ['member'],
     });
     const close = vi.fn();
     const ctx = {

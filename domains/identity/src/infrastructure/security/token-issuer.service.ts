@@ -32,21 +32,31 @@ export class TokenIssuer {
     @Inject(refreshTokenConfig.KEY) private readonly refresh: RefreshTokenConfig,
   ) {}
 
-  async issueAccessToken(user: AccessTokenSubject): Promise<IssuedAccessToken> {
+  /**
+   * `options.ttlSec` shortens the lifetime (staff switch-in, Task 15); default `JWT_ACCESS_TTL_SEC`.
+   * The `staff` claim is written only when true, so normal tokens carry no `staff` key.
+   */
+  async issueAccessToken(
+    subject: AccessTokenSubject,
+    options: { ttlSec?: number } = {},
+  ): Promise<IssuedAccessToken> {
+    const ttlSec = options.ttlSec ?? this.access.accessTtlSec;
     const iat = nowSec();
-    const exp = iat + this.access.accessTtlSec;
+    const exp = iat + ttlSec;
     const jti = generateId();
     const payload = {
-      sub: user.id,
-      email: user.email,
-      roles: [...user.roles],
+      sub: subject.id,
+      email: subject.email,
+      tid: subject.tenantId,
+      roles: [...subject.roles],
+      ...(subject.staff === true ? { staff: true } : {}),
       typ: 'access',
       jti,
       iat,
       exp,
     };
     const token = await this.jwt.signAsync(payload, this.signOptions(this.access.accessSecret));
-    return { token, jti, expiresIn: this.access.accessTtlSec, exp };
+    return { token, jti, expiresIn: ttlSec, exp };
   }
 
   /** `sessionId` becomes the `jti` (the sessions table stores sha256(token) under that id). */

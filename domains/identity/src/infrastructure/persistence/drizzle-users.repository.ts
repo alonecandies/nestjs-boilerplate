@@ -10,17 +10,7 @@ import {
   keysetWhere,
   TransactionHost,
 } from '@platform/database';
-import {
-  and,
-  arrayContains,
-  count,
-  eq,
-  getTableColumns,
-  ilike,
-  or,
-  type SQL,
-  sql,
-} from 'drizzle-orm';
+import { and, eq, getTableColumns, ilike, or, type SQL, sql } from 'drizzle-orm';
 import type {
   ListUsersCriteria,
   UserRecord,
@@ -28,9 +18,7 @@ import type {
 } from '../../application/persistence/users.repository.js';
 import { EmailAlreadyTakenException } from '../../domain/identity.errors.js';
 import { UserAggregate, type UserSnapshot } from '../../domain/user.aggregate.js';
-import { ADMIN_ROLE, type UserRole } from '../../domain/user-role.js';
-import { USER_ROLES_LOCK } from '../../identity.constants.js';
-import { type IdentitySchema, users } from './identity.schema.js';
+import { type IdentitySchema, memberships, users } from './identity.schema.js';
 import { isUniqueViolation } from './postgres-errors.js';
 
 type Db = DrizzleDB<IdentitySchema>;
@@ -67,6 +55,12 @@ const buildStatements = (db: Db) => ({
     .where(eq(users.email, sql.placeholder('email')))
     .limit(1)
     .prepare('identity_user_credentials_by_email'),
+  staffById: db
+    .select({ isPlatformStaff: users.isPlatformStaff })
+    .from(users)
+    .where(eq(users.id, sql.placeholder('id')))
+    .limit(1)
+    .prepare('identity_user_staff_by_id'),
   idByEmail: db
     .select({ id: users.id })
     .from(users)
@@ -107,25 +101,9 @@ export class DrizzleUsersRepository implements UsersRepository {
     return row ?? null;
   }
 
-  async findAggregate(id: string): Promise<UserAggregate | null> {
-    const [row] = await this.txHost.tx
-      .select()
-      .from(users)
-      .where(eq(users.id, id))
-      .limit(1)
-      .for('update');
-    return row ? UserAggregate.restore(row) : null;
-  }
-
-  async countAdmins(): Promise<number> {
-    const tx = this.txHost.tx;
-    // Held until the transaction ends (a no-op guard outside one: it is released immediately).
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${USER_ROLES_LOCK}))`);
-    const [row] = await tx
-      .select({ admins: count() })
-      .from(users)
-      .where(arrayContains(users.roles, [ADMIN_ROLE]));
-    return row?.admins ?? 0;
+  async isPlatformStaff(id: string): Promise<boolean> {
+    const [row] = await this.statements.staffById.execute({ id });
+    return row?.isPlatformStaff === true;
   }
 
   async existsByEmail(email: string): Promise<boolean> {
@@ -137,29 +115,38 @@ export class DrizzleUsersRepository implements UsersRepository {
     const rows = await this.txHost.tx
       .select(publicColumns)
       .from(users)
+      .innerJoin(
+        memberships,
+        and(eq(memberships.userId, users.id), eq(memberships.tenantId, criteria.tenantId)),
+      )
       .where(and(searchFilter(criteria.search), keysetWhere(users.id, criteria.cursor)))
       .orderBy(keysetOrder(users.id))
       .limit(keysetFetchLimit(criteria.limit));
     return keysetPage(rows, criteria.limit);
   }
 
+  async findByIdInTenant(id: string, tenantId: string): Promise<UserRecord | null> {
+    const [row] = await this.txHost.tx
+      .select(publicColumns)
+      .from(users)
+      .innerJoin(
+        memberships,
+        and(eq(memberships.userId, users.id), eq(memberships.tenantId, tenantId)),
+      )
+      .where(eq(users.id, id))
+      .limit(1);
+    return row ?? null;
+  }
+
   async insert(user: UserAggregate): Promise<void> {
-    const snapshot = user.toSnapshot();
     try {
-      await this.txHost.tx.insert(users).values({ ...snapshot, roles: [...snapshot.roles] });
+      await this.txHost.tx.insert(users).values(user.toSnapshot());
     } catch (error) {
       if (isUniqueViolation(error, 'users_email_unique')) {
         throw new EmailAlreadyTakenException({ cause: error });
       }
       throw error;
     }
-  }
-
-  async updateRoles(id: string, roles: readonly UserRole[], updatedAt: Date): Promise<void> {
-    await this.txHost.tx
-      .update(users)
-      .set({ roles: [...roles], updatedAt })
-      .where(eq(users.id, id));
   }
 
   async updatePasswordHash(id: string, passwordHash: string, updatedAt: Date): Promise<void> {

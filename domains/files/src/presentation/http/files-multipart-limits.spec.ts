@@ -1,5 +1,4 @@
 import { FastifyAdapter } from '@nestjs/platform-fastify';
-import { Role } from '@platform/auth';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createFilesTestApp, type FilesTestApp } from '../../testing/files-test-app.test.js';
 
@@ -15,7 +14,7 @@ describe('upload limits when the adapter pre-registers @fastify/multipart', () =
     return t.app.inject({
       method: 'POST',
       url: '/v1/files',
-      headers: { authorization: `Bearer ${await t.tokenFor([Role.User])}` },
+      headers: { authorization: `Bearer ${await t.tokenFor(['member'])}` },
       payload: form,
     });
   };
@@ -45,7 +44,7 @@ describe('upload limits when the adapter pre-registers @fastify/multipart', () =
       const res = await t.app.inject({
         method: 'POST',
         url: '/v1/files',
-        headers: { authorization: `Bearer ${await t.tokenFor([Role.User])}` },
+        headers: { authorization: `Bearer ${await t.tokenFor(['member'])}` },
         payload: form,
       });
       expect(res.statusCode).toBe(400);

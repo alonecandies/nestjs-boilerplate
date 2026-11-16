@@ -21,7 +21,9 @@ function user(overrides: Partial<AuthUser> = {}): AuthUser {
   return {
     id: '0199a3c1-7b2e-7cc0-8f1e-2f7c3b4d5e6f',
     email: 'jane@example.com',
+    tenantId: '0199a3c1-7b2e-7cc0-8f1e-2f7c3b4d5e70',
     roles: [],
+    staff: false,
     permissions: [],
     jti: 'jti-1',
     exp: nowSec() + 900,

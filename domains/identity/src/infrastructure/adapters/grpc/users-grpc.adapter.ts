@@ -1,7 +1,6 @@
 import {
   IDENTITY_GRPC_PACKAGE,
   type ListUsersRequest,
-  type UpdateUserRolesRequest,
   USERS_SERVICE_NAME,
   type User,
   type UserPage,
@@ -29,9 +28,12 @@ export class UsersGrpcAdapter implements UsersPort, OnModuleInit {
     this.users = this.client.getService<UsersServiceClient>(USERS_SERVICE_NAME);
   }
 
-  async getUser(id: string): Promise<User> {
+  async getUser(id: string, scope?: { tenantId: string }): Promise<User> {
     const user = await this.caller.call(operation('GetUser'), (metadata) =>
-      this.users.getUser({ id }, metadata),
+      this.users.getUser(
+        { id, ...(scope === undefined ? {} : { tenantId: scope.tenantId }) },
+        metadata,
+      ),
     );
     return normalizeUser(user);
   }
@@ -49,12 +51,5 @@ export class UsersGrpcAdapter implements UsersPort, OnModuleInit {
       this.users.listUsers(query, metadata),
     );
     return normalizeUserPage(page);
-  }
-
-  async updateUserRoles(input: UpdateUserRolesRequest): Promise<User> {
-    const user = await this.caller.call(operation('UpdateUserRoles'), (metadata) =>
-      this.users.updateUserRoles(input, metadata),
-    );
-    return normalizeUser(user);
   }
 }

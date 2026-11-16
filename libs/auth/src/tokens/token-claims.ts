@@ -1,8 +1,13 @@
-import { UnauthenticatedException } from '@platform/common';
+import {
+  isPlatformTenantId,
+  isTenantRole,
+  isUuid,
+  normalizeTenantRoles,
+  UnauthenticatedException,
+} from '@platform/common';
 import { isArray, isInteger, isString } from 'lodash-es';
 import { AuthErrorCode } from '../auth.constants.js';
 import { isPermissionName } from '../rbac/rbac-feature.js';
-import { isRole } from '../rbac/role.enum.js';
 import type {
   AccessTokenClaims,
   AuthUser,
@@ -45,19 +50,25 @@ function parseBase(
 }
 
 /**
- * Validates the shape of verified access-token claims. Unknown roles are DROPPED rather than
- * rejected: during a rolling deploy a newer issuer may know roles this service doesn't — least
- * privilege, without locking those users out.
+ * Validates the shape of verified access-token claims. `tid` is required (a pre-B2 token has none:
+ * 401 and the client refreshes). Unknown roles are DROPPED rather than rejected: during a rolling
+ * deploy a newer issuer may know roles this service doesn't — least privilege, without locking those
+ * users out. `staff` is true only for the JSON boolean `true`. UUID ids are lower-cased so that
+ * every later string comparison and `SET LOCAL` sees one spelling.
  */
 export function parseAccessTokenClaims(payload: unknown): AccessTokenClaims {
   const base = parseBase(payload, 'access');
-  const { email, roles } = base;
+  const { email, roles, tid, staff } = base;
   if (!isString(email)) throw invalid('missing email');
-  if (!isArray(roles)) throw invalid('missing roles');
+  if (!Array.isArray(roles)) throw invalid('missing roles');
+  if (isPlatformTenantId(tid)) throw invalid('tid is the platform tenant');
+  if (!isString(tid) || !isUuid(tid)) throw invalid('missing or malformed tid');
   return {
-    sub: base.sub,
+    sub: isUuid(base.sub) ? base.sub.toLowerCase() : base.sub,
     email,
-    roles: roles.filter(isRole),
+    tid: tid.toLowerCase(),
+    roles: normalizeTenantRoles(roles),
+    staff: staff === true,
     jti: base.jti,
     typ: 'access',
     iat: base.iat,
@@ -85,7 +96,9 @@ export function toAuthUser(claims: AccessTokenClaims, permissions: readonly stri
   return {
     id: claims.sub,
     email: claims.email,
+    tenantId: claims.tid,
     roles: [...claims.roles],
+    staff: claims.staff,
     permissions: [...permissions],
     jti: claims.jti,
     exp: claims.exp,
@@ -99,8 +112,10 @@ export function isAuthUser(value: unknown): value is AuthUser {
   return (
     nonEmpty(user.id) &&
     isString(user.email) &&
+    nonEmpty(user.tenantId) &&
     isArray(user.roles) &&
-    user.roles.every(isRole) &&
+    user.roles.every(isTenantRole) &&
+    typeof user.staff === 'boolean' &&
     isArray(user.permissions) &&
     user.permissions.every(isPermissionName) &&
     isString(user.jti) &&

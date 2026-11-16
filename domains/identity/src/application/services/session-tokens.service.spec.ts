@@ -24,7 +24,7 @@ describe('SessionTokensService', () => {
   });
 
   it('opens a tenant-bound session (sha256 of the refresh token only) and returns the tenant with the pair', async () => {
-    const user = makeUserRecord({ roles: ['admin', 'user'] });
+    const user = makeUserRecord();
 
     const result = await service.open({
       user,
@@ -35,6 +35,12 @@ describe('SessionTokensService', () => {
     });
 
     expect(tokens.issueRefreshToken).toHaveBeenCalledWith({ userId: user.id, sessionId: 'sid-1' });
+    expect(tokens.issueAccessToken).toHaveBeenCalledWith({
+      id: user.id,
+      email: user.email,
+      tenantId: TENANT,
+      roles: ['owner'],
+    });
     expect(sessions.create).toHaveBeenCalledWith({
       id: 'sid-1',
       userId: user.id,
@@ -53,7 +59,7 @@ describe('SessionTokensService', () => {
         id: user.id,
         email: user.email,
         displayName: user.displayName,
-        roles: ['admin', 'user'],
+        roles: [],
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       },

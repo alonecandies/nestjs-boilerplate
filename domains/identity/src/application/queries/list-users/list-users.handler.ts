@@ -1,6 +1,11 @@
 import type { UserPage } from '@domain/identity-contracts';
 import { type IQueryHandler, QueryHandler } from '@nestjs/cqrs';
-import { DEFAULT_PAGE_LIMIT, MAX_PAGE_LIMIT } from '@platform/common';
+import {
+  DEFAULT_PAGE_LIMIT,
+  DomainValidationException,
+  isUuid,
+  MAX_PAGE_LIMIT,
+} from '@platform/common';
 import { clamp, isNil, trim } from 'lodash-es';
 import { IDENTITY_LIMITS } from '../../../identity.constants.js';
 import { toUserContract } from '../../mappers/user.mapper.js';
@@ -18,8 +23,14 @@ export class ListUsersHandler implements IQueryHandler<ListUsersQuery> {
   constructor(private readonly users: UsersRepository) {}
 
   async execute(query: ListUsersQuery): Promise<UserPage> {
+    if (!isUuid(query.tenantId)) {
+      throw new DomainValidationException('A tenant is required', {
+        issues: [{ path: 'tenantId', message: 'Must be a UUID' }],
+      });
+    }
     const search = trim(query.search ?? '').slice(0, IDENTITY_LIMITS.SEARCH_MAX_LENGTH);
     const page = await this.users.list({
+      tenantId: query.tenantId,
       limit: pageLimit(query.limit),
       cursor: query.cursor === '' ? undefined : query.cursor,
       search: search === '' ? undefined : search,

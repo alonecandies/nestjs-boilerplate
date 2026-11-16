@@ -1,7 +1,5 @@
 import { Field, GraphQLISODateTime, ObjectType } from '@nestjs/graphql';
-import type { Role } from '@platform/auth';
 import { GraphQLUUID } from '@platform/graphql';
-import { RoleEnum } from '../role.enum.js';
 
 /**
  * GraphQL `User`. Exported for the cross-domain field the apps compose (`Payment.user` in
@@ -17,9 +15,6 @@ export class UserModel {
 
   @Field()
   displayName: string;
-
-  @Field(() => [RoleEnum])
-  roles: Role[];
 
   @Field(() => GraphQLISODateTime)
   createdAt: Date;

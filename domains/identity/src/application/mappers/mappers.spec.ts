@@ -10,26 +10,27 @@ import {
 import { toAccessTokenSubject, toUserContract, toUserRecord } from './user.mapper.js';
 
 describe('user mappers', () => {
-  const snapshot = makeUserSnapshot({ roles: ['admin', 'user'] });
+  const snapshot = makeUserSnapshot();
 
-  it('never leak the password hash, even when handed a full snapshot', () => {
+  it('never leak the password hash; global roles are gone (always [])', () => {
     expect(toUserContract(snapshot)).not.toHaveProperty('passwordHash');
     expect(toUserRecord(snapshot)).not.toHaveProperty('passwordHash');
     expect(toUserContract(snapshot)).toEqual({
       id: snapshot.id,
       email: snapshot.email,
       displayName: snapshot.displayName,
-      roles: ['admin', 'user'],
+      roles: [],
       createdAt: snapshot.createdAt,
       updatedAt: snapshot.updatedAt,
     });
   });
 
-  it('builds the access-token subject from id, email and RBAC roles', () => {
-    expect(toAccessTokenSubject(snapshot)).toEqual({
+  it('builds the access-token subject from the user, the tenant and the tenant roles (never global roles)', () => {
+    expect(toAccessTokenSubject(snapshot, 'tenant-1', ['owner'])).toEqual({
       id: snapshot.id,
       email: snapshot.email,
-      roles: ['admin', 'user'],
+      tenantId: 'tenant-1',
+      roles: ['owner'],
     });
   });
 });

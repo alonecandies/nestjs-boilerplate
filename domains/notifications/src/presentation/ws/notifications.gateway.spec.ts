@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
-import { AccessTokenDenylist, AuthModule, Role, TokenService } from '@platform/auth';
-import { signTestAccessToken } from '@platform/auth/testing';
+import { AccessTokenDenylist, AuthModule, TokenService } from '@platform/auth';
+import { signTestAccessToken, TEST_TENANT_ID } from '@platform/auth/testing';
 import { AppConfigModule } from '@platform/config';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeRedisModule } from '../../../test/support/edge-test-app.js';
@@ -41,7 +41,9 @@ function authedSocket(user: { jti?: string; exp?: number } = {}) {
   socket.data.user = {
     id: USER_ID,
     email: 'a@b.io',
+    tenantId: TEST_TENANT_ID,
     roles: [],
+    staff: false,
     permissions: [],
     jti: user.jti ?? 'jti-1',
     exp: user.exp ?? nowSec() + 900,
@@ -79,7 +81,7 @@ describe('NotificationsGateway', () => {
   describe('handshake authentication (namespace middleware)', () => {
     // Signed with the auth namespace of process.env, which AppConfigModule + AuthModule load.
     const accessToken = () =>
-      signTestAccessToken({ id: USER_ID, email: 'a@b.io', roles: [Role.User] });
+      signTestAccessToken({ id: USER_ID, email: 'a@b.io', roles: ['member'] });
 
     it('installs itself as namespace middleware and accepts a valid token (auth.token)', async () => {
       const use = vi.fn();
@@ -95,7 +97,7 @@ describe('NotificationsGateway', () => {
       await vi.waitFor(() => expect(next).toHaveBeenCalled());
 
       expect(next).toHaveBeenCalledWith(undefined);
-      expect(socket.data.user).toMatchObject({ id: USER_ID, roles: [Role.User] });
+      expect(socket.data.user).toMatchObject({ id: USER_ID, roles: ['member'] });
     });
 
     it('accepts a Bearer Authorization header too', async () => {
