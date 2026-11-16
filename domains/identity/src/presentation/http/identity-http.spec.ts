@@ -18,6 +18,7 @@ import {
   CannotRevokeOwnAdminRoleException,
   EmailAlreadyTakenException,
   InvalidCredentialsException,
+  TenantAccessDeniedException,
 } from '../../domain/identity.errors.js';
 import { UserReadCache } from '../shared/user-read.cache.js';
 import { AuthController } from './auth.controller.js';
@@ -174,6 +175,59 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
       });
       expect(res.statusCode).toBe(401);
       expect(res.json()).toMatchObject({ code: 'INVALID_CREDENTIALS' });
+    });
+
+    it('passes an optional tenantId to the port; omits it when absent', async () => {
+      authPort.login.mockResolvedValue(makeAuthTokens());
+      const tenantId = '0190f3b2-0000-7000-8000-0000000000aa';
+
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/login',
+        payload: { email: 'ada@example.com', password: 'pw', tenantId },
+      });
+
+      expect(res.statusCode, res.body).toBe(200);
+      expect(authPort.login).toHaveBeenCalledWith({
+        email: 'ada@example.com',
+        password: 'pw',
+        tenantId,
+        client: expect.objectContaining({ ip: expect.any(String) }),
+      });
+      await app.inject({
+        method: 'POST',
+        url: '/v1/auth/login',
+        payload: { email: 'ada@example.com', password: 'pw' },
+      });
+      expect(authPort.login.mock.calls[1]?.[0]).not.toHaveProperty('tenantId');
+    });
+
+    it.each([['not-a-uuid'], [''], ['0190f3b2-0000-7000-8000-0000000000aa; drop'], [42]])(
+      '400 for a malformed tenantId %j (validated before passport; the port is never called)',
+      async (tenantId) => {
+        const res = await app.inject({
+          method: 'POST',
+          url: '/v1/auth/login',
+          payload: { email: 'ada@example.com', password: 'pw', tenantId },
+        });
+        expect(res.statusCode, res.body).toBe(400);
+        expect(authPort.login).not.toHaveBeenCalled();
+      },
+    );
+
+    it('403 TENANT_ACCESS_DENIED from the port passes through LocalAuthGuard unchanged (Review Focus 1)', async () => {
+      authPort.login.mockRejectedValue(new TenantAccessDeniedException());
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/login',
+        payload: {
+          email: 'ada@example.com',
+          password: 'pw',
+          tenantId: '00000000-0000-0000-0000-000000000000',
+        },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ code: 'TENANT_ACCESS_DENIED' });
     });
   });
 

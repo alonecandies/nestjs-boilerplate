@@ -22,7 +22,7 @@ export const toRegisterUserCommand = (request: RegisterRequest): RegisterUserCom
   new RegisterUserCommand(request.email, request.password, request.displayName, request.client);
 
 export const toLoginCommand = (request: LoginRequest): LoginCommand =>
-  new LoginCommand(request.email, request.password, request.client);
+  new LoginCommand(request.email, request.password, request.client, request.tenantId);
 
 export const toRefreshSessionCommand = (request: RefreshTokensRequest): RefreshSessionCommand =>
   new RefreshSessionCommand(request.refreshToken, request.client);

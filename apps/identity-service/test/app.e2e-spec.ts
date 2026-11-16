@@ -222,6 +222,23 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
       expect(error).toMatchObject({ httpStatus: 401, code: 'INVALID_CREDENTIALS' });
     });
 
+    it('AuthService.Login with a malformed tenant_id → INVALID_ARGUMENT before any SQL', async () => {
+      const before = postgres.executed.length;
+      const error = await call(
+        authClient.login({
+          email: 'ada@example.com',
+          password: 'correct horse battery',
+          tenantId: 'nope',
+        }),
+        'AuthService.Login',
+      ).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(DomainValidationException);
+      expect((error as DomainValidationException).issues).toEqual([
+        expect.objectContaining({ path: 'tenantId' }),
+      ]);
+      expect(postgres.executed).toHaveLength(before);
+    });
+
     it('caller errors never open the circuit breaker', () => {
       expect(breakers.states()['identity']).toBe('closed');
     });

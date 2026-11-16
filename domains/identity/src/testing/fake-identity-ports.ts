@@ -23,6 +23,7 @@ import {
   InvalidRefreshTokenException,
   MembershipRevokedException,
   normalizeEmail,
+  TenantAccessDeniedException,
   UsersPort,
 } from '../index.js';
 import type { TokenIssuer } from '../infrastructure/security/token-issuer.service.js';
@@ -137,8 +138,14 @@ export class FakeAuthPort extends AuthPort {
     this.state.calls.push('AuthService.Login');
     const entry = this.state.byEmail(normalizeEmail(input.email));
     if (entry?.password !== input.password) throw new InvalidCredentialsException();
-    const membership = this.state.membershipsOf(entry.user.id)[0];
-    if (!membership) throw new InvalidCredentialsException();
+    const membership =
+      input.tenantId === undefined
+        ? this.state.membershipsOf(entry.user.id)[0]
+        : this.state.membership(input.tenantId, entry.user.id);
+    if (!membership) {
+      if (input.tenantId !== undefined) throw new TenantAccessDeniedException();
+      throw new InvalidCredentialsException();
+    }
     membership.lastActiveAt = Date.now();
     return this.issue(entry.user, membership.tenantId);
   }

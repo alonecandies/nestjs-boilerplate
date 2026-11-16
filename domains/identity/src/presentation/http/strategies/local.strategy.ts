@@ -24,7 +24,19 @@ export class LocalStrategy extends PassportStrategy(Strategy, LOCAL_STRATEGY) {
     });
   }
 
-  validate(request: RequestLike, email: string, password: string): Promise<AuthTokens> {
-    return this.auth.login({ email, password, client: clientInfoOf(request) });
+  validate(
+    request: RequestLike & { body?: unknown },
+    email: string,
+    password: string,
+  ): Promise<AuthTokens> {
+    // passport-local hands over only the two credential fields; the tenant comes from the body that
+    // LoginRequestGuard has already validated (a UUID or absent).
+    const { tenantId } = (request.body ?? {}) as { tenantId?: string };
+    return this.auth.login({
+      email,
+      password,
+      client: clientInfoOf(request),
+      ...(tenantId === undefined ? {} : { tenantId }),
+    });
   }
 }

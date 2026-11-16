@@ -54,7 +54,14 @@ export interface RegisterRequest {
 export interface LoginRequest {
   email: string;
   password: string;
-  client?: ClientInfo | undefined;
+  client?:
+    | ClientInfo
+    | undefined;
+  /**
+   * The tenant to open the session in (a UUID). Absent: the most recently active membership.
+   * Not a member (unknown and nil ids included) → PERMISSION_DENIED / TENANT_ACCESS_DENIED.
+   */
+  tenantId?: string | undefined;
 }
 
 export interface RefreshTokensRequest {

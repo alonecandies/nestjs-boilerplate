@@ -69,6 +69,9 @@ message LoginRequest {
   string email = 1;
   string password = 2;
   ClientInfo client = 3;
+  // The tenant to open the session in (a UUID). Absent: the most recently active membership.
+  // Not a member (unknown and nil ids included) → PERMISSION_DENIED / TENANT_ACCESS_DENIED.
+  optional string tenant_id = 4;
 }
 
 message RefreshTokensRequest {

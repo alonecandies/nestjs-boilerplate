@@ -9,6 +9,7 @@ await vi.hoisted(async () => {
 
 import { isUuidV7 } from '@platform/common';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { graphql } from './support/http.js';
 import { createMonolithE2eApp, type MonolithE2e } from './support/monolith-e2e-app.js';
 
 interface AuthTokensBody {
@@ -114,5 +115,92 @@ describe('tenancy: workspaces and tenant-bound sessions (monolith)', () => {
     const body = login.json<AuthTokensBody>();
     expect(body.tenantId).not.toBe(linus.tenantId);
     expect(e2e.identity.store.tenants.get(body.tenantId)).toMatchObject({ personal: true });
+  });
+
+  it('login with tenantId opens the session in that membership (REST and GraphQL)', async () => {
+    const owner = await register('owner.login@example.com', 'Owner');
+    const guest = await register('guest.login@example.com', 'Guest');
+    // guest joins owner's workspace as a member (B2-13/B2-14 add the API for this).
+    e2e.identity.store.memberships.set(`${owner.tenantId}:${guest.user.id}`, {
+      tenantId: owner.tenantId,
+      userId: guest.user.id,
+      roles: ['member'],
+      lastActiveAt: null,
+      createdAt: new Date(),
+    });
+
+    const rest = await inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'guest.login@example.com', password: PASSWORD, tenantId: owner.tenantId },
+    });
+    expect(rest.statusCode, rest.body).toBe(200);
+    expect(rest.json<AuthTokensBody>()).toMatchObject({
+      tenantId: owner.tenantId,
+      tenantRoles: ['member'],
+    });
+
+    const gql = await inject(
+      graphql('mutation ($input: LoginInput!) { login(input: $input) { tenantId tenantRoles } }', {
+        input: { email: 'guest.login@example.com', password: PASSWORD, tenantId: guest.tenantId },
+      }),
+    );
+    expect(gql.json()).toEqual({
+      data: { login: { tenantId: guest.tenantId, tenantRoles: ['OWNER'] } },
+    });
+
+    // Without tenantId: the most recently active membership is now guest's own workspace.
+    const plain = await inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'guest.login@example.com', password: PASSWORD },
+    });
+    expect(plain.json<AuthTokensBody>().tenantId).toBe(guest.tenantId);
+  });
+
+  it.each([
+    ['a tenant the user is not a member of', 'other'],
+    ['the platform tenant (nil UUID)', '00000000-0000-0000-0000-000000000000'],
+    ['an unknown tenant', '0190f3b2-0000-7000-8000-00000000dead'],
+  ])(
+    'login with %s → 403 TENANT_ACCESS_DENIED, no session (Review Focus 1)',
+    async (_name, which) => {
+      const victim = await register(`victim.${which.slice(0, 5)}@example.com`, 'Victim');
+      const caller = await register(`caller.${which.slice(0, 5)}@example.com`, 'Caller');
+      const sessionsBefore = e2e.identity.store.sessions.size;
+      const res = await inject({
+        method: 'POST',
+        url: '/v1/auth/login',
+        payload: {
+          email: `caller.${which.slice(0, 5)}@example.com`,
+          password: PASSWORD,
+          tenantId: which === 'other' ? victim.tenantId : which,
+        },
+      });
+      expect(res.statusCode, res.body).toBe(403);
+      expect(res.json<{ code: string }>().code).toBe('TENANT_ACCESS_DENIED');
+      expect(e2e.identity.store.sessions.size).toBe(sessionsBefore);
+      expect(caller.tenantId).not.toBe(victim.tenantId);
+    },
+  );
+
+  it('login with a malformed tenantId → 400 (REST); a wrong password with a foreign tenant → 401, not 403', async () => {
+    const res = await inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'ada.tenancy@example.com', password: PASSWORD, tenantId: 'x' },
+    });
+    expect(res.statusCode).toBe(400);
+    const wrong = await inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: {
+        email: 'ada.tenancy@example.com',
+        password: 'wrong password',
+        tenantId: '0190f3b2-0000-7000-8000-00000000dead',
+      },
+    });
+    expect(wrong.statusCode).toBe(401);
+    expect(wrong.json<{ code: string }>().code).toBe('INVALID_CREDENTIALS');
   });
 });

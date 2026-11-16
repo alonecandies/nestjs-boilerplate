@@ -59,4 +59,42 @@ describe('tenancy through the gateway (remote ports over the fake identity-servi
       data: { login: { tenantId: ada.tenantId, tenantRoles: ['OWNER'] } },
     });
   });
+
+  it('login with tenantId through the gateway: a membership → 200 there; a foreign tenant → 403', async () => {
+    const owner = await inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: { email: 'owner.gw@example.com', password: PASSWORD, displayName: 'Owner' },
+    });
+    const guest = await inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: { email: 'guest.gw@example.com', password: PASSWORD, displayName: 'Guest' },
+    });
+    const ownerTenant = owner.json<AuthTokensBody>().tenantId;
+    e2e.identity.addMembership(ownerTenant, guest.json<AuthTokensBody>().user.id, ['member']);
+
+    const ok = await inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'guest.gw@example.com', password: PASSWORD, tenantId: ownerTenant },
+    });
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(ok.json<AuthTokensBody>()).toMatchObject({
+      tenantId: ownerTenant,
+      tenantRoles: ['member'],
+    });
+
+    const denied = await inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: {
+        email: 'owner.gw@example.com',
+        password: PASSWORD,
+        tenantId: guest.json<AuthTokensBody>().tenantId,
+      },
+    });
+    expect(denied.statusCode).toBe(403);
+    expect(denied.json<{ code: string }>().code).toBe('TENANT_ACCESS_DENIED');
+  });
 });
