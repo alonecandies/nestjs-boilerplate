@@ -9,6 +9,8 @@ export interface RpcCallerContext {
   correlationId?: string | undefined;
   userId?: string | undefined;
   roles?: readonly string[] | undefined;
+  tenantId?: string | undefined;
+  staff?: boolean | undefined;
 }
 
 /** A sanitized `RpcCallerContext` read from incoming metadata. `roles` is always present. */
@@ -17,6 +19,8 @@ export interface IncomingRpcContext {
   correlationId?: string;
   userId?: string;
   roles: string[];
+  tenantId?: string;
+  staff: boolean;
 }
 
 /** Client-safe error information sent in trailers so a `DomainException` survives the hop. */
@@ -75,6 +79,8 @@ export function createOutgoingMetadata(ctx: RpcCallerContext = {}): Metadata {
     metadata.set(GRPC_METADATA_KEYS.CORRELATION_ID, ctx.correlationId);
   }
   setIfLegal(metadata, GRPC_METADATA_KEYS.USER_ID, ctx.userId);
+  setIfLegal(metadata, GRPC_METADATA_KEYS.TENANT_ID, ctx.tenantId);
+  if (ctx.staff === true) metadata.set(GRPC_METADATA_KEYS.STAFF, 'true');
   const roles = normalizeRoles(ctx.roles);
   if (roles.length > 0) metadata.set(GRPC_METADATA_KEYS.USER_ROLES, roles.join(','));
   return metadata;
@@ -87,6 +93,7 @@ export function createOutgoingMetadata(ctx: RpcCallerContext = {}): Metadata {
 export function readIncomingMetadata(metadata: Metadata | undefined): IncomingRpcContext {
   const context: IncomingRpcContext = {
     roles: normalizeRoles(firstValue(metadata, GRPC_METADATA_KEYS.USER_ROLES)?.split(',')),
+    staff: firstValue(metadata, GRPC_METADATA_KEYS.STAFF) === 'true',
   };
   const requestId = firstValue(metadata, GRPC_METADATA_KEYS.REQUEST_ID);
   if (isSafeRequestId(requestId)) context.requestId = requestId;
@@ -94,6 +101,8 @@ export function readIncomingMetadata(metadata: Metadata | undefined): IncomingRp
   if (isSafeRequestId(correlationId)) context.correlationId = correlationId;
   const userId = firstValue(metadata, GRPC_METADATA_KEYS.USER_ID)?.trim();
   if (userId && isLegalValue(userId)) context.userId = userId;
+  const tenantId = firstValue(metadata, GRPC_METADATA_KEYS.TENANT_ID)?.trim();
+  if (tenantId && isLegalValue(tenantId)) context.tenantId = tenantId;
   return context;
 }
 

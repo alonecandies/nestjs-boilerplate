@@ -8,6 +8,7 @@ import { type MiddlewareConsumer, Module, type NestModule, RequestMethod } from 
 import { ConfigModule } from '@nestjs/config';
 import { CqrsModule } from '@nestjs/cqrs';
 import { ScheduleModule } from '@nestjs/schedule';
+import { RbacModule } from '@platform/auth';
 import { CassandraHealthIndicator, CassandraModule } from '@platform/cassandra';
 import { CorrelationIdMiddleware, provideCommonEnhancersAsync } from '@platform/common';
 import { type AppConfig, AppConfigModule, appConfig, grpcConfig } from '@platform/config';
@@ -34,6 +35,8 @@ import { KafkaHealthIndicator, KafkaProducerModule } from '@platform/transport';
       healthContributors: [CassandraHealthIndicator, RedisHealthIndicator, KafkaHealthIndicator],
     }),
     CqrsModule.forRoot(),
+    // The RBAC registry: services recompute permissions from the roles in gRPC metadata (B2-23).
+    RbacModule.forRoot(),
     // DailyDigestCron (09:00 UTC).
     ScheduleModule.forRoot(),
     // Creates the keyspace and applies the CQL migrations at boot (LWT-claimed, so concurrent

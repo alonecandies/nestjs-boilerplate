@@ -3,6 +3,7 @@ import { type MiddlewareConsumer, Module, type NestModule, RequestMethod } from 
 import { ConfigModule } from '@nestjs/config';
 import { CqrsModule } from '@nestjs/cqrs';
 import { ScheduleModule } from '@nestjs/schedule';
+import { RbacModule } from '@platform/auth';
 import { CorrelationIdMiddleware, provideCommonEnhancersAsync } from '@platform/common';
 import { type AppConfig, AppConfigModule, appConfig, grpcConfig } from '@platform/config';
 import { DatabaseHealthIndicator, DatabaseModule } from '@platform/database';
@@ -30,6 +31,8 @@ import { DATABASE_MIGRATIONS } from './database.migrations.js';
       healthContributors: [DatabaseHealthIndicator, RedisHealthIndicator],
     }),
     CqrsModule.forRoot(),
+    // The RBAC registry: services recompute permissions from the roles in gRPC metadata (B2-23).
+    RbacModule.forRoot(),
     // PurgeStripeEventsCron (hourly, @WithLock so only one replica runs it).
     ScheduleModule.forRoot(),
     // The platform set, then billing's history (DATABASE_MIGRATIONS, shared with migrate.ts), at boot

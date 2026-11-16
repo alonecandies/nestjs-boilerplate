@@ -20,6 +20,7 @@
   },
   "dependencies": {
     "@domain/billing": "workspace:*",
+    "@platform/auth": "workspace:*",
     "@platform/bootstrap": "workspace:*",
     "@platform/common": "workspace:*",
     "@platform/config": "workspace:*",

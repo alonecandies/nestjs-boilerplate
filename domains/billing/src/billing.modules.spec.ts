@@ -53,7 +53,13 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
   it('billing-service: BillingGrpcModule resolves the core and the gRPC controller', async () => {
     const infra = fakeInfrastructure();
     const moduleRef = await Test.createTestingModule({
-      imports: [AppConfigModule.forRoot(), CqrsModule.forRoot(), infra.module, BillingGrpcModule],
+      imports: [
+        AppConfigModule.forRoot(),
+        CqrsModule.forRoot(),
+        RbacModule.forRoot(),
+        infra.module,
+        BillingGrpcModule,
+      ],
     }).compile();
     context = await moduleRef.init();
 

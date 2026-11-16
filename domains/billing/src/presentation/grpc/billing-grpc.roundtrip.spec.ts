@@ -219,7 +219,7 @@ describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () =
 
   it('an invalid payload is rejected by the zod pipe (INVALID_ARGUMENT) before the bus', async () => {
     const error = await port
-      .createCheckoutSession({ userId: 'not-a-uuid', customerEmail: 'x', priceId: '', quantity: 0 })
+      .createCheckoutSession({ userId: generateId(), customerEmail: 'x', priceId: '', quantity: 0 })
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(DomainValidationException);
     expect(commandBus.execute).not.toHaveBeenCalled();

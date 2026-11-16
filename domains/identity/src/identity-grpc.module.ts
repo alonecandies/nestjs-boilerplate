@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { RbacModule } from '@platform/auth';
+import { IDENTITY_RBAC } from './identity.permissions.js';
 import { IdentityCoreModule } from './identity-core.module.js';
 import { AuthGrpcController } from './presentation/grpc/auth-grpc.controller.js';
 import { UsersGrpcController } from './presentation/grpc/users-grpc.controller.js';
@@ -8,7 +10,7 @@ import { UsersGrpcController } from './presentation/grpc/users-grpc.controller.j
  * (`connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE])` in main.ts). No HTTP API.
  */
 @Module({
-  imports: [IdentityCoreModule],
+  imports: [IdentityCoreModule, RbacModule.forFeature(IDENTITY_RBAC)],
   controllers: [AuthGrpcController, UsersGrpcController],
 })
 export class IdentityGrpcModule {}
