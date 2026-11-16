@@ -140,7 +140,7 @@ describe('billing gRPC payload schemas (ZodRpcValidationPipe)', () => {
     expect(parsed.payload.toString('utf8')).toBe('{"id":"evt"}');
   });
 
-  it('accepts an absent owner (all users) and bounds the limit', () => {
+  it('accepts an absent owner (every payment of the tenant) and bounds the limit', () => {
     const pipe = new ZodRpcValidationPipe(listPaymentsRpcSchema);
     expect(pipe.transform({ tenantId: TEST_TENANT_ID, userId: null, limit: 0 })).toEqual({
       tenantId: TEST_TENANT_ID,

@@ -398,6 +398,31 @@ describe('HandleStripeWebhookHandler', () => {
       expect(published).toEqual([expect.objectContaining({ tenantId: TEST_TENANT_ID })]);
     });
 
+    it('treats a nil-UUID user as no user: acknowledged and applied, never retried forever', async () => {
+      const nilUser = (id: string) =>
+        completed(
+          {
+            metadata: {
+              paymentId: payment.id,
+              userId: PLATFORM_TENANT_ID,
+              tenantId: TEST_TENANT_ID,
+            },
+          },
+          id,
+        );
+
+      const result = await deliver(nilUser('evt_nil_user_1'));
+
+      expect(result).toMatchObject({ received: true, duplicate: false });
+      expect(store.state.events.get(`${TEST_TENANT_ID}:evt_nil_user_1`)).toEqual({
+        tenantId: TEST_TENANT_ID,
+        userId: null,
+        id: 'evt_nil_user_1',
+        type: 'checkout.session.completed',
+      });
+      expect(store.payment(payment.id)?.status).toBe(PaymentStatus.Succeeded);
+    });
+
     it('records an event without tenant metadata for the platform tenant with a NULL user', async () => {
       await deliver(
         signedEvent('payout.paid', { id: 'po_1', object: 'payout' }, { id: 'evt_payout_1' }),

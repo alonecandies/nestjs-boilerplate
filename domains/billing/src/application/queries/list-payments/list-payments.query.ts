@@ -2,8 +2,8 @@ import type { PaymentList } from '@domain/billing-contracts';
 import { Query } from '@nestjs/cqrs';
 
 /**
- * One page of payments, newest first. `userId` omitted = every user of the tenant (the edge enforces
- * `billing:read-all`); `cursor` = the previous page's `nextCursor`.
+ * One page of payments, newest first. `userId` omitted = every payment of the tenant (`ListPaymentsHandler`
+ * recomputes `billing:read-all` from the principal); `cursor` = the previous page's `nextCursor`.
  */
 export class ListPaymentsQuery extends Query<PaymentList> {
   constructor(

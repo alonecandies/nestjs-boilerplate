@@ -119,10 +119,10 @@ session of the given `refreshToken`, or **every** session when the body omits it
 
 ### 401 / 403 codes
 
-| Status | Code                                                                                                                                                                                                     |
-| ------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 401    | `MISSING_TOKEN`, `INVALID_TOKEN`, `TOKEN_EXPIRED` (refresh and retry), `TOKEN_REVOKED`, `MISSING_CREDENTIALS`, `INVALID_CREDENTIALS`, `INVALID_REFRESH_TOKEN`, `SESSION_EXPIRED`, `REFRESH_TOKEN_REUSED` |
-| 403    | `FORBIDDEN` with `details.requiredRoles` or `details.requiredPermissions`                                                                                                                                |
+| Status | Code                                                                                                                                                                                                                                                |
+| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 401    | `INVALID_PRINCIPAL`, `MEMBERSHIP_REVOKED`, `MISSING_TOKEN`, `INVALID_TOKEN`, `TOKEN_EXPIRED` (refresh and retry), `TOKEN_REVOKED`, `MISSING_CREDENTIALS`, `INVALID_CREDENTIALS`, `INVALID_REFRESH_TOKEN`, `SESSION_EXPIRED`, `REFRESH_TOKEN_REUSED` |
+| 403    | `FORBIDDEN` with `details.requiredRoles` or `details.requiredPermissions`; `TENANT_ACCESS_DENIED`, `OWNER_RANK_REQUIRED`, `INVITATION_EMAIL_MISMATCH`, `STAFF_ONLY`, `STAFF_TOKEN_NOT_ALLOWED`, `TENANT_MISMATCH`                                   |
 
 ## Authorisation (RBAC)
 
@@ -151,10 +151,10 @@ them at verification. Grants are cumulative: owner ⊇ admin ⊇ member (✓ = e
 | Domain        | Permission            | `member` | `admin` | `owner` | Used by                                                                                                                         |
 | ------------- | --------------------- | :------: | :-----: | :-----: | ------------------------------------------------------------------------------------------------------------------------------- |
 | identity      | `users:read`          |          |    ✓    |    ✓    | `GET /v1/users`, another user's `GET /v1/users/:id`, `users`                                                                    |
-| identity      | `members:manage`      |          |    ✓    |    ✓    | reserved                                                                                                                        |
-| identity      | `tenant:manage`       |          |         |    ✓    | reserved                                                                                                                        |
+| identity      | `members:manage`      |          |    ✓    |    ✓    | `PATCH`/`DELETE /v1/tenant/members/:userId`, `POST /v1/tenant/invitations`, `updateMemberRoles`, `removeMember`, `inviteMember` |
+| identity      | `tenant:manage`       |          |         |    ✓    | `PATCH /v1/tenant`, `renameTenant`                                                                                              |
 | billing       | `billing:checkout`    |    ✓     |    ✓    |    ✓    | `POST /v1/billing/checkout-sessions`, `createCheckoutSession`                                                                   |
-| billing       | `billing:read-all`    |          |         |         | `GET /v1/billing/payments?all=true`, `payments(all: true)`: declared, granted to nobody until the data is tenant-scoped (B2-26) |
+| billing       | `billing:read-all`    |          |    ✓    |    ✓    | `GET /v1/billing/payments?all=true`, `payments(all: true)`: every payment of the active tenant only                             |
 | notifications | `notifications:read`  |    ✓     |    ✓    |    ✓    | notifications REST, GraphQL, Socket.IO                                                                                          |
 | notifications | `notifications:write` |          |    ✓    |    ✓    | reserved                                                                                                                        |
 | files         | `files:read`          |    ✓     |    ✓    |    ✓    | `GET /v1/files/download-url` (own files)                                                                                        |
@@ -165,7 +165,8 @@ Ownership rules that are **not** permissions, enforced by the handlers:
 
 - A user can always read their own profile (`GET /v1/users/:id`, `user(id)`).
 - Files are scoped to the key prefix `users/{userId}/`; access is checked before existence (403 before 404) so keys of other users cannot be probed.
-- Notifications and payments always use the user id from the token, never from the request.
+- Notifications and payments always use the user id and tenant from the token, never from the request.
+- Owner rank: only an owner can grant, revoke, invite or remove the `owner` role, and a tenant always keeps one owner (`LAST_OWNER`); both are checked in the handlers, in every transport.
 
 ### Platform staff switch-in
 
@@ -178,6 +179,46 @@ grant). A switch-in token can neither switch tenants nor switch in again (`STAFF
 it cannot outlive its TTL; the flag is re-read on every switch-in, so a revocation stops new switch-ins at once.
 `POST /v1/staff/switch-out` (`@StaffOnly()`) revokes the switch-in token at once (denylist) and writes
 `staff.switch_out`; otherwise the token simply expires.
+
+### Principal propagation
+
+The gateway forwards the authenticated principal on every gRPC call as `x-user-id`, `x-tenant-id`, `x-user-roles` and
+`x-staff` (only from the CLS principal, never from request headers). A service rebuilds it with the same
+`createPrincipal` rules as the edge: malformed metadata (`x-user-id` not a UUID, a nil or malformed tenant, a tenant
+without a user) fails closed with `UNAUTHENTICATED` / `INVALID_PRINCIPAL`; `staff` is true only for the exact string
+`true`; unknown roles are dropped; no `x-user-id` means no principal (not an error). Permissions are never sent: the
+service recomputes them from the roles with its own RBAC registry. This metadata is trusted only inside the mesh: gRPC
+mTLS (`GRPC_TLS_*`), or `GRPC_ALLOW_INSECURE` only behind a mesh that does mTLS plus a NetworkPolicy. Kafka envelopes
+carry `tenantId` and `actorId`; a consumer acts as that actor (an envelope without them, from a deploy in flight, sets no
+principal), and DataLoader batches keep the request's context.
+
+### Tenant scoping
+
+Every billing row carries `tenant_id` (the Citus distribution column) and every billing query filters on it. The REST,
+GraphQL and gRPC entry points take the tenant from the caller's principal; a request that names another tenant is 403
+`TENANT_MISMATCH`. The Stripe webhook has no principal: the tenant and user come from the metadata checkout signed into
+the Stripe object, so only signed data decides the scope. An event with no or malformed tenant metadata (payouts,
+sessions created before tenancy) is acknowledged and recorded under the platform tenant with no user, and it never
+touches a tenant's payment; a nil-UUID user is treated as no user. Row-level security is not enforced yet (B3): the scope
+is the query, not the database.
+
+### Invitations
+
+`POST /v1/tenant/invitations` creates a token of 32 random bytes (base64url, 43 characters). Only its sha256 is stored;
+the raw token exists in the mail job and the mail, and the job is deleted once the mail is sent or has failed for good
+(`INVITATION_MAIL_RETENTION`). It never reaches Kafka, logs or the database. An invitation lives 7 days and is single
+use. The accepting account's email must equal the invitation email (compared case-insensitively, trimmed), otherwise 403
+`INVITATION_EMAIL_MISMATCH`; unknown, expired and replayed tokens are one 404 `INVITATION_INVALID`, so tokens cannot be
+probed; an invitee who is already a member gets 409 `MEMBERSHIP_EXISTS` and the invitation is not consumed. A staff
+switch-in token cannot accept (403 `TENANT_ACCESS_DENIED`). `MAIL_APP_URL`, the base of the link in the mail, must be
+https in production unless `SMTP_ALLOW_INSECURE=true`, because the link carries the token. Accepting needs no
+credential, so it has no credential rate limit.
+
+### Owner rank and the last owner
+
+Only an owner can grant, revoke, invite or remove `owner`; admins manage everyone else (403 `OWNER_RANK_REQUIRED`). A
+per-tenant lock serialises role changes, removals and departures, so a tenant keeps at least one owner even when two
+owners demote each other at once (422 `LAST_OWNER`).
 
 ### The first admin (platform staff)
 
@@ -270,8 +311,9 @@ when they match `[A-Za-z0-9._:-]{1,128}`.
 ## Internal gRPC (mTLS, reflection)
 
 The services (identity, notifications, billing) **trust their caller**: `rpc` handlers run no JWT
-guard, and `actorId`/`userId` come from the request. Whoever reaches port 50051 can act as any user.
-Protect the transport:
+guard, and the principal (`x-user-id`, `x-tenant-id`, `x-user-roles`, `x-staff`) and the `actorId`/`userId`/`tenantId`
+fields come from the caller. Whoever reaches port 50051 can act as any user of any tenant. Protect the
+transport (see also [Principal propagation](#principal-propagation)):
 
 | Variable                           | Default              | Effect                                                                                  |
 | ---------------------------------- | -------------------- | --------------------------------------------------------------------------------------- |
@@ -287,7 +329,7 @@ reach the services' gRPC ports. Keep reflection off.
 
 Client-side resilience (not a security control, but it limits blast radius): every call has a
 deadline (`GRPC_DEADLINE_MS`, 5 s), a circuit breaker per upstream, and `UNAVAILABLE` retries only
-for `GetUser`, `GetUsersByIds`, `ListUsers`, `ListNotifications`, `ListPayments`. Upstream 5xx details
+for `GetUser`, `GetUsersByIds`, `ListUsers`, `ListMyTenants`, `ListMembers`, `ListNotifications`, `ListPayments`. Upstream 5xx details
 are sanitised before they reach the client.
 
 ## Webhooks and uploads

@@ -115,7 +115,7 @@ it imports. A process ignores (and does not validate) variables of namespaces it
 | `notificationsRateLimit`  |    ✓     |         ✓         |                  |                         |                 | `NotificationsApiModule` (`RateLimitModule.forFeature`)                                              |
 | `cache`                   |    ✓     |         ✓         |                  |                         |                 | `AppCacheModule`                                                                                     |
 | `graphql`                 |    ✓     |         ✓         |                  |                         |                 | `AppGraphqlModule`                                                                                   |
-| `mail`                    |    ✓     |                   |                  |            ✓            |                 | `AppMailerModule`                                                                                    |
+| `mail`                    |    ✓     |                   |   ✓ (enqueue)    |            ✓            |                 | `AppMailerModule`                                                                                    |
 | `storage`                 |    ✓     |         ✓         |                  |                         |                 | `StorageModule`                                                                                      |
 | `files`                   |    ✓     |         ✓         |                  |                         |                 | `FilesModule`                                                                                        |
 | `stripe`                  |    ✓     |                   |                  |                         |        ✓        | `StripeModule`, `BillingCoreModule`                                                                  |
@@ -428,7 +428,11 @@ usage in [API.md](API.md)
 
 ### `mail` — SMTP (nodemailer) + BullMQ mail queue
 
-[`mail.config.ts`](../libs/config/src/namespaces/mail.config.ts) · monolith, notifications-service
+[`mail.config.ts`](../libs/config/src/namespaces/mail.config.ts) · monolith, notifications-service, identity-service
+
+notifications-service (and the monolith) deliver mail. identity-service now loads this namespace too, but only to
+enqueue invitation mail on the shared BullMQ `mail` queue: in production it needs `SMTP_HOST`, `SMTP_PORT` and
+`MAIL_FROM` set like the delivering services, because the namespace validates them everywhere it loads.
 
 | Variable                 | Default                                                                           | Description                                                                                                                                                                                                       |
 | ------------------------ | --------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -442,6 +446,7 @@ usage in [API.md](API.md)
 | `SMTP_POOL`              | `true`                                                                            | Reuse SMTP connections instead of a handshake per mail.                                                                                                                                                           |
 | `SMTP_MAX_CONNECTIONS`   | `5`                                                                               | Pooled connections.                                                                                                                                                                                               |
 | `MAIL_QUEUE_CONCURRENCY` | `5`                                                                               | BullMQ mail worker concurrency.                                                                                                                                                                                   |
+| `MAIL_APP_URL`           | unset (compose: `http://localhost:3000`)                                          | Optional. Public web app URL for links in mail (the invitation link is `<MAIL_APP_URL>/invitations/accept?token=…`). Must be https in production unless `SMTP_ALLOW_INSECURE=true`; a trailing slash is dropped.  |
 | `SMTP_ALLOW_INSECURE`    | `false`                                                                           | Local compose stack only (Mailpit). Production rejects the Mailpit default (loopback on port 1025), a reserved sender domain (example.com, `.test`, …) and plaintext SMTP to a remote host unless this is `true`. |
 
 ### `storage` — uploads to S3-compatible storage or GCS

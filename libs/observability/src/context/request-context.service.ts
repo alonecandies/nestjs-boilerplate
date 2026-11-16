@@ -46,8 +46,8 @@ export class RequestContextService {
   }
 
   /**
-   * Authenticated user of the current request: the CLS principal (B2, spec §7), else the legacy
-   * `CLS_USER_ID` the gRPC metadata interceptor still sets until B2-23 retires it.
+   * Authenticated user of the current request: the CLS principal's user (B2, spec §7).
+   * `CLS_USER_ID` only backs contexts opened without a principal (the `userId` setter, `run`).
    */
   get userId(): string | undefined {
     if (!this.cls.isActive()) return undefined;

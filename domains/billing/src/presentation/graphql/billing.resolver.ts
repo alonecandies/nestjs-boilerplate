@@ -25,7 +25,7 @@ export class BillingResolver {
   @Query(() => PaymentConnectionModel, {
     name: 'payments',
     description:
-      "Newest first, one page at a time (`cursor` = the previous page's `nextCursor`). `all: true` lists every user's payments (billing:read-all).",
+      "Newest first, one page at a time (`cursor` = the previous page's `nextCursor`). `all: true` lists every payment of your active workspace (requires billing:read-all).",
     complexity: 10,
   })
   async payments(

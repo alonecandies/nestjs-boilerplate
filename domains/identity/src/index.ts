@@ -13,6 +13,7 @@
 
 // The edge surface (also `@domain/identity/api`).
 export * from './api/index.js';
+// Application: commands/queries (for other in-process callers), persistence ports.
 export { AcceptInvitationCommand } from './application/commands/accept-invitation/accept-invitation.command.js';
 export { AcceptInvitationHandler } from './application/commands/accept-invitation/accept-invitation.handler.js';
 export { CreateInvitationCommand } from './application/commands/create-invitation/create-invitation.command.js';
@@ -30,7 +31,6 @@ export { RemoveMemberCommand } from './application/commands/remove-member/remove
 export { RemoveMemberHandler } from './application/commands/remove-member/remove-member.handler.js';
 export { RenameTenantCommand } from './application/commands/rename-tenant/rename-tenant.command.js';
 export { RenameTenantHandler } from './application/commands/rename-tenant/rename-tenant.handler.js';
-// Application: commands/queries (for other in-process callers), persistence ports.
 export { StaffSwitchInCommand } from './application/commands/staff-switch-in/staff-switch-in.command.js';
 export { StaffSwitchOutCommand } from './application/commands/staff-switch-out/staff-switch-out.command.js';
 export { SwitchTenantCommand } from './application/commands/switch-tenant/switch-tenant.command.js';

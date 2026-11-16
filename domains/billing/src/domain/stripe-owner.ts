@@ -18,12 +18,14 @@ export const PLATFORM_OWNER: StripeOwner = Object.freeze({
  * Reads `metadata.tenantId` / `metadata.userId` of a Stripe object (Checkout Session, PaymentIntent,
  * Charge: checkout mirrors the metadata onto the PaymentIntent). Only signed data reaches this
  * function (the webhook verified the signature first). Anything that is not a tenant UUID falls back
- * to the platform owner, never to a guess.
+ * to the platform owner, never to a guess. A nil-UUID `userId` counts as no user.
  */
 export function stripeOwnerOf(object: unknown): StripeOwner {
   const metadata = (object as { metadata?: unknown } | null | undefined)?.metadata;
   if (typeof metadata !== 'object' || metadata === null) return PLATFORM_OWNER;
   const { tenantId, userId } = metadata as Record<string, unknown>;
   if (!isUuid(tenantId) || isPlatformTenantId(tenantId)) return PLATFORM_OWNER;
-  return { tenantId, userId: isUuid(userId) ? userId : null };
+  // The nil UUID is the platform sentinel, not a user: createPrincipal rejects it, so a signed event
+  // naming it would throw and Stripe would retry forever. Treat it as no user (the no-principal path).
+  return { tenantId, userId: isUuid(userId) && !isPlatformTenantId(userId) ? userId : null };
 }

@@ -136,12 +136,12 @@ export class GlobalRolesRemovedException extends BusinessRuleViolationException 
 }
 
 /**
- * 403 — a staff switch-in token tried to switch tenant or to switch in again (switch out instead,
- * then use your own login token).
+ * 403 — a staff switch-in token tried an operation it may not do: switch tenant, switch in again or
+ * accept an invitation (switch out instead, then use your own login token).
  */
 export class StaffTokenNotAllowedException extends PermissionDeniedException {
   constructor() {
-    super('A staff switch-in token cannot switch tenants', {
+    super('A staff switch-in token cannot be used for this operation', {
       code: IdentityErrorCode.STAFF_TOKEN_NOT_ALLOWED,
     });
   }
