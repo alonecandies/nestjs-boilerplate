@@ -7,6 +7,9 @@ import { LogoutHandler } from './application/commands/logout/logout.handler.js';
 import { PurgeExpiredSessionsHandler } from './application/commands/purge-expired-sessions/purge-expired-sessions.handler.js';
 import { RefreshSessionHandler } from './application/commands/refresh-session/refresh-session.handler.js';
 import { RegisterUserHandler } from './application/commands/register-user/register-user.handler.js';
+import { StaffSwitchInHandler } from './application/commands/staff-switch-in/staff-switch-in.handler.js';
+import { StaffSwitchOutHandler } from './application/commands/staff-switch-out/staff-switch-out.handler.js';
+import { SwitchTenantHandler } from './application/commands/switch-tenant/switch-tenant.handler.js';
 import { UserRegisteredRelay } from './application/event-handlers/user-registered.relay.js';
 import { AuditEventsRepository } from './application/persistence/audit-events.repository.js';
 import { InvitationsRepository } from './application/persistence/invitations.repository.js';
@@ -33,6 +36,7 @@ import { PurgeExpiredSessionsCron } from './infrastructure/scheduling/purge-expi
 import { passwordConfig } from './infrastructure/security/password.config.js';
 import { PasswordHasher } from './infrastructure/security/password-hasher.service.js';
 import { refreshTokenConfig } from './infrastructure/security/refresh-token.config.js';
+import { staffSwitchInConfig } from './infrastructure/security/staff-switch-in.config.js';
 import { TokenIssuer } from './infrastructure/security/token-issuer.service.js';
 
 export const IDENTITY_COMMAND_HANDLERS = [
@@ -40,6 +44,9 @@ export const IDENTITY_COMMAND_HANDLERS = [
   LoginHandler,
   RefreshSessionHandler,
   LogoutHandler,
+  SwitchTenantHandler,
+  StaffSwitchInHandler,
+  StaffSwitchOutHandler,
   PurgeExpiredSessionsHandler,
 ];
 
@@ -76,6 +83,7 @@ const PERSISTENCE: Provider[] = [
     // its secret, algorithm, iss and aud, so this JwtModule carries no defaults.
     ConfigModule.forFeature(authConfig),
     ConfigModule.forFeature(refreshTokenConfig),
+    ConfigModule.forFeature(staffSwitchInConfig),
     JwtModule.register({}),
   ],
   providers: [

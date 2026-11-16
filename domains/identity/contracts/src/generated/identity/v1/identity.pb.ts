@@ -78,6 +78,43 @@ export interface LogoutRequest {
   refreshToken?: string | undefined;
 }
 
+export interface SwitchTenantRequest {
+  userId: string;
+  tenantId: string;
+  refreshToken: string;
+  accessTokenJti: string;
+  /** Access token `exp` claim (epoch seconds); bounds the denylist entry TTL. */
+  accessTokenExp: string;
+  client?: ClientInfo | undefined;
+}
+
+export interface StaffSwitchInRequest {
+  staffUserId: string;
+  tenantId: string;
+  /** Why staff enters (audited), 1..1000 characters. */
+  reason: string;
+  client?: ClientInfo | undefined;
+}
+
+export interface StaffSwitchOutRequest {
+  staffUserId: string;
+  tenantId: string;
+  accessTokenJti: string;
+  /** Switch-in token `exp` (epoch seconds); bounds the denylist entry TTL. */
+  accessTokenExp: string;
+}
+
+export interface StaffAccessToken {
+  accessToken: string;
+  /** Lifetime in seconds (STAFF_SWITCH_IN_TTL_SEC). */
+  expiresIn: number;
+  /** Always "Bearer". */
+  tokenType: string;
+  tenantId: string;
+  /** The identity.audit_events row recording the switch-in. */
+  auditEventId: string;
+}
+
 export interface GetUserRequest {
   id: string;
   /** Scope: only a member of this tenant is found (else NOT_FOUND). Absent: any user (own profile, internal). */
@@ -146,6 +183,24 @@ export interface AuthServiceClient {
   /** Revokes the session and denylists the access token for its remaining lifetime. */
 
   logout(request: LogoutRequest, metadata?: Metadata): Observable<Empty>;
+
+  /**
+   * Moves the caller's session to another tenant: rotates the refresh token into a session there and
+   * denylists the current access token. Not a member → PERMISSION_DENIED / TENANT_ACCESS_DENIED.
+   */
+
+  switchTenant(request: SwitchTenantRequest, metadata?: Metadata): Observable<AuthTokens>;
+
+  /**
+   * Platform staff enters a tenant for support: an access token only (admin + staff, short TTL), audited
+   * in the tenant. Not staff → PERMISSION_DENIED / STAFF_ONLY; unknown tenant → NOT_FOUND.
+   */
+
+  staffSwitchIn(request: StaffSwitchInRequest, metadata?: Metadata): Observable<StaffAccessToken>;
+
+  /** Platform staff leaves the tenant: denylists the switch-in token and audits the exit. */
+
+  staffSwitchOut(request: StaffSwitchOutRequest, metadata?: Metadata): Observable<Empty>;
 }
 
 /** Credential flows. Every successful flow returns a fresh access + refresh token pair. */
@@ -169,11 +224,43 @@ export interface AuthServiceController {
   /** Revokes the session and denylists the access token for its remaining lifetime. */
 
   logout(request: LogoutRequest, metadata?: Metadata): void | Promise<void>;
+
+  /**
+   * Moves the caller's session to another tenant: rotates the refresh token into a session there and
+   * denylists the current access token. Not a member → PERMISSION_DENIED / TENANT_ACCESS_DENIED.
+   */
+
+  switchTenant(
+    request: SwitchTenantRequest,
+    metadata?: Metadata,
+  ): Promise<AuthTokens> | Observable<AuthTokens> | AuthTokens;
+
+  /**
+   * Platform staff enters a tenant for support: an access token only (admin + staff, short TTL), audited
+   * in the tenant. Not staff → PERMISSION_DENIED / STAFF_ONLY; unknown tenant → NOT_FOUND.
+   */
+
+  staffSwitchIn(
+    request: StaffSwitchInRequest,
+    metadata?: Metadata,
+  ): Promise<StaffAccessToken> | Observable<StaffAccessToken> | StaffAccessToken;
+
+  /** Platform staff leaves the tenant: denylists the switch-in token and audits the exit. */
+
+  staffSwitchOut(request: StaffSwitchOutRequest, metadata?: Metadata): void | Promise<void>;
 }
 
 export function AuthServiceControllerMethods() {
   return function (constructor: Function) {
-    const grpcMethods: string[] = ["register", "login", "refreshTokens", "logout"];
+    const grpcMethods: string[] = [
+      "register",
+      "login",
+      "refreshTokens",
+      "logout",
+      "switchTenant",
+      "staffSwitchIn",
+      "staffSwitchOut",
+    ];
     for (const method of grpcMethods) {
       const descriptor: any = Reflect.getOwnPropertyDescriptor(constructor.prototype, method);
       GrpcMethod("AuthService", method)(constructor.prototype[method], method, descriptor);

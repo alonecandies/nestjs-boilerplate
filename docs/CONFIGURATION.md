@@ -23,8 +23,8 @@ flowchart LR
 - **Namespaces.** Variables are grouped into 13 platform namespaces
   (`libs/config/src/namespaces/*.config.ts`, registered in `CONFIG_NAMESPACES` in
   [all-config.ts](../libs/config/src/all-config.ts)), the namespaces each domain owns
-  (`domains/<x>/src/**/*.config.ts`: billing's `stripe`, identity's `password` and `refreshToken`,
-  the gRPC client URLs, files' limits) plus two app-local ones
+  (`domains/<x>/src/**/*.config.ts`: billing's `stripe`, identity's `password`, `refreshToken` and
+  `staffSwitchIn`, the gRPC client URLs, files' limits) plus two app-local ones
   (`apps/gateway/src/gateway.config.ts`, `apps/monolith/src/monolith.config.ts`). Each is a zod
   schema keyed by the env var names, transformed into a typed camelCase object.
 - **Lazy, per-process validation.** Only `app` and `observability` are loaded globally. Every other
@@ -109,6 +109,7 @@ it imports. A process ignores (and does not validate) variables of namespaces it
 | `auth`                    |    ✓     |         ✓         |        ✓         |                         |                 | `AuthModule`, `IdentityCoreModule` (`TokenIssuer`)                                                   |
 | `password`                |    ✓     |                   |        ✓         |                         |                 | `IdentityCoreModule` (`@domain/identity`)                                                            |
 | `refreshToken`            |    ✓     |                   |        ✓         |                         |                 | `IdentityCoreModule` (`@domain/identity`)                                                            |
+| `staffSwitchIn`           |    ✓     |                   |        ✓         |                         |                 | `IdentityCoreModule` (`@domain/identity`)                                                            |
 | `throttle`                |    ✓     |         ✓         |                  |                         |                 | `AppThrottlerModule`                                                                                 |
 | `identityRateLimit`       |    ✓     |         ✓         |                  |                         |                 | `IdentityApiModule` (`RateLimitModule.forFeature`)                                                   |
 | `notificationsRateLimit`  |    ✓     |         ✓         |                  |                         |                 | `NotificationsApiModule` (`RateLimitModule.forFeature`)                                              |
@@ -338,6 +339,15 @@ monolith, identity-service (loaded by `IdentityCoreModule`; the gateway never re
 | --------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `JWT_REFRESH_SECRET`  | `dev-refresh-secret-change-me-please-32chars` | ≥ 32 chars. **Dev default rejected in production**, publicly known values too (unless `ALLOW_KNOWN_LOCAL_SECRETS=true`), and it must differ from `JWT_ACCESS_SECRET` there (this namespace reads it for that check only). |
 | `JWT_REFRESH_TTL_SEC` | `604800`                                      | Refresh token lifetime (7 days).                                                                                                                                                                                          |
+
+### `staffSwitchIn` — staff switch-in tokens (identity)
+
+[`staff-switch-in.config.ts`](../domains/identity/src/infrastructure/security/staff-switch-in.config.ts) ·
+monolith, identity-service (loaded by `IdentityCoreModule`)
+
+| Variable                  | Default | Description                                                                                     |
+| ------------------------- | ------- | ----------------------------------------------------------------------------------------------- |
+| `STAFF_SWITCH_IN_TTL_SEC` | `900`   | Lifetime of a staff switch-in access token, 60..3600 s. No refresh token is ever issued for it. |
 
 ### `password` — Argon2id (identity)
 

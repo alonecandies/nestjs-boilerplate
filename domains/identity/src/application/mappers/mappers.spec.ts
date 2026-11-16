@@ -6,6 +6,9 @@ import {
   toLoginCommand,
   toLogoutCommand,
   toRegisterUserCommand,
+  toStaffSwitchInCommand,
+  toStaffSwitchOutCommand,
+  toSwitchTenantCommand,
 } from './identity-request.mapper.js';
 import { toAccessTokenSubject, toUserContract, toUserRecord } from './user.mapper.js';
 
@@ -62,5 +65,48 @@ describe('identity request mappers', () => {
       toLoginCommand({ email: 'e', password: 'p', client: { ip: '1' }, tenantId: 't-1' }),
     ).toMatchObject({ email: 'e', password: 'p', client: { ip: '1' }, tenantId: 't-1' });
     expect(toLoginCommand({ email: 'e', password: 'p' }).tenantId).toBeUndefined();
+  });
+
+  it('toSwitchTenantCommand: int64 exp string → number, the access token as { jti, exp }', () => {
+    expect(
+      toSwitchTenantCommand({
+        userId: 'u',
+        tenantId: 't',
+        refreshToken: 'r',
+        accessTokenJti: 'j',
+        accessTokenExp: '1900000000',
+      }),
+    ).toMatchObject({
+      userId: 'u',
+      tenantId: 't',
+      refreshToken: 'r',
+      accessToken: { jti: 'j', exp: 1_900_000_000 },
+    });
+  });
+
+  it('toStaffSwitchInCommand: carries the staff user, tenant, reason and client', () => {
+    expect(
+      toStaffSwitchInCommand({
+        staffUserId: 's',
+        tenantId: 't',
+        reason: 'ticket #1',
+        client: { ip: '1' },
+      }),
+    ).toMatchObject({ staffUserId: 's', tenantId: 't', reason: 'ticket #1', client: { ip: '1' } });
+  });
+
+  it('toStaffSwitchOutCommand: int64 exp string → number', () => {
+    expect(
+      toStaffSwitchOutCommand({
+        staffUserId: 's',
+        tenantId: 't',
+        accessTokenJti: 'j',
+        accessTokenExp: '1900000000',
+      }),
+    ).toMatchObject({
+      staffUserId: 's',
+      tenantId: 't',
+      accessToken: { jti: 'j', exp: 1_900_000_000 },
+    });
   });
 });

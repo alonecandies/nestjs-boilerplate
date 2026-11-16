@@ -5,6 +5,10 @@ import type {
   LogoutRequest,
   RefreshTokensRequest,
   RegisterRequest,
+  StaffAccessToken,
+  StaffSwitchInRequest,
+  StaffSwitchOutRequest,
+  SwitchTenantRequest,
   User,
   UserPage,
 } from '@domain/identity-contracts';
@@ -16,11 +20,13 @@ import {
   type TenantRole,
 } from '@platform/common';
 import {
+  AUDIT_EVENT_TYPES,
   AuthPort,
   EmailAlreadyTakenException,
   InvalidCredentialsException,
   InvalidRefreshTokenException,
   MembershipRevokedException,
+  NotPlatformStaffException,
   normalizeEmail,
   TenantAccessDeniedException,
   UsersPort,
@@ -55,6 +61,19 @@ export class FakeIdentityState {
   }[] = [];
   /** Refresh-token session id → its user and tenant. */
   readonly sessions = new Map<string, { userId: string; tenantId: string }>();
+  /** Users holding is_platform_staff. */
+  readonly staff = new Set<string>();
+  readonly auditEvents: {
+    id: string;
+    tenantId: string;
+    actorId: string | null;
+    type: string;
+    data: Record<string, unknown>;
+  }[] = [];
+
+  grantStaff(userId: string): void {
+    this.staff.add(userId);
+  }
 
   membership(tenantId: string, userId: string) {
     return this.memberships.find((m) => m.tenantId === tenantId && m.userId === userId);
@@ -169,6 +188,72 @@ export class FakeAuthPort extends AuthPort {
     this.state.calls.push('AuthService.Logout');
     // identity-service denylists the access jti in the Redis the gateway reads.
     await this.denylist.deny(input.accessTokenJti, Number(input.accessTokenExp));
+  }
+
+  async switchTenant(input: SwitchTenantRequest): Promise<AuthTokens> {
+    this.state.calls.push('AuthService.SwitchTenant');
+    const claims = await this.tokens.verifyRefreshToken(input.refreshToken).catch(() => {
+      throw new InvalidRefreshTokenException();
+    });
+    const session = this.state.sessions.get(claims.jti);
+    if (claims.sub !== input.userId || session?.userId !== input.userId) {
+      throw new InvalidRefreshTokenException();
+    }
+    const membership = this.state.membership(input.tenantId, input.userId);
+    if (!membership) throw new TenantAccessDeniedException();
+    const entry = this.state.users.get(input.userId);
+    if (!entry) throw new InvalidRefreshTokenException();
+    await this.denylist.deny(input.accessTokenJti, Number(input.accessTokenExp));
+    this.state.sessions.delete(claims.jti);
+    membership.lastActiveAt = Date.now();
+    return this.issue(entry.user, input.tenantId);
+  }
+
+  async staffSwitchIn(input: StaffSwitchInRequest): Promise<StaffAccessToken> {
+    this.state.calls.push('AuthService.StaffSwitchIn');
+    if (!this.state.staff.has(input.staffUserId)) throw new NotPlatformStaffException();
+    if (!this.state.tenants.has(input.tenantId)) {
+      throw new EntityNotFoundException('Tenant', input.tenantId);
+    }
+    const entry = this.state.users.get(input.staffUserId);
+    if (!entry) throw new NotPlatformStaffException();
+    const access = await this.tokens.issueAccessToken(
+      {
+        id: entry.user.id,
+        email: entry.user.email,
+        tenantId: input.tenantId,
+        roles: ['admin'],
+        staff: true,
+      },
+      { ttlSec: 900 },
+    );
+    const auditEventId = generateId();
+    this.state.auditEvents.push({
+      id: auditEventId,
+      tenantId: input.tenantId,
+      actorId: input.staffUserId,
+      type: AUDIT_EVENT_TYPES.STAFF_SWITCH_IN,
+      data: { reason: input.reason.trim(), accessTokenJti: access.jti },
+    });
+    return {
+      accessToken: access.token,
+      expiresIn: access.expiresIn,
+      tokenType: 'Bearer',
+      tenantId: input.tenantId,
+      auditEventId,
+    };
+  }
+
+  async staffSwitchOut(input: StaffSwitchOutRequest): Promise<void> {
+    this.state.calls.push('AuthService.StaffSwitchOut');
+    await this.denylist.deny(input.accessTokenJti, Number(input.accessTokenExp));
+    this.state.auditEvents.push({
+      id: generateId(),
+      tenantId: input.tenantId,
+      actorId: input.staffUserId,
+      type: AUDIT_EVENT_TYPES.STAFF_SWITCH_OUT,
+      data: { accessTokenJti: input.accessTokenJti },
+    });
   }
 
   private async issue(user: User, tenantId: string): Promise<AuthTokens> {

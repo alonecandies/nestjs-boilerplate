@@ -22,6 +22,8 @@ export const IDENTITY_LIMITS = {
   IP_MAX_LENGTH: 64,
   /** identity.tenants.name (personal workspace names are cut to fit). */
   TENANT_NAME_MAX_LENGTH: 100,
+  /** Staff switch-in reason, after trimming (spec §5.2: audited free text). */
+  SWITCH_IN_REASON_MAX_LENGTH: 1_000,
 } as const;
 
 /** Longest password `PasswordHasher` hashes or verifies (argon2 cost DoS guard, any transport). */
@@ -41,6 +43,8 @@ export const IdentityErrorCode = {
   TENANT_ACCESS_DENIED: 'TENANT_ACCESS_DENIED',
   MEMBERSHIP_REVOKED: 'MEMBERSHIP_REVOKED',
   GLOBAL_ROLES_REMOVED: 'GLOBAL_ROLES_REMOVED',
+  STAFF_TOKEN_NOT_ALLOWED: 'STAFF_TOKEN_NOT_ALLOWED',
+  STAFF_ONLY: 'STAFF_ONLY',
 } as const;
 export type IdentityErrorCode = (typeof IdentityErrorCode)[keyof typeof IdentityErrorCode];
 

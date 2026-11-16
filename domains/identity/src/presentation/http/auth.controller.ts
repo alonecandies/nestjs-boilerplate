@@ -17,6 +17,7 @@ import {
   ApiBody,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiNoContentResponse,
   ApiOkResponse,
   ApiOperation,
@@ -28,6 +29,7 @@ import { type AuthUser, CurrentUser, LocalAuthGuard } from '@platform/auth';
 import { Public, type RequestLike } from '@platform/common';
 import { RateLimit } from '@platform/redis';
 import { AuthPort } from '../../application/ports/auth.port.js';
+import { StaffTokenNotAllowedException } from '../../domain/identity.errors.js';
 import { IDENTITY_RATE_LIMITS } from '../rate-limit/identity-rate-limit.js';
 import { clientInfoOf } from '../shared/client-info.util.js';
 import { UserReadCache } from '../shared/user-read.cache.js';
@@ -35,6 +37,7 @@ import { LoginDto } from './dto/login.dto.js';
 import { LogoutDto } from './dto/logout.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { RegisterDto } from './dto/register.dto.js';
+import { SwitchTenantDto } from './dto/switch-tenant.dto.js';
 import { LoginRequestGuard } from './guards/login-request.guard.js';
 import { AuthTokensResponse } from './responses/auth-tokens.response.js';
 import { MeResponse } from './responses/me.response.js';
@@ -136,6 +139,42 @@ export class AuthController {
       accessTokenExp: String(user.exp),
       refreshToken: body.refreshToken,
     });
+  }
+
+  @Post('switch-tenant')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Switch the active tenant',
+    description:
+      'Rotates the refresh token into a session in `tenantId` and revokes the current access token. ' +
+      'Returns the new token pair.',
+  })
+  @ApiOkResponse({ type: AuthTokensResponse })
+  @ApiBadRequestResponse({ type: ProblemResponse })
+  @ApiUnauthorizedResponse({
+    type: ProblemResponse,
+    description: '`INVALID_REFRESH_TOKEN`, `SESSION_EXPIRED`, `REFRESH_TOKEN_REUSED`',
+  })
+  @ApiForbiddenResponse({
+    type: ProblemResponse,
+    description: '`TENANT_ACCESS_DENIED`, `STAFF_TOKEN_NOT_ALLOWED`',
+  })
+  async switchTenant(
+    @Body() body: SwitchTenantDto,
+    @CurrentUser() user: AuthUser,
+    @Req() request: RequestLike,
+  ): Promise<AuthTokensResponse> {
+    if (user.staff) throw new StaffTokenNotAllowedException();
+    const tokens = await this.auth.switchTenant({
+      userId: user.id,
+      tenantId: body.tenantId,
+      refreshToken: body.refreshToken,
+      accessTokenJti: user.jti,
+      accessTokenExp: String(user.exp),
+      client: clientInfoOf(request),
+    });
+    return AuthTokensResponse.from(tokens);
   }
 
   @Get('me')

@@ -6,6 +6,9 @@ import { LoginCommand } from '../../../application/commands/login/login.command.
 import { LogoutCommand } from '../../../application/commands/logout/logout.command.js';
 import { RefreshSessionCommand } from '../../../application/commands/refresh-session/refresh-session.command.js';
 import { RegisterUserCommand } from '../../../application/commands/register-user/register-user.command.js';
+import { StaffSwitchInCommand } from '../../../application/commands/staff-switch-in/staff-switch-in.command.js';
+import { StaffSwitchOutCommand } from '../../../application/commands/staff-switch-out/staff-switch-out.command.js';
+import { SwitchTenantCommand } from '../../../application/commands/switch-tenant/switch-tenant.command.js';
 import { GetUserByIdQuery } from '../../../application/queries/get-user-by-id/get-user-by-id.query.js';
 import { GetUsersByIdsQuery } from '../../../application/queries/get-users-by-ids/get-users-by-ids.query.js';
 import { ListUsersQuery } from '../../../application/queries/list-users/list-users.query.js';
@@ -27,12 +30,31 @@ describe('local adapters (monolith: port → CQRS bus)', () => {
     await adapter.login({ email: 'e@x.io', password: 'p', client: { ip: '1' } });
     await adapter.refreshTokens({ refreshToken: 'r' });
     await adapter.logout({ userId: 'u', accessTokenJti: 'j', accessTokenExp: '42' });
+    await adapter.switchTenant({
+      userId: 'u',
+      tenantId: 't',
+      refreshToken: 'r',
+      accessTokenJti: 'j',
+      accessTokenExp: '42',
+    });
+    await adapter.staffSwitchIn({ staffUserId: 's', tenantId: 't', reason: 'r' });
+    await adapter.staffSwitchOut({
+      staffUserId: 's',
+      tenantId: 't',
+      accessTokenJti: 'j',
+      accessTokenExp: '42',
+    });
 
     const commands = commandBus.execute.mock.calls.map(([command]) => command);
     expect(commands[0]).toBeInstanceOf(RegisterUserCommand);
     expect(commands[1]).toEqual(new LoginCommand('e@x.io', 'p', { ip: '1' }));
     expect(commands[2]).toEqual(new RefreshSessionCommand('r', undefined));
     expect(commands[3]).toEqual(new LogoutCommand('u', 'j', 42, undefined));
+    expect(commands[4]).toEqual(
+      new SwitchTenantCommand('u', 't', 'r', { jti: 'j', exp: 42 }, undefined),
+    );
+    expect(commands[5]).toEqual(new StaffSwitchInCommand('s', 't', 'r', undefined));
+    expect(commands[6]).toEqual(new StaffSwitchOutCommand('s', 't', { jti: 'j', exp: 42 }));
   });
 
   it('UsersLocalAdapter routes every read to the QueryBus', async () => {

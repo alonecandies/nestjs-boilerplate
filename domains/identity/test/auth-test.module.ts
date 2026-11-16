@@ -42,9 +42,10 @@ export async function principal(
   roles: TenantRole[],
   id: string = generateId(),
   tenantId: string = TEST_TENANT_ID,
+  staff = false,
 ): Promise<TestPrincipal> {
   const issued = await signTestAccessToken(
-    { id, email: 'p@example.com', tenantId, roles },
+    { id, email: 'p@example.com', tenantId, roles, staff },
     { config: app.get<AuthConfig>(authConfig.KEY) },
   );
   return { id, token: issued.token, jti: issued.jti, exp: issued.exp };

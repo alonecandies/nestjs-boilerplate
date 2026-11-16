@@ -6,6 +6,10 @@ import {
   type LogoutRequest,
   type RefreshTokensRequest,
   type RegisterRequest,
+  type StaffAccessToken,
+  type StaffSwitchInRequest,
+  type StaffSwitchOutRequest,
+  type SwitchTenantRequest,
 } from '@domain/identity-contracts';
 import { CommandBus } from '@nestjs/cqrs';
 import { Payload } from '@nestjs/microservices';
@@ -15,12 +19,18 @@ import {
   toLogoutCommand,
   toRefreshSessionCommand,
   toRegisterUserCommand,
+  toStaffSwitchInCommand,
+  toStaffSwitchOutCommand,
+  toSwitchTenantCommand,
 } from '../../application/mappers/identity-request.mapper.js';
 import {
   loginRequestSchema,
   logoutRequestSchema,
   refreshTokensRequestSchema,
   registerRequestSchema,
+  staffSwitchInRequestSchema,
+  staffSwitchOutRequestSchema,
+  switchTenantRequestSchema,
 } from './identity-rpc.payloads.js';
 
 /**
@@ -57,5 +67,24 @@ export class AuthGrpcController implements AuthServiceController {
     @Payload(new ZodRpcValidationPipe(logoutRequestSchema)) request: LogoutRequest,
   ): Promise<void> {
     return this.commandBus.execute(toLogoutCommand(request));
+  }
+
+  switchTenant(
+    @Payload(new ZodRpcValidationPipe(switchTenantRequestSchema)) request: SwitchTenantRequest,
+  ): Promise<AuthTokens> {
+    return this.commandBus.execute(toSwitchTenantCommand(request));
+  }
+
+  staffSwitchIn(
+    @Payload(new ZodRpcValidationPipe(staffSwitchInRequestSchema)) request: StaffSwitchInRequest,
+  ): Promise<StaffAccessToken> {
+    return this.commandBus.execute(toStaffSwitchInCommand(request));
+  }
+
+  /** Resolves `undefined`, which serialises as `google.protobuf.Empty`. */
+  staffSwitchOut(
+    @Payload(new ZodRpcValidationPipe(staffSwitchOutRequestSchema)) request: StaffSwitchOutRequest,
+  ): Promise<void> {
+    return this.commandBus.execute(toStaffSwitchOutCommand(request));
   }
 }

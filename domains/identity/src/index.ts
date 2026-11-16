@@ -13,12 +13,15 @@
 
 // The edge surface (also `@domain/identity/api`).
 export * from './api/index.js';
-// Application: commands/queries (for other in-process callers), persistence ports.
 export { LoginCommand } from './application/commands/login/login.command.js';
 export { LogoutCommand } from './application/commands/logout/logout.command.js';
 export { PurgeExpiredSessionsCommand } from './application/commands/purge-expired-sessions/purge-expired-sessions.command.js';
 export { RefreshSessionCommand } from './application/commands/refresh-session/refresh-session.command.js';
 export { RegisterUserCommand } from './application/commands/register-user/register-user.command.js';
+// Application: commands/queries (for other in-process callers), persistence ports.
+export { StaffSwitchInCommand } from './application/commands/staff-switch-in/staff-switch-in.command.js';
+export { StaffSwitchOutCommand } from './application/commands/staff-switch-out/staff-switch-out.command.js';
+export { SwitchTenantCommand } from './application/commands/switch-tenant/switch-tenant.command.js';
 export type {
   AuditEventRecord,
   AuditEventType,
@@ -75,8 +78,10 @@ export {
   InvalidUserException,
   MembershipAlreadyExistsException,
   MembershipRevokedException,
+  NotPlatformStaffException,
   RefreshTokenReuseDetectedException,
   SessionExpiredException,
+  StaffTokenNotAllowedException,
   TenantAccessDeniedException,
   TenantSlugTakenException,
 } from './domain/identity.errors.js';
@@ -124,3 +129,7 @@ export {
   type RefreshTokenConfig,
   refreshTokenConfig,
 } from './infrastructure/security/refresh-token.config.js';
+export {
+  type StaffSwitchInConfig,
+  staffSwitchInConfig,
+} from './infrastructure/security/staff-switch-in.config.js';

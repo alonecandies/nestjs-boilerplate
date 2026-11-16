@@ -7,11 +7,15 @@ import {
   type LogoutRequest,
   type RefreshTokensRequest,
   type RegisterRequest,
+  type StaffAccessToken,
+  type StaffSwitchInRequest,
+  type StaffSwitchOutRequest,
+  type SwitchTenantRequest,
 } from '@domain/identity-contracts';
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import type { ClientGrpc } from '@nestjs/microservices';
 import type { AuthPort } from '../../../application/ports/auth.port.js';
-import { normalizeAuthTokens } from './grpc-contract.normalizer.js';
+import { normalizeAuthTokens, normalizeStaffAccessToken } from './grpc-contract.normalizer.js';
 import { IdentityGrpcCaller } from './identity-grpc.caller.js';
 
 const operation = (method: string): string => `identity.v1.${AUTH_SERVICE_NAME}/${method}`;
@@ -53,5 +57,25 @@ export class AuthGrpcAdapter implements AuthPort, OnModuleInit {
 
   async logout(input: LogoutRequest): Promise<void> {
     await this.caller.call(operation('Logout'), (metadata) => this.auth.logout(input, metadata));
+  }
+
+  async switchTenant(input: SwitchTenantRequest): Promise<AuthTokens> {
+    const tokens = await this.caller.call(operation('SwitchTenant'), (metadata) =>
+      this.auth.switchTenant(input, metadata),
+    );
+    return normalizeAuthTokens(tokens);
+  }
+
+  async staffSwitchIn(input: StaffSwitchInRequest): Promise<StaffAccessToken> {
+    const token = await this.caller.call(operation('StaffSwitchIn'), (metadata) =>
+      this.auth.staffSwitchIn(input, metadata),
+    );
+    return normalizeStaffAccessToken(token);
+  }
+
+  async staffSwitchOut(input: StaffSwitchOutRequest): Promise<void> {
+    await this.caller.call(operation('StaffSwitchOut'), (metadata) =>
+      this.auth.staffSwitchOut(input, metadata),
+    );
   }
 }

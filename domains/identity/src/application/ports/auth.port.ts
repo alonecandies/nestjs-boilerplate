@@ -4,6 +4,10 @@ import type {
   LogoutRequest,
   RefreshTokensRequest,
   RegisterRequest,
+  StaffAccessToken,
+  StaffSwitchInRequest,
+  StaffSwitchOutRequest,
+  SwitchTenantRequest,
 } from '@domain/identity-contracts';
 
 /**
@@ -31,4 +35,22 @@ export abstract class AuthPort {
    * `refreshToken` — or every session of the user when it is absent ("sign out everywhere").
    */
   abstract logout(input: LogoutRequest): Promise<void>;
+
+  /**
+   * Moves the caller's session to `tenantId`: the refresh token is rotated into a session there and the
+   * current access token is denylisted.
+   * @throws TenantAccessDeniedException (403) | InvalidRefreshTokenException | SessionExpiredException |
+   *   RefreshTokenReuseDetectedException (401)
+   */
+  abstract switchTenant(input: SwitchTenantRequest): Promise<AuthTokens>;
+
+  /**
+   * Platform staff enters `tenantId` (audited). Access token only.
+   * @throws NotPlatformStaffException (403 STAFF_ONLY) | EntityNotFoundException (404) |
+   *   DomainValidationException (422; the REST DTO and the RPC schema answer 400 / INVALID_ARGUMENT first)
+   */
+  abstract staffSwitchIn(input: StaffSwitchInRequest): Promise<StaffAccessToken>;
+
+  /** Revokes a staff switch-in token and audits the exit (the edge ensures it is one: `@StaffOnly()`). */
+  abstract staffSwitchOut(input: StaffSwitchOutRequest): Promise<void>;
 }

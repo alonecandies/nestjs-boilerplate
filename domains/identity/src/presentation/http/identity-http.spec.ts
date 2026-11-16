@@ -66,6 +66,7 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
     authPort.login.mockReset();
     authPort.refreshTokens.mockReset();
     authPort.logout.mockReset();
+    authPort.switchTenant.mockReset();
     usersPort.getUser.mockReset();
     usersPort.listUsers.mockReset();
     cache.store.clear();
@@ -427,6 +428,68 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
       });
       expect(missing.statusCode).toBe(404);
       expect(missing.json()).toMatchObject({ code: 'NOT_FOUND' });
+    });
+  });
+
+  describe('POST /v1/auth/switch-tenant', () => {
+    const tenantId = '0190f3b2-0000-7000-8000-0000000000a2';
+    const refreshToken = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2ln';
+
+    it('401 without a bearer token', async () => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/switch-tenant',
+        payload: { tenantId, refreshToken },
+      });
+      expect(res.statusCode).toBe(401);
+    });
+
+    it('200: the caller, the target, both tokens and the client reach the port', async () => {
+      authPort.switchTenant.mockResolvedValue(makeAuthTokens({ tenantId }));
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/switch-tenant',
+        headers: bearer(user),
+        payload: { tenantId, refreshToken },
+      });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ tenantId });
+      expect(authPort.switchTenant).toHaveBeenCalledWith({
+        userId: user.id,
+        tenantId,
+        refreshToken,
+        accessTokenJti: user.jti,
+        accessTokenExp: String(user.exp),
+        client: expect.objectContaining({ ip: expect.any(String) }),
+      });
+    });
+
+    it.each([
+      [{ tenantId: 'x', refreshToken }],
+      [{ tenantId, refreshToken: 'not-a-jwt' }],
+      [{ tenantId }],
+    ])('400 for %j (the port is never called)', async (payload) => {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/switch-tenant',
+        headers: bearer(user),
+        payload,
+      });
+      expect(res.statusCode).toBe(400);
+      expect(authPort.switchTenant).not.toHaveBeenCalled();
+    });
+
+    it('403 STAFF_TOKEN_NOT_ALLOWED for a staff switch-in token (Review Focus 5)', async () => {
+      const staff = await principal(app, ['admin'], generateId(), TEST_TENANT_ID, true);
+      const res = await app.inject({
+        method: 'POST',
+        url: '/v1/auth/switch-tenant',
+        headers: bearer(staff),
+        payload: { tenantId, refreshToken },
+      });
+      expect(res.statusCode).toBe(403);
+      expect(res.json()).toMatchObject({ code: 'STAFF_TOKEN_NOT_ALLOWED' });
+      expect(authPort.switchTenant).not.toHaveBeenCalled();
     });
   });
 });

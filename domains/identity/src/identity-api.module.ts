@@ -16,13 +16,14 @@ import { AuthResolver } from './presentation/graphql/auth.resolver.js';
 import { UsersResolver } from './presentation/graphql/users.resolver.js';
 import { UsersLoaderRegistrar } from './presentation/graphql/users-loader.registrar.js';
 import { AuthController } from './presentation/http/auth.controller.js';
+import { StaffController } from './presentation/http/staff.controller.js';
 import { LocalStrategy } from './presentation/http/strategies/local.strategy.js';
 import { UsersController } from './presentation/http/users.controller.js';
 import { IdentityRateLimitModule } from './presentation/rate-limit/identity-rate-limit.js';
 import { UserReadCache } from './presentation/shared/user-read.cache.js';
 
 /** Topology-independent presentation: the same classes in the monolith and the gateway. */
-const CONTROLLERS = [AuthController, UsersController];
+const CONTROLLERS = [AuthController, UsersController, StaffController];
 const PRESENTATION: Provider[] = [
   LocalStrategy,
   UserReadCache,

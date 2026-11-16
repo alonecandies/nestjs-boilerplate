@@ -133,3 +133,22 @@ export class GlobalRolesRemovedException extends BusinessRuleViolationException 
     });
   }
 }
+
+/**
+ * 403 — a staff switch-in token tried to switch tenant or to switch in again (switch out instead,
+ * then use your own login token).
+ */
+export class StaffTokenNotAllowedException extends PermissionDeniedException {
+  constructor() {
+    super('A staff switch-in token cannot switch tenants', {
+      code: IdentityErrorCode.STAFF_TOKEN_NOT_ALLOWED,
+    });
+  }
+}
+
+/** 403 — switch-in by a user whose `is_platform_staff` flag is not set (read fresh, never from the token). */
+export class NotPlatformStaffException extends PermissionDeniedException {
+  constructor() {
+    super('Platform staff only', { code: IdentityErrorCode.STAFF_ONLY });
+  }
+}

@@ -1,4 +1,4 @@
-import type { AuthTokens, User, UserPage } from '@domain/identity-contracts';
+import type { AuthTokens, StaffAccessToken, User, UserPage } from '@domain/identity-contracts';
 import { isEmpty } from 'lodash-es';
 
 /**
@@ -29,6 +29,17 @@ export function normalizeAuthTokens(tokens: Wire<AuthTokens>): AuthTokens {
     user: tokens.user ? normalizeUser(tokens.user) : undefined,
     tenantId: tokens.tenantId ?? '',
     tenantRoles: tokens.tenantRoles ?? [],
+  };
+}
+
+/** proto-loader leaves absent scalars undefined on the client side: fill the contract defaults. */
+export function normalizeStaffAccessToken(token: Partial<StaffAccessToken>): StaffAccessToken {
+  return {
+    accessToken: token.accessToken ?? '',
+    expiresIn: token.expiresIn ?? 0,
+    tokenType: token.tokenType ?? 'Bearer',
+    tenantId: token.tenantId ?? '',
+    auditEventId: token.auditEventId ?? '',
   };
 }
 

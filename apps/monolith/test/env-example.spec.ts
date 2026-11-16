@@ -3,7 +3,12 @@ import { join } from 'node:path';
 import { parseEnv } from 'node:util';
 import { stripeConfig } from '@domain/billing';
 import { filesConfig } from '@domain/files';
-import { identityRateLimitConfig, passwordConfig, refreshTokenConfig } from '@domain/identity';
+import {
+  identityRateLimitConfig,
+  passwordConfig,
+  refreshTokenConfig,
+  staffSwitchInConfig,
+} from '@domain/identity';
 import { notificationsRateLimitConfig } from '@domain/notifications';
 import { validateAllEnv } from '@platform/config';
 import { describe, expect, it } from 'vitest';
@@ -11,13 +16,14 @@ import { monolithConfig } from '../src/monolith.config.js';
 
 /**
  * The domain and app-local namespaces the monolith loads besides the platform ones: billing's
- * `stripe` (BillingCoreModule), identity's `password` and `refreshToken` (IdentityCoreModule),
+ * `stripe` (BillingCoreModule), identity's `password`, `refreshToken` and `staffSwitchIn` (IdentityCoreModule),
  * files' `files` (FilesModule) and its own `monolith` (main.ts).
  */
 const NAMESPACES = [
   stripeConfig,
   passwordConfig,
   refreshTokenConfig,
+  staffSwitchInConfig,
   filesConfig,
   monolithConfig,
   notificationsRateLimitConfig,

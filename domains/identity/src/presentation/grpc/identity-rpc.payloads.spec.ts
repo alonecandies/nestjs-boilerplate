@@ -4,6 +4,9 @@ import {
   getUserRequestSchema,
   listUsersRequestSchema,
   loginRequestSchema,
+  staffSwitchInRequestSchema,
+  staffSwitchOutRequestSchema,
+  switchTenantRequestSchema,
 } from './identity-rpc.payloads.js';
 
 describe('listUsersRequestSchema.search', () => {
@@ -67,5 +70,65 @@ describe('tenant scoping of the user RPCs', () => {
     expect(getUserRequestSchema.parse({ id, tenantId: '' }).tenantId).toBeUndefined();
     expect(getUserRequestSchema.parse({ id, tenantId: null }).tenantId).toBeUndefined();
     expect(getUserRequestSchema.safeParse({ id, tenantId: 'x' }).success).toBe(false);
+  });
+});
+
+describe('switchTenantRequestSchema', () => {
+  const valid = {
+    userId: '0190f3b2-0000-7000-8000-000000000001',
+    tenantId: '0190f3b2-0000-7000-8000-0000000000a2',
+    refreshToken: 'r',
+    accessTokenJti: 'j',
+    accessTokenExp: '1900000000',
+    client: null,
+  };
+  it('accepts a full request (client null → undefined)', () => {
+    expect(switchTenantRequestSchema.parse(valid).client).toBeUndefined();
+  });
+  it.each([
+    ['tenantId', 'x'],
+    ['userId', 'x'],
+    ['accessTokenExp', 'soon'],
+    ['refreshToken', ''],
+  ])('rejects a bad %s', (field, value) => {
+    expect(switchTenantRequestSchema.safeParse({ ...valid, [field]: value }).success).toBe(false);
+  });
+});
+
+describe('staffSwitchInRequestSchema', () => {
+  const valid = {
+    staffUserId: '0190f3b2-0000-7000-8000-000000000001',
+    tenantId: '0190f3b2-0000-7000-8000-0000000000a2',
+    reason: '  ticket #42  ',
+    client: null,
+  };
+  it('trims the reason and maps a null client to undefined', () => {
+    const parsed = staffSwitchInRequestSchema.parse(valid);
+    expect(parsed.reason).toBe('ticket #42');
+    expect(parsed.client).toBeUndefined();
+  });
+  it.each([
+    ['staffUserId', 'x'],
+    ['tenantId', 'x'],
+    ['reason', '   '],
+    ['reason', 'x'.repeat(IDENTITY_LIMITS.SWITCH_IN_REASON_MAX_LENGTH + 1)],
+  ])('rejects a bad %s', (field, value) => {
+    expect(staffSwitchInRequestSchema.safeParse({ ...valid, [field]: value }).success).toBe(false);
+  });
+});
+
+describe('staffSwitchOutRequestSchema', () => {
+  it('requires UUIDs and epoch seconds', () => {
+    const valid = {
+      staffUserId: '0190f3b2-0000-7000-8000-000000000001',
+      tenantId: '0190f3b2-0000-7000-8000-0000000000aa',
+      accessTokenJti: 'j',
+      accessTokenExp: '1900000000',
+    };
+    expect(staffSwitchOutRequestSchema.safeParse(valid).success).toBe(true);
+    expect(staffSwitchOutRequestSchema.safeParse({ ...valid, tenantId: 'x' }).success).toBe(false);
+    expect(
+      staffSwitchOutRequestSchema.safeParse({ ...valid, accessTokenExp: 'soon' }).success,
+    ).toBe(false);
   });
 });

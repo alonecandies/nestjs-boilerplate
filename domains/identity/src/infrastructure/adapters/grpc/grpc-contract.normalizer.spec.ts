@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { makeUser } from '../../../../test/fixtures.js';
 import {
   normalizeAuthTokens,
+  normalizeStaffAccessToken,
   normalizeUser,
   normalizeUserPage,
 } from './grpc-contract.normalizer.js';
@@ -41,6 +42,16 @@ describe('gRPC contract normalizers (proto-loader defaults: absent message → n
     ).toMatchObject({
       tenantId: '',
       tenantRoles: [],
+    });
+  });
+
+  it('fills the contract defaults of a staff token (absent scalars → empty, Bearer)', () => {
+    expect(normalizeStaffAccessToken({ accessToken: 'a', tenantId: 't' })).toEqual({
+      accessToken: 'a',
+      expiresIn: 0,
+      tokenType: 'Bearer',
+      tenantId: 't',
+      auditEventId: '',
     });
   });
 });
