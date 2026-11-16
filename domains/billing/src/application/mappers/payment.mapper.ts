@@ -11,6 +11,7 @@ export function toPaymentContract(payment: Payment): PaymentContract {
   const s = payment.toSnapshot();
   return {
     id: s.id,
+    tenantId: s.tenantId,
     userId: s.userId,
     status: s.status,
     amountTotal: String(s.amountTotal ?? 0),

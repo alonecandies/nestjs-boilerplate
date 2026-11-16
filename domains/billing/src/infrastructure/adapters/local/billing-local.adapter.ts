@@ -31,7 +31,12 @@ export class BillingLocalAdapter implements BillingPort {
 
   listPayments(input: ListPaymentsRequest): Promise<PaymentList> {
     return this.queryBus.execute(
-      new ListPaymentsQuery({ userId: input.userId, limit: input.limit, cursor: input.cursor }),
+      new ListPaymentsQuery({
+        tenantId: input.tenantId,
+        userId: input.userId,
+        limit: input.limit,
+        cursor: input.cursor,
+      }),
     );
   }
 }

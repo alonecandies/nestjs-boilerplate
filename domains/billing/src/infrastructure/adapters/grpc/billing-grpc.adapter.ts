@@ -35,6 +35,7 @@ const optionalDate = (value: Date | null | undefined): Date | undefined =>
 export function normalizePayment(payment: Payment): Payment {
   return {
     id: payment.id,
+    tenantId: payment.tenantId,
     userId: payment.userId,
     status: payment.status,
     amountTotal: payment.amountTotal || '0',

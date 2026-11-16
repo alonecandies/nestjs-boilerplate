@@ -23,6 +23,9 @@ message CreateCheckoutSessionRequest {
   optional string cancel_url = 6;
   // Forwarded as the Stripe idempotency key (defaults to `checkout-<paymentId>`).
   optional string idempotency_key = 7;
+  // The caller's active tenant (`req.user.tenantId`). The payment, its Idempotency-Key scope and the
+  // Stripe metadata belong to it.
+  string tenant_id = 8;
 }
 
 message CheckoutSession {
@@ -50,7 +53,7 @@ message HandleStripeWebhookResponse {
 message Payment {
   string id = 1;
   string user_id = 2;
-  // "pending" | "succeeded" | "failed" | "expired".
+  // "pending" | "succeeded" | "failed" | "expired" | "refunded" | "partially_refunded" | "disputed".
   string status = 3;
   // Minor currency units (e.g. cents). A decimal string in TypeScript (int64, forceLong=string).
   int64 amount_total = 4;
@@ -61,6 +64,7 @@ message Payment {
   optional string stripe_checkout_session_id = 8;
   google.protobuf.Timestamp created_at = 9;
   google.protobuf.Timestamp updated_at = 10;
+  string tenant_id = 11;
 }
 
 message ListPaymentsRequest {
@@ -69,6 +73,8 @@ message ListPaymentsRequest {
   int32 limit = 2;
   // Opaque keyset cursor: the `next_cursor` of the previous page. Absent = first page.
   optional string cursor = 3;
+  // Only this tenant's payments.
+  string tenant_id = 4;
 }
 
 message PaymentList {

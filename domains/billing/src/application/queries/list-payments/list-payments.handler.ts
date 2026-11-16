@@ -7,7 +7,7 @@ import { PaymentsRepository } from '../../repositories/payments.repository.js';
 import { ListPaymentsQuery } from './list-payments.query.js';
 
 /**
- * Keyset-paginated, index-backed listing: `WHERE user_id = $1 [AND id < $cursor] ORDER BY id DESC
+ * Keyset-paginated, index-backed listing: `WHERE tenant_id = $1 [AND user_id = $2] [AND id < $cursor] ORDER BY id DESC
  * LIMIT n + 1` (one query; the look-ahead row decides whether `nextCursor` is set).
  */
 @QueryHandler(ListPaymentsQuery)
@@ -22,6 +22,7 @@ export class ListPaymentsHandler implements IQueryHandler<ListPaymentsQuery> {
         ? clamp(requested, 1, BILLING_LIMITS.MAX_PAGE_SIZE)
         : BILLING_LIMITS.DEFAULT_PAGE_SIZE;
     const page = await this.payments.list({
+      tenantId: criteria.tenantId,
       userId: criteria.userId,
       limit,
       cursor: criteria.cursor,

@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { PLATFORM_TENANT_ID } from '@platform/common';
 import { MIGRATIONS_TABLE } from '@platform/database';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
@@ -42,5 +43,39 @@ describe('billingMigrations', () => {
     expect(baseline).toContain(
       'CREATE INDEX "stripe_events_processed_at_idx" ON "billing"."stripe_events"',
     );
+  });
+
+  describe('0001_tenant_columns (hand-edited)', () => {
+    const text = readFileSync(join(billingMigrations.folder, '0001_tenant_columns.sql'), 'utf8');
+
+    it('backfills rows that predate tenancy to the platform tenant, then drops the default', () => {
+      for (const table of ['payments', 'stripe_events']) {
+        expect(text).toContain(
+          `ALTER TABLE "billing"."${table}" ADD COLUMN "tenant_id" uuid DEFAULT '${PLATFORM_TENANT_ID}'::uuid NOT NULL;`,
+        );
+        expect(text).toContain(
+          `ALTER TABLE "billing"."${table}" ALTER COLUMN "tenant_id" DROP DEFAULT;`,
+        );
+      }
+    });
+
+    it('drops the old column-level primary keys before adding the tenant-leading ones', () => {
+      for (const table of ['payments', 'stripe_events']) {
+        const drop = text.indexOf(
+          `ALTER TABLE "billing"."${table}" DROP CONSTRAINT "${table}_pkey";`,
+        );
+        const add = text.indexOf(
+          `ADD CONSTRAINT "${table}_tenant_id_id_pk" PRIMARY KEY("tenant_id","id")`,
+        );
+        expect(drop).toBeGreaterThanOrEqual(0);
+        expect(add).toBeGreaterThan(drop);
+      }
+    });
+
+    it('adds the three ledger payment statuses (ledger design S-6, D5)', () => {
+      for (const value of ['refunded', 'partially_refunded', 'disputed']) {
+        expect(text).toContain(`ALTER TYPE "billing"."payment_status" ADD VALUE '${value}';`);
+      }
+    });
   });
 });

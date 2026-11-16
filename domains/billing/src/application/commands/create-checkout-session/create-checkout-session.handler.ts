@@ -18,7 +18,7 @@ import { CreateCheckoutSessionCommand } from './create-checkout-session.command.
  * The Stripe idempotency key of a payment's Checkout Session. It is derived from OUR payment id —
  * never the raw client `Idempotency-Key` — because Stripe keys are account-wide: two users sending
  * the same header value must not share a session. Replays of the same client key resolve to the
- * same payment (unique `(user_id, idempotency_key)`), hence to the same Stripe key and session.
+ * same payment (unique `(tenant_id, user_id, idempotency_key)`), hence to the same Stripe key and session.
  */
 export const checkoutIdempotencyKey = (paymentId: string): string => `checkout-${paymentId}`;
 
@@ -46,6 +46,7 @@ export class CreateCheckoutSessionHandler implements ICommandHandler<CreateCheck
     const { payment, created } = await this.payments.create(
       Payment.initiate({
         id: generateId(),
+        tenantId: request.tenantId,
         userId: request.userId,
         priceId: request.priceId,
         quantity: request.quantity,
@@ -100,7 +101,7 @@ export class CreateCheckoutSessionHandler implements ICommandHandler<CreateCheck
           successUrl: request.successUrl ?? this.config.successUrl,
           cancelUrl: request.cancelUrl ?? this.config.cancelUrl,
           clientReferenceId: payment.id,
-          metadata: { paymentId: payment.id, userId: payment.userId },
+          metadata: { paymentId: payment.id, userId: payment.userId, tenantId: payment.tenantId },
         },
         checkoutIdempotencyKey(payment.id),
       );

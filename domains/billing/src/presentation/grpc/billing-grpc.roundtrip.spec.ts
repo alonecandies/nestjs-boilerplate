@@ -5,6 +5,7 @@ import { NestFactory } from '@nestjs/core';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { RbacModule } from '@platform/auth';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { DomainValidationException, generateId } from '@platform/common';
 import { AppConfigModule, grpcConfig } from '@platform/config';
 import { createGrpcServerStrategy } from '@platform/transport';
@@ -116,7 +117,7 @@ describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () =
     });
     queryBus.execute.mockResolvedValue(local);
 
-    const remote = await port.listPayments({ userId, limit: 5 });
+    const remote = await port.listPayments({ tenantId: TEST_TENANT_ID, userId, limit: 5 });
 
     expect(remote).toEqual(local);
     const [pending, paid] = remote.items;
@@ -124,13 +125,15 @@ describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () =
     expect(pending?.amountTotal).toBe('0');
     expect(paid).toMatchObject({ amountTotal: '9007199254', stripeCheckoutSessionId: 'cs_test_1' });
     expect(paid?.createdAt).toBeInstanceOf(Date);
-    expect(queryBus.execute).toHaveBeenCalledWith(new ListPaymentsQuery({ userId, limit: 5 }));
+    expect(queryBus.execute).toHaveBeenCalledWith(
+      new ListPaymentsQuery({ tenantId: TEST_TENANT_ID, userId, limit: 5 }),
+    );
   });
 
   it('ListPayments without user id (admin "all") arrives as undefined, not null', async () => {
     queryBus.execute.mockResolvedValue({ items: [] });
 
-    const list = await port.listPayments({ limit: 0 });
+    const list = await port.listPayments({ tenantId: TEST_TENANT_ID, limit: 0 });
     expect(list).toEqual({ items: [] });
     // An absent next_cursor must not come back as null/"" (the port omits it).
     expect(list).not.toHaveProperty('nextCursor');
@@ -146,12 +149,19 @@ describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () =
     const userId = generateId();
     queryBus.execute.mockResolvedValue({ items: [], nextCursor: 'cursor-2' });
 
-    await expect(port.listPayments({ userId, limit: 2, cursor: 'cursor-1' })).resolves.toEqual({
+    await expect(
+      port.listPayments({ tenantId: TEST_TENANT_ID, userId, limit: 2, cursor: 'cursor-1' }),
+    ).resolves.toEqual({
       items: [],
       nextCursor: 'cursor-2',
     });
     const [query] = queryBus.execute.mock.calls[0] as [ListPaymentsQuery];
-    expect(query.criteria).toEqual({ userId, limit: 2, cursor: 'cursor-1' });
+    expect(query.criteria).toEqual({
+      tenantId: TEST_TENANT_ID,
+      userId,
+      limit: 2,
+      cursor: 'cursor-1',
+    });
   });
 
   it('CreateCheckoutSession: absent optional fields reach the command as undefined', async () => {
@@ -162,6 +172,7 @@ describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () =
     };
     commandBus.execute.mockResolvedValue(session);
     const request = {
+      tenantId: TEST_TENANT_ID,
       userId: generateId(),
       customerEmail: 'ada@example.com',
       priceId: 'price_1',
@@ -200,7 +211,7 @@ describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () =
   it('domain errors keep their status and code across the hop', async () => {
     const paymentId = generateId();
     queryBus.execute.mockRejectedValueOnce(new PaymentNotFoundException(paymentId));
-    await expect(port.listPayments({ limit: 1 })).rejects.toMatchObject({
+    await expect(port.listPayments({ tenantId: TEST_TENANT_ID, limit: 1 })).rejects.toMatchObject({
       httpStatus: 404,
       code: 'PAYMENT_NOT_FOUND',
     });
@@ -208,6 +219,7 @@ describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () =
     commandBus.execute.mockRejectedValueOnce(new IdempotencyKeyReusedException());
     await expect(
       port.createCheckoutSession({
+        tenantId: TEST_TENANT_ID,
         userId: generateId(),
         customerEmail: 'ada@example.com',
         priceId: 'price_1',
@@ -219,7 +231,13 @@ describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () =
 
   it('an invalid payload is rejected by the zod pipe (INVALID_ARGUMENT) before the bus', async () => {
     const error = await port
-      .createCheckoutSession({ userId: generateId(), customerEmail: 'x', priceId: '', quantity: 0 })
+      .createCheckoutSession({
+        tenantId: TEST_TENANT_ID,
+        userId: generateId(),
+        customerEmail: 'x',
+        priceId: '',
+        quantity: 0,
+      })
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(DomainValidationException);
     expect(commandBus.execute).not.toHaveBeenCalled();

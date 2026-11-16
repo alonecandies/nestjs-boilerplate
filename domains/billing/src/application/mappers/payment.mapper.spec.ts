@@ -15,6 +15,7 @@ describe('payment mapper (aggregate → billing.v1.Payment)', () => {
 
     expect(toPaymentContract(payment)).toEqual({
       id: s.id,
+      tenantId: s.tenantId,
       userId: s.userId,
       status: 'succeeded',
       amountTotal: '12345',

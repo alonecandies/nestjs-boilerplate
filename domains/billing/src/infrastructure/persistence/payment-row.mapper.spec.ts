@@ -12,6 +12,7 @@ describe('payment row mapper', () => {
       stripeCheckoutSessionId: 'cs_1',
       stripePaymentIntentId: 'pi_1',
       idempotencyKey: 'key-12345',
+      requestHash: 'b'.repeat(64),
       paidAt: new Date('2026-09-03T00:00:00.000Z'),
       version: 3,
     });
@@ -25,6 +26,7 @@ describe('payment row mapper', () => {
       stripeCheckoutSessionId: row.stripeCheckoutSessionId ?? null,
       stripePaymentIntentId: row.stripePaymentIntentId ?? null,
       idempotencyKey: row.idempotencyKey ?? null,
+      requestHash: row.requestHash ?? null,
       paidAt: row.paidAt ?? null,
       version: row.version ?? 0,
       createdAt: row.createdAt ?? new Date(0),

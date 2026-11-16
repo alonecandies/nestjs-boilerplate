@@ -1,5 +1,5 @@
 /** Tenant id of platform-level rows (payouts, unattributed fees). B2 never issues the nil UUID. */
-export const PLATFORM_TENANT_ID = '00000000-0000-0000-0000-000000000000';
+export { PLATFORM_TENANT_ID } from '@platform/common';
 /** uuidv5 namespace of every ledger id. A code constant, never env: changing it re-keys the ledger. */
 export const LEDGER_NAMESPACE = '9402cabc-4fa0-4891-9ed1-389e5828479d';
 

@@ -227,9 +227,9 @@ by `CreateCheckoutSessionHandler`, not by the adapter.
 ## Flows
 
 **Checkout** (`CreateCheckoutSessionHandler`): insert a `pending` payment (or find the one this user's
-`Idempotency-Key` already created — unique `(user_id, idempotency_key)`; a different price/quantity is 409) →
+`Idempotency-Key` already created in this tenant — unique `(tenant_id, user_id, idempotency_key)`; a different price/quantity is 409) →
 `StripeService.createCheckoutSession` with Stripe idempotency key `checkout-<paymentId>`,
-`client_reference_id = paymentId` and `metadata { paymentId, userId }` → bind the session id, amount and currency
+`client_reference_id = paymentId` and `metadata { paymentId, userId, tenantId }` (signed by Stripe, mirrored onto the PaymentIntent; the webhook resolves the tenant from it) → bind the session id, amount and currency
 (optimistic lock on `version`). No transaction spans the Stripe call; every step is safe to repeat. A Stripe
 failure marks the payment `failed`; a retry with the same key reopens it and gets the same session.
 
@@ -237,8 +237,8 @@ failure marks the payment `failed`; a retry with the same key reopens it and get
 
 1. `StripeService.constructWebhookEvent(rawBody, signature)`: missing, forged or stale (> 5 min) signatures are a
    422 before any I/O.
-2. `@Transactional()`: `INSERT INTO billing.stripe_events … ON CONFLICT (id) DO NOTHING` — a duplicate delivery returns
-   `duplicate: true` — then load the payment `FOR UPDATE` (by `client_reference_id`, else session id) and apply:
+2. `@Transactional()`: `INSERT INTO billing.stripe_events … ON CONFLICT (tenant_id, id) DO NOTHING` (tenant and user from the signed metadata via `stripeOwnerOf`; events without any, such as payouts, use the nil `PLATFORM_TENANT_ID` and a NULL user) — a duplicate delivery returns
+   `duplicate: true` — then load the payment `FOR UPDATE` inside that tenant (by `client_reference_id`, else session id; an event naming another tenant finds nothing and is acknowledged) and apply:
    - `checkout.session.completed` / `async_payment_succeeded` (paid) → `succeeded` + `PaymentSucceededEvent`
      (a completed-but-`unpaid` session, i.e. a delayed payment method, stays `pending`);
    - `checkout.session.async_payment_failed` → `failed`; `checkout.session.expired` → `expired`;
@@ -256,8 +256,8 @@ Infrastructure errors propagate, the transaction rolls back (forgetting the even
 processed again. Old receipts are purged: see **Retention** below.
 
 **Pagination.** `list` is keyset-paginated on the uuidv7 id (`@platform/database` `keysetFetchLimit`/`keysetPage`):
-`WHERE user_id = $1 [AND id < $cursor] ORDER BY id DESC LIMIT n + 1` on `payments_user_id_id_idx` (the admin
-listing uses the primary key). Cursors are opaque; a forged one is a 422 `INVALID_CURSOR`, never SQL.
+`WHERE tenant_id = $1 [AND user_id = $2] [AND id < $cursor] ORDER BY id DESC LIMIT n + 1` on
+`payments_tenant_id_user_id_id_idx` (the whole-tenant listing uses the `(tenant_id, id)` primary key). Cursors are opaque; a forged one is a 422 `INVALID_CURSOR`, never SQL.
 
 **Retention.** `PurgeStripeEventsCron` (hourly, `@WithLock('billing:purge-stripe-events')` so one replica runs
 it) deletes `stripe_events` older than `STRIPE_EVENTS_RETENTION_DAYS` (30; Stripe redelivers for ≤ 3 days) in
@@ -271,18 +271,22 @@ dedupe replays either way.
 
 ## Data model (`billingSchema`, `infrastructure/persistence/billing.schema.ts`)
 
-| Table           | Columns                                                                                                                                                                                                                                                                                                                                                       | Indexes                                                                                                 |
-| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| `payments`      | `id uuid pk` (app uuidv7, DB default `uuidv7()`), `user_id uuid` (no FK: service boundary), `price_id`, `quantity int`, `amount_total int8` (minor units, NULL until priced), `currency`, `status payment_status`, `stripe_checkout_session_id` (unique), `stripe_payment_intent_id`, `idempotency_key`, `paid_at`, `version int`, `created_at`, `updated_at` | `(user_id, id)` for "my payments, newest first"; unique `(user_id, idempotency_key)`; unique session id |
-| `stripe_events` | `id text pk` (Stripe `evt_…`), `type`, `processed_at`                                                                                                                                                                                                                                                                                                         | PK = the idempotency key; `stripe_events_processed_at_idx` for the retention purge                      |
+| Table           | Columns                                                                                                                                                                                                                                                                                                                                                                                                                                        | Indexes                                                                                                                                                                                                                                                                                                                                                     |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `payments`      | `tenant_id uuid` (no FK: service boundary), `id uuid` (app uuidv7, DB default `uuidv7()`), `user_id uuid` (no FK), `price_id`, `quantity int`, `amount_total int8` (minor units, NULL until priced), `currency`, `status payment_status`, `stripe_checkout_session_id`, `stripe_payment_intent_id`, `idempotency_key`, `request_hash` (sha256 of the normalized request, NULL before B2), `paid_at`, `version int`, `created_at`, `updated_at` | PK `payments_tenant_id_id_pk (tenant_id, id)`; `payments_tenant_id_user_id_id_idx (tenant_id, user_id, id)` for "my payments in this tenant, newest first"; unique `payments_tenant_id_user_id_idempotency_key_uq (tenant_id, user_id, idempotency_key)`; unique `payments_tenant_id_stripe_checkout_session_id_uq (tenant_id, stripe_checkout_session_id)` |
+| `stripe_events` | `tenant_id uuid`, `id text` (Stripe `evt_…`), `user_id uuid` (NULL for platform events), `type`, `processed_at`                                                                                                                                                                                                                                                                                                                                | PK `stripe_events_tenant_id_id_pk (tenant_id, id)` = the idempotency key; `stripe_events_processed_at_idx` for the retention purge                                                                                                                                                                                                                          |
 
-`payment_status` enum: `pending`, `succeeded`, `failed`, `expired`. Constraint names are explicit snake_case
-(`payments_stripe_checkout_session_id_unique`). The tables and the enum live in the `billing` Postgres schema
+Both tables are Citus-ready (`// citus: tenant`: the primary key and every unique index start with `tenant_id`, no
+FK to another domain) but not distributed yet (SH-6). Rows created before B2 belong to the platform tenant (nil
+UUID): no tenant can list them.
+
+`payment_status` enum: `pending`, `succeeded`, `failed`, `expired`, `refunded`, `partially_refunded`, `disputed`.
+Constraint and index names are explicit snake_case (`payments_tenant_id_id_pk`). The tables and the enum live in the `billing` Postgres schema
 (`billingPgSchema`); raw SQL qualifies them (`billing.payments`). Billing owns its migration history:
-`drizzle.config.ts` generates `src/infrastructure/persistence/migrations` (`0000_init.sql` holds every table and
-index, `stripe_events_processed_at_idx` included), bookkeeping in `billing.__drizzle_migrations`, and
+`drizzle.config.ts` generates `src/infrastructure/persistence/migrations` (`0000_init.sql` holds the original tables and
+indexes; `0001_tenant_columns.sql` adds the tenant columns, the tenant-leading keys and the three ledger statuses), bookkeeping in `billing.__drizzle_migrations`, and
 `billingMigrations` applies it after the platform set (the schema file imports only `drizzle-orm` and a
-dependency-free enum file, so drizzle-kit can load it). Reads (`findById`, `list`) use prepared statements on the pool; writes and row locks go
+dependency-free enum file, so drizzle-kit can load it). Every query carries `tenant_id` (`findById(tenantId, id)`, `findForCheckoutSession({ tenantId, … })`, `list({ tenantId, … })`). Reads (`findById`, `list`) use prepared statements on the pool; writes and row locks go
 through `TransactionHost` and join the active transaction.
 
 ## Configuration
@@ -326,6 +330,9 @@ applies the platform set and billing's own history (schema `billing`), then chec
 tables and enum in `billing` and none of identity's, nothing in `public`, one bookkeeping row per journal
 entry in each set's own table, every index of the former migrations, the DB defaults (uuidv7 id, `pending`
 status) and a second boot that applies nothing.
+`infrastructure/persistence/billing.repositories.int-spec.ts` runs the repositories on Citus 14.2 (`startBillingDatabase`
+in `test/billing-database.ts`, local execution off): tenant isolation of list, find and lock, Idempotency-Keys per
+(tenant, user), platform events with a NULL user, and migration `0001` applied to a database that already has rows.
 
 ## Ledger (immudb)
 

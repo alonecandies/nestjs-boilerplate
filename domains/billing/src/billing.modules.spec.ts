@@ -2,6 +2,7 @@ import { Global, type INestApplicationContext, Module } from '@nestjs/common';
 import { CqrsModule, QueryBus } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
 import { RbacModule } from '@platform/auth';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { AppConfigModule } from '@platform/config';
 import { DRIZZLE, TransactionHost } from '@platform/database';
 import { KafkaProducer } from '@platform/transport';
@@ -67,12 +68,12 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
     // The Stripe adapter comes with the core, not from an app-level module.
     expect(context.get(StripeService, { strict: false })).toBeInstanceOf(StripeService);
     await expect(
-      context.get(QueryBus).execute(new ListPaymentsQuery({ limit: 3 })),
+      context.get(QueryBus).execute(new ListPaymentsQuery({ tenantId: TEST_TENANT_ID, limit: 3 })),
     ).resolves.toEqual({
       items: [],
     });
     // LIMIT = page size + 1 look-ahead row (keyset pagination).
-    expect(infra.queries.at(-1)?.params).toEqual([4]);
+    expect(infra.queries.at(-1)?.params).toEqual([TEST_TENANT_ID, 4]);
   });
 
   it('monolith: BillingApiModule.forLocal() binds BillingPort to the CQRS buses', async () => {
@@ -91,8 +92,10 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
 
     const port = context.get(BillingPort, { strict: false });
     expect(port).toBeInstanceOf(BillingLocalAdapter);
-    await expect(port.listPayments({ limit: 4 })).resolves.toEqual({ items: [] });
-    expect(infra.queries.at(-1)?.params).toEqual([5]);
+    await expect(port.listPayments({ tenantId: TEST_TENANT_ID, limit: 4 })).resolves.toEqual({
+      items: [],
+    });
+    expect(infra.queries.at(-1)?.params).toEqual([TEST_TENANT_ID, 5]);
   });
 
   it('gateway: BillingApiModule.forRemote() binds BillingPort to gRPC and needs no core', async () => {

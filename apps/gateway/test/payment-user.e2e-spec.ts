@@ -11,6 +11,7 @@ await vi.hoisted(async () => {
 });
 
 import { GraphQLSchemaHost } from '@nestjs/graphql';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { generateId } from '@platform/common';
 import { printSchema } from 'graphql';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -51,6 +52,12 @@ const PAYMENTS_QUERY = /* GraphQL */ `
   }
 `;
 
+/** The `tid` (active tenant) claim of an access token: what the gateway forwards as `tenantId`. */
+const tenantIdOf = (accessToken: string): string => {
+  const payload = JSON.parse(Buffer.from(accessToken.split('.')[1] ?? '', 'base64url').toString());
+  return (payload as { tid: string }).tid;
+};
+
 /** billing-service, stubbed at its port: each test sets the page once the owners exist. */
 const billing = {
   createCheckoutSession: vi.fn(),
@@ -61,6 +68,7 @@ const billing = {
 /** A `billing.v1.Payment` as `BillingPort.listPayments` returns it. */
 const payment = (userId: string) => ({
   id: generateId(),
+  tenantId: TEST_TENANT_ID,
   userId,
   status: 'succeeded',
   amountTotal: '2500',
@@ -125,7 +133,11 @@ describe('Payment.user in the gateway (app-level resolver over the remote ports)
     const body = await queryPayments();
 
     expect(body.errors).toBeUndefined();
-    expect(billing.listPayments).toHaveBeenCalledWith({ userId: grace.user.id, limit: 10 });
+    expect(billing.listPayments).toHaveBeenCalledWith({
+      tenantId: tenantIdOf(callerToken),
+      userId: grace.user.id,
+      limit: 10,
+    });
     const items = body.data?.payments.items ?? [];
     expect(items.map((item) => item.user?.email)).toEqual([
       'grace@example.com',

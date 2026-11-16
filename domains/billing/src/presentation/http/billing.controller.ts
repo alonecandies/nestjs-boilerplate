@@ -89,6 +89,7 @@ export class BillingController {
     @CurrentUser() user: AuthUser,
   ): Promise<CheckoutSessionResponse> {
     return this.billing.createCheckoutSession({
+      tenantId: user.tenantId,
       userId: user.id,
       customerEmail: user.email,
       priceId: body.priceId,
@@ -142,6 +143,7 @@ export class BillingController {
     @CurrentUser() user: AuthUser,
   ): Promise<PaymentListResponse> {
     const list = await this.billing.listPayments({
+      tenantId: user.tenantId,
       userId: resolvePaymentsOwner(user, query.all),
       limit: query.limit,
       cursor: query.cursor,

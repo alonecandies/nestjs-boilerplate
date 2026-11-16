@@ -1,4 +1,5 @@
 import type { CommandBus, QueryBus } from '@nestjs/cqrs';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { generateId } from '@platform/common';
 import { createMock } from '@platform/testing';
 import { describe, expect, it } from 'vitest';
@@ -19,6 +20,7 @@ describe('BillingLocalAdapter (port → CQRS buses)', () => {
     const session = { id: 'cs_1', url: 'https://checkout.stripe.com/x', paymentId: generateId() };
     commandBus.execute.mockResolvedValueOnce(session);
     const request = {
+      tenantId: TEST_TENANT_ID,
       userId: generateId(),
       customerEmail: 'a@b.co',
       priceId: 'price_1',
@@ -47,9 +49,11 @@ describe('BillingLocalAdapter (port → CQRS buses)', () => {
     queryBus.execute.mockResolvedValueOnce({ items: [] });
     const userId = generateId();
 
-    await expect(adapter.listPayments({ userId, limit: 7 })).resolves.toEqual({ items: [] });
+    await expect(
+      adapter.listPayments({ tenantId: TEST_TENANT_ID, userId, limit: 7 }),
+    ).resolves.toEqual({ items: [] });
     const query = queryBus.execute.mock.calls[0]?.[0] as ListPaymentsQuery;
     expect(query).toBeInstanceOf(ListPaymentsQuery);
-    expect(query.criteria).toEqual({ userId, limit: 7 });
+    expect(query.criteria).toEqual({ tenantId: TEST_TENANT_ID, userId, limit: 7 });
   });
 });

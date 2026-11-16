@@ -1,4 +1,4 @@
-import { MAX_CURSOR_LENGTH } from '@platform/common';
+import { isPlatformTenantId, MAX_CURSOR_LENGTH } from '@platform/common';
 import { z } from 'zod';
 import { BILLING_LIMITS, IDEMPOTENCY_KEY_PATTERN } from '../../billing.constants.js';
 
@@ -10,7 +10,11 @@ import { BILLING_LIMITS, IDEMPOTENCY_KEY_PATTERN } from '../../billing.constants
 
 const absentAsUndefined = <T>(value: T | null | undefined): T | undefined => value ?? undefined;
 
+/** A tenant id: a UUID that is never the platform tenant (nil UUID). */
+const tenantId = z.uuid().refine((id) => !isPlatformTenantId(id), 'Must be the UUID of a tenant');
+
 export const createCheckoutSessionRpcSchema = z.object({
+  tenantId,
   userId: z.uuid(),
   customerEmail: z.email(),
   priceId: z.string().trim().min(1).max(BILLING_LIMITS.PRICE_ID_MAX_LENGTH),
@@ -40,6 +44,7 @@ export const handleStripeWebhookRpcSchema = z.object({
 });
 
 export const listPaymentsRpcSchema = z.object({
+  tenantId,
   userId: z.uuid().nullish().transform(absentAsUndefined),
   // 0 = "not set" in proto3; the query handler applies the default page size.
   limit: z.number().int().min(0).max(BILLING_LIMITS.MAX_PAGE_SIZE),

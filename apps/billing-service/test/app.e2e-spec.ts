@@ -39,6 +39,7 @@ import { startServiceTestApp } from './support/service-test-app.js';
  */
 
 const WEBHOOK_SECRET = 'whsec_billing_service_e2e';
+const TENANT_ID = '01920000-0000-7000-8000-0000000000e1';
 const USER_ID = '01920000-0000-7000-8000-0000000000c1';
 const BROKEN_DB_USER_ID = '01920000-0000-7000-8000-0000000000c2';
 const PAID_ID = '01920000-0000-7000-8000-0000000000d2';
@@ -55,6 +56,7 @@ function paymentRow(values: Record<string, unknown>): FakeRow {
 
 const PAYMENT_ROWS = [
   paymentRow({
+    tenantId: TENANT_ID,
     id: PAID_ID,
     userId: USER_ID,
     priceId: 'price_pro',
@@ -71,6 +73,7 @@ const PAYMENT_ROWS = [
   }),
   // Not priced by Stripe yet: no amount, currency or session.
   paymentRow({
+    tenantId: TENANT_ID,
     id: PENDING_ID,
     userId: USER_ID,
     priceId: 'price_basic',
@@ -86,16 +89,21 @@ const processedEvents = new Set<string>();
 const postgres = createFakePostgres(billingSchema, (sql, params) => {
   if (sql === 'select 1') return [{ '?column?': 1 }];
   if (sql.startsWith('insert into "billing"."stripe_events"')) {
-    const [eventId] = params as [string];
-    if (processedEvents.has(eventId)) return []; // ON CONFLICT DO NOTHING
-    processedEvents.add(eventId);
+    const [tenantId, eventId] = params as [string, string];
+    const key = `${tenantId}:${eventId}`;
+    if (processedEvents.has(key)) return []; // ON CONFLICT DO NOTHING
+    processedEvents.add(key);
     return [{ id: eventId }];
   }
-  if (sql.includes('from "billing"."payments" where "billing"."payments"."user_id"')) {
-    if (params[0] === BROKEN_DB_USER_ID) {
+  if (
+    sql.includes(
+      'from "billing"."payments" where ("billing"."payments"."tenant_id" = $1 and "billing"."payments"."user_id" = $2) order by',
+    )
+  ) {
+    if (params[1] === BROKEN_DB_USER_ID) {
       throw new Error('connection terminated unexpectedly (db 10.0.0.12:5432)');
     }
-    return params[0] === USER_ID ? PAYMENT_ROWS : [];
+    return params[0] === TENANT_ID && params[1] === USER_ID ? PAYMENT_ROWS : [];
   }
   return [];
 });
@@ -221,13 +229,14 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
 
     it('ListPayments runs the real query handler + repository; int64 → string, Timestamp → Date', async () => {
       const list: PaymentList = await call(
-        billing.listPayments({ userId: USER_ID, limit: 5 }),
+        billing.listPayments({ tenantId: TENANT_ID, userId: USER_ID, limit: 5 }),
         'BillingService.ListPayments',
       );
 
       const [paid, pending] = list.items;
       expect(paid).toMatchObject({
         id: PAID_ID,
+        tenantId: TENANT_ID,
         userId: USER_ID,
         status: 'succeeded',
         amountTotal: '9007199254',
@@ -241,38 +250,43 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
       expect(paid?.createdAt).toBeInstanceOf(Date);
       expect(pending).toMatchObject({ id: PENDING_ID, status: 'pending', amountTotal: '0' });
       // LIMIT = page size + 1 look-ahead row; both rows fit, so this is the last page.
-      expect(postgres.executed.at(-1)).toMatchObject({ params: [USER_ID, 6] });
+      expect(postgres.executed.at(-1)).toMatchObject({ params: [TENANT_ID, USER_ID, 6] });
       expect(list.nextCursor).toBeUndefined();
     });
 
     it('ListPayments pages with a keyset cursor (next_cursor out, cursor in → id < $cursor)', async () => {
       const first: PaymentList = await call(
-        billing.listPayments({ userId: USER_ID, limit: 1 }),
+        billing.listPayments({ tenantId: TENANT_ID, userId: USER_ID, limit: 1 }),
         'BillingService.ListPayments',
       );
       expect(first.items.map((p) => p.id)).toEqual([PAID_ID]);
       expect(first.nextCursor).toEqual(expect.any(String));
 
       const second: PaymentList = await call(
-        billing.listPayments({ userId: USER_ID, limit: 1, cursor: first.nextCursor }),
+        billing.listPayments({
+          tenantId: TENANT_ID,
+          userId: USER_ID,
+          limit: 1,
+          cursor: first.nextCursor,
+        }),
         'BillingService.ListPayments',
       );
       // The fake answers only the first-page statement: the resumed query is a different one.
       expect(second.items).toEqual([]);
       const resumed = postgres.executed.at(-1);
-      expect(resumed?.sql).toContain('"billing"."payments"."id" < $2');
-      expect(resumed?.params).toEqual([USER_ID, PAID_ID, 2]);
+      expect(resumed?.sql).toContain('"billing"."payments"."id" < $3');
+      expect(resumed?.params).toEqual([TENANT_ID, USER_ID, PAID_ID, 2]);
     });
 
     it('ListPayments with a malformed user id → INVALID_ARGUMENT before any SQL', async () => {
       const before = postgres.executed.length;
-      const raw = await lastValueFrom(billing.listPayments({ userId: 'nope', limit: 5 })).catch(
-        (e: unknown) => e,
-      );
+      const raw = await lastValueFrom(
+        billing.listPayments({ tenantId: TENANT_ID, userId: 'nope', limit: 5 }),
+      ).catch((e: unknown) => e);
       expect(raw).toMatchObject({ code: status.INVALID_ARGUMENT });
 
       const error = await call(
-        billing.listPayments({ userId: 'nope', limit: 5 }),
+        billing.listPayments({ tenantId: TENANT_ID, userId: 'nope', limit: 5 }),
         'BillingService.ListPayments',
       ).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(DomainValidationException);
@@ -283,7 +297,7 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
     });
 
     it('a database failure → INTERNAL without leaking internals; the caller sees a 502', async () => {
-      const request = { userId: BROKEN_DB_USER_ID, limit: 5 };
+      const request = { tenantId: TENANT_ID, userId: BROKEN_DB_USER_ID, limit: 5 };
       const raw = await lastValueFrom(billing.listPayments(request)).catch((e: unknown) => e);
       expect(raw).toMatchObject({ code: status.INTERNAL });
       expect((raw as ServiceError).details).not.toContain('10.0.0.12');

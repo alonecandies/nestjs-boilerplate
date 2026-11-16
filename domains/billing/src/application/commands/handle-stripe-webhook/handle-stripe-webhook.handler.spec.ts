@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { EventPublisher, type IEvent } from '@nestjs/cqrs';
-import { DomainValidationException } from '@platform/common';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
+import { DomainValidationException, generateId, PLATFORM_TENANT_ID } from '@platform/common';
 import { beforeAll, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import {
   createTestStripeService,
@@ -32,6 +33,13 @@ describe('HandleStripeWebhookHandler', () => {
   let amountMismatch: { inc: Mock<() => void> };
   let apiVersionMismatch: { inc: Mock<() => void> };
 
+  /** The metadata checkout signs into the session (B2-26): what the webhook resolves the tenant from. */
+  const signedMetadata = () => ({
+    paymentId: payment.id,
+    userId: payment.userId,
+    tenantId: TEST_TENANT_ID,
+  });
+
   const deliver = (webhook: SignedWebhook) =>
     handler.execute(new HandleStripeWebhookCommand(webhook.payload, webhook.signature));
 
@@ -47,6 +55,7 @@ describe('HandleStripeWebhookHandler', () => {
           amount_total: 2_500,
           currency: 'usd',
           status: 'complete',
+          metadata: signedMetadata(),
         }),
         ...overrides,
       },
@@ -107,7 +116,9 @@ describe('HandleStripeWebhookHandler', () => {
       paidAt: new Date(1_790_000_000 * 1_000),
       version: 1,
     });
-    expect(store.state.events.get('evt_completed_1')).toEqual({
+    expect(store.state.events.get(`${TEST_TENANT_ID}:evt_completed_1`)).toEqual({
+      tenantId: TEST_TENANT_ID,
+      userId: payment.userId,
       id: 'evt_completed_1',
       type: 'checkout.session.completed',
     });
@@ -146,7 +157,7 @@ describe('HandleStripeWebhookHandler', () => {
     );
 
     expect(response).toMatchObject({ received: true, duplicate: false });
-    expect(store.state.events.has('evt_no_currency_2')).toBe(true);
+    expect(store.state.events.has(`${TEST_TENANT_ID}:evt_no_currency_2`)).toBe(true);
     expect(store.payment(unpriced.id)).toMatchObject({
       status: PaymentStatus.Pending,
       version: 0,
@@ -193,6 +204,7 @@ describe('HandleStripeWebhookHandler', () => {
           id: 'cs_paid_1',
           client_reference_id: payment.id,
           payment_status: 'paid',
+          metadata: signedMetadata(),
         }),
       ),
     );
@@ -204,7 +216,11 @@ describe('HandleStripeWebhookHandler', () => {
     await deliver(
       signedEvent(
         'checkout.session.async_payment_failed',
-        makeCheckoutSession({ id: 'cs_paid_1', client_reference_id: payment.id }),
+        makeCheckoutSession({
+          id: 'cs_paid_1',
+          client_reference_id: payment.id,
+          metadata: signedMetadata(),
+        }),
       ),
     );
     expect(store.payment(payment.id)?.status).toBe(PaymentStatus.Failed);
@@ -215,7 +231,7 @@ describe('HandleStripeWebhookHandler', () => {
     const response = await deliver(
       signedEvent(
         'checkout.session.expired',
-        makeCheckoutSession({ id: 'cs_paid_1', status: 'expired' }),
+        makeCheckoutSession({ id: 'cs_paid_1', status: 'expired', metadata: signedMetadata() }),
       ),
     );
 
@@ -235,13 +251,19 @@ describe('HandleStripeWebhookHandler', () => {
       eventType: 'customer.created',
       duplicate: false,
     });
-    expect(store.state.events.has('evt_other')).toBe(true);
+    expect(store.state.events.has(`${PLATFORM_TENANT_ID}:evt_other`)).toBe(true);
     expect(store.payment(payment.id)?.version).toBe(0);
   });
 
   it('acknowledges events for unknown payments and impossible transitions', async () => {
     await expect(
-      deliver(completed({ id: 'cs_unknown', client_reference_id: null })),
+      deliver(
+        completed({
+          id: 'cs_unknown',
+          client_reference_id: null,
+          metadata: { userId: payment.userId, tenantId: TEST_TENANT_ID },
+        }),
+      ),
     ).resolves.toMatchObject({ received: true });
 
     await deliver(completed({}, 'evt_first'));
@@ -282,7 +304,7 @@ describe('HandleStripeWebhookHandler', () => {
 
     await expect(deliver(webhook)).rejects.toThrow('connection reset');
     expect(tx.rolledBack).toBe(1);
-    expect(store.state.events.has('evt_retry')).toBe(false);
+    expect(store.state.events.has(`${TEST_TENANT_ID}:evt_retry`)).toBe(false);
     expect(published).toEqual([]);
 
     saveSpy.mockRestore();
@@ -316,11 +338,50 @@ describe('HandleStripeWebhookHandler', () => {
           id: 'cs_paid_1',
           client_reference_id: payment.id,
           status: 'expired',
+          metadata: signedMetadata(),
         }),
         { id: 'evt_old_api_1', apiVersion: '2020-08-27' },
       ),
     );
     expect(apiVersionMismatch.inc).toHaveBeenCalledTimes(1);
     expect(store.payment(payment.id)).toMatchObject({ status: PaymentStatus.Expired });
+  });
+
+  describe('tenancy (signed metadata)', () => {
+    const owned = (tenantId: string, id?: string) =>
+      completed({ metadata: { paymentId: payment.id, userId: payment.userId, tenantId } }, id);
+
+    it("records the event under the metadata's tenant and user and completes that tenant's payment", async () => {
+      await deliver(owned(TEST_TENANT_ID, 'evt_owned_1'));
+
+      expect(store.state.events.get(`${TEST_TENANT_ID}:evt_owned_1`)).toEqual({
+        tenantId: TEST_TENANT_ID,
+        userId: payment.userId,
+        id: 'evt_owned_1',
+        type: 'checkout.session.completed',
+      });
+      expect(store.payment(payment.id)?.status).toBe(PaymentStatus.Succeeded);
+    });
+
+    it('leaves the payment untouched when the metadata names another tenant (acknowledged)', async () => {
+      const result = await deliver(owned(generateId(), 'evt_foreign_1'));
+
+      expect(result).toMatchObject({ received: true, duplicate: false });
+      expect(store.payment(payment.id)?.status).toBe(PaymentStatus.Pending);
+      expect(published).toEqual([]);
+    });
+
+    it('records an event without tenant metadata for the platform tenant with a NULL user', async () => {
+      await deliver(
+        signedEvent('payout.paid', { id: 'po_1', object: 'payout' }, { id: 'evt_payout_1' }),
+      );
+
+      expect(store.state.events.get(`${PLATFORM_TENANT_ID}:evt_payout_1`)).toEqual({
+        tenantId: PLATFORM_TENANT_ID,
+        userId: null,
+        id: 'evt_payout_1',
+        type: 'payout.paid',
+      });
+    });
   });
 });

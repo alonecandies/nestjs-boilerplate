@@ -1,5 +1,5 @@
 import { AggregateRoot } from '@nestjs/cqrs';
-import { generateId, type ValidationIssue } from '@platform/common';
+import { generateId, isPlatformTenantId, isUuid, type ValidationIssue } from '@platform/common';
 import { isInteger, isNil, toLower, trim } from 'lodash-es';
 import { BILLING_LIMITS } from '../billing.constants.js';
 import { CheckoutSessionMismatchException, InvalidPaymentException } from './billing.errors.js';
@@ -8,6 +8,8 @@ import { PaymentStatus } from './payment-status.enum.js';
 
 /** The persisted state of a payment (what repositories load and save). */
 export interface PaymentSnapshot {
+  /** Owning tenant (never PLATFORM_TENANT_ID for a new payment). */
+  readonly tenantId: string;
   readonly id: string;
   /** Owner. No FK: users live in the identity service (service boundary). */
   readonly userId: string;
@@ -22,6 +24,8 @@ export interface PaymentSnapshot {
   readonly stripePaymentIntentId: string | null;
   /** Client `Idempotency-Key`, unique per user. */
   readonly idempotencyKey: string | null;
+  /** sha256 hex of the normalized request (ledger S-2); null before B2. */
+  readonly requestHash: string | null;
   readonly paidAt: Date | null;
   /** Optimistic-lock version; every successful save increments it. */
   readonly version: number;
@@ -32,10 +36,12 @@ export interface PaymentSnapshot {
 export interface InitiatePaymentProps {
   /** uuidv7 chosen by the caller: it is the Checkout `client_reference_id` and idempotency seed. */
   id: string;
+  tenantId: string;
   userId: string;
   priceId: string;
   quantity: number;
   idempotencyKey?: string | null | undefined;
+  requestHash?: string | null | undefined;
   now: Date;
 }
 
@@ -108,9 +114,13 @@ export class Payment extends AggregateRoot {
     if (trim(props.userId).length === 0) {
       issues.push({ path: 'userId', message: 'Must not be empty' });
     }
+    if (!isUuid(props.tenantId) || isPlatformTenantId(props.tenantId)) {
+      issues.push({ path: 'tenantId', message: 'Must be the UUID of a tenant' });
+    }
     if (issues.length > 0) throw new InvalidPaymentException(issues);
 
     return new Payment({
+      tenantId: props.tenantId,
       id: props.id,
       userId: props.userId,
       priceId,
@@ -121,6 +131,7 @@ export class Payment extends AggregateRoot {
       stripeCheckoutSessionId: null,
       stripePaymentIntentId: null,
       idempotencyKey: props.idempotencyKey ?? null,
+      requestHash: props.requestHash ?? null,
       paidAt: null,
       version: 0,
       createdAt: props.now,
@@ -139,6 +150,14 @@ export class Payment extends AggregateRoot {
 
   get userId(): string {
     return this.state.userId;
+  }
+
+  get tenantId(): string {
+    return this.state.tenantId;
+  }
+
+  get requestHash(): string | null {
+    return this.state.requestHash;
   }
 
   get priceId(): string {

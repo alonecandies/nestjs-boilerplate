@@ -1,6 +1,7 @@
 import type { BillingServiceClient, Payment } from '@domain/billing-contracts';
 import { Metadata, status } from '@grpc/grpc-js';
 import type { ClientGrpc } from '@nestjs/microservices';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { EntityNotFoundException, generateId } from '@platform/common';
 import { grpcConfig } from '@platform/config';
 import { GRPC_METADATA_KEYS, GrpcCircuitBreakers } from '@platform/transport';
@@ -36,7 +37,13 @@ describe('BillingGrpcAdapter (port → billing.v1.BillingService)', () => {
       of({ id: 'cs_1', url: 'https://x.test', paymentId: 'p' }),
     );
 
-    const request = { userId, customerEmail: 'a@b.co', priceId: 'price_1', quantity: 1 };
+    const request = {
+      tenantId: TEST_TENANT_ID,
+      userId,
+      customerEmail: 'a@b.co',
+      priceId: 'price_1',
+      quantity: 1,
+    };
     await expect(adapter.createCheckoutSession(request)).resolves.toEqual({
       id: 'cs_1',
       url: 'https://x.test',
@@ -63,6 +70,7 @@ describe('BillingGrpcAdapter (port → billing.v1.BillingService)', () => {
   it('normalises proto-loader nulls in listed payments', async () => {
     const wire = {
       id: generateId(),
+      tenantId: TEST_TENANT_ID,
       userId: generateId(),
       status: 'pending',
       amountTotal: '',
@@ -75,11 +83,12 @@ describe('BillingGrpcAdapter (port → billing.v1.BillingService)', () => {
     } as unknown as Payment;
     client.listPayments.mockReturnValue(of({ items: [wire] }));
 
-    const list = await adapter.listPayments({ limit: 5 });
+    const list = await adapter.listPayments({ tenantId: TEST_TENANT_ID, limit: 5 });
 
-    expect(client.listPayments.mock.calls[0]?.[0]).toEqual({ limit: 5 });
+    expect(client.listPayments.mock.calls[0]?.[0]).toEqual({ tenantId: TEST_TENANT_ID, limit: 5 });
     expect(list.items[0]).toEqual({
       id: wire.id,
+      tenantId: TEST_TENANT_ID,
       userId: wire.userId,
       status: 'pending',
       amountTotal: '0',
@@ -104,14 +113,15 @@ describe('BillingGrpcAdapter (port → billing.v1.BillingService)', () => {
       ),
     );
 
-    await expect(adapter.listPayments({ limit: 1 })).rejects.toBeInstanceOf(
-      EntityNotFoundException,
-    );
+    await expect(
+      adapter.listPayments({ tenantId: TEST_TENANT_ID, limit: 1 }),
+    ).rejects.toBeInstanceOf(EntityNotFoundException);
   });
 
   it('keeps a present session id and fills a missing amount', () => {
     const payment = normalizePayment({
       id: 'p',
+      tenantId: 't',
       userId: 'u',
       status: 'succeeded',
       amountTotal: '42',

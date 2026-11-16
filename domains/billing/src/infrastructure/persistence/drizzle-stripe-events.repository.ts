@@ -14,13 +14,15 @@ export class DrizzleStripeEventsRepository implements StripeEventsRepository {
   async markProcessed(event: StripeEventReceipt): Promise<boolean> {
     const inserted = await this.txHost.tx
       .insert(stripeEvents)
-      .values({ id: event.id, type: event.type })
-      .onConflictDoNothing({ target: stripeEvents.id })
+      .values({ tenantId: event.tenantId, id: event.id, userId: event.userId, type: event.type })
+      .onConflictDoNothing({ target: [stripeEvents.tenantId, stripeEvents.id] })
       .returning({ id: stripeEvents.id });
     return inserted.length > 0;
   }
 
   async deleteProcessedBefore(cutoff: Date, limit: number): Promise<number> {
+    // System method 5 (spec §9): B3-11 moves it to a *.system-repository.ts; SH-6 rewrites the LIMIT
+    // subquery, which Citus cannot push down on a distributed table.
     const tx = this.txHost.tx;
     // DELETE has no LIMIT in Postgres: bound it through the id subquery (index range scan).
     const result = await tx

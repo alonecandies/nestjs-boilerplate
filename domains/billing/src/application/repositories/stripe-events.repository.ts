@@ -1,4 +1,7 @@
 export interface StripeEventReceipt {
+  /** Tenant and user from the signed metadata (`stripeOwnerOf`). */
+  tenantId: string;
+  userId: string | null;
   id: string;
   type: string;
 }

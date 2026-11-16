@@ -1,4 +1,5 @@
 import type { CreateCheckoutSessionRequest } from '@domain/billing-contracts';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import {
   DomainConflictException,
   ExternalServiceException,
@@ -34,6 +35,7 @@ describe('CreateCheckoutSessionHandler', () => {
     overrides: Partial<CreateCheckoutSessionRequest> = {},
   ): CreateCheckoutSessionRequest => ({
     userId,
+    tenantId: TEST_TENANT_ID,
     customerEmail: 'buyer@example.com',
     priceId: 'price_pro',
     quantity: 2,
@@ -70,7 +72,7 @@ describe('CreateCheckoutSessionHandler', () => {
         successUrl: 'https://shop.test/billing/success',
         cancelUrl: 'https://shop.test/billing/cancel',
         clientReferenceId: result.paymentId,
-        metadata: { paymentId: result.paymentId, userId },
+        metadata: { paymentId: result.paymentId, userId, tenantId: TEST_TENANT_ID },
       },
       checkoutIdempotencyKey(result.paymentId),
     );
@@ -241,4 +243,31 @@ describe('CreateCheckoutSessionHandler', () => {
       expect(stripe.createCheckoutSession).not.toHaveBeenCalled();
     },
   );
+
+  it('signs paymentId, userId and tenantId into the session metadata (B2-26, ledger D5)', async () => {
+    const result = await handler.execute(new CreateCheckoutSessionCommand(request()));
+
+    expect(stripe.createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: { paymentId: result.paymentId, userId, tenantId: TEST_TENANT_ID },
+      }),
+      checkoutIdempotencyKey(result.paymentId),
+    );
+    expect(store.payment(result.paymentId)).toMatchObject({ tenantId: TEST_TENANT_ID });
+  });
+
+  it('scopes the Idempotency-Key to the tenant: one key in two tenants makes two payments', async () => {
+    const otherTenant = generateId();
+    const first = await handler.execute(
+      new CreateCheckoutSessionCommand(request({ idempotencyKey: 'order-42' })),
+    );
+    const second = await handler.execute(
+      new CreateCheckoutSessionCommand(
+        request({ idempotencyKey: 'order-42', tenantId: otherTenant }),
+      ),
+    );
+
+    expect(second.paymentId).not.toBe(first.paymentId);
+    expect(store.payment(second.paymentId)).toMatchObject({ tenantId: otherTenant });
+  });
 });

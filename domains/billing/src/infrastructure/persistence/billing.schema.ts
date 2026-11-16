@@ -13,6 +13,7 @@ import {
   index,
   integer,
   pgSchema,
+  primaryKey,
   text,
   timestamp,
   uniqueIndex,
@@ -30,26 +31,27 @@ const timestamptz = () => timestamp({ withTimezone: true, precision: 3, mode: 'd
 
 export const paymentStatusEnum = billingPgSchema.enum('payment_status', PAYMENT_STATUSES);
 
+// citus: tenant (distributed by tenant_id in SH-6). No FK to identity: tenant_id and user_id are plain
+// columns so billing's migration set stays self-contained (sharding design §2.1.3).
 export const payments = billingPgSchema.table(
   'payments',
   {
-    // The application always supplies a uuidv7 (Payment.initiate); the PG 18 `uuidv7()` default
-    // covers raw SQL inserts and seeds.
-    id: uuid().primaryKey().default(sql`uuidv7()`),
-    // No FK: users belong to the identity service (service boundary).
+    tenantId: uuid().notNull(),
+    // The application always supplies a uuidv7 (Payment.initiate); the default covers raw SQL.
+    id: uuid().notNull().default(sql`uuidv7()`),
     userId: uuid().notNull(),
     priceId: text().notNull(),
     quantity: integer().notNull(),
-    // Minor units. int8 read as a JS number (exact up to 2^53, far beyond any Stripe amount);
-    // NULL until Stripe priced the Checkout Session.
+    // Minor units. int8 read as a JS number (exact up to 2^53); NULL until Stripe priced the session.
     amountTotal: bigint({ mode: 'number' }),
     currency: text(),
     status: paymentStatusEnum().notNull().default(PaymentStatus.Pending),
-    // Explicit name: drizzle-kit would derive it from the camelCase key (payments_stripeCheckout…).
-    stripeCheckoutSessionId: text().unique('payments_stripe_checkout_session_id_unique'),
+    stripeCheckoutSessionId: text(),
     stripePaymentIntentId: text(),
-    // Client Idempotency-Key. NULLs never collide in a UNIQUE index, so only keyed requests dedupe.
+    // Client Idempotency-Key, unique per (tenant, user). NULLs never collide.
     idempotencyKey: text(),
+    // sha256 hex of the normalized checkout request (ledger S-2); NULL for rows that predate it.
+    requestHash: text(),
     paidAt: timestamptz(),
     // Optimistic lock (UPDATE ... WHERE version = $expected).
     version: integer().notNull().default(0),
@@ -60,28 +62,42 @@ export const payments = billingPgSchema.table(
       .$onUpdate(() => new Date()),
   },
   (t) => [
-    // "My payments, newest first": WHERE user_id = $1 ORDER BY id DESC (uuidv7 = time order).
-    // A plain ASC btree is scanned backwards for DESC (drizzle's .desc() would add NULLS LAST).
-    index('payments_user_id_id_idx').on(t.userId, t.id),
-    uniqueIndex('payments_user_id_idempotency_key_uq').on(t.userId, t.idempotencyKey),
+    primaryKey({ name: 'payments_tenant_id_id_pk', columns: [t.tenantId, t.id] }),
+    // "My payments in this tenant, newest first": WHERE tenant_id = $1 AND user_id = $2 ORDER BY id DESC.
+    index('payments_tenant_id_user_id_id_idx').on(t.tenantId, t.userId, t.id),
+    uniqueIndex('payments_tenant_id_stripe_checkout_session_id_uq').on(
+      t.tenantId,
+      t.stripeCheckoutSessionId,
+    ),
+    uniqueIndex('payments_tenant_id_user_id_idempotency_key_uq').on(
+      t.tenantId,
+      t.userId,
+      t.idempotencyKey,
+    ),
   ],
 );
 
 /**
- * Processed Stripe webhook events: the primary key makes delivery idempotent
- * (`INSERT … ON CONFLICT DO NOTHING` in the same transaction as the payment update). Rows older
- * than `STRIPE_EVENTS_RETENTION_DAYS` are purged hourly (`PurgeStripeEventsCron`).
+ * Processed Stripe webhook events, per tenant: the tenant and user come from the signed event's
+ * metadata; events that carry none (payouts, fees, sessions created before B2) use the nil
+ * `PLATFORM_TENANT_ID` and a NULL user. One Stripe event id always maps to one tenant.
+ * citus: tenant. Purged hourly after `STRIPE_EVENTS_RETENTION_DAYS`.
  */
 export const stripeEvents = billingPgSchema.table(
   'stripe_events',
   {
+    tenantId: uuid().notNull(),
     /** Stripe event id (`evt_…`). */
-    id: text().primaryKey(),
+    id: text().notNull(),
+    userId: uuid(),
     type: text().notNull(),
     processedAt: timestamptz().notNull().defaultNow(),
   },
-  // The purge's `WHERE processed_at < $cutoff` range scan.
-  (t) => [index('stripe_events_processed_at_idx').on(t.processedAt)],
+  (t) => [
+    primaryKey({ name: 'stripe_events_tenant_id_id_pk', columns: [t.tenantId, t.id] }),
+    // The purge's `WHERE processed_at < $cutoff` range scan.
+    index('stripe_events_processed_at_idx').on(t.processedAt),
+  ],
 );
 
 export type PaymentRow = typeof payments.$inferSelect;

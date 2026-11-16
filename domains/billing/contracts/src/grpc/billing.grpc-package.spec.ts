@@ -55,6 +55,7 @@ describe('billing.v1 wire format (proto-loader semantics + generated types)', ()
   it('keeps int64 exact as decimal strings beyond 2^53', () => {
     const payment: Payment = {
       id: 'p1',
+      tenantId: 't1',
       userId: 'u1',
       status: 'succeeded',
       amountTotal: '9007199254740993',

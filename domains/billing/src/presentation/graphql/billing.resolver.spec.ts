@@ -2,6 +2,7 @@ import type { Payment } from '@domain/billing-contracts';
 import { GraphQLSchemaHost } from '@nestjs/graphql';
 import { Test } from '@nestjs/testing';
 import { AuthModule, RbacModule } from '@platform/auth';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { generateId, provideCommonEnhancers } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { AppGraphqlModule } from '@platform/graphql';
@@ -73,6 +74,7 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
 
   const payment = (userId: string, overrides: Partial<Payment> = {}): Payment => ({
     id: generateId(),
+    tenantId: TEST_TENANT_ID,
     userId,
     status: 'succeeded',
     amountTotal: '2500',
@@ -136,7 +138,11 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
       const body = await gql(PAYMENTS_QUERY, {}, user);
 
       expect(body.errors).toBeUndefined();
-      expect(port.listPayments).toHaveBeenCalledWith({ userId: user.id, limit: 10 });
+      expect(port.listPayments).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
+        userId: user.id,
+        limit: 10,
+      });
       const connection = body.data?.['payments'] as {
         items: Record<string, unknown>[];
         nextCursor: string | null;
@@ -174,6 +180,7 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
 
       expect(body.errors).toBeUndefined();
       expect(port.listPayments).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
         userId: user.id,
         limit: 10,
         cursor: 'cursor-1',
@@ -206,6 +213,7 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
       expect(body.errors).toBeUndefined();
       expect(body.data?.['createCheckoutSession']).toEqual(session);
       expect(port.createCheckoutSession).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
         userId: user.id,
         customerEmail: user.email,
         priceId: 'price_1',

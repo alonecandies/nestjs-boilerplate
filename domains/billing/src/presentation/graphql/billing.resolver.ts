@@ -33,6 +33,7 @@ export class BillingResolver {
     @CurrentUser() user: AuthUser,
   ): Promise<PaymentConnectionModel> {
     const list = await this.billing.listPayments({
+      tenantId: user.tenantId,
       userId: resolvePaymentsOwner(user, args.all),
       limit: args.limit,
       cursor: args.cursor ?? undefined,
@@ -49,6 +50,7 @@ export class BillingResolver {
     @CurrentUser() user: AuthUser,
   ): Promise<CheckoutSessionModel> {
     return this.billing.createCheckoutSession({
+      tenantId: user.tenantId,
       userId: user.id,
       customerEmail: user.email,
       priceId: input.priceId,
