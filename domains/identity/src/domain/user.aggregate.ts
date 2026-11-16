@@ -1,22 +1,10 @@
 import { AggregateRoot } from '@nestjs/cqrs';
 import { generateId, type ValidationIssue } from '@platform/common';
-import { isEmpty, isEqual, sortBy, uniq } from 'lodash-es';
+import { isEmpty } from 'lodash-es';
 import { IDENTITY_LIMITS } from '../identity.constants.js';
 import { normalizeEmail } from './email.js';
 import { UserRegisteredEvent } from './events/user-registered.event.js';
-import { UserRolesChangedEvent } from './events/user-roles-changed.event.js';
-import {
-  CannotRevokeOwnAdminRoleException,
-  InvalidRolesException,
-  InvalidUserException,
-} from './identity.errors.js';
-import {
-  ADMIN_ROLE,
-  DEFAULT_USER_ROLE,
-  isUserRole,
-  USER_ROLES,
-  type UserRole,
-} from './user-role.js';
+import { InvalidUserException } from './identity.errors.js';
 
 /** The persisted state of a user (what repositories load and save). */
 export interface UserSnapshot {
@@ -26,8 +14,8 @@ export interface UserSnapshot {
   readonly displayName: string;
   /** Argon2id PHC string. Never leaves the identity service. */
   readonly passwordHash: string;
-  /** Deduplicated, in canonical `USER_ROLES` order. */
-  readonly roles: readonly UserRole[];
+  /** Platform staff (switch-in, B2-11); granted only by the staff:grant CLI. */
+  readonly isPlatformStaff: boolean;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
@@ -41,15 +29,10 @@ export interface RegisterUserProps {
   now: Date;
 }
 
-/** Canonical role list: unique, ordered like `USER_ROLES` (stable equality, stable storage). */
-function canonicalRoles(roles: readonly UserRole[]): UserRole[] {
-  return sortBy(uniq(roles), (role) => USER_ROLES.indexOf(role));
-}
-
 /**
- * User aggregate: registration and role management invariants. Pure domain logic — persistence
- * happens in `UsersRepository`, and the events applied here are published (via the CQRS
- * `EventPublisher`) only after the handler's transaction committed.
+ * User aggregate: registration invariants. Pure domain logic — persistence happens in
+ * `UsersRepository`, and the events applied here are published (via the CQRS `EventPublisher`)
+ * only after the handler's transaction committed.
  */
 export class UserAggregate extends AggregateRoot {
   private state: UserSnapshot;
@@ -59,7 +42,7 @@ export class UserAggregate extends AggregateRoot {
     this.state = state;
   }
 
-  /** A new account with the default role; applies `UserRegisteredEvent`. */
+  /** A new account (never platform staff); applies `UserRegisteredEvent`. */
   static register(props: RegisterUserProps): UserAggregate {
     const email = normalizeEmail(props.email);
     const displayName = props.displayName.trim();
@@ -86,7 +69,7 @@ export class UserAggregate extends AggregateRoot {
       email,
       displayName,
       passwordHash: props.passwordHash,
-      roles: [DEFAULT_USER_ROLE],
+      isPlatformStaff: false,
       createdAt: props.now,
       updatedAt: props.now,
     });
@@ -96,53 +79,14 @@ export class UserAggregate extends AggregateRoot {
 
   /** Rehydrates a persisted user (no events). */
   static restore(snapshot: UserSnapshot): UserAggregate {
-    return new UserAggregate({ ...snapshot, roles: canonicalRoles(snapshot.roles) });
+    return new UserAggregate({ ...snapshot });
   }
 
   get id(): string {
     return this.state.id;
   }
 
-  get roles(): readonly UserRole[] {
-    return this.state.roles;
-  }
-
-  hasRole(role: UserRole): boolean {
-    return this.state.roles.includes(role);
-  }
-
-  /**
-   * Replaces the role set. Returns `false` (and applies nothing) when the set is unchanged.
-   * @throws InvalidRolesException empty list or unknown role names
-   * @throws CannotRevokeOwnAdminRoleException the actor is this admin and drops `admin`
-   */
-  changeRoles(roles: readonly string[], actorId: string, now: Date): boolean {
-    const unknown = roles.filter((role) => !isUserRole(role));
-    if (roles.length === 0 || unknown.length > 0) {
-      throw new InvalidRolesException(
-        roles.length === 0
-          ? [{ path: 'roles', message: 'At least one role is required' }]
-          : unknown.map((role) => ({
-              path: 'roles',
-              message: `Unknown role "${role}" (allowed: ${USER_ROLES.join(', ')})`,
-            })),
-      );
-    }
-    const next = canonicalRoles(roles.filter(isUserRole));
-    if (actorId === this.state.id && this.hasRole(ADMIN_ROLE) && !next.includes(ADMIN_ROLE)) {
-      throw new CannotRevokeOwnAdminRoleException();
-    }
-    if (isEqual(next, this.state.roles)) return false;
-
-    const previous = this.state.roles;
-    this.state = { ...this.state, roles: next, updatedAt: now };
-    this.apply(
-      new UserRolesChangedEvent(generateId(), this.state.id, previous, next, actorId, now),
-    );
-    return true;
-  }
-
   toSnapshot(): UserSnapshot {
-    return { ...this.state, roles: [...this.state.roles] };
+    return { ...this.state };
   }
 }

@@ -1,5 +1,4 @@
 import type { User } from '@domain/identity-contracts';
-import { isRole, type Role } from '@platform/auth';
 import { isUuidV7, uuidV7Timestamp } from '@platform/common';
 import { isDate, isNumber, isString } from 'lodash-es';
 
@@ -8,7 +7,6 @@ export interface UserView {
   id: string;
   email: string;
   displayName: string;
-  roles: Role[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -30,7 +28,6 @@ export function toUserView(user: User): UserView {
     id: user.id,
     email: user.email,
     displayName: user.displayName,
-    roles: user.roles.filter(isRole),
     createdAt,
     updatedAt: toDate(user.updatedAt) ?? createdAt,
   };

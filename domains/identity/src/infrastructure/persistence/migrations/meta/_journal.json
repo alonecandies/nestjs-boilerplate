@@ -43,6 +43,20 @@
       "when": 1794810157769,
       "tag": "0005_tenant_sessions",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1794823997191,
+      "tag": "0006_platform_staff",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1794824125653,
+      "tag": "0007_drop_user_roles",
+      "breakpoints": true
     }
   ]
 }

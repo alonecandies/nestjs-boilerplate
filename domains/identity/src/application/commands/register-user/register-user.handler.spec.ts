@@ -79,7 +79,7 @@ describe('RegisterUserHandler', () => {
       email: 'ada@example.com',
       displayName: 'Ada',
       passwordHash: '$argon2id$hash',
-      roles: ['user'],
+      isPlatformStaff: false,
     });
     expect(workspaces.create).toHaveBeenCalledWith(
       expect.objectContaining({ id: inserted.id, email: 'ada@example.com', displayName: 'Ada' }),

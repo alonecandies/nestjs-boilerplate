@@ -1,4 +1,4 @@
-import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
+import { Args, Query, Resolver } from '@nestjs/graphql';
 import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
 import { GraphQLUUID } from '@platform/graphql';
 import { UsersPort } from '../../application/ports/users.port.js';
@@ -7,7 +7,6 @@ import { assertCanReadUser } from '../shared/user-access.policy.js';
 import { UserReadCache } from '../shared/user-read.cache.js';
 import { UsersArgs } from './args/users.args.js';
 import { toUserConnectionModel, toUserModel } from './graphql.mapper.js';
-import { UpdateUserRolesInput } from './inputs/update-user-roles.input.js';
 import { UserModel } from './models/user.model.js';
 import { UserConnectionModel } from './models/user-connection.model.js';
 
@@ -49,22 +48,5 @@ export class UsersResolver {
       search: args.search ?? undefined,
     });
     return toUserConnectionModel(page);
-  }
-
-  @Mutation(() => UserModel, {
-    description: "Replace a user's roles (requires `users:manage-roles`)",
-  })
-  @RequirePermissions(IdentityPermission.UsersManageRoles)
-  async updateUserRoles(
-    @Args('input') input: UpdateUserRolesInput,
-    @CurrentUser('id') actorId: string,
-  ): Promise<UserModel> {
-    const user = await this.usersPort.updateUserRoles({
-      id: input.id,
-      roles: input.roles,
-      actorId,
-    });
-    await this.cache.invalidate(input.id);
-    return toUserModel(user);
   }
 }

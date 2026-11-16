@@ -1,5 +1,6 @@
 import type { CursorPage } from '@platform/common';
 import { decodeIdCursor, keysetPage } from '@platform/database';
+import type { UserAggregate } from '../index.js';
 import {
   type AuditEventRecord,
   EmailAlreadyTakenException,
@@ -12,9 +13,7 @@ import {
   SessionsRepository,
   type TenantRecord,
   TransactionRunner,
-  UserAggregate,
   type UserRecord,
-  type UserRole,
   type UserSnapshot,
   UsersRepository,
 } from '../index.js';
@@ -78,13 +77,8 @@ export class InMemoryUsersRepository extends UsersRepository {
     return [...this.store.users.values()].find((user) => user.email === email) ?? null;
   }
 
-  async findAggregate(id: string): Promise<UserAggregate | null> {
-    const user = this.store.users.get(id);
-    return user ? UserAggregate.restore(user) : null;
-  }
-
-  async countAdmins(): Promise<number> {
-    return [...this.store.users.values()].filter((user) => user.roles.includes('admin')).length;
+  async isPlatformStaff(id: string): Promise<boolean> {
+    return this.store.users.get(id)?.isPlatformStaff === true;
   }
 
   async existsByEmail(email: string): Promise<boolean> {
@@ -113,11 +107,6 @@ export class InMemoryUsersRepository extends UsersRepository {
     const snapshot = user.toSnapshot();
     if (await this.existsByEmail(snapshot.email)) throw new EmailAlreadyTakenException();
     this.store.users.set(snapshot.id, snapshot);
-  }
-
-  async updateRoles(id: string, roles: readonly UserRole[], updatedAt: Date): Promise<void> {
-    const user = this.store.users.get(id);
-    if (user) this.store.users.set(id, { ...user, roles: [...roles], updatedAt });
   }
 
   async updatePasswordHash(id: string, passwordHash: string, updatedAt: Date): Promise<void> {

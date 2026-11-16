@@ -46,13 +46,13 @@ const database = createFakePostgres((sql, params): FakeResult => {
     return [rest];
   }
   if (sql.startsWith('insert into "identity"."users"')) {
-    const [id, email, passwordHash, displayName, roles, createdAt, updatedAt] = params;
+    const [id, email, passwordHash, displayName, isPlatformStaff, createdAt, updatedAt] = params;
     users.set(String(id), {
       id,
       email,
       password_hash: passwordHash,
       display_name: displayName,
-      roles,
+      is_platform_staff: isPlatformStaff,
       created_at: createdAt,
       updated_at: updatedAt,
     });
@@ -111,8 +111,8 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
     });
 
     expect(res.statusCode).toBe(201);
-    const body = res.json<{ accessToken: string; user: { id: string; roles: string[] } }>();
-    expect(body.user.roles).toEqual(['user']);
+    const body = res.json<{ accessToken: string; user: { id: string } }>();
+    expect(body.user).not.toHaveProperty('roles');
     const statements = database.executed.map((query) => query.sql.split(' (')[0]);
     expect(statements).toEqual([
       'select "id" from "identity"."users" where "identity"."users"."email" = $1 limit $2',
@@ -150,7 +150,7 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
       email: 'alan@example.com',
       password_hash: hash,
       display_name: 'Alan',
-      roles: '{admin}',
+      is_platform_staff: false,
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     });
@@ -161,7 +161,7 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
       payload: { email: 'ALAN@example.com', password: 'open sesame' },
     });
     expect(ok.statusCode).toBe(200);
-    expect(ok.json()).toMatchObject({ user: { id, roles: ['admin'] } });
+    expect(ok.json()).toMatchObject({ user: { id } });
 
     const bad = await app.inject({
       method: 'POST',
@@ -190,6 +190,6 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
       headers: bearer(moderator),
     });
     expect(res.statusCode).toBe(200);
-    expect(res.json()).toMatchObject({ email: 'alan@example.com', roles: ['admin'] });
+    expect(res.json()).toMatchObject({ email: 'alan@example.com' });
   });
 });

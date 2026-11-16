@@ -19,7 +19,6 @@ export { LogoutCommand } from './application/commands/logout/logout.command.js';
 export { PurgeExpiredSessionsCommand } from './application/commands/purge-expired-sessions/purge-expired-sessions.command.js';
 export { RefreshSessionCommand } from './application/commands/refresh-session/refresh-session.command.js';
 export { RegisterUserCommand } from './application/commands/register-user/register-user.command.js';
-export { UpdateUserRolesCommand } from './application/commands/update-user-roles/update-user-roles.command.js';
 export type {
   AuditEventRecord,
   AuditEventType,
@@ -67,11 +66,9 @@ export { TenantSelection } from './application/services/tenant-selection.service
 // Domain.
 export { normalizeEmail } from './domain/email.js';
 export { UserRegisteredEvent } from './domain/events/user-registered.event.js';
-export { UserRolesChangedEvent } from './domain/events/user-roles-changed.event.js';
 export {
-  CannotRemoveLastAdminException,
-  CannotRevokeOwnAdminRoleException,
   EmailAlreadyTakenException,
+  GlobalRolesRemovedException,
   InvalidCredentialsException,
   InvalidRefreshTokenException,
   InvalidRolesException,
@@ -97,7 +94,6 @@ export {
   TENANT_SLUG_PATTERN,
 } from './domain/tenant-slug.js';
 export { UserAggregate, type UserSnapshot } from './domain/user.aggregate.js';
-export { isUserRole, USER_ROLES, type UserRole } from './domain/user-role.js';
 // Modules.
 export {
   IDENTITY_COMMAND_HANDLERS,
@@ -118,7 +114,6 @@ export {
   sessionsRelations,
   tenantRole,
   tenants,
-  userRole,
   users,
   usersRelations,
 } from './infrastructure/persistence/identity.schema.js';

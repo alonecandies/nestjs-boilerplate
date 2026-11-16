@@ -28,7 +28,7 @@ interface AuthTokensBody {
   refreshToken: string;
   expiresIn: number;
   tokenType: string;
-  user: { id: string; email: string; displayName: string; roles: string[] };
+  user: { id: string; email: string; displayName: string };
 }
 
 const GRACE = {
@@ -114,7 +114,6 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
           '/v1/auth/me',
           '/v1/users',
           '/v1/users/{id}',
-          '/v1/users/{id}/roles',
           '/v1/notifications',
           '/v1/notifications/{id}/read',
           '/v1/billing/checkout-sessions',
@@ -148,7 +147,7 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
       tokens = response.json<AuthTokensBody>();
       expect(tokens).toMatchObject({
         tokenType: 'Bearer',
-        user: { email: 'grace@example.com', displayName: 'Grace', roles: ['user'] },
+        user: { email: 'grace@example.com', displayName: 'Grace' },
       });
       expect(isUuidV7(tokens.user.id)).toBe(true);
       expect(e2e.identity.calls).toContain('AuthService.Register');
@@ -179,7 +178,6 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
       expect(first.json()).toMatchObject({
         id: tokens.user.id,
         email: 'grace@example.com',
-        roles: ['user'],
       });
       const second = await inject({
         method: 'GET',
@@ -192,7 +190,7 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
 
     it('GraphQL { me } with the access token', async () => {
       const response = await inject(
-        graphql('{ me { id email displayName roles } }', undefined, bearer(tokens.accessToken)),
+        graphql('{ me { id email displayName } }', undefined, bearer(tokens.accessToken)),
       );
       expect(response.statusCode, response.body).toBe(200);
       expect(response.json()).toEqual({
@@ -201,7 +199,6 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
             id: tokens.user.id,
             email: 'grace@example.com',
             displayName: 'Grace',
-            roles: ['USER'],
           },
         },
       });

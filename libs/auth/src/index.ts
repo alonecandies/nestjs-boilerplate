@@ -37,7 +37,6 @@ export {
   type RbacFeature,
 } from './rbac/rbac-feature.js';
 export { RbacVocabularyCheck } from './rbac/rbac-vocabulary.check.js';
-export { isRole, ROLE_VALUES, Role } from './rbac/role.enum.js';
 export { JwtStrategy } from './strategies/jwt.strategy.js';
 export { AccessTokenDenylist } from './tokens/access-token-denylist.service.js';
 export {

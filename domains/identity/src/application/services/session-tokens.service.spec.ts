@@ -24,7 +24,7 @@ describe('SessionTokensService', () => {
   });
 
   it('opens a tenant-bound session (sha256 of the refresh token only) and returns the tenant with the pair', async () => {
-    const user = makeUserRecord({ roles: ['admin', 'user'] });
+    const user = makeUserRecord();
 
     const result = await service.open({
       user,
@@ -59,7 +59,7 @@ describe('SessionTokensService', () => {
         id: user.id,
         email: user.email,
         displayName: user.displayName,
-        roles: ['admin', 'user'],
+        roles: [],
         createdAt: user.createdAt,
         updatedAt: user.updatedAt,
       },

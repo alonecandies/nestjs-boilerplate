@@ -13,7 +13,8 @@ export function toUserContract(user: UserRecord): User {
     id: user.id,
     email: user.email,
     displayName: user.displayName,
-    roles: [...user.roles],
+    // proto User.roles is kept for wire compatibility: always empty since B2 (roles are per tenant).
+    roles: [],
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };
@@ -25,7 +26,7 @@ export function toUserRecord(user: UserSnapshot): UserRecord {
     id: user.id,
     email: user.email,
     displayName: user.displayName,
-    roles: user.roles,
+    isPlatformStaff: user.isPlatformStaff,
     createdAt: user.createdAt,
     updatedAt: user.updatedAt,
   };

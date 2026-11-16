@@ -2,12 +2,7 @@ import { generateId } from '@platform/common';
 import { describe, expect, it } from 'vitest';
 import { NOW } from '../../test/fixtures.js';
 import { UserRegisteredEvent } from './events/user-registered.event.js';
-import { UserRolesChangedEvent } from './events/user-roles-changed.event.js';
-import {
-  CannotRevokeOwnAdminRoleException,
-  InvalidRolesException,
-  InvalidUserException,
-} from './identity.errors.js';
+import { InvalidUserException } from './identity.errors.js';
 import { UserAggregate } from './user.aggregate.js';
 
 const register = (overrides: Partial<Parameters<typeof UserAggregate.register>[0]> = {}) =>
@@ -22,17 +17,18 @@ const register = (overrides: Partial<Parameters<typeof UserAggregate.register>[0
 
 describe('UserAggregate', () => {
   describe('register()', () => {
-    it('normalises email + display name, grants the default role and applies UserRegisteredEvent', () => {
+    it('normalises email + display name, is not platform staff and applies UserRegisteredEvent', () => {
       const user = register();
       const snapshot = user.toSnapshot();
 
       expect(snapshot).toMatchObject({
         email: 'ada@example.com',
         displayName: 'Ada Lovelace',
-        roles: ['user'],
         createdAt: NOW,
         updatedAt: NOW,
       });
+      expect(user.toSnapshot()).toMatchObject({ isPlatformStaff: false });
+      expect(user.toSnapshot()).not.toHaveProperty('roles');
       const events = user.getUncommittedEvents();
       expect(events).toHaveLength(1);
       expect(events[0]).toBeInstanceOf(UserRegisteredEvent);
@@ -63,71 +59,16 @@ describe('UserAggregate', () => {
     });
   });
 
-  describe('changeRoles()', () => {
-    const restoreWith = (roles: ('admin' | 'moderator' | 'user')[]) =>
-      UserAggregate.restore({ ...register().toSnapshot(), roles });
-
-    it('replaces the roles in canonical order, bumps updatedAt and applies UserRolesChangedEvent', () => {
-      const user = restoreWith(['user']);
-      const later = new Date(NOW.getTime() + 1_000);
-      const actorId = generateId();
-
-      expect(user.changeRoles(['user', 'admin', 'user'], actorId, later)).toBe(true);
-
-      expect(user.roles).toEqual(['admin', 'user']);
-      expect(user.toSnapshot().updatedAt).toEqual(later);
-      const [event] = user.getUncommittedEvents();
-      expect(event).toBeInstanceOf(UserRolesChangedEvent);
-      expect(event).toMatchObject({
-        userId: user.id,
-        previousRoles: ['user'],
-        roles: ['admin', 'user'],
-        actorId,
-      });
-    });
-
-    it('is a no-op (false, no event) when the set does not change', () => {
-      const user = restoreWith(['moderator', 'user']);
-      expect(user.changeRoles(['user', 'moderator'], generateId(), NOW)).toBe(false);
-      expect(user.getUncommittedEvents()).toEqual([]);
-    });
-
-    it('rejects an empty list and unknown role names', () => {
-      const user = restoreWith(['user']);
-      expect(() => user.changeRoles([], generateId(), NOW)).toThrow(InvalidRolesException);
-      expect(() => user.changeRoles(['root', 'user'], generateId(), NOW)).toThrow(
-        expect.objectContaining({
-          code: 'INVALID_ROLES',
-          issues: [expect.objectContaining({ message: expect.stringContaining('"root"') })],
-        }),
-      );
-    });
-
-    it('forbids an admin from removing their own admin role', () => {
-      const admin = restoreWith(['admin']);
-      expect(() => admin.changeRoles(['user'], admin.id, NOW)).toThrow(
-        CannotRevokeOwnAdminRoleException,
-      );
-      // …but they may keep admin while adding others, and another admin may demote them.
-      expect(admin.changeRoles(['admin', 'moderator'], admin.id, NOW)).toBe(true);
-      expect(admin.changeRoles(['user'], generateId(), NOW)).toBe(true);
-    });
-  });
-
-  it('restore() canonicalises stored roles and applies no events', () => {
-    const user = UserAggregate.restore({
-      ...register().toSnapshot(),
-      roles: ['user', 'admin', 'user'],
-    });
-    expect(user.roles).toEqual(['admin', 'user']);
-    expect(user.hasRole('admin')).toBe(true);
+  it('restore() rehydrates the snapshot (staff flag included) and applies no events', () => {
+    const user = UserAggregate.restore({ ...register().toSnapshot(), isPlatformStaff: true });
+    expect(user.toSnapshot()).toMatchObject({ isPlatformStaff: true });
     expect(user.getUncommittedEvents()).toEqual([]);
   });
 
   it('toSnapshot() returns a copy', () => {
     const user = register();
-    const snapshot = user.toSnapshot();
-    (snapshot.roles as string[]).push('admin');
-    expect(user.roles).toEqual(['user']);
+    const snapshot = user.toSnapshot() as { email: string };
+    snapshot.email = 'changed@example.com';
+    expect(user.toSnapshot().email).toBe('ada@example.com');
   });
 });

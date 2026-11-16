@@ -10,16 +10,16 @@ import {
 import { toAccessTokenSubject, toUserContract, toUserRecord } from './user.mapper.js';
 
 describe('user mappers', () => {
-  const snapshot = makeUserSnapshot({ roles: ['admin', 'user'] });
+  const snapshot = makeUserSnapshot();
 
-  it('never leak the password hash, even when handed a full snapshot', () => {
+  it('never leak the password hash; global roles are gone (always [])', () => {
     expect(toUserContract(snapshot)).not.toHaveProperty('passwordHash');
     expect(toUserRecord(snapshot)).not.toHaveProperty('passwordHash');
     expect(toUserContract(snapshot)).toEqual({
       id: snapshot.id,
       email: snapshot.email,
       displayName: snapshot.displayName,
-      roles: ['admin', 'user'],
+      roles: [],
       createdAt: snapshot.createdAt,
       updatedAt: snapshot.updatedAt,
     });

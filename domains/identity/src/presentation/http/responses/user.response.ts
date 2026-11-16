@@ -1,6 +1,5 @@
 import type { User } from '@domain/identity-contracts';
 import { ApiProperty } from '@nestjs/swagger';
-import { Role } from '@platform/auth';
 import { Exclude, Expose } from 'class-transformer';
 import { toUserView } from '../../shared/user-view.js';
 
@@ -22,10 +21,6 @@ export class UserResponse {
   @Expose()
   @ApiProperty({ example: 'Ada Lovelace' })
   displayName: string;
-
-  @Expose()
-  @ApiProperty({ enum: Role, enumName: 'Role', isArray: true, example: [Role.User] })
-  roles: Role[];
 
   @Expose()
   @ApiProperty({ type: String, format: 'date-time' })

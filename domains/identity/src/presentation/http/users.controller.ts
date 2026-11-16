@@ -1,11 +1,9 @@
 import {
-  Body,
   ClassSerializerInterceptor,
   Controller,
   Get,
   Param,
   ParseUUIDPipe,
-  Patch,
   Query,
   UseInterceptors,
 } from '@nestjs/common';
@@ -27,7 +25,6 @@ import { IdentityPermission } from '../../identity.permissions.js';
 import { assertCanReadUser } from '../shared/user-access.policy.js';
 import { UserReadCache } from '../shared/user-read.cache.js';
 import { ListUsersQueryDto } from './dto/list-users-query.dto.js';
-import { UpdateUserRolesDto } from './dto/update-user-roles.dto.js';
 import { ProblemResponse } from './responses/problem.response.js';
 import { UserResponse } from './responses/user.response.js';
 import { UserPageResponse } from './responses/user-page.response.js';
@@ -75,31 +72,5 @@ export class UsersController {
   ): Promise<UserResponse> {
     assertCanReadUser(actor, id);
     return UserResponse.from(await this.cache.getUser(id));
-  }
-
-  @Patch(':id/roles')
-  @RequirePermissions(IdentityPermission.UsersManageRoles)
-  @ApiOperation({
-    summary: "Replace a user's roles",
-    description:
-      'Effective on the next token refresh. Admins cannot remove their own admin role, and the last admin cannot be demoted.',
-  })
-  @ApiParam({ name: 'id', format: 'uuid' })
-  @ApiOkResponse({ type: UserResponse })
-  @ApiBadRequestResponse({ type: ProblemResponse })
-  @ApiForbiddenResponse({ type: ProblemResponse, description: 'Requires `users:manage-roles`.' })
-  @ApiNotFoundResponse({ type: ProblemResponse })
-  @ApiUnprocessableEntityResponse({
-    type: ProblemResponse,
-    description: '`CANNOT_REVOKE_OWN_ADMIN`, `CANNOT_REMOVE_LAST_ADMIN`',
-  })
-  async updateRoles(
-    @Param('id', userIdPipe) id: string,
-    @Body() body: UpdateUserRolesDto,
-    @CurrentUser('id') actorId: string,
-  ): Promise<UserResponse> {
-    const user = await this.users.updateUserRoles({ id, roles: body.roles, actorId });
-    await this.cache.invalidate(id);
-    return UserResponse.from(user);
   }
 }

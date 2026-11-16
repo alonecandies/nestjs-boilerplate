@@ -1,6 +1,5 @@
 import type { CursorPage } from '@platform/common';
 import type { UserAggregate, UserSnapshot } from '../../domain/user.aggregate.js';
-import type { UserRole } from '../../domain/user-role.js';
 
 /** Public projection of a user: everything but the password hash. */
 export type UserRecord = Omit<UserSnapshot, 'passwordHash'>;
@@ -28,19 +27,8 @@ export abstract class UsersRepository {
   /** `email` must be normalised. Includes the password hash. */
   abstract findCredentialsByEmail(email: string): Promise<UserSnapshot | null>;
 
-  /**
-   * Loads the aggregate FOR A WRITE: the row is locked (`SELECT … FOR UPDATE`) until the end of
-   * the current transaction, so call it inside `TransactionRunner.run()` — concurrent
-   * read-modify-writes of one user then queue instead of overwriting each other.
-   */
-  abstract findAggregate(id: string): Promise<UserAggregate | null>;
-
-  /**
-   * Number of users holding the admin role, after taking a transaction-scoped lock that
-   * serialises every caller (call it inside `TransactionRunner.run()`, before a demotion): the
-   * count cannot go stale before the caller's transaction commits.
-   */
-  abstract countAdmins(): Promise<number>;
+  /** Fresh read of the staff flag (switch-in authorises on this, never on a token). Unknown id → false. */
+  abstract isPlatformStaff(id: string): Promise<boolean>;
 
   abstract existsByEmail(email: string): Promise<boolean>;
 
@@ -49,8 +37,6 @@ export abstract class UsersRepository {
 
   /** @throws EmailAlreadyTakenException when the email unique constraint rejects the row. */
   abstract insert(user: UserAggregate): Promise<void>;
-
-  abstract updateRoles(id: string, roles: readonly UserRole[], updatedAt: Date): Promise<void>;
 
   abstract updatePasswordHash(id: string, passwordHash: string, updatedAt: Date): Promise<void>;
 }

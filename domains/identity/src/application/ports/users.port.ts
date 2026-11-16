@@ -1,13 +1,8 @@
-import type {
-  ListUsersRequest,
-  UpdateUserRolesRequest,
-  User,
-  UserPage,
-} from '@domain/identity-contracts';
+import type { ListUsersRequest, User, UserPage } from '@domain/identity-contracts';
 
 /**
- * User queries and administration for the presentation layer (and other domains' GraphQL
- * fields through the `users` DataLoader). Local adapter = QueryBus/CommandBus, remote adapter =
+ * User queries for the presentation layer (and other domains' GraphQL
+ * fields through the `users` DataLoader). Local adapter = QueryBus, remote adapter =
  * gRPC `identity.v1.UsersService`.
  */
 export abstract class UsersPort {
@@ -19,11 +14,4 @@ export abstract class UsersPort {
 
   /** Keyset page (uuidv7 ids, newest first); `nextCursor` is absent on the last page. */
   abstract listUsers(query: ListUsersRequest): Promise<UserPage>;
-
-  /**
-   * @throws EntityNotFoundException (404), InvalidRolesException (422),
-   *   CannotRevokeOwnAdminRoleException (422 CANNOT_REVOKE_OWN_ADMIN),
-   *   CannotRemoveLastAdminException (422 CANNOT_REMOVE_LAST_ADMIN)
-   */
-  abstract updateUserRoles(input: UpdateUserRolesRequest): Promise<User>;
 }

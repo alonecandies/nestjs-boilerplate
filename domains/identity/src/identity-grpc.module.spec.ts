@@ -24,7 +24,7 @@ const database = createFakePostgres((sql) =>
           id: USER_ID,
           email: 'ada@example.com',
           display_name: 'Ada',
-          roles: '{user}',
+          is_platform_staff: false,
           created_at: NOW.toISOString(),
           updated_at: NOW.toISOString(),
         },
@@ -75,7 +75,7 @@ describe('IdentityGrpcModule (identity-service wiring)', () => {
       id: USER_ID,
       email: 'ada@example.com',
       displayName: 'Ada',
-      roles: ['user'],
+      roles: [],
       createdAt: NOW,
       updatedAt: NOW,
     });

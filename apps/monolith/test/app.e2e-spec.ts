@@ -33,7 +33,7 @@ interface AuthTokensBody {
   refreshToken: string;
   expiresIn: number;
   tokenType: string;
-  user: { id: string; email: string; displayName: string; roles: string[] };
+  user: { id: string; email: string; displayName: string };
 }
 
 const ADA = {
@@ -157,7 +157,7 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
       expect(tokens).toMatchObject({
         tokenType: 'Bearer',
         expiresIn: 900,
-        user: { email: 'ada@example.com', displayName: 'Ada', roles: ['user'] },
+        user: { email: 'ada@example.com', displayName: 'Ada' },
       });
       expect(isUuidV7(tokens.user.id)).toBe(true);
       // Persisted through the (in-memory) repository: normalised email, argon2id hash.
@@ -208,18 +208,17 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
         id: tokens.user.id,
         email: 'ada@example.com',
         displayName: 'Ada',
-        roles: ['user'],
       });
     });
 
     it('GraphQL { me } with the access token', async () => {
       const response = await inject(
-        graphql('{ me { id email displayName roles } }', undefined, bearer(tokens.accessToken)),
+        graphql('{ me { id email displayName } }', undefined, bearer(tokens.accessToken)),
       );
       expect(response.statusCode, response.body).toBe(200);
       expect(response.json()).toEqual({
         data: {
-          me: { id: tokens.user.id, email: 'ada@example.com', displayName: 'Ada', roles: ['USER'] },
+          me: { id: tokens.user.id, email: 'ada@example.com', displayName: 'Ada' },
         },
       });
     });

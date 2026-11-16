@@ -67,24 +67,6 @@ export class RefreshTokenReuseDetectedException extends UnauthenticatedException
   }
 }
 
-/** 422 — an admin tried to drop their own admin role (would lock the last admin out). */
-export class CannotRevokeOwnAdminRoleException extends BusinessRuleViolationException {
-  constructor() {
-    super('You cannot remove your own admin role', {
-      code: IdentityErrorCode.CANNOT_REVOKE_OWN_ADMIN,
-    });
-  }
-}
-
-/** 422 — the change would remove the admin role from the last remaining admin. */
-export class CannotRemoveLastAdminException extends BusinessRuleViolationException {
-  constructor() {
-    super('At least one admin must remain', {
-      code: IdentityErrorCode.CANNOT_REMOVE_LAST_ADMIN,
-    });
-  }
-}
-
 /** 422 — role list empty or containing unknown role names. */
 export class InvalidRolesException extends DomainValidationException {
   constructor(issues: readonly ValidationIssue[]) {
@@ -136,6 +118,18 @@ export class MembershipRevokedException extends UnauthenticatedException {
   constructor() {
     super('Your access to this workspace was removed; please log in again', {
       code: IdentityErrorCode.MEMBERSHIP_REVOKED,
+    });
+  }
+}
+
+/**
+ * 422 (gRPC FAILED_PRECONDITION) — the retired global-role RPC `UpdateUserRoles`. Roles are per tenant
+ * since B2 (memberships); platform staff is a flag set by the staff:grant CLI.
+ */
+export class GlobalRolesRemovedException extends BusinessRuleViolationException {
+  constructor() {
+    super('Global roles were removed: roles belong to tenant memberships', {
+      code: IdentityErrorCode.GLOBAL_ROLES_REMOVED,
     });
   }
 }

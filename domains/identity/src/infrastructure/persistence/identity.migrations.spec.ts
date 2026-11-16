@@ -14,7 +14,6 @@ import {
   sessions,
   tenantRole,
   tenants,
-  userRole,
   users,
 } from './identity.schema.js';
 
@@ -35,7 +34,6 @@ describe('identityMigrations', () => {
         (table) => getTableConfig(table).schema,
       ),
     ).toEqual(Array(6).fill('identity'));
-    expect(userRole.schema).toBe('identity');
     expect(tenantRole.schema).toBe('identity');
   });
 
@@ -72,5 +70,14 @@ describe('identityMigrations', () => {
     expect(sql).toContain('DROP CONSTRAINT "sessions_pkey"');
     expect(sql).toContain('ADD CONSTRAINT "sessions_user_id_id_pk" PRIMARY KEY("user_id","id")');
     expect(sql).not.toMatch(/^-- ALTER TABLE/m);
+  });
+
+  it('0006 adds users.is_platform_staff; 0007 drops users.roles and the user_role type', () => {
+    const add = readFileSync(join(identityMigrations.folder, '0006_platform_staff.sql'), 'utf8');
+    expect(add).toContain('ADD COLUMN "is_platform_staff" boolean DEFAULT false NOT NULL');
+    expect(add).not.toContain('DROP');
+    const drop = readFileSync(join(identityMigrations.folder, '0007_drop_user_roles.sql'), 'utf8');
+    expect(drop).toContain('DROP COLUMN "roles"');
+    expect(drop).toContain('DROP TYPE "identity"."user_role"');
   });
 });

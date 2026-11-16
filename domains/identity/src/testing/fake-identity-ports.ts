@@ -5,7 +5,6 @@ import type {
   LogoutRequest,
   RefreshTokensRequest,
   RegisterRequest,
-  UpdateUserRolesRequest,
   User,
   UserPage,
 } from '@domain/identity-contracts';
@@ -94,12 +93,6 @@ export class FakeIdentityState {
   byEmail(email: string): StoredUser | undefined {
     return [...this.users.values()].find((entry) => entry.user.email === email);
   }
-
-  /** Replaces a user's roles directly (e.g. an admin for positive RBAC checks). */
-  setRoles(id: string, roles: string[]): void {
-    const entry = this.users.get(id);
-    if (entry) entry.user = { ...entry.user, roles, updatedAt: new Date() };
-  }
 }
 
 export class FakeAuthPort extends AuthPort {
@@ -120,7 +113,7 @@ export class FakeAuthPort extends AuthPort {
       id: generateId(),
       email,
       displayName: input.displayName.trim(),
-      roles: ['user'],
+      roles: [],
       createdAt: now,
       updatedAt: now,
     };
@@ -228,12 +221,5 @@ export class FakeUsersPort extends UsersPort {
       .sort((a, b) => b.id.localeCompare(a.id))
       .slice(0, query.limit);
     return { items };
-  }
-
-  async updateUserRoles(input: UpdateUserRolesRequest): Promise<User> {
-    this.state.calls.push('UsersService.UpdateUserRoles');
-    if (!this.state.users.has(input.id)) throw new EntityNotFoundException('User', input.id);
-    this.state.setRoles(input.id, input.roles);
-    return this.getUser(input.id);
   }
 }

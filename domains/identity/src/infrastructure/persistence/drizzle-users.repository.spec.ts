@@ -10,12 +10,12 @@ import { UserAggregate } from '../../domain/user.aggregate.js';
 import { DrizzleUsersRepository } from './drizzle-users.repository.js';
 import type { IdentitySchema } from './identity.schema.js';
 
-/** A users row as postgres.js returns it (enum arrays of unknown OIDs arrive as literals). */
+/** A users row as postgres.js returns it. */
 const row = (id: string) => ({
   id,
   email: 'ada@example.com',
   display_name: 'Ada',
-  roles: '{admin,user}',
+  is_platform_staff: false,
   created_at: NOW.toISOString(),
   updated_at: NOW.toISOString(),
 });
@@ -26,7 +26,7 @@ const fullRow = (id: string) => ({
   email: 'ada@example.com',
   password_hash: '$argon2id$h',
   display_name: 'Ada',
-  roles: '{admin,user}',
+  is_platform_staff: false,
   created_at: NOW.toISOString(),
   updated_at: NOW.toISOString(),
 });
@@ -48,12 +48,12 @@ describe('DrizzleUsersRepository', () => {
       id,
       email: 'ada@example.com',
       displayName: 'Ada',
-      roles: ['admin', 'user'],
+      isPlatformStaff: false,
       createdAt: NOW,
       updatedAt: NOW,
     });
     expect(executed[0]?.sql).toBe(
-      'select "id", "email", "display_name", "roles", "created_at", "updated_at" from "identity"."users" where "identity"."users"."id" = $1 limit $2',
+      'select "id", "email", "display_name", "is_platform_staff", "created_at", "updated_at" from "identity"."users" where "identity"."users"."id" = $1 limit $2',
     );
     expect(executed[0]?.params).toEqual([id, 1]);
   });
@@ -122,7 +122,7 @@ describe('DrizzleUsersRepository', () => {
     const { repository, executed } = setup(() => [row(generateId())]);
     const page = await repository.list({ limit: 20 });
     expect(executed[0]?.sql).toBe(
-      'select "id", "email", "display_name", "roles", "created_at", "updated_at" from "identity"."users" order by "identity"."users"."id" desc limit $1',
+      'select "id", "email", "display_name", "is_platform_staff", "created_at", "updated_at" from "identity"."users" order by "identity"."users"."id" desc limit $1',
     );
     expect(page.nextCursor).toBeNull();
   });
@@ -141,10 +141,10 @@ describe('DrizzleUsersRepository', () => {
     const user = newUser();
     await repository.insert(user);
     expect(executed[0]?.sql).toMatch(
-      /^insert into "identity"\."users" \("id", "email", "password_hash", "display_name", "roles", "created_at", "updated_at"\)/,
+      /^insert into "identity"\."users" \("id", "email", "password_hash", "display_name", "is_platform_staff", "created_at", "updated_at"\)/,
     );
     expect(executed[0]?.params).toContain(user.id);
-    expect(executed[0]?.params).toContain('{"user"}');
+    expect(executed[0]?.params).toContain(false);
 
     const pgError = Object.assign(new Error('duplicate key'), {
       code: '23505',
@@ -167,42 +167,26 @@ describe('DrizzleUsersRepository', () => {
     expect((failure as Error).cause).toBe(other);
   });
 
-  it('updateRoles / updatePasswordHash touch only their columns (+ updated_at)', async () => {
+  it('updatePasswordHash touches only its column (+ updated_at)', async () => {
     const { repository, executed } = setup(() => []);
     const id = generateId();
-    await repository.updateRoles(id, ['admin', 'user'], NOW);
     await repository.updatePasswordHash(id, '$argon2id$new', NOW);
 
     expect(executed[0]?.sql).toBe(
-      'update "identity"."users" set "roles" = $1, "updated_at" = $2 where "identity"."users"."id" = $3',
-    );
-    expect(executed[0]?.params).toEqual(['{"admin","user"}', NOW.toISOString(), id]);
-    expect(executed[1]?.sql).toBe(
       'update "identity"."users" set "password_hash" = $1, "updated_at" = $2 where "identity"."users"."id" = $3',
     );
   });
 
-  it('findAggregate locks the row (FOR UPDATE) and restores the aggregate', async () => {
+  it('isPlatformStaff: a fresh single-column read; false when the row is missing', async () => {
     const id = generateId();
-    const { repository, executed } = setup(() => [fullRow(id)]);
-    const user = await repository.findAggregate(id);
-    expect(user).toBeInstanceOf(UserAggregate);
-    expect(user?.roles).toEqual(['admin', 'user']);
-    expect(executed[0]?.sql).toMatch(/where "identity"\."users"\."id" = \$1 limit \$2 for update$/);
-  });
+    const { repository, executed } = setup(() => [{ is_platform_staff: true }]);
+    await expect(repository.isPlatformStaff(id)).resolves.toBe(true);
+    expect(executed[0]?.sql).toBe(
+      'select "is_platform_staff" from "identity"."users" where "identity"."users"."id" = $1 limit $2',
+    );
+    expect(executed[0]?.params).toEqual([id, 1]);
 
-  it('countAdmins takes the role-change advisory lock first, then counts admins', async () => {
-    const { repository, executed } = setup((query) =>
-      query.startsWith('select count') ? [{ admins: '2' }] : [],
-    );
-    await expect(repository.countAdmins()).resolves.toBe(2);
-    expect(executed[0]).toEqual({
-      sql: 'select pg_advisory_xact_lock(hashtext($1))',
-      params: ['identity:user-roles'],
-    });
-    expect(executed[1]?.sql).toBe(
-      'select count(*) from "identity"."users" where "identity"."users"."roles" @> $1',
-    );
-    expect(executed[1]?.params).toEqual(['{"admin"}']);
+    const none = setup(() => []);
+    await expect(none.repository.isPlatformStaff(id)).resolves.toBe(false);
   });
 });

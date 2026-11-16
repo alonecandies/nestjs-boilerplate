@@ -51,7 +51,7 @@ function knownUserRow(): FakeRow {
     id: KNOWN_USER_ID,
     email: 'ada@example.com',
     displayName: 'Ada Lovelace',
-    roles: '{user}', // enum arrays arrive as a Postgres array literal
+    isPlatformStaff: false,
     createdAt: CREATED_AT.toISOString(),
     updatedAt: UPDATED_AT.toISOString(),
   };
@@ -173,12 +173,25 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
         id: KNOWN_USER_ID,
         email: 'ada@example.com',
         displayName: 'Ada Lovelace',
-        roles: ['user'],
+        roles: [],
         createdAt: CREATED_AT,
         updatedAt: UPDATED_AT,
       });
       expect(user.createdAt).toBeInstanceOf(Date);
       expect(postgres.executed.at(-1)).toMatchObject({ params: [KNOWN_USER_ID, 1] });
+    });
+
+    it('UsersService.UpdateUserRoles is retired → FAILED_PRECONDITION / GLOBAL_ROLES_REMOVED', async () => {
+      const request = { id: KNOWN_USER_ID, roles: ['admin'], actorId: KNOWN_USER_ID };
+      const raw = await lastValueFrom(usersClient.updateUserRoles(request)).catch(
+        (e: unknown) => e,
+      );
+      expect(raw).toMatchObject({ code: status.FAILED_PRECONDITION });
+      const error = await call(
+        usersClient.updateUserRoles(request),
+        'UsersService.UpdateUserRoles',
+      ).catch((e: unknown) => e);
+      expect(error).toMatchObject({ httpStatus: 422, code: 'GLOBAL_ROLES_REMOVED' });
     });
 
     it('UsersService.GetUser for an unknown id → status NOT_FOUND + x-error-code trailer', async () => {

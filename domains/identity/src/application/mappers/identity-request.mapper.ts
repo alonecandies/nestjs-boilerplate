@@ -4,13 +4,11 @@ import type {
   LogoutRequest,
   RefreshTokensRequest,
   RegisterRequest,
-  UpdateUserRolesRequest,
 } from '@domain/identity-contracts';
 import { LoginCommand } from '../commands/login/login.command.js';
 import { LogoutCommand } from '../commands/logout/logout.command.js';
 import { RefreshSessionCommand } from '../commands/refresh-session/refresh-session.command.js';
 import { RegisterUserCommand } from '../commands/register-user/register-user.command.js';
-import { UpdateUserRolesCommand } from '../commands/update-user-roles/update-user-roles.command.js';
 import { ListUsersQuery } from '../queries/list-users/list-users.query.js';
 
 /*
@@ -35,9 +33,6 @@ export const toLogoutCommand = (request: LogoutRequest): LogoutCommand =>
     Number(request.accessTokenExp),
     request.refreshToken,
   );
-
-export const toUpdateUserRolesCommand = (request: UpdateUserRolesRequest): UpdateUserRolesCommand =>
-  new UpdateUserRolesCommand(request.id, request.roles, request.actorId);
 
 export const toListUsersQuery = (request: ListUsersRequest): ListUsersQuery =>
   new ListUsersQuery(request.limit, request.cursor, request.search);

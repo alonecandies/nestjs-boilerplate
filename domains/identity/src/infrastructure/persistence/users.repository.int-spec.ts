@@ -80,18 +80,6 @@ const journalSize = (set: DatabaseMigrationSet): number => {
   return journal.entries.length;
 };
 
-const sleep = (ms: number): Promise<'timeout'> =>
-  new Promise((resolve) => setTimeout(() => resolve('timeout'), ms));
-
-/** A promise plus its resolver (hold a transaction open until the test says so). */
-function gate(): { promise: Promise<void>; open: () => void } {
-  let open = (): void => undefined;
-  const promise = new Promise<void>((resolve) => {
-    open = resolve;
-  });
-  return { promise, open };
-}
-
 const register = (email: string, displayName = 'Integration User'): UserAggregate =>
   UserAggregate.register({
     id: generateId(),
@@ -107,7 +95,6 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
   let db: DrizzleDB<IdentitySchema>;
   let usersRepo: DrizzleUsersRepository;
   let sessionsRepo: DrizzleSessionsRepository;
-  let transaction: DrizzleTransactionRunner;
   const run = generateId().slice(-12);
   const email = (name: string): string => `${name}.${run}@example.com`;
 
@@ -127,7 +114,6 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     db = app.get(DRIZZLE);
     usersRepo = app.get(DrizzleUsersRepository);
     sessionsRepo = app.get(DrizzleSessionsRepository);
-    transaction = app.get(DrizzleTransactionRunner);
   });
 
   afterAll(async () => {
@@ -155,8 +141,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     const enums = await db.execute<{ name: string }>(sql`
       select n.nspname || '.' || t.typname as name
       from pg_type t join pg_namespace n on n.oid = t.typnamespace
-      where t.typname in ('user_role', 'payment_status') and n.nspname <> 'public'`);
-    expect(enums.map((row) => row.name)).toEqual(['identity.user_role']);
+      where t.typname in ('user_role', 'tenant_role', 'payment_status') and n.nspname <> 'public'`);
+    expect(enums.map((row) => row.name)).toEqual(['identity.tenant_role']);
     const [trgm] = await db.execute<{ schema: string }>(sql`
       select n.nspname as schema from pg_extension e join pg_namespace n on n.oid = e.extnamespace
       where e.extname = 'pg_trgm'`);
@@ -190,7 +176,11 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     await usersRepo.insert(user);
 
     const record = await usersRepo.findById(user.id);
-    expect(record).toMatchObject({ id: user.id, email: email('ada'), roles: ['user'] });
+    expect(record).toMatchObject({
+      id: user.id,
+      email: email('ada'),
+      isPlatformStaff: false,
+    });
     expect(record).not.toHaveProperty('passwordHash');
     expect(record?.createdAt).toBeInstanceOf(Date);
 
@@ -243,49 +233,16 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     });
   });
 
-  it('updateRoles stores the user_role[] array', async () => {
-    const user = register(email('roles'));
+  it('isPlatformStaff: false by default, true once flagged, false for an unknown id', async () => {
+    const user = register(email('staff'));
     await usersRepo.insert(user);
-    await usersRepo.updateRoles(user.id, ['admin', 'user'], new Date());
-    await expect(usersRepo.findById(user.id)).resolves.toMatchObject({ roles: ['admin', 'user'] });
-  });
-
-  it('findAggregate locks the row: a concurrent read-modify-write waits, then sees the committed roles', async () => {
-    const user = register(email('locked'));
-    await usersRepo.insert(user);
-    const [locked, release] = [gate(), gate()];
-
-    const first = transaction.run(async () => {
-      await usersRepo.findAggregate(user.id);
-      locked.open();
-      await release.promise;
-      await usersRepo.updateRoles(user.id, ['moderator', 'user'], new Date());
-    });
-    await locked.promise;
-    const second = transaction.run(async () => (await usersRepo.findAggregate(user.id))?.roles);
-
-    await expect(Promise.race([second, sleep(300)])).resolves.toBe('timeout');
-    release.open();
-    await first;
-    // Not the stale ['user'] it would have read without the lock (lost update / wrong audit).
-    await expect(second).resolves.toEqual(['moderator', 'user']);
-  });
-
-  it('countAdmins serialises demotions: a second caller waits for the first transaction', async () => {
-    const [locked, release] = [gate(), gate()];
-    const first = transaction.run(async () => {
-      const admins = await usersRepo.countAdmins();
-      locked.open();
-      await release.promise;
-      return admins;
-    });
-    await locked.promise;
-    const second = transaction.run(() => usersRepo.countAdmins());
-
-    await expect(Promise.race([second, sleep(300)])).resolves.toBe('timeout');
-    release.open();
-    await expect(first).resolves.toEqual(expect.any(Number));
-    await expect(second).resolves.toEqual(expect.any(Number));
+    await expect(usersRepo.isPlatformStaff(user.id)).resolves.toBe(false);
+    await db.execute(sql`update identity.users set is_platform_staff = true where id = ${user.id}`);
+    await expect(usersRepo.isPlatformStaff(user.id)).resolves.toBe(true);
+    await expect(usersRepo.findById(user.id)).resolves.toMatchObject({ isPlatformStaff: true });
+    await expect(usersRepo.isPlatformStaff('0190f3b2-0000-7000-8000-00000000dead')).resolves.toBe(
+      false,
+    );
   });
 
   it('drizzle queries are server-side prepared statements (DATABASE_PREPARE=true)', async () => {
@@ -334,12 +291,12 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     expect(plan).toContain('Bitmap Index Scan on users_search_trgm_idx');
   });
 
-  it('the DB defaults (uuidv7 id, roles) cover raw SQL inserts', async () => {
-    const [row] = await db.execute<{ id: string; roles: string }>(sql`
+  it('the DB defaults (uuidv7 id, is_platform_staff false) cover raw SQL inserts', async () => {
+    const [row] = await db.execute<{ id: string; is_platform_staff: boolean }>(sql`
       insert into identity.users (email, password_hash, display_name)
-      values (${email('raw')}, 'x', 'Raw Insert') returning id, roles::text`);
+      values (${email('raw')}, 'x', 'Raw Insert') returning id, is_platform_staff`);
     expect(isUuidV7(row?.id)).toBe(true);
-    expect(row?.roles).toBe('{user}');
+    expect(row?.is_platform_staff).toBe(false);
   });
 
   it('sessions: FK to users with ON DELETE CASCADE, rotation is compare-and-set', async () => {

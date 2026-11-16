@@ -140,7 +140,6 @@ them at verification. Grants are cumulative: owner ⊇ admin ⊇ member (✓ = e
 | Domain        | Permission            | `member` | `admin` | `owner` | Used by                                                                                                                         |
 | ------------- | --------------------- | :------: | :-----: | :-----: | ------------------------------------------------------------------------------------------------------------------------------- |
 | identity      | `users:read`          |          |    ✓    |    ✓    | `GET /v1/users`, another user's `GET /v1/users/:id`, `users`                                                                    |
-| identity      | `users:manage-roles`  |          |    ✓    |    ✓    | `PATCH /v1/users/:id/roles`, `updateUserRoles`                                                                                  |
 | identity      | `members:manage`      |          |    ✓    |    ✓    | reserved                                                                                                                        |
 | identity      | `tenant:manage`       |          |         |    ✓    | reserved                                                                                                                        |
 | billing       | `billing:checkout`    |    ✓     |    ✓    |    ✓    | `POST /v1/billing/checkout-sessions`, `createCheckoutSession`                                                                   |
@@ -156,9 +155,6 @@ Ownership rules that are **not** permissions, enforced by the handlers:
 - A user can always read their own profile (`GET /v1/users/:id`, `user(id)`).
 - Files are scoped to the key prefix `users/{userId}/`; access is checked before existence (403 before 404) so keys of other users cannot be probed.
 - Notifications and payments always use the user id from the token, never from the request.
-- Role changes run under `SELECT … FOR UPDATE` plus an advisory lock: an admin cannot drop their own
-  admin role (`CANNOT_REVOKE_OWN_ADMIN`) and the last admin cannot be removed
-  (`CANNOT_REMOVE_LAST_ADMIN`).
 
 ### The first admin
 

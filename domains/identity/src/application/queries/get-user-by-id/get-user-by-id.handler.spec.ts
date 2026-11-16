@@ -8,7 +8,7 @@ import { GetUserByIdQuery } from './get-user-by-id.query.js';
 
 describe('GetUserByIdHandler', () => {
   it('returns the contract user', async () => {
-    const user = makeUserRecord({ roles: ['moderator'] });
+    const user = makeUserRecord();
     const users = mockOf<UsersRepository>({ findById: async () => user });
     await expect(
       new GetUserByIdHandler(users).execute(new GetUserByIdQuery(user.id)),
@@ -16,7 +16,7 @@ describe('GetUserByIdHandler', () => {
       id: user.id,
       email: user.email,
       displayName: user.displayName,
-      roles: ['moderator'],
+      roles: [],
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     });

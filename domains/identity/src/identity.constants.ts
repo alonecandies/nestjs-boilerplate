@@ -34,14 +34,13 @@ export const IdentityErrorCode = {
   INVALID_REFRESH_TOKEN: 'INVALID_REFRESH_TOKEN',
   REFRESH_TOKEN_REUSED: 'REFRESH_TOKEN_REUSED',
   SESSION_EXPIRED: 'SESSION_EXPIRED',
-  CANNOT_REVOKE_OWN_ADMIN: 'CANNOT_REVOKE_OWN_ADMIN',
-  CANNOT_REMOVE_LAST_ADMIN: 'CANNOT_REMOVE_LAST_ADMIN',
   INVALID_ROLES: 'INVALID_ROLES',
   INVALID_USER: 'INVALID_USER',
   TENANT_SLUG_TAKEN: 'TENANT_SLUG_TAKEN',
   MEMBERSHIP_EXISTS: 'MEMBERSHIP_EXISTS',
   TENANT_ACCESS_DENIED: 'TENANT_ACCESS_DENIED',
   MEMBERSHIP_REVOKED: 'MEMBERSHIP_REVOKED',
+  GLOBAL_ROLES_REMOVED: 'GLOBAL_ROLES_REMOVED',
 } as const;
 export type IdentityErrorCode = (typeof IdentityErrorCode)[keyof typeof IdentityErrorCode];
 
@@ -51,13 +50,6 @@ export const USERS_LOADER = 'users';
 /** Read-through cache of `GET /v1/users/:id` (blueprint §3.16): key `user:{id}`, 30 s. */
 export const USER_CACHE_TTL_MS = 30_000;
 export const userCacheKey = (id: string): string => `user:${id}`;
-
-/**
- * Postgres transaction-scoped advisory lock key (`pg_advisory_xact_lock(hashtext(key))`) taken
- * before counting admins: serialises admin demotions so two concurrent ones cannot both see
- * "another admin remains" and leave the system with none.
- */
-export const USER_ROLES_LOCK = 'identity:user-roles';
 
 /** Hourly purge of expired sessions, on one replica only (`@WithLock`). */
 export const PURGE_SESSIONS_LOCK = 'identity:purge-sessions';
