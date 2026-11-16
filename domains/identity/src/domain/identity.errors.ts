@@ -97,3 +97,13 @@ export class InvalidUserException extends DomainValidationException {
     super('Invalid user', { code: IdentityErrorCode.INVALID_USER, issues });
   }
 }
+
+/** 409 — a tenant with this slug already exists. */
+export class TenantSlugTakenException extends DomainConflictException {
+  constructor(options?: { cause?: unknown }) {
+    super('A workspace with this slug already exists', {
+      code: IdentityErrorCode.TENANT_SLUG_TAKEN,
+      cause: options?.cause,
+    });
+  }
+}

@@ -146,6 +146,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
       'app.tenant_colocation',
       'identity.__drizzle_migrations',
       'identity.sessions',
+      'identity.tenants',
       'identity.users',
     ]);
     const enums = await db.execute<{ name: string }>(sql`

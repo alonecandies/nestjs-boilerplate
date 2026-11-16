@@ -1,0 +1,62 @@
+import { type INestApplicationContext, Module, type Provider } from '@nestjs/common';
+import { NestFactory } from '@nestjs/core';
+import { AppConfigModule } from '@platform/config';
+import { DatabaseModule, DRIZZLE, type DrizzleDB } from '@platform/database';
+import { startTestPostgres } from '@platform/testing/postgres';
+import { ClsModule } from 'nestjs-cls';
+import { vi } from 'vitest';
+import { identityMigrations } from '../src/infrastructure/persistence/identity.migrations.js';
+import {
+  type IdentitySchema,
+  identitySchema,
+} from '../src/infrastructure/persistence/identity.schema.js';
+
+export interface IdentityDatabase {
+  readonly app: INestApplicationContext;
+  readonly db: DrizzleDB<IdentitySchema>;
+  close(): Promise<void>;
+}
+
+/**
+ * A fresh Citus 14.2 database (`startTestPostgres`) with the platform set and identity's history
+ * applied by the real `DatabaseModule`, and `providers` (repositories under test) on top. Int specs only.
+ */
+export async function startIdentityDatabase(providers: Provider[]): Promise<IdentityDatabase> {
+  const pg = await startTestPostgres();
+  vi.stubEnv('DATABASE_URL', pg.url);
+  vi.stubEnv('SERVICE_NAME', 'identity-int');
+
+  @Module({
+    imports: [
+      AppConfigModule.forRoot(),
+      ClsModule.forRoot({ global: true }),
+      DatabaseModule.forRootAsync({
+        schema: identitySchema,
+        migrations: [identityMigrations],
+        runMigrations: true,
+      }),
+    ],
+    providers,
+  })
+  class IdentityIntModule {}
+
+  try {
+    const app = await NestFactory.createApplicationContext(IdentityIntModule, {
+      logger: false,
+      abortOnError: false,
+    });
+    return {
+      app,
+      db: app.get<DrizzleDB<IdentitySchema>>(DRIZZLE),
+      close: async () => {
+        await app.close();
+        await pg.stop();
+        vi.unstubAllEnvs();
+      },
+    };
+  } catch (error) {
+    await pg.stop();
+    vi.unstubAllEnvs();
+    throw error;
+  }
+}

@@ -11,6 +11,7 @@ import { UpdateUserRolesHandler } from './application/commands/update-user-roles
 import { UserRegisteredRelay } from './application/event-handlers/user-registered.relay.js';
 import { UserRolesChangedAuditHandler } from './application/event-handlers/user-roles-changed-audit.handler.js';
 import { SessionsRepository } from './application/persistence/sessions.repository.js';
+import { TenantsRepository } from './application/persistence/tenants.repository.js';
 import { TransactionRunner } from './application/persistence/transaction-runner.js';
 import { UsersRepository } from './application/persistence/users.repository.js';
 import { GetUserByIdHandler } from './application/queries/get-user-by-id/get-user-by-id.handler.js';
@@ -18,6 +19,7 @@ import { GetUsersByIdsHandler } from './application/queries/get-users-by-ids/get
 import { ListUsersHandler } from './application/queries/list-users/list-users.handler.js';
 import { SessionTokensService } from './application/services/session-tokens.service.js';
 import { DrizzleSessionsRepository } from './infrastructure/persistence/drizzle-sessions.repository.js';
+import { DrizzleTenantsRepository } from './infrastructure/persistence/drizzle-tenants.repository.js';
 import { DrizzleTransactionRunner } from './infrastructure/persistence/drizzle-transaction.runner.js';
 import { DrizzleUsersRepository } from './infrastructure/persistence/drizzle-users.repository.js';
 import { PurgeExpiredSessionsCron } from './infrastructure/scheduling/purge-expired-sessions.cron.js';
@@ -43,6 +45,7 @@ export const IDENTITY_EVENT_HANDLERS = [UserRegisteredRelay, UserRolesChangedAud
 const PERSISTENCE: Provider[] = [
   { provide: UsersRepository, useClass: DrizzleUsersRepository },
   { provide: SessionsRepository, useClass: DrizzleSessionsRepository },
+  { provide: TenantsRepository, useClass: DrizzleTenantsRepository },
   { provide: TransactionRunner, useClass: DrizzleTransactionRunner },
 ];
 

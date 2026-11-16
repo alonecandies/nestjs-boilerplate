@@ -26,6 +26,8 @@ export type {
   SessionRecord,
 } from './application/persistence/sessions.repository.js';
 export { SessionsRepository } from './application/persistence/sessions.repository.js';
+export type { NewTenant, TenantRecord } from './application/persistence/tenants.repository.js';
+export { TenantsRepository } from './application/persistence/tenants.repository.js';
 export { TransactionRunner } from './application/persistence/transaction-runner.js';
 export type { ListUsersCriteria, UserRecord } from './application/persistence/users.repository.js';
 export { UsersRepository } from './application/persistence/users.repository.js';
@@ -46,7 +48,14 @@ export {
   InvalidUserException,
   RefreshTokenReuseDetectedException,
   SessionExpiredException,
+  TenantSlugTakenException,
 } from './domain/identity.errors.js';
+export {
+  deriveTenantSlug,
+  personalWorkspaceName,
+  slugify,
+  TENANT_SLUG_PATTERN,
+} from './domain/tenant-slug.js';
 export { UserAggregate, type UserSnapshot } from './domain/user.aggregate.js';
 export { isUserRole, USER_ROLES, type UserRole } from './domain/user-role.js';
 // Modules.
@@ -64,6 +73,7 @@ export {
   identitySchema,
   sessions,
   sessionsRelations,
+  tenants,
   userRole,
   users,
   usersRelations,

@@ -20,6 +20,8 @@ export const IDENTITY_LIMITS = {
   /** Stored client fingerprint (sessions.user_agent / sessions.ip) is truncated to these. */
   USER_AGENT_MAX_LENGTH: 512,
   IP_MAX_LENGTH: 64,
+  /** identity.tenants.name (personal workspace names are cut to fit). */
+  TENANT_NAME_MAX_LENGTH: 100,
 } as const;
 
 /** Longest password `PasswordHasher` hashes or verifies (argon2 cost DoS guard, any transport). */
@@ -36,6 +38,7 @@ export const IdentityErrorCode = {
   CANNOT_REMOVE_LAST_ADMIN: 'CANNOT_REMOVE_LAST_ADMIN',
   INVALID_ROLES: 'INVALID_ROLES',
   INVALID_USER: 'INVALID_USER',
+  TENANT_SLUG_TAKEN: 'TENANT_SLUG_TAKEN',
 } as const;
 export type IdentityErrorCode = (typeof IdentityErrorCode)[keyof typeof IdentityErrorCode];
 

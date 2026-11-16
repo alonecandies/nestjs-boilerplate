@@ -1,5 +1,5 @@
 import { relations, sql } from 'drizzle-orm';
-import { index, pgSchema, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, index, pgSchema, text, timestamp, uuid } from 'drizzle-orm/pg-core';
 import { USER_ROLES } from '../../domain/user-role.js';
 
 /*
@@ -84,6 +84,25 @@ export const sessions = identityPgSchema.table(
   ],
 );
 
+// citus: reference (users, tenants and memberships are reference tables: sharding design §2.2)
+export const tenants = identityPgSchema.table(
+  'tenants',
+  {
+    id: uuid().primaryKey().default(sql`uuidv7()`),
+    /** DNS-label shaped (`TENANT_SLUG_PATTERN`); personal workspaces derive it from the email. */
+    slug: text().notNull().unique('tenants_slug_unique'),
+    name: text().notNull(),
+    /** The workspace registration created; `false` for tenants created through the API. */
+    personal: boolean().notNull().default(false),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  // The nil UUID is PLATFORM_TENANT_ID (@platform/common): never issued as a tenant id. Literal on
+  // purpose: drizzle-kit loads this file without workspace packages (identity.migrations.spec pins it).
+  () => [
+    check('tenants_id_not_platform', sql`"id" <> '00000000-0000-0000-0000-000000000000'::uuid`),
+  ],
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
 }));
@@ -100,6 +119,7 @@ export const identitySchema = {
   userRole,
   users,
   sessions,
+  tenants,
   usersRelations,
   sessionsRelations,
 };
@@ -109,3 +129,4 @@ export type UserRow = typeof users.$inferSelect;
 export type NewUserRow = typeof users.$inferInsert;
 export type SessionRow = typeof sessions.$inferSelect;
 export type NewSessionRow = typeof sessions.$inferInsert;
+export type TenantRow = typeof tenants.$inferSelect;
