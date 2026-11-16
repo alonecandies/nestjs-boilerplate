@@ -167,16 +167,19 @@ Ownership rules that are **not** permissions, enforced by the handlers:
 - Files are scoped to the key prefix `users/{userId}/`; access is checked before existence (403 before 404) so keys of other users cannot be probed.
 - Notifications and payments always use the user id from the token, never from the request.
 
-### The first admin
+### The first admin (platform staff)
 
-There is no seed account. Every registration gets the `user` role. Promote the first admin
-directly in Postgres, then log in again (roles are read into the next token):
+There is no seed account. Every registration creates the user's own workspace, where they are `owner`. Platform
+staff (support access to other tenants, see [Platform staff switch-in](#platform-staff-switch-in)) is a flag only
+this command sets, from a shell with database access:
 
-```sql
-UPDATE identity.users SET roles = ARRAY['admin']::identity.user_role[] WHERE email = 'you@example.com';
+```bash
+bun run --filter @domain/identity staff:grant you@example.com           # grant
+bun run --filter @domain/identity staff:grant you@example.com --revoke  # revoke
 ```
 
-After that, admins manage roles through `PATCH /v1/users/:id/roles` or `updateUserRoles`.
+It connects with `DATABASE_MIGRATION_URL` when set, else `DATABASE_URL`, and exits 1 when no user has that email.
+No API can grant staff. A revocation takes effect at the next switch-in (the flag is re-read every time).
 
 ## Rate limiting
 
@@ -390,7 +393,6 @@ Prometheus scrape the pods directly. A separate metrics listener is a [known gap
 ## Known gaps
 
 - `/metrics` is served on the API port; a separate metrics listener is a planned follow-up.
-- No admin seed or bootstrap command (manual SQL above).
 - Integration events are published after commit, with no transactional outbox: a crash between
   commit and publish loses the event (not a security issue, but an audit-trail one).
 - WebSocket revocation is not instant: a live socket whose token is revoked is closed by the next

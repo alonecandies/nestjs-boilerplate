@@ -367,6 +367,7 @@
         "lodash-es": "catalog:",
         "nestjs-cls": "catalog:",
         "passport-local": "catalog:",
+        "postgres": "catalog:",
         "rxjs": "catalog:",
         "zod": "catalog:",
       },

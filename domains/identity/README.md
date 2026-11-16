@@ -258,6 +258,10 @@ Test doubles for the apps: `@domain/identity/testing` exports `createInMemoryIde
 monolith e2e suite under the real handlers) and `FakeIdentityState`, `FakeAuthPort`, `FakeUsersPort`
 (a fake identity-service behind the gateway's ports). Production code never imports the subpath.
 
+## Scripts
+
+- `bun run --filter @domain/identity staff:grant <email> [--revoke]`: grant or revoke platform staff (`users.is_platform_staff`); see [SECURITY.md](../../docs/SECURITY.md#the-first-admin-platform-staff).
+
 ## Gotchas
 
 - Roles live in the access token: role changes apply after the next refresh (≤ 15 min). Reuse
