@@ -1,6 +1,7 @@
 import { Metadata } from '@grpc/grpc-js';
 import type { Empty } from '../generated/google/protobuf/empty.pb.js';
 import {
+  ChangePermissionRequest,
   ChangeSQLPrivilegesRequest,
   type ChangeSQLPrivilegesResponse,
   type CommittedSQLTx,
@@ -197,6 +198,19 @@ export class ImmudbSession {
         password: Buffer.from(password),
         permission: PERMISSION_READ_WRITE,
         database,
+      }),
+    );
+  }
+
+  /** Gives an existing user read-write permission on `database` (a no-op when it has it). */
+  async grantReadWrite(username: string, database: string): Promise<void> {
+    await this.call<ChangePermissionRequest, Empty>(
+      (r, m, o, cb) => this.client.changePermission(r, m, o, cb),
+      ChangePermissionRequest.fromPartial({
+        action: PermissionAction.GRANT,
+        username,
+        database,
+        permission: PERMISSION_READ_WRITE,
       }),
     );
   }

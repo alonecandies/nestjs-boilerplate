@@ -18,6 +18,7 @@ import type { ImmuServiceClient } from './generated/immudb/schema/schema.pb.js';
 import { ImmudbHealthIndicator } from './health/immudb.health.js';
 import { IMMUDB_GRPC_CLIENT, IMMUDB_MODULE_OPTIONS } from './immudb.constants.js';
 import type { ImmudbModuleOptions } from './immudb.types.js';
+import { runImmudbMigrations } from './migrations/immudb-migrations.js';
 
 @Injectable()
 class ImmudbLifecycle implements OnApplicationShutdown {
@@ -55,9 +56,15 @@ export class ImmudbModule {
         },
         {
           provide: ImmudbSessionPool,
-          inject: [IMMUDB_GRPC_CLIENT, immudbConfig.KEY],
-          useFactory: (grpc: ImmuServiceClient, cfg: ImmudbConfig): ImmudbSessionPool =>
-            new ImmudbSessionPool(
+          inject: [IMMUDB_GRPC_CLIENT, immudbConfig.KEY, IMMUDB_MODULE_OPTIONS],
+          useFactory: async (
+            grpc: ImmuServiceClient,
+            cfg: ImmudbConfig,
+            opts: ImmudbModuleOptions,
+          ): Promise<ImmudbSessionPool> => {
+            // Before any provider can inject the client (like CassandraModule's boot migrations).
+            if (cfg.runMigrations) await runImmudbMigrations(cfg, opts.migrations ?? [], { grpc });
+            return new ImmudbSessionPool(
               () =>
                 ImmudbSession.open(
                   grpc,
@@ -66,7 +73,8 @@ export class ImmudbModule {
                 ),
               cfg.sessionPoolSize,
               cfg.keepAliveIntervalMs,
-            ),
+            );
+          },
         },
         {
           provide: ImmudbClient,

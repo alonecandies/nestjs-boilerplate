@@ -14,3 +14,4 @@ export * from './errors/immudb.error.js';
 export * from './health/immudb.health.js';
 export * from './immudb.module.js';
 export type * from './immudb.types.js';
+export * from './migrations/immudb-migrations.js';
