@@ -2,6 +2,8 @@ import type { ApolloServerPlugin, BaseContext, GraphQLRequestListener } from '@a
 import { Plugin } from '@nestjs/apollo';
 import { Inject, Optional } from '@nestjs/common';
 import { GraphQLSchemaHost } from '@nestjs/graphql';
+import { AccessTokenDenylist, TokenService } from '@platform/auth';
+import { getHeaderValue } from '@platform/common';
 import { type ThrottleConfig, throttleConfig } from '@platform/config';
 import {
   authenticatedUserId,
@@ -12,6 +14,10 @@ import {
   THROTTLER,
 } from '@platform/redis';
 import { GraphQLError } from 'graphql';
+import {
+  createSubscriptionAuthenticator,
+  type SubscriptionAuthenticator,
+} from '../auth/subscription-auth.js';
 import { isIntrospectionOnly, measureComplexity } from './complexity.plugin.js';
 
 export const GRAPHQL_RATE_LIMITED = 'RATE_LIMITED';
@@ -19,7 +25,10 @@ export const GRAPHQL_RATE_LIMITED = 'RATE_LIMITED';
 interface GqlRequestLike {
   user?: unknown;
   ip?: unknown;
+  headers?: Readonly<Record<string, string | string[] | undefined>>;
 }
+
+const BEARER = /^\s*bearer\s+(\S+)\s*$/i;
 
 /** The Fastify reply in the GraphQL context (`{ req, reply }`, built by createGraphqlContext). */
 interface HeaderReply {
@@ -32,21 +41,47 @@ interface HeaderReply {
  * by the operation's complexity (the same estimators as `ComplexityPlugin`, minimum 1). A fully
  * limited operation fails BEFORE any resolver runs with HTTP 429, `extensions.code: RATE_LIMITED`,
  * `Retry-After` and the IETF headers. Introspection-only operations are exempt.
+ *
+ * Over HTTP this hook runs before `JwtAuthGuard` (it authenticates per resolver), so `req.user` is
+ * not set yet: the bearer token is verified here with the checks of `JwtStrategy` (signature, iss,
+ * aud, exp, typ, denylist) to key the budget by user. A missing or invalid token is charged to the
+ * client IP (IPv6 collapsed to its subnet, like the guards); the guard then rejects it as usual.
+ * A `req.user` that is already set is used as is.
  */
 @Plugin()
 export class OperationRateLimitPlugin implements ApolloServerPlugin<BaseContext> {
+  private readonly authenticate: SubscriptionAuthenticator;
+
   constructor(
     private readonly schemaHost: GraphQLSchemaHost,
     @Inject(throttleConfig.KEY) private readonly limits: ThrottleConfig,
+    tokens: TokenService,
+    denylist: AccessTokenDenylist,
     // Explicit token: a `T | undefined` parameter type is emitted as `Object` in design:paramtypes.
     @Optional() @Inject(RateLimitCharger) private readonly charger?: RateLimitCharger,
-  ) {}
+  ) {
+    this.authenticate = createSubscriptionAuthenticator(tokens, denylist);
+  }
+
+  /** The principal to charge: `req.user`, else the verified bearer token, else none (IP). */
+  private async principalOf(req: GqlRequestLike): Promise<unknown> {
+    if (authenticatedUserId(req.user) !== undefined) return req.user;
+    const token = BEARER.exec(getHeaderValue(req.headers, 'authorization') ?? '')?.[1];
+    if (token === undefined) return undefined;
+    try {
+      return await this.authenticate(token);
+    } catch {
+      // Invalid, expired or revoked (or the denylist is unreachable): JwtAuthGuard answers it.
+      return undefined;
+    }
+  }
 
   async requestDidStart(): Promise<GraphQLRequestListener<BaseContext>> {
     const charger = this.charger;
     if (charger === undefined) return {};
     const schema = this.schemaHost.schema;
     const { graphqlCostLimit, graphqlTtlMs } = this.limits;
+    const principalOf = (req: GqlRequestLike) => this.principalOf(req);
     return {
       async didResolveOperation({ request, document, contextValue }) {
         if (isIntrospectionOnly(document, request.operationName)) return;
@@ -58,10 +93,7 @@ export class OperationRateLimitPlugin implements ApolloServerPlugin<BaseContext>
         });
         const ctx = contextValue as { req?: GqlRequestLike; reply?: HeaderReply };
         const req = ctx.req ?? {};
-        const userId = authenticatedUserId(req.user);
-        const tracker = userId
-          ? `user:${userId}`
-          : `ip:${typeof req.ip === 'string' ? req.ip : 'unknown'}`;
+        const tracker = charger.trackerFor(await principalOf(req), req.ip);
         const { record, decision } = await charger.charge(
           {
             throttler: THROTTLER.GRAPHQL,

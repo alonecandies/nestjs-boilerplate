@@ -342,6 +342,29 @@ describe('GraphQL per-request charging (C-5)', () => {
     expect(increment.mock.calls.filter(([, , , , n]) => n === 'tenant')).toHaveLength(1);
   });
 
+  it('charges once when the root fields of a query run concurrently (graphql-js executeFields)', async () => {
+    const { guard, increment } = await createGuard();
+    const req = { headers: {}, user: { id: 'u-1', tenantId: 't-1' } };
+    const fields = Array.from({ length: 5 }, () => guard.canActivate(context('graphql', req)));
+    await expect(Promise.all(fields)).resolves.toEqual([true, true, true, true, true]);
+    expect(increment.mock.calls.filter(([, , , , n]) => n === 'user')).toHaveLength(1);
+    expect(increment.mock.calls.filter(([, , , , n]) => n === 'tenant')).toHaveLength(1);
+  });
+
+  it('refuses every concurrent root field of a blocked GraphQL request, charging once', async () => {
+    const { guard, increment } = await createGuard();
+    increment.mockResolvedValue(record({ isBlocked: true, totalHits: 101, timeToBlockExpire: 5 }));
+    const req = { headers: {}, user: { id: 'u-1' } };
+    const fields = await Promise.allSettled(
+      Array.from({ length: 5 }, () => guard.canActivate(context('graphql', req))),
+    );
+    for (const field of fields) {
+      expect(field.status).toBe('rejected');
+      expect(field.status === 'rejected' && field.reason).toBeInstanceOf(ThrottlerException);
+    }
+    expect(increment.mock.calls.filter(([, , , , n]) => n === 'user')).toHaveLength(1);
+  });
+
   it('still charges a route policy per resolver', async () => {
     const { guard, increment } = await createGuard();
     const req = { headers: {}, user: { id: 'u-1' } };
