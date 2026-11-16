@@ -21,6 +21,11 @@ export { RefreshSessionCommand } from './application/commands/refresh-session/re
 export { RegisterUserCommand } from './application/commands/register-user/register-user.command.js';
 export { UpdateUserRolesCommand } from './application/commands/update-user-roles/update-user-roles.command.js';
 export type {
+  InvitationRecord,
+  NewInvitation,
+} from './application/persistence/invitations.repository.js';
+export { InvitationsRepository } from './application/persistence/invitations.repository.js';
+export type {
   MembershipRecord,
   NewMembership,
   TenantMembership,
@@ -57,6 +62,12 @@ export {
   SessionExpiredException,
   TenantSlugTakenException,
 } from './domain/identity.errors.js';
+export {
+  generateInvitationToken,
+  hashInvitationToken,
+  INVITATION_TOKEN_BYTES,
+  INVITATION_TTL_MS,
+} from './domain/invitation-token.js';
 export { TENANT_ROLE_VALUES } from './domain/tenant-role.js';
 export {
   deriveTenantSlug,
@@ -79,6 +90,7 @@ export { identityMigrations } from './infrastructure/persistence/identity.migrat
 export {
   type IdentitySchema,
   identitySchema,
+  invitations,
   memberships,
   sessions,
   sessionsRelations,

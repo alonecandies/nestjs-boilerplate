@@ -7,6 +7,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 import { TENANT_ROLE_VALUES } from '../../domain/tenant-role.js';
@@ -140,6 +141,34 @@ export const memberships = identityPgSchema.table(
   ],
 );
 
+// citus: tenant (PK and every unique lead with tenant_id; FKs to the reference tables only)
+export const invitations = identityPgSchema.table(
+  'invitations',
+  {
+    tenantId: uuid()
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    id: uuid().notNull().default(sql`uuidv7()`),
+    /** Normalised like users.email; acceptance requires the logged-in user's email to match. */
+    email: text().notNull(),
+    roles: tenantRole().array().notNull(),
+    /** sha256 hex of the mailed token. */
+    tokenHash: text().notNull(),
+    invitedBy: uuid()
+      .notNull()
+      .references(() => users.id),
+    expiresAt: timestamptz().notNull(),
+    acceptedAt: timestamptz(),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'invitations_tenant_id_id_pk', columns: [t.tenantId, t.id] }),
+    uniqueIndex('invitations_tenant_id_token_hash_uq').on(t.tenantId, t.tokenHash),
+    // findByTokenHash: a multi-shard system read (one index probe per shard once distributed).
+    index('invitations_token_hash_idx').on(t.tokenHash),
+  ],
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
 }));
@@ -159,6 +188,7 @@ export const identitySchema = {
   sessions,
   tenants,
   memberships,
+  invitations,
   usersRelations,
   sessionsRelations,
 };
@@ -170,3 +200,4 @@ export type SessionRow = typeof sessions.$inferSelect;
 export type NewSessionRow = typeof sessions.$inferInsert;
 export type TenantRow = typeof tenants.$inferSelect;
 export type MembershipRow = typeof memberships.$inferSelect;
+export type InvitationRow = typeof invitations.$inferSelect;

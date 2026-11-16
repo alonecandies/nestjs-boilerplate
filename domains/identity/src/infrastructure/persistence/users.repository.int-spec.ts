@@ -145,6 +145,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
       'app.__drizzle_migrations',
       'app.tenant_colocation',
       'identity.__drizzle_migrations',
+      'identity.invitations',
       'identity.memberships',
       'identity.sessions',
       'identity.tenants',

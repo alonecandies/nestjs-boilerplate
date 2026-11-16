@@ -10,6 +10,7 @@ import { RegisterUserHandler } from './application/commands/register-user/regist
 import { UpdateUserRolesHandler } from './application/commands/update-user-roles/update-user-roles.handler.js';
 import { UserRegisteredRelay } from './application/event-handlers/user-registered.relay.js';
 import { UserRolesChangedAuditHandler } from './application/event-handlers/user-roles-changed-audit.handler.js';
+import { InvitationsRepository } from './application/persistence/invitations.repository.js';
 import { MembershipsRepository } from './application/persistence/memberships.repository.js';
 import { SessionsRepository } from './application/persistence/sessions.repository.js';
 import { TenantsRepository } from './application/persistence/tenants.repository.js';
@@ -19,6 +20,7 @@ import { GetUserByIdHandler } from './application/queries/get-user-by-id/get-use
 import { GetUsersByIdsHandler } from './application/queries/get-users-by-ids/get-users-by-ids.handler.js';
 import { ListUsersHandler } from './application/queries/list-users/list-users.handler.js';
 import { SessionTokensService } from './application/services/session-tokens.service.js';
+import { DrizzleInvitationsRepository } from './infrastructure/persistence/drizzle-invitations.repository.js';
 import { DrizzleMembershipsRepository } from './infrastructure/persistence/drizzle-memberships.repository.js';
 import { DrizzleSessionsRepository } from './infrastructure/persistence/drizzle-sessions.repository.js';
 import { DrizzleTenantsRepository } from './infrastructure/persistence/drizzle-tenants.repository.js';
@@ -49,6 +51,7 @@ const PERSISTENCE: Provider[] = [
   { provide: SessionsRepository, useClass: DrizzleSessionsRepository },
   { provide: TenantsRepository, useClass: DrizzleTenantsRepository },
   { provide: MembershipsRepository, useClass: DrizzleMembershipsRepository },
+  { provide: InvitationsRepository, useClass: DrizzleInvitationsRepository },
   { provide: TransactionRunner, useClass: DrizzleTransactionRunner },
 ];
 
