@@ -2,6 +2,7 @@ import {
   BusinessRuleViolationException,
   DomainConflictException,
   DomainValidationException,
+  PermissionDeniedException,
   UnauthenticatedException,
   type ValidationIssue,
 } from '@platform/common';
@@ -95,5 +96,46 @@ export class InvalidRolesException extends DomainValidationException {
 export class InvalidUserException extends DomainValidationException {
   constructor(issues: readonly ValidationIssue[]) {
     super('Invalid user', { code: IdentityErrorCode.INVALID_USER, issues });
+  }
+}
+
+/** 409 — a tenant with this slug already exists. */
+export class TenantSlugTakenException extends DomainConflictException {
+  constructor(options?: { cause?: unknown }) {
+    super('A workspace with this slug already exists', {
+      code: IdentityErrorCode.TENANT_SLUG_TAKEN,
+      cause: options?.cause,
+    });
+  }
+}
+
+/** 409 — the user is already a member of this tenant. */
+export class MembershipAlreadyExistsException extends DomainConflictException {
+  constructor(options?: { cause?: unknown }) {
+    super('The user is already a member of this workspace', {
+      code: IdentityErrorCode.MEMBERSHIP_EXISTS,
+      cause: options?.cause,
+    });
+  }
+}
+
+/**
+ * 403 — login or switch to a tenant the user may not use. One error for "not a member", "unknown
+ * tenant" and the platform tenant, so tenant ids cannot be probed.
+ */
+export class TenantAccessDeniedException extends PermissionDeniedException {
+  constructor() {
+    super('You are not a member of this workspace', {
+      code: IdentityErrorCode.TENANT_ACCESS_DENIED,
+    });
+  }
+}
+
+/** 401 — the session's membership was removed: the session is revoked, the client logs in again. */
+export class MembershipRevokedException extends UnauthenticatedException {
+  constructor() {
+    super('Your access to this workspace was removed; please log in again', {
+      code: IdentityErrorCode.MEMBERSHIP_REVOKED,
+    });
   }
 }

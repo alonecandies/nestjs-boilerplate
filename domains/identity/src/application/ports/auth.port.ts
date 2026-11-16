@@ -17,7 +17,7 @@ export abstract class AuthPort {
   /** @throws EmailAlreadyTakenException (409 EMAIL_TAKEN) */
   abstract register(input: RegisterRequest): Promise<AuthTokens>;
 
-  /** @throws InvalidCredentialsException (401 INVALID_CREDENTIALS) */
+  /** @throws InvalidCredentialsException (401 INVALID_CREDENTIALS) | TenantAccessDeniedException (403 TENANT_ACCESS_DENIED, only when `tenantId` is given) */
   abstract login(input: LoginRequest): Promise<AuthTokens>;
 
   /**

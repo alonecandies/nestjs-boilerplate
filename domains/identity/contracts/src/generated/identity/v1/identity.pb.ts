@@ -29,7 +29,13 @@ export interface AuthTokens {
   expiresIn: number;
   /** Always "Bearer". */
   tokenType: string;
-  user?: User | undefined;
+  user?:
+    | User
+    | undefined;
+  /** The session's tenant: the access token's active tenant. */
+  tenantId: string;
+  /** The user's roles in tenant_id: "owner" | "admin" | "member". */
+  tenantRoles: string[];
 }
 
 /** Client fingerprint stored on the session (audit / theft investigation). */
@@ -48,7 +54,14 @@ export interface RegisterRequest {
 export interface LoginRequest {
   email: string;
   password: string;
-  client?: ClientInfo | undefined;
+  client?:
+    | ClientInfo
+    | undefined;
+  /**
+   * The tenant to open the session in (a UUID). Absent: the most recently active membership.
+   * Not a member (unknown and nil ids included) → PERMISSION_DENIED / TENANT_ACCESS_DENIED.
+   */
+  tenantId?: string | undefined;
 }
 
 export interface RefreshTokensRequest {

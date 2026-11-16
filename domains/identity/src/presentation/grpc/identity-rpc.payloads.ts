@@ -55,6 +55,13 @@ const clientInfo = z
 const password = z.string().min(1).max(IDENTITY_LIMITS.PASSWORD_MAX_LENGTH);
 const refreshToken = z.string().min(1).max(IDENTITY_LIMITS.REFRESH_TOKEN_MAX_LENGTH);
 
+/** proto3 `optional string` holding a UUID: unset (absent, null or '') → undefined. */
+const optionalUuid = z
+  .string()
+  .nullish()
+  .transform((value) => (value === null || value === '' ? undefined : value))
+  .pipe(z.uuid().optional());
+
 export const registerRequestSchema = z.object({
   email: z.string().trim().max(IDENTITY_LIMITS.EMAIL_MAX_LENGTH).pipe(z.email()),
   password: password.min(IDENTITY_LIMITS.PASSWORD_MIN_LENGTH),
@@ -70,6 +77,7 @@ export const loginRequestSchema = z.object({
   email: z.string().min(1).max(IDENTITY_LIMITS.EMAIL_MAX_LENGTH),
   password,
   client: clientInfo,
+  tenantId: optionalUuid,
 }) satisfies z.ZodType<LoginRequest>;
 
 export const refreshTokensRequestSchema = z.object({

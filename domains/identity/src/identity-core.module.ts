@@ -10,14 +10,25 @@ import { RegisterUserHandler } from './application/commands/register-user/regist
 import { UpdateUserRolesHandler } from './application/commands/update-user-roles/update-user-roles.handler.js';
 import { UserRegisteredRelay } from './application/event-handlers/user-registered.relay.js';
 import { UserRolesChangedAuditHandler } from './application/event-handlers/user-roles-changed-audit.handler.js';
+import { AuditEventsRepository } from './application/persistence/audit-events.repository.js';
+import { InvitationsRepository } from './application/persistence/invitations.repository.js';
+import { MembershipsRepository } from './application/persistence/memberships.repository.js';
 import { SessionsRepository } from './application/persistence/sessions.repository.js';
+import { TenantsRepository } from './application/persistence/tenants.repository.js';
 import { TransactionRunner } from './application/persistence/transaction-runner.js';
 import { UsersRepository } from './application/persistence/users.repository.js';
 import { GetUserByIdHandler } from './application/queries/get-user-by-id/get-user-by-id.handler.js';
 import { GetUsersByIdsHandler } from './application/queries/get-users-by-ids/get-users-by-ids.handler.js';
 import { ListUsersHandler } from './application/queries/list-users/list-users.handler.js';
+import { PersonalWorkspaces } from './application/services/personal-workspaces.service.js';
 import { SessionTokensService } from './application/services/session-tokens.service.js';
+import { TenantAuditLog } from './application/services/tenant-audit-log.service.js';
+import { TenantSelection } from './application/services/tenant-selection.service.js';
+import { DrizzleAuditEventsRepository } from './infrastructure/persistence/drizzle-audit-events.repository.js';
+import { DrizzleInvitationsRepository } from './infrastructure/persistence/drizzle-invitations.repository.js';
+import { DrizzleMembershipsRepository } from './infrastructure/persistence/drizzle-memberships.repository.js';
 import { DrizzleSessionsRepository } from './infrastructure/persistence/drizzle-sessions.repository.js';
+import { DrizzleTenantsRepository } from './infrastructure/persistence/drizzle-tenants.repository.js';
 import { DrizzleTransactionRunner } from './infrastructure/persistence/drizzle-transaction.runner.js';
 import { DrizzleUsersRepository } from './infrastructure/persistence/drizzle-users.repository.js';
 import { PurgeExpiredSessionsCron } from './infrastructure/scheduling/purge-expired-sessions.cron.js';
@@ -43,6 +54,10 @@ export const IDENTITY_EVENT_HANDLERS = [UserRegisteredRelay, UserRolesChangedAud
 const PERSISTENCE: Provider[] = [
   { provide: UsersRepository, useClass: DrizzleUsersRepository },
   { provide: SessionsRepository, useClass: DrizzleSessionsRepository },
+  { provide: TenantsRepository, useClass: DrizzleTenantsRepository },
+  { provide: MembershipsRepository, useClass: DrizzleMembershipsRepository },
+  { provide: InvitationsRepository, useClass: DrizzleInvitationsRepository },
+  { provide: AuditEventsRepository, useClass: DrizzleAuditEventsRepository },
   { provide: TransactionRunner, useClass: DrizzleTransactionRunner },
 ];
 
@@ -74,6 +89,9 @@ const PERSISTENCE: Provider[] = [
     PasswordHasher,
     TokenIssuer,
     SessionTokensService,
+    PersonalWorkspaces,
+    TenantSelection,
+    TenantAuditLog,
     PurgeExpiredSessionsCron,
   ],
 })

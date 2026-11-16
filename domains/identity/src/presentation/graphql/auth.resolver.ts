@@ -47,6 +47,9 @@ export class AuthResolver {
       email: input.email,
       password: input.password,
       client: clientInfoOf(context.req),
+      ...(input.tenantId === undefined || input.tenantId === null
+        ? {}
+        : { tenantId: input.tenantId }),
     });
     return toAuthPayloadModel(tokens);
   }

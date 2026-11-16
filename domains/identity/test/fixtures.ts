@@ -44,6 +44,8 @@ export function makeAuthTokens(overrides: Partial<AuthTokens> = {}): AuthTokens 
     expiresIn: 900,
     tokenType: 'Bearer',
     user: makeUser(),
+    tenantId: '0190f3b2-0000-7000-8000-0000000000aa',
+    tenantRoles: ['owner'],
     ...overrides,
   };
 }

@@ -34,4 +34,13 @@ describe('gRPC contract normalizers (proto-loader defaults: absent message → n
     expect(normalizeUserPage({ items: null })).toEqual({ items: [] });
     expect(normalizeUserPage({ items: [], nextCursor: '' })).not.toHaveProperty('nextCursor');
   });
+
+  it('normalises the tenant of a token pair (absent on the wire → empty)', () => {
+    expect(
+      normalizeAuthTokens({ accessToken: 'a', tenantId: null, tenantRoles: null }),
+    ).toMatchObject({
+      tenantId: '',
+      tenantRoles: [],
+    });
+  });
 });

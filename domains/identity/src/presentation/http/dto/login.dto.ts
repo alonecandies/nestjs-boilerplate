@@ -1,5 +1,5 @@
-import { ApiProperty } from '@nestjs/swagger';
-import { IsEmail, IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsEmail, IsNotEmpty, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { IDENTITY_LIMITS } from '../../../identity.constants.js';
 import { NormalizeEmail } from '../../shared/transforms.js';
 
@@ -19,4 +19,13 @@ export class LoginDto {
   @IsNotEmpty()
   @MaxLength(IDENTITY_LIMITS.PASSWORD_MAX_LENGTH)
   password: string;
+
+  @ApiPropertyOptional({
+    format: 'uuid',
+    description:
+      'Tenant to open the session in. Absent: your most recently active workspace. Not a member: 403 `TENANT_ACCESS_DENIED`.',
+  })
+  @IsOptional()
+  @IsUUID()
+  tenantId?: string;
 }

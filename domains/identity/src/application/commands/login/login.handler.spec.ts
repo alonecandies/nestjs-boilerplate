@@ -1,20 +1,40 @@
 import { Logger } from '@nestjs/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeAuthTokens, makeUserSnapshot } from '../../../../test/fixtures.js';
+import {
+  makeAuthTokens,
+  makeUserSnapshot,
+  passThroughTransaction,
+} from '../../../../test/fixtures.js';
 import { mockOf } from '../../../../test/mocks.js';
-import { InvalidCredentialsException } from '../../../domain/identity.errors.js';
+import {
+  InvalidCredentialsException,
+  TenantAccessDeniedException,
+} from '../../../domain/identity.errors.js';
 import type { PasswordHasher } from '../../../infrastructure/security/password-hasher.service.js';
+import type { MembershipRecord } from '../../persistence/memberships.repository.js';
 import type { UsersRepository } from '../../persistence/users.repository.js';
 import type { SessionTokensService } from '../../services/session-tokens.service.js';
+import type { TenantSelection } from '../../services/tenant-selection.service.js';
 import { LoginCommand } from './login.command.js';
 import { LoginHandler } from './login.handler.js';
+
+const TENANT = '0190f3b2-0000-7000-8000-0000000000aa';
 
 describe('LoginHandler', () => {
   const tokens = makeAuthTokens();
   const stored = makeUserSnapshot();
+  const membership: MembershipRecord = {
+    tenantId: TENANT,
+    userId: stored.id,
+    roles: ['admin'],
+    lastActiveAt: new Date(),
+    createdAt: new Date(),
+  };
   let users: ReturnType<typeof mockOf<UsersRepository>>;
   let hasher: ReturnType<typeof mockOf<PasswordHasher>>;
   let sessionTokens: ReturnType<typeof mockOf<SessionTokensService>>;
+  let selection: ReturnType<typeof mockOf<TenantSelection>>;
+  let transaction: ReturnType<typeof passThroughTransaction>;
   let handler: LoginHandler;
 
   beforeEach(() => {
@@ -29,40 +49,51 @@ describe('LoginHandler', () => {
       hash: async () => '$argon2id$new',
     });
     sessionTokens = mockOf<SessionTokensService>({ open: async () => tokens });
-    handler = new LoginHandler(users, hasher, sessionTokens);
+    selection = mockOf<TenantSelection>({ forLogin: async () => membership });
+    transaction = passThroughTransaction();
+    handler = new LoginHandler(users, hasher, sessionTokens, transaction, selection);
   });
 
-  it('verifies the password and opens a session (hash never passed on)', async () => {
+  it('verifies the password, picks the tenant, opens a session there (hash never passed on)', async () => {
     const client = { ip: '10.0.0.9' };
-    await expect(handler.execute(new LoginCommand(' ADA@example.com', 'pw', client))).resolves.toBe(
-      tokens,
-    );
+    await expect(
+      handler.execute(new LoginCommand(' Ada@Example.com ', 'pw', client, TENANT)),
+    ).resolves.toBe(tokens);
 
     expect(users.findCredentialsByEmail).toHaveBeenCalledWith('ada@example.com');
     expect(hasher.verify).toHaveBeenCalledWith(stored.passwordHash, 'pw');
-    const [record, passedClient] = sessionTokens.open.mock.calls[0] ?? [];
-    expect(record).not.toHaveProperty('passwordHash');
-    expect(record).toMatchObject({ id: stored.id });
-    expect(passedClient).toBe(client);
-    expect(users.updatePasswordHash).not.toHaveBeenCalled();
+    const [user, tenantId] = selection.forLogin.mock.calls[0] ?? [];
+    expect(user).not.toHaveProperty('passwordHash');
+    expect(tenantId).toBe(TENANT);
+    const [input] = sessionTokens.open.mock.calls[0] ?? [];
+    expect(input).toEqual({ user, tenantId: TENANT, roles: ['admin'], client });
+    expect(transaction.runs).toBe(1);
+  });
+
+  it('a tenant the user may not use fails AFTER the password check (a thrown failure: C wave-1 contract)', async () => {
+    selection.forLogin.mockRejectedValue(new TenantAccessDeniedException());
+    await expect(
+      handler.execute(new LoginCommand('ada@example.com', 'pw', undefined, TENANT)),
+    ).rejects.toBeInstanceOf(TenantAccessDeniedException);
+    expect(hasher.verify).toHaveBeenCalled();
+    expect(sessionTokens.open).not.toHaveBeenCalled();
   });
 
   it('unknown email: burns a dummy verification, then the same 401 as a wrong password', async () => {
     users.findCredentialsByEmail.mockResolvedValue(null);
-    await expect(handler.execute(new LoginCommand('who@x.io', 'pw'))).rejects.toBeInstanceOf(
-      InvalidCredentialsException,
-    );
+    await expect(
+      handler.execute(new LoginCommand('nobody@example.com', 'pw')),
+    ).rejects.toBeInstanceOf(InvalidCredentialsException);
     expect(hasher.verifyDummy).toHaveBeenCalledWith('pw');
-    expect(sessionTokens.open).not.toHaveBeenCalled();
+    expect(selection.forLogin).not.toHaveBeenCalled();
   });
 
-  it('wrong password → InvalidCredentialsException, no session', async () => {
+  it('wrong password → InvalidCredentialsException, no tenant picked, no session', async () => {
     hasher.verify.mockResolvedValue(false);
-    const error = await handler
-      .execute(new LoginCommand('ada@example.com', 'bad'))
-      .catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(InvalidCredentialsException);
-    expect(error).toMatchObject({ code: 'INVALID_CREDENTIALS', httpStatus: 401 });
+    await expect(
+      handler.execute(new LoginCommand('ada@example.com', 'bad')),
+    ).rejects.toBeInstanceOf(InvalidCredentialsException);
+    expect(selection.forLogin).not.toHaveBeenCalled();
     expect(sessionTokens.open).not.toHaveBeenCalled();
   });
 

@@ -9,3 +9,4 @@
 export { TokenIssuer } from '../infrastructure/security/token-issuer.service.js';
 export * from './fake-identity-ports.js';
 export * from './in-memory-identity.js';
+export * from './in-memory-tenancy.js';

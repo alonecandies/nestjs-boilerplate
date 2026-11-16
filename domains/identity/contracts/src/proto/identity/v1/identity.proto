@@ -46,6 +46,10 @@ message AuthTokens {
   // Always "Bearer".
   string token_type = 4;
   User user = 5;
+  // The session's tenant: the access token's active tenant.
+  string tenant_id = 6;
+  // The user's roles in tenant_id: "owner" | "admin" | "member".
+  repeated string tenant_roles = 7;
 }
 
 // Client fingerprint stored on the session (audit / theft investigation).
@@ -65,6 +69,9 @@ message LoginRequest {
   string email = 1;
   string password = 2;
   ClientInfo client = 3;
+  // The tenant to open the session in (a UUID). Absent: the most recently active membership.
+  // Not a member (unknown and nil ids included) → PERMISSION_DENIED / TENANT_ACCESS_DENIED.
+  optional string tenant_id = 4;
 }
 
 message RefreshTokensRequest {

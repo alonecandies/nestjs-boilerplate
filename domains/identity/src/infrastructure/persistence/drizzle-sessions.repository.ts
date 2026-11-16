@@ -23,8 +23,12 @@ export class DrizzleSessionsRepository implements SessionsRepository {
     await this.txHost.tx.insert(sessions).values(session);
   }
 
-  async findById(id: string): Promise<SessionRecord | null> {
-    const [row] = await this.txHost.tx.select().from(sessions).where(eq(sessions.id, id)).limit(1);
+  async findById(userId: string, id: string): Promise<SessionRecord | null> {
+    const [row] = await this.txHost.tx
+      .select()
+      .from(sessions)
+      .where(and(eq(sessions.userId, userId), eq(sessions.id, id)))
+      .limit(1);
     return row ?? null;
   }
 

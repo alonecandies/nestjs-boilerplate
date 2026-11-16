@@ -1,6 +1,7 @@
 import type { SessionState } from '../../domain/session.js';
 
 export interface SessionRecord extends SessionState {
+  readonly tenantId: string;
   readonly userAgent: string | null;
   readonly ip: string | null;
   /** The session that replaced this one on rotation. */
@@ -12,6 +13,8 @@ export interface NewSession {
   /** = the refresh token's `jti`. */
   id: string;
   userId: string;
+  /** The tenant this session (and its refresh token) belongs to. */
+  tenantId: string;
   /** `sha256Hex(refreshToken)` — the token itself is never stored. */
   refreshTokenHash: string;
   userAgent: string | null;
@@ -31,7 +34,8 @@ export interface RotateSessionInput {
 export abstract class SessionsRepository {
   abstract create(session: NewSession): Promise<void>;
 
-  abstract findById(id: string): Promise<SessionRecord | null>;
+  /** By (user_id, id): a router query once sessions are distributed by user_id. */
+  abstract findById(userId: string, id: string): Promise<SessionRecord | null>;
 
   /**
    * Atomically revokes the session iff it is still active AND bound to this user and token hash

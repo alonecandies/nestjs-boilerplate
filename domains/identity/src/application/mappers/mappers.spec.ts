@@ -3,6 +3,7 @@ import { makeUserSnapshot } from '../../../test/fixtures.js';
 import { toSessionClient } from './client-info.mapper.js';
 import {
   toListUsersQuery,
+  toLoginCommand,
   toLogoutCommand,
   toRegisterUserCommand,
 } from './identity-request.mapper.js';
@@ -53,5 +54,12 @@ describe('identity request mappers', () => {
       toRegisterUserCommand({ email: 'e', password: 'p', displayName: 'd', client: { ip: '1' } }),
     ).toMatchObject({ email: 'e', password: 'p', displayName: 'd', client: { ip: '1' } });
     expect(toListUsersQuery({ limit: 5, cursor: 'c' })).toMatchObject({ limit: 5, cursor: 'c' });
+  });
+
+  it('toLoginCommand carries the optional tenant as the fourth argument', () => {
+    expect(
+      toLoginCommand({ email: 'e', password: 'p', client: { ip: '1' }, tenantId: 't-1' }),
+    ).toMatchObject({ email: 'e', password: 'p', client: { ip: '1' }, tenantId: 't-1' });
+    expect(toLoginCommand({ email: 'e', password: 'p' }).tenantId).toBeUndefined();
   });
 });

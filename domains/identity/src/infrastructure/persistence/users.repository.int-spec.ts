@@ -145,7 +145,11 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
       'app.__drizzle_migrations',
       'app.tenant_colocation',
       'identity.__drizzle_migrations',
+      'identity.audit_events',
+      'identity.invitations',
+      'identity.memberships',
       'identity.sessions',
+      'identity.tenants',
       'identity.users',
     ]);
     const enums = await db.execute<{ name: string }>(sql`
@@ -342,9 +346,13 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     const user = register(email('sessions'));
     await usersRepo.insert(user);
     const now = new Date();
+    const [tenant] = await db.execute<{ id: string }>(
+      sql`insert into identity.tenants (slug, name) values (${`s-${run}`}, 'S') returning id`,
+    );
     const session = {
       id: generateId(),
       userId: user.id,
+      tenantId: tenant?.id ?? '',
       refreshTokenHash: sha256Hex('refresh-token'),
       userAgent: 'vitest',
       ip: '127.0.0.1',
@@ -369,7 +377,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     ).rejects.toThrow();
     // ...and deleting the user cascades.
     await db.execute(sql`delete from identity.users where id = ${user.id}`);
-    await expect(sessionsRepo.findById(session.id)).resolves.toBeNull();
+    await expect(sessionsRepo.findById(user.id, session.id)).resolves.toBeNull();
   });
 
   // Last: it replaces the context (and the repositories) the tests above share.

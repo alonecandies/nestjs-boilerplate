@@ -1,6 +1,11 @@
 import type { AuthTokens } from '@domain/identity-contracts';
 import { ApiProperty } from '@nestjs/swagger';
-import { ExternalServiceException } from '@platform/common';
+import {
+  ExternalServiceException,
+  normalizeTenantRoles,
+  TENANT_ROLES,
+  type TenantRole,
+} from '@platform/common';
 import { Exclude, Expose, Type } from 'class-transformer';
 import { UserResponse } from './user.response.js';
 
@@ -25,6 +30,17 @@ export class AuthTokensResponse {
   tokenType: string;
 
   @Expose()
+  @ApiProperty({
+    format: 'uuid',
+    description: "The session's tenant (the access token's active tenant).",
+  })
+  tenantId: string;
+
+  @Expose()
+  @ApiProperty({ enum: TENANT_ROLES, enumName: 'TenantRole', isArray: true, example: ['owner'] })
+  tenantRoles: TenantRole[];
+
+  @Expose()
   @Type(() => UserResponse)
   @ApiProperty({ type: () => UserResponse })
   user: UserResponse;
@@ -39,6 +55,8 @@ export class AuthTokensResponse {
       refreshToken: tokens.refreshToken,
       expiresIn: tokens.expiresIn,
       tokenType: tokens.tokenType,
+      tenantId: tokens.tenantId,
+      tenantRoles: normalizeTenantRoles(tokens.tenantRoles),
       user: UserResponse.from(tokens.user),
     });
   }

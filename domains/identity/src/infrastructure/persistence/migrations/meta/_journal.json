@@ -8,6 +8,41 @@
       "when": 1791812058964,
       "tag": "0000_init",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1794807188417,
+      "tag": "0001_tenants",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794808619318,
+      "tag": "0002_memberships",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1794809293473,
+      "tag": "0003_invitations",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794809507488,
+      "tag": "0004_audit_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1794810157769,
+      "tag": "0005_tenant_sessions",
+      "breakpoints": true
     }
   ]
 }

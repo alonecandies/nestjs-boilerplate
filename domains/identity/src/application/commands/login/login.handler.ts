@@ -6,8 +6,10 @@ import { InvalidCredentialsException } from '../../../domain/identity.errors.js'
 import type { UserSnapshot } from '../../../domain/user.aggregate.js';
 import { PasswordHasher } from '../../../infrastructure/security/password-hasher.service.js';
 import { toUserRecord } from '../../mappers/user.mapper.js';
+import { TransactionRunner } from '../../persistence/transaction-runner.js';
 import { UsersRepository } from '../../persistence/users.repository.js';
 import { SessionTokensService } from '../../services/session-tokens.service.js';
+import { TenantSelection } from '../../services/tenant-selection.service.js';
 import { LoginCommand } from './login.command.js';
 
 @CommandHandler(LoginCommand)
@@ -18,6 +20,8 @@ export class LoginHandler implements ICommandHandler<LoginCommand> {
     private readonly users: UsersRepository,
     private readonly hasher: PasswordHasher,
     private readonly sessionTokens: SessionTokensService,
+    private readonly transaction: TransactionRunner,
+    private readonly selection: TenantSelection,
   ) {}
 
   async execute(command: LoginCommand): Promise<AuthTokens> {
@@ -34,7 +38,18 @@ export class LoginHandler implements ICommandHandler<LoginCommand> {
     if (this.hasher.needsRehash(credentials.passwordHash)) {
       await this.rehash(credentials, command.password);
     }
-    return this.sessionTokens.open(toUserRecord(credentials), command.client);
+    const user = toUserRecord(credentials);
+    const now = new Date();
+    // Tenant choice (and, for a pre-tenancy account, its personal workspace) + the session: one unit.
+    return this.transaction.run(async () => {
+      const membership = await this.selection.forLogin(user, command.tenantId, now);
+      return this.sessionTokens.open({
+        user,
+        tenantId: membership.tenantId,
+        roles: membership.roles,
+        client: command.client,
+      });
+    });
   }
 
   /**

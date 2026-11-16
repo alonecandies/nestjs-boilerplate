@@ -15,7 +15,10 @@ import { makeAuthTokens, makeUser } from '../../../test/fixtures.js';
 import { InMemoryAppCache } from '../../../test/in-memory-app-cache.js';
 import { AuthPort } from '../../application/ports/auth.port.js';
 import { UsersPort } from '../../application/ports/users.port.js';
-import { EmailAlreadyTakenException } from '../../domain/identity.errors.js';
+import {
+  EmailAlreadyTakenException,
+  TenantAccessDeniedException,
+} from '../../domain/identity.errors.js';
 import { USERS_LOADER } from '../../identity.constants.js';
 import { UserReadCache } from '../shared/user-read.cache.js';
 import { AuthResolver } from './auth.resolver.js';
@@ -210,5 +213,40 @@ describe('identity GraphQL API (Apollo on Fastify, global guards, fake ports)', 
     expect(result).toEqual([a, null, b]);
     expect(usersPort.getUsersByIds).toHaveBeenCalledOnce();
     expect(usersPort.getUsersByIds).toHaveBeenCalledWith([a.id, missing, b.id]);
+  });
+
+  it('login(input: { tenantId }) forwards the tenant; a malformed id is a validation error; 403 keeps its code', async () => {
+    authPort.login.mockResolvedValue(makeAuthTokens());
+    const tenantId = '0190f3b2-0000-7000-8000-0000000000aa';
+    const ok = await gql<{ login: { tenantId: string } }>(
+      'mutation ($input: LoginInput!) { login(input: $input) { tenantId } }',
+      { input: { email: 'ada@example.com', password: 'pw', tenantId } },
+    );
+    expect(ok.errors).toBeUndefined();
+    expect(authPort.login).toHaveBeenCalledWith(
+      expect.objectContaining({ email: 'ada@example.com', password: 'pw', tenantId }),
+    );
+
+    authPort.login.mockClear();
+    const malformed = await gql(
+      'mutation ($input: LoginInput!) { login(input: $input) { tenantId } }',
+      {
+        input: { email: 'ada@example.com', password: 'pw', tenantId: 'nope' },
+      },
+    );
+    expect(malformed.errors?.[0]?.extensions?.status).toBe(400);
+    expect(authPort.login).not.toHaveBeenCalled();
+
+    authPort.login.mockRejectedValue(new TenantAccessDeniedException());
+    const denied = await gql(
+      'mutation ($input: LoginInput!) { login(input: $input) { tenantId } }',
+      {
+        input: { email: 'ada@example.com', password: 'pw', tenantId },
+      },
+    );
+    expect(denied.errors?.[0]?.extensions).toMatchObject({
+      code: 'TENANT_ACCESS_DENIED',
+      status: 403,
+    });
   });
 });

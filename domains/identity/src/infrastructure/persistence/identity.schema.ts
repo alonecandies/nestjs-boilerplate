@@ -1,5 +1,17 @@
 import { relations, sql } from 'drizzle-orm';
-import { index, pgSchema, text, timestamp, uuid } from 'drizzle-orm/pg-core';
+import {
+  boolean,
+  check,
+  index,
+  jsonb,
+  pgSchema,
+  primaryKey,
+  text,
+  timestamp,
+  uniqueIndex,
+  uuid,
+} from 'drizzle-orm/pg-core';
+import { TENANT_ROLE_VALUES } from '../../domain/tenant-role.js';
 import { USER_ROLES } from '../../domain/user-role.js';
 
 /*
@@ -33,6 +45,9 @@ const timestamptz = () => timestamp({ withTimezone: true, precision: 3, mode: 'd
 /** RBAC roles (values = @platform/auth `Role`). */
 export const userRole = identityPgSchema.enum('user_role', USER_ROLES);
 
+/** Tenant roles (values = @platform/common `TENANT_ROLES`). */
+export const tenantRole = identityPgSchema.enum('tenant_role', TENANT_ROLE_VALUES);
+
 export const users = identityPgSchema.table(
   'users',
   {
@@ -59,14 +74,38 @@ export const users = identityPgSchema.table(
   ],
 );
 
+// citus: reference (users, tenants and memberships are reference tables: sharding design §2.2)
+export const tenants = identityPgSchema.table(
+  'tenants',
+  {
+    id: uuid().primaryKey().default(sql`uuidv7()`),
+    /** DNS-label shaped (`TENANT_SLUG_PATTERN`); personal workspaces derive it from the email. */
+    slug: text().notNull().unique('tenants_slug_unique'),
+    name: text().notNull(),
+    /** The workspace registration created; `false` for tenants created through the API. */
+    personal: boolean().notNull().default(false),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  // The nil UUID is PLATFORM_TENANT_ID (@platform/common): never issued as a tenant id. Literal on
+  // purpose: drizzle-kit loads this file without workspace packages (identity.migrations.spec pins it).
+  () => [
+    check('tenants_id_not_platform', sql`"id" <> '00000000-0000-0000-0000-000000000000'::uuid`),
+  ],
+);
+
+// citus: user (PK leads with user_id; refresh looks up (user_id = sub, id = jti): a router query)
 export const sessions = identityPgSchema.table(
   'sessions',
   {
-    /** = the refresh token's `jti`. */
-    id: uuid().primaryKey(),
+    /** = the refresh token's `jti` (no default: the app generates it before signing). */
+    id: uuid().notNull(),
     userId: uuid()
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    /** A session (and its refresh token) belongs to exactly one tenant. */
+    tenantId: uuid()
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
     /** sha256 hex of the refresh token (never the token itself). */
     refreshTokenHash: text().notNull(),
     userAgent: text(),
@@ -77,10 +116,84 @@ export const sessions = identityPgSchema.table(
     createdAt: timestamptz().notNull().defaultNow(),
   },
   (t) => [
-    // "revoke all sessions of a user" (reuse detection, sign-out everywhere) + FK cascade.
-    index('sessions_user_id_idx').on(t.userId),
-    // hourly purge `WHERE expires_at <= now()`.
+    // Also serves "revoke all sessions of a user" (leading column) and the FK cascade.
+    primaryKey({ name: 'sessions_user_id_id_pk', columns: [t.userId, t.id] }),
+    // hourly purge `WHERE expires_at <= now()` (a multi-shard system DELETE once distributed).
     index('sessions_expires_at_idx').on(t.expiresAt),
+  ],
+);
+
+// citus: reference (a STABLE policy helper reads it on every node: sharding design §2.2)
+export const memberships = identityPgSchema.table(
+  'memberships',
+  {
+    tenantId: uuid()
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    /** Canonical order (owner, admin, member), deduplicated, never empty. */
+    roles: tenantRole().array().notNull(),
+    /** Set by register, login and switch (a replicated write on Citus), never by refresh. */
+    lastActiveAt: timestamptz(),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'memberships_tenant_id_user_id_pk', columns: [t.tenantId, t.userId] }),
+    // "most recently active membership" at login (MembershipsRepository.findMostRecentForUser).
+    index('memberships_user_id_last_active_at_idx').on(t.userId, t.lastActiveAt.desc().nullsLast()),
+    check('memberships_roles_not_empty', sql`cardinality("roles") > 0`),
+  ],
+);
+
+// citus: tenant (PK and every unique lead with tenant_id; FKs to the reference tables only)
+export const invitations = identityPgSchema.table(
+  'invitations',
+  {
+    tenantId: uuid()
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    id: uuid().notNull().default(sql`uuidv7()`),
+    /** Normalised like users.email; acceptance requires the logged-in user's email to match. */
+    email: text().notNull(),
+    roles: tenantRole().array().notNull(),
+    /** sha256 hex of the mailed token. */
+    tokenHash: text().notNull(),
+    invitedBy: uuid()
+      .notNull()
+      .references(() => users.id),
+    expiresAt: timestamptz().notNull(),
+    acceptedAt: timestamptz(),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'invitations_tenant_id_id_pk', columns: [t.tenantId, t.id] }),
+    uniqueIndex('invitations_tenant_id_token_hash_uq').on(t.tenantId, t.tokenHash),
+    // findByTokenHash: a multi-shard system read (one index probe per shard once distributed).
+    index('invitations_token_hash_idx').on(t.tokenHash),
+  ],
+);
+
+// citus: tenant. Append-only: no code path updates or deletes a row (audit-events.append-only.spec.ts); B3's
+// policies allow only SELECT and INSERT (spec §8.2). No trigger: Citus will not distribute a table with triggers.
+export const auditEvents = identityPgSchema.table(
+  'audit_events',
+  {
+    tenantId: uuid()
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    id: uuid().notNull().default(sql`uuidv7()`),
+    /** The user who acted; no FK: the history outlives users. `null` for system actions. */
+    actorId: uuid(),
+    /** `AUDIT_EVENT_TYPES` value (`<subject>.<verb>`). */
+    type: text().notNull(),
+    data: jsonb().$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'audit_events_tenant_id_id_pk', columns: [t.tenantId, t.id] }),
+    index('audit_events_tenant_id_created_at_idx').on(t.tenantId, t.createdAt.desc()),
   ],
 );
 
@@ -98,8 +211,13 @@ export const sessionsRelations = relations(sessions, ({ one }) => ({
  */
 export const identitySchema = {
   userRole,
+  tenantRole,
   users,
   sessions,
+  tenants,
+  memberships,
+  invitations,
+  auditEvents,
   usersRelations,
   sessionsRelations,
 };
@@ -109,3 +227,7 @@ export type UserRow = typeof users.$inferSelect;
 export type NewUserRow = typeof users.$inferInsert;
 export type SessionRow = typeof sessions.$inferSelect;
 export type NewSessionRow = typeof sessions.$inferInsert;
+export type TenantRow = typeof tenants.$inferSelect;
+export type MembershipRow = typeof memberships.$inferSelect;
+export type InvitationRow = typeof invitations.$inferSelect;
+export type AuditEventRow = typeof auditEvents.$inferSelect;

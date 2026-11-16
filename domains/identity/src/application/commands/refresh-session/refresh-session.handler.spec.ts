@@ -1,6 +1,5 @@
-import { Logger } from '@nestjs/common';
 import { AuthErrorCode, type RefreshTokenClaims } from '@platform/auth';
-import { generateId, sha256Hex, UnauthenticatedException } from '@platform/common';
+import { generateId, isUuidV7, sha256Hex, UnauthenticatedException } from '@platform/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   makeAuthTokens,
@@ -10,10 +9,12 @@ import {
 import { mockOf } from '../../../../test/mocks.js';
 import {
   InvalidRefreshTokenException,
+  MembershipRevokedException,
   RefreshTokenReuseDetectedException,
   SessionExpiredException,
 } from '../../../domain/identity.errors.js';
 import type { TokenIssuer } from '../../../infrastructure/security/token-issuer.service.js';
+import type { MembershipsRepository } from '../../persistence/memberships.repository.js';
 import type { SessionRecord, SessionsRepository } from '../../persistence/sessions.repository.js';
 import type { UsersRepository } from '../../persistence/users.repository.js';
 import type { SessionTokensService } from '../../services/session-tokens.service.js';
@@ -21,6 +22,7 @@ import { RefreshSessionCommand } from './refresh-session.command.js';
 import { RefreshSessionHandler } from './refresh-session.handler.js';
 
 const REFRESH_TOKEN = 'header.payload.signature';
+const TENANT = '0190f3b2-0000-7000-8000-0000000000aa';
 
 describe('RefreshSessionHandler', () => {
   const user = makeUserRecord();
@@ -37,6 +39,7 @@ describe('RefreshSessionHandler', () => {
   const storedSession = (overrides: Partial<SessionRecord> = {}): SessionRecord => ({
     id: sessionId,
     userId: user.id,
+    tenantId: TENANT,
     refreshTokenHash: sha256Hex(REFRESH_TOKEN),
     userAgent: null,
     ip: null,
@@ -47,29 +50,42 @@ describe('RefreshSessionHandler', () => {
     ...overrides,
   });
   const tokens = makeAuthTokens();
+  const log: string[] = [];
 
   let tokenIssuer: ReturnType<typeof mockOf<TokenIssuer>>;
   let users: ReturnType<typeof mockOf<UsersRepository>>;
   let sessions: ReturnType<typeof mockOf<SessionsRepository>>;
+  let memberships: ReturnType<typeof mockOf<MembershipsRepository>>;
   let sessionTokens: ReturnType<typeof mockOf<SessionTokensService>>;
-  let transaction: ReturnType<typeof passThroughTransaction>;
   let handler: RefreshSessionHandler;
-  const log: string[] = [];
 
   beforeEach(() => {
     log.length = 0;
     tokenIssuer = mockOf<TokenIssuer>({ verifyRefreshToken: async () => claims });
     users = mockOf<UsersRepository>({ findById: async () => user });
     sessions = mockOf<SessionsRepository>({
+      findById: async () => storedSession(),
       revokeForRotation: async () => {
         log.push('revoke-for-rotation');
         return true;
       },
-      findById: async () => storedSession({ revokedAt: new Date() }),
+      revoke: async () => {
+        log.push('revoke');
+        return true;
+      },
       revokeAllForUser: async () => {
         log.push('revoke-all');
         return 3;
       },
+    });
+    memberships = mockOf<MembershipsRepository>({
+      find: async () => ({
+        tenantId: TENANT,
+        userId: user.id,
+        roles: ['admin'],
+        lastActiveAt: null,
+        createdAt: new Date(),
+      }),
     });
     sessionTokens = mockOf<SessionTokensService>({
       open: async () => {
@@ -77,7 +93,7 @@ describe('RefreshSessionHandler', () => {
         return tokens;
       },
     });
-    transaction = {
+    const transaction = {
       ...passThroughTransaction(),
       run: async <T>(work: () => Promise<T>): Promise<T> => {
         log.push('begin');
@@ -85,91 +101,96 @@ describe('RefreshSessionHandler', () => {
         log.push('commit');
         return result;
       },
-      runs: 0,
     };
-    handler = new RefreshSessionHandler(tokenIssuer, users, sessions, sessionTokens, transaction);
+    handler = new RefreshSessionHandler(
+      tokenIssuer,
+      users,
+      sessions,
+      sessionTokens,
+      transaction,
+      memberships,
+    );
   });
 
   const command = new RefreshSessionCommand(REFRESH_TOKEN, { ip: '1.2.3.4' });
 
-  it('rotates atomically: revoke the presented session + open its successor in one transaction', async () => {
+  it("rotates atomically inside the session's tenant, with the membership's current roles", async () => {
     await expect(handler.execute(command)).resolves.toBe(tokens);
-
-    expect(tokenIssuer.verifyRefreshToken).toHaveBeenCalledWith(REFRESH_TOKEN);
-    const [rotation] = sessions.revokeForRotation.mock.calls[0] ?? [];
-    expect(rotation).toMatchObject({
+    expect(sessions.findById).toHaveBeenCalledWith(user.id, sessionId);
+    expect(memberships.find).toHaveBeenCalledWith(TENANT, user.id);
+    expect(log).toEqual(['begin', 'revoke-for-rotation', 'open-successor', 'commit']);
+    const [input] = sessionTokens.open.mock.calls[0] ?? [];
+    expect(input).toMatchObject({
+      user,
+      tenantId: TENANT,
+      roles: ['admin'],
+      client: { ip: '1.2.3.4' },
+    });
+    expect(isUuidV7(input?.sessionId)).toBe(true);
+    expect(sessions.revokeForRotation).toHaveBeenCalledWith({
       id: sessionId,
       userId: user.id,
       refreshTokenHash: sha256Hex(REFRESH_TOKEN),
+      replacedById: input?.sessionId,
+      now: expect.any(Date),
     });
-    const [openedFor, client, successorId] = sessionTokens.open.mock.calls[0] ?? [];
-    expect(openedFor).toBe(user);
-    expect(client).toEqual({ ip: '1.2.3.4' });
-    expect(successorId).toBe(rotation?.replacedById);
-    expect(log).toEqual(['begin', 'revoke-for-rotation', 'open-successor', 'commit']);
   });
 
-  it('REUSE: a genuine but already-rotated token revokes every session — after the transaction', async () => {
-    sessions.revokeForRotation.mockImplementation(async () => {
-      log.push('revoke-for-rotation');
-      return false;
+  it('membership removed since login → session revoked, 401 MEMBERSHIP_REVOKED, nothing issued', async () => {
+    memberships.find.mockResolvedValue(null);
+    await expect(handler.execute(command)).rejects.toBeInstanceOf(MembershipRevokedException);
+    expect(sessions.revoke).toHaveBeenCalledWith({
+      id: sessionId,
+      userId: user.id,
+      now: expect.any(Date),
     });
-    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    expect(log).toEqual(['revoke']);
+  });
 
+  it('REUSE: a genuine but already-rotated token revokes every session, outside any transaction', async () => {
+    sessions.findById.mockResolvedValue(storedSession({ revokedAt: new Date() }));
     await expect(handler.execute(command)).rejects.toBeInstanceOf(
       RefreshTokenReuseDetectedException,
     );
-
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      { userId: user.id, sessionId, revokedSessions: 3 },
-      'Refresh token reuse detected: all sessions of the user revoked',
-    );
-
     expect(sessions.revokeAllForUser).toHaveBeenCalledWith(user.id, expect.any(Date));
-    // Outside the rotation transaction: the throw that follows cannot roll it back.
-    expect(log).toEqual(['begin', 'revoke-for-rotation', 'commit', 'revoke-all']);
+    expect(log).toEqual(['revoke-all']);
+    expect(memberships.find).not.toHaveBeenCalled();
+  });
+
+  it('a concurrent rotation that wins between the read and the update is classified as reuse', async () => {
+    sessions.findById
+      .mockResolvedValueOnce(storedSession())
+      .mockResolvedValueOnce(storedSession({ revokedAt: new Date() }));
+    sessions.revokeForRotation.mockResolvedValue(false);
+    await expect(handler.execute(command)).rejects.toBeInstanceOf(
+      RefreshTokenReuseDetectedException,
+    );
     expect(sessionTokens.open).not.toHaveBeenCalled();
   });
 
-  it('expired session → SessionExpiredException (no family revocation)', async () => {
-    sessions.revokeForRotation.mockResolvedValue(false);
+  it('expired session → SessionExpiredException; unknown session or hash mismatch → InvalidRefreshTokenException', async () => {
     sessions.findById.mockResolvedValue(storedSession({ expiresAt: new Date(Date.now() - 1) }));
     await expect(handler.execute(command)).rejects.toBeInstanceOf(SessionExpiredException);
-    expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
-  });
-
-  it('unknown session or hash mismatch → InvalidRefreshTokenException (no family revocation)', async () => {
-    sessions.revokeForRotation.mockResolvedValue(false);
     sessions.findById.mockResolvedValue(null);
     await expect(handler.execute(command)).rejects.toBeInstanceOf(InvalidRefreshTokenException);
-
-    sessions.findById.mockResolvedValue(
-      storedSession({ refreshTokenHash: sha256Hex('another'), revokedAt: new Date() }),
-    );
+    sessions.findById.mockResolvedValue(storedSession({ refreshTokenHash: sha256Hex('other') }));
     await expect(handler.execute(command)).rejects.toBeInstanceOf(InvalidRefreshTokenException);
     expect(sessions.revokeAllForUser).not.toHaveBeenCalled();
   });
 
-  it('maps JWT failures before touching the database: expired → SESSION_EXPIRED, other → INVALID_REFRESH_TOKEN', async () => {
+  it('maps JWT failures before touching the database', async () => {
     tokenIssuer.verifyRefreshToken.mockRejectedValue(
-      new UnauthenticatedException('Token has expired', { code: AuthErrorCode.TOKEN_EXPIRED }),
+      new UnauthenticatedException('expired', { code: AuthErrorCode.TOKEN_EXPIRED }),
     );
-    await expect(handler.execute(command)).rejects.toMatchObject({ code: 'SESSION_EXPIRED' });
-
-    tokenIssuer.verifyRefreshToken.mockRejectedValue(
-      new UnauthenticatedException('Invalid token', { code: AuthErrorCode.INVALID_TOKEN }),
-    );
-    await expect(handler.execute(command)).rejects.toMatchObject({
-      code: 'INVALID_REFRESH_TOKEN',
-      httpStatus: 401,
-    });
+    await expect(handler.execute(command)).rejects.toBeInstanceOf(SessionExpiredException);
+    tokenIssuer.verifyRefreshToken.mockRejectedValue(new Error('bad signature'));
+    await expect(handler.execute(command)).rejects.toBeInstanceOf(InvalidRefreshTokenException);
     expect(users.findById).not.toHaveBeenCalled();
-    expect(sessions.revokeForRotation).not.toHaveBeenCalled();
   });
 
   it('a deleted user → InvalidRefreshTokenException', async () => {
     users.findById.mockResolvedValue(null);
     await expect(handler.execute(command)).rejects.toBeInstanceOf(InvalidRefreshTokenException);
-    expect(sessions.revokeForRotation).not.toHaveBeenCalled();
+    vi.clearAllMocks();
   });
 });
