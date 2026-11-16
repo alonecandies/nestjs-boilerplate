@@ -24,6 +24,7 @@
     "class-transformer": "catalog:",
     "class-validator": "catalog:",
     "lodash-es": "catalog:",
+    "nestjs-cls": "catalog:",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
     "uuid": "catalog:",

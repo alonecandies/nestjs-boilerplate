@@ -23,6 +23,7 @@ export * from './middlewares/maintenance-mode.middleware.js';
 export * from './middlewares/raw-http.types.js';
 export * from './pipes/validation.js';
 export * from './providers/common-enhancers.js';
+export * from './tenancy/index.js';
 export * from './types/utility.types.js';
 export * from './utils/async.util.js';
 export * from './utils/crypto.util.js';
