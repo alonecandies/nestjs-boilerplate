@@ -49,6 +49,15 @@ export class StripeService {
     }
   }
 
+  /** The current state of a Checkout Session (a GET: naturally idempotent). */
+  async retrieveCheckoutSession(id: string): Promise<Stripe.Checkout.Session> {
+    try {
+      return await this.client.checkout.sessions.retrieve(id);
+    } catch (error) {
+      throw toPaymentDomainException(error) ?? error;
+    }
+  }
+
   /**
    * Verifies the `Stripe-Signature` header (HMAC-SHA256 with the endpoint secret, timestamp within
    * 5 min) and parses the event. `payload` MUST be the raw request bytes — re-serialized JSON never

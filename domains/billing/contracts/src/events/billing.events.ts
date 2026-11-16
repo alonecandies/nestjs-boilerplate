@@ -11,6 +11,8 @@ export const paymentSucceededPayload = z.object({
   /** ISO 4217 code as reported by Stripe (lowercase). */
   currency: z.string().length(3),
   paidAt: z.iso.datetime(),
+  /** Stripe PaymentIntent (`pi_…`): locates the charge and its balance transaction. Optional (v1). */
+  stripePaymentIntentId: z.string().min(1).optional(),
 });
 
 export type PaymentSucceededPayload = z.infer<typeof paymentSucceededPayload>;

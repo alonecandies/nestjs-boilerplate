@@ -58,4 +58,20 @@ describe('toPaymentDomainException', () => {
     expect(mapped?.message).toBe('The payment provider request failed');
     expect(mapped?.cause).toBeInstanceOf(Stripe.errors.StripeAuthenticationError);
   });
+
+  it('maps a 409 idempotency_key_in_use (a StripeAPIError) to a retryable CHECKOUT_IN_PROGRESS', () => {
+    const raw = Stripe.errors.StripeError.generate({
+      type: 'invalid_request_error',
+      code: 'idempotency_key_in_use',
+      statusCode: 409,
+      message: 'There is currently another in-progress request using this Idempotent Key.',
+    });
+    expect(raw).toBeInstanceOf(Stripe.errors.StripeAPIError);
+    const mapped = toPaymentDomainException(raw);
+    expect(mapped).toBeInstanceOf(DomainConflictException);
+    expect(mapped).toMatchObject({
+      code: 'CHECKOUT_IN_PROGRESS',
+      details: { retryAfterSec: 1 },
+    });
+  });
 });

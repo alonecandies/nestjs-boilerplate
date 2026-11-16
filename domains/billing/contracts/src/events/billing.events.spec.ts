@@ -49,4 +49,18 @@ describe('PAYMENT_SUCCEEDED_EVENT', () => {
   ])('rejects %s', (_label, change, field) => {
     expect(rejectedPaths({ ...payload, ...change })).toEqual([['payload', field]]);
   });
+
+  it('accepts the PaymentIntent id, which is optional (v1 stays compatible)', () => {
+    const withIntent = { ...payload, stripePaymentIntentId: 'pi_123' };
+    expect(parseEventEnvelope(PAYMENT_SUCCEEDED_EVENT, envelope(withIntent)).payload).toEqual(
+      withIntent,
+    );
+    expect(parseEventEnvelope(PAYMENT_SUCCEEDED_EVENT, envelope(payload)).payload).toEqual(payload);
+  });
+
+  it('rejects an empty PaymentIntent id', () => {
+    expect(rejectedPaths({ ...payload, stripePaymentIntentId: '' })).toEqual([
+      ['payload', 'stripePaymentIntentId'],
+    ]);
+  });
 });

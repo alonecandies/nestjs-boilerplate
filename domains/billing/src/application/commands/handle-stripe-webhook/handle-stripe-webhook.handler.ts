@@ -5,8 +5,13 @@ import { isUuid } from '@platform/common';
 import { Transactional } from '@platform/database';
 import { InjectMetric } from '@platform/observability';
 import type Stripe from 'stripe';
-import { PAID_WITHOUT_CURRENCY_METRIC } from '../../../billing.constants.js';
+import {
+  AMOUNT_MISMATCH_METRIC,
+  API_VERSION_MISMATCH_METRIC,
+  PAID_WITHOUT_CURRENCY_METRIC,
+} from '../../../billing.constants.js';
 import { normalizeCurrency, type Payment } from '../../../domain/payment.aggregate.js';
+import { STRIPE_API_VERSION } from '../../../infrastructure/stripe/stripe.constants.js';
 import { StripeService } from '../../../infrastructure/stripe/stripe.service.js';
 import { PaymentsRepository } from '../../repositories/payments.repository.js';
 import { StripeEventsRepository } from '../../repositories/stripe-events.repository.js';
@@ -57,10 +62,20 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
     private readonly publisher: EventPublisher,
     @InjectMetric(PAID_WITHOUT_CURRENCY_METRIC)
     private readonly paidWithoutCurrency: { inc(): void },
+    @InjectMetric(AMOUNT_MISMATCH_METRIC)
+    private readonly amountMismatch: { inc(): void },
+    @InjectMetric(API_VERSION_MISMATCH_METRIC)
+    private readonly apiVersionMismatch: { inc(): void },
   ) {}
 
   async execute(command: HandleStripeWebhookCommand): Promise<HandleStripeWebhookResponse> {
     const event = this.stripe.constructWebhookEvent(command.payload, command.signature);
+    if (event.api_version !== null && event.api_version !== STRIPE_API_VERSION) {
+      this.apiVersionMismatch.inc();
+      this.logger.warn(
+        `Stripe event ${event.id} uses API version ${event.api_version}, expected ${STRIPE_API_VERSION}: re-pin the webhook endpoint`,
+      );
+    }
     const outcome = await this.applyOnce(event);
     if (outcome.payment !== null) this.publisher.mergeObjectContext(outcome.payment).commit();
     return {
@@ -104,7 +119,8 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
             );
             return false;
           }
-          return p.complete(
+          const quoted = { amount: p.amountTotal, currency: normalizeCurrency(p.currency) };
+          const applied = p.complete(
             {
               sessionId: session.id,
               paymentIntentId: paymentIntentIdOf(session),
@@ -114,6 +130,21 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
             },
             now,
           );
+          const charged = { amount: p.amountTotal, currency: normalizeCurrency(p.currency) };
+          if (
+            applied &&
+            quoted.amount !== null &&
+            quoted.currency !== null &&
+            charged.amount !== null &&
+            charged.currency !== null &&
+            (charged.amount !== quoted.amount || charged.currency !== quoted.currency)
+          ) {
+            this.amountMismatch.inc();
+            this.logger.warn(
+              `Stripe event ${event.id}: payment ${p.id} was quoted ${quoted.amount} ${quoted.currency} but Stripe charged ${charged.amount} ${charged.currency}; recorded as charged`,
+            );
+          }
+          return applied;
         });
         return { duplicate: false, payment };
       }

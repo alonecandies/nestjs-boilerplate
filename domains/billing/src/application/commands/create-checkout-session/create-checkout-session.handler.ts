@@ -4,6 +4,7 @@ import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { DomainConflictException, generateId } from '@platform/common';
 import type Stripe from 'stripe';
 import {
+  CheckoutSessionClosedException,
   CheckoutUrlMissingException,
   IdempotencyKeyReusedException,
 } from '../../../domain/billing.errors.js';
@@ -24,8 +25,8 @@ export const checkoutIdempotencyKey = (paymentId: string): string => `checkout-$
 /**
  * 1. Insert a `pending` payment first (or find the one this `Idempotency-Key` already created), so
  *    the payment id exists before Stripe sees it (`client_reference_id` + metadata).
- * 2. Create the Checkout Session with an idempotency key derived from that id: client retries and
- *    crash-after-Stripe retries get the SAME session.
+ * 2. Create the Checkout Session with an idempotency key derived from that id (crash-after-Stripe
+ *    retries get the SAME session), or retrieve the one already bound to the payment (a replay).
  * 3. Bind the session (id, amount, currency) to the payment with an optimistic-locked save.
  *
  * No database transaction spans the Stripe call (it may take seconds); each write is atomic on its
@@ -54,7 +55,11 @@ export class CreateCheckoutSessionHandler implements ICommandHandler<CreateCheck
     );
     if (!created && !payment.matchesRequest(request)) throw new IdempotencyKeyReusedException();
 
-    const session = await this.createSession(payment, request);
+    const boundId = payment.stripeCheckoutSessionId;
+    const session =
+      boundId === null
+        ? await this.createSession(payment, request)
+        : await this.boundSession(payment, boundId);
     if (
       payment.attachCheckoutSession(
         { id: session.id, amountTotal: session.amount_total, currency: session.currency },
@@ -65,6 +70,21 @@ export class CreateCheckoutSessionHandler implements ICommandHandler<CreateCheck
     }
     if (!session.url) throw new CheckoutUrlMissingException();
     return { id: session.id, url: session.url, paymentId: payment.id };
+  }
+
+  /**
+   * A replay never creates a second session (Stripe forgets idempotency keys after 24 h, so a late
+   * `create` would make an orphan session and then fail `CHECKOUT_SESSION_MISMATCH`).
+   */
+  private async boundSession(
+    payment: Payment,
+    sessionId: string,
+  ): Promise<Stripe.Checkout.Session> {
+    const session = await this.stripe.retrieveCheckoutSession(sessionId);
+    if (session.status === 'complete' || session.status === 'expired') {
+      throw new CheckoutSessionClosedException(payment.id, session.status);
+    }
+    return session;
   }
 
   private async createSession(

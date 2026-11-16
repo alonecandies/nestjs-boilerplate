@@ -12,6 +12,9 @@ export function toPaymentSucceededPayload(event: PaymentSucceededEvent): Payment
     amountTotal: event.amountTotal,
     currency: event.currency,
     paidAt: event.paidAt.toISOString(),
+    ...(event.stripePaymentIntentId === null
+      ? {}
+      : { stripePaymentIntentId: event.stripePaymentIntentId }),
   };
 }
 

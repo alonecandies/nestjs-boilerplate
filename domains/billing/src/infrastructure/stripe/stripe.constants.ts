@@ -1,4 +1,5 @@
 import { Inject } from '@nestjs/common';
+import type Stripe from 'stripe';
 
 /** DI token of the shared `Stripe` client instance (one keep-alive HTTP agent per process). */
 export const STRIPE_CLIENT = Symbol('STRIPE_CLIENT');
@@ -14,3 +15,10 @@ export const STRIPE_WEBHOOK_TOLERANCE_SEC = 300;
 
 /** Reported to Stripe with every request (visible in the dashboard's request logs). */
 export const STRIPE_APP_INFO = { name: 'nestjs-boilerplate' } as const;
+
+/**
+ * The Stripe API version requests are made with and webhooks are expected in. Typed as the SDK's
+ * pinned literal: an SDK upgrade that moves it fails `tsc` here, so the webhook endpoint in the
+ * dashboard is re-pinned deliberately (`docs/API.md`).
+ */
+export const STRIPE_API_VERSION: Stripe.LatestApiVersion = '2026-08-26.dahlia';

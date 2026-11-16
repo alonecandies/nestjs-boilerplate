@@ -155,6 +155,8 @@ not logged (`includePayload: false`).
 | `http_request_duration_seconds` (`_bucket`, `_sum`, `_count`)         | histogram | `method`, `route`, `status_code` | Fastify `onResponse` hook (`HttpMetricsHook`); buckets 5 ms, 10, 25, 50, 100, 250, 500 ms, 1, 2.5, 5 s |
 | `process_*`, `nodejs_*` (CPU, RSS, heap, GC, event-loop lag, handles) | various   | —                                | prom-client default metrics (event-loop monitoring precision 10 ms)                                    |
 | `billing_checkout_paid_without_currency_total`                        | counter   | —                                | billing: paid Stripe Checkout Sessions left pending because no currency was known                      |
+| `billing_checkout_amount_mismatch_total`                              | counter   | —                                | billing: paid Checkout Sessions whose charged amount or currency differs from the quote                |
+| `billing_stripe_api_version_mismatch_total`                           | counter   | —                                | billing: Stripe webhook events whose `api_version` differs from `STRIPE_API_VERSION`                   |
 
 Label rules:
 

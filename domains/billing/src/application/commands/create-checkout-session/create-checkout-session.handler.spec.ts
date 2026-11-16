@@ -101,6 +101,14 @@ describe('CreateCheckoutSessionHandler', () => {
     const first = await handler.execute(
       new CreateCheckoutSessionCommand(request({ idempotencyKey: 'order-42-attempt' })),
     );
+    stripe.retrieveCheckoutSession.mockResolvedValueOnce(
+      makeCheckoutSession({
+        id: 'cs_test_1',
+        amount_total: 5_000,
+        currency: 'usd',
+        status: 'open',
+      }),
+    );
     const second = await handler.execute(
       new CreateCheckoutSessionCommand(request({ idempotencyKey: 'order-42-attempt' })),
     );
@@ -109,8 +117,8 @@ describe('CreateCheckoutSessionHandler', () => {
     expect(store.state.payments.size).toBe(1);
     expect(stripe.createCheckoutSession.mock.calls.map((call) => call[1])).toEqual([
       checkoutIdempotencyKey(first.paymentId),
-      checkoutIdempotencyKey(first.paymentId),
     ]);
+    expect(stripe.retrieveCheckoutSession).toHaveBeenCalledWith('cs_test_1');
   });
 
   it('scopes Idempotency-Keys per user', async () => {
@@ -190,4 +198,47 @@ describe('CreateCheckoutSessionHandler', () => {
       stripeCheckoutSessionId: 'cs_embedded',
     });
   });
+
+  it('a replay retrieves the bound session instead of creating a second one (S-1)', async () => {
+    const first = await handler.execute(
+      new CreateCheckoutSessionCommand(request({ idempotencyKey: 'order-50-key' })),
+    );
+    stripe.createCheckoutSession.mockClear();
+    stripe.retrieveCheckoutSession.mockResolvedValueOnce(
+      makeCheckoutSession({
+        id: 'cs_test_1',
+        amount_total: 5_000,
+        currency: 'usd',
+        status: 'open',
+      }),
+    );
+    const second = await handler.execute(
+      new CreateCheckoutSessionCommand(request({ idempotencyKey: 'order-50-key' })),
+    );
+    expect(second).toEqual(first);
+    expect(stripe.retrieveCheckoutSession).toHaveBeenCalledWith('cs_test_1');
+    expect(stripe.createCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  it.each(['expired', 'complete'] as const)(
+    'a replay of a %s session gets 409 CHECKOUT_SESSION_CLOSED and no new session',
+    async (status) => {
+      await handler.execute(
+        new CreateCheckoutSessionCommand(request({ idempotencyKey: `order-51-${status}` })),
+      );
+      stripe.createCheckoutSession.mockClear();
+      stripe.retrieveCheckoutSession.mockResolvedValueOnce(
+        makeCheckoutSession({ id: 'cs_test_1', status, url: null }),
+      );
+      await expect(
+        handler.execute(
+          new CreateCheckoutSessionCommand(request({ idempotencyKey: `order-51-${status}` })),
+        ),
+      ).rejects.toMatchObject({
+        code: 'CHECKOUT_SESSION_CLOSED',
+        details: { sessionStatus: status },
+      });
+      expect(stripe.createCheckoutSession).not.toHaveBeenCalled();
+    },
+  );
 });

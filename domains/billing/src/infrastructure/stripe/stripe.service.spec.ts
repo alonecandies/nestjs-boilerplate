@@ -2,6 +2,7 @@ import { DomainValidationException, ExternalServiceException } from '@platform/c
 import Stripe from 'stripe';
 import { describe, expect, it, vi } from 'vitest';
 import { stripeConfig } from './stripe.config.js';
+import { STRIPE_API_VERSION } from './stripe.constants.js';
 import { createStripeClient } from './stripe.module.js';
 import { StripeService } from './stripe.service.js';
 
@@ -189,5 +190,26 @@ describe('StripeService.createCheckoutSession', () => {
     vi.spyOn(service.client.checkout.sessions, 'create').mockRejectedValue(boom);
 
     await expect(service.createCheckoutSession(input)).rejects.toBe(boom);
+  });
+});
+
+describe('StripeService.retrieveCheckoutSession and the pinned API version', () => {
+  it('retrieves a session by id and translates SDK errors', async () => {
+    const service = createService();
+    const retrieve = vi
+      .spyOn(service.client.checkout.sessions, 'retrieve')
+      .mockResolvedValueOnce({ id: 'cs_1', status: 'open' } as never)
+      .mockRejectedValueOnce(
+        Stripe.errors.StripeError.generate({ statusCode: 500, message: 'down', type: 'api_error' }),
+      );
+    await expect(service.retrieveCheckoutSession('cs_1')).resolves.toMatchObject({ id: 'cs_1' });
+    expect(retrieve).toHaveBeenCalledWith('cs_1');
+    await expect(service.retrieveCheckoutSession('cs_1')).rejects.toMatchObject({
+      code: 'PAYMENT_PROVIDER_ERROR',
+    });
+  });
+
+  it('pins the API version the SDK was built for', () => {
+    expect(STRIPE_API_VERSION).toBe(Stripe.API_VERSION);
   });
 });

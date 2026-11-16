@@ -21,6 +21,19 @@ export function toPaymentDomainException(error: unknown): DomainException | unde
   const stripeRequestId = error.requestId;
   const details = stripeRequestId === undefined ? undefined : { stripeRequestId };
 
+  // 409 from a concurrent request with the same key: a StripeAPIError (only 400/404 become
+  // StripeIdempotencyError). A conflict, so the caller does not mark the payment failed.
+  if (error.code === 'idempotency_key_in_use') {
+    return new DomainConflictException(
+      'The same checkout request is still being processed, retry shortly',
+      {
+        code: BillingErrorCode.CHECKOUT_IN_PROGRESS,
+        cause: error,
+        details: { ...details, retryAfterSec: 1 },
+      },
+    );
+  }
+
   if (error instanceof Stripe.errors.StripeIdempotencyError) {
     return new DomainConflictException('The idempotency key was already used for another request', {
       code: BillingErrorCode.IDEMPOTENCY_KEY_REUSED,
