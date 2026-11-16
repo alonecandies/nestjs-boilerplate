@@ -19,3 +19,4 @@ export * from './plugins/operation-rate-limit.plugin.js';
 export * from './pubsub/pubsub.constants.js';
 export * from './pubsub/pubsub.module.js';
 export * from './scalars/index.js';
+export * from './subscriptions/subscription-guard.js';

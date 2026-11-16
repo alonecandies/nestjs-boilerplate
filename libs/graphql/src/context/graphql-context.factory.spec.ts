@@ -1,6 +1,7 @@
 import type { IncomingMessage } from 'node:http';
 import type { AuthUser } from '@platform/auth';
 import { isUuidV7 } from '@platform/common';
+import { createClientIpResolver } from '@platform/redis';
 import DataLoader from 'dataloader';
 import { describe, expect, it } from 'vitest';
 import { DataLoaderRegistry } from '../loaders/data-loader.registry.js';
@@ -102,5 +103,27 @@ describe('createGraphqlContext', () => {
     expect(first.req.headers['authorization']).toBe('Bearer jwt-2');
     expect(first.reply).toBeUndefined();
     expect(first.loaders['echo']).not.toBe(second.loaders['echo']);
+  });
+});
+
+const forwardedCtx = (forwardedFor: string): GqlWsConnectionContext => ({
+  connectionParams: {},
+  extra: {
+    request: {
+      socket: { remoteAddress: '10.0.0.5' },
+      headers: { 'x-forwarded-for': forwardedFor },
+      url: '/graphql',
+    } as unknown as IncomingMessage,
+  },
+});
+
+describe('buildWsRequest client IP', () => {
+  it('uses the socket address by default (X-Forwarded-For ignored)', () => {
+    expect(buildWsRequest(forwardedCtx('1.2.3.4')).ip).toBe('10.0.0.5');
+  });
+  it('honours TRUST_PROXY through the resolver', () => {
+    expect(
+      buildWsRequest(forwardedCtx('6.6.6.6, 1.2.3.4'), createClientIpResolver(['10.0.0.0/8'])).ip,
+    ).toBe('1.2.3.4');
   });
 });

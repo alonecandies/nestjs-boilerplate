@@ -1,4 +1,5 @@
 import { generateId, getHeaderValue, HTTP_HEADERS, isSafeRequestId } from '@platform/common';
+import type { ClientIpResolver } from '@platform/redis';
 import { omit } from 'lodash-es';
 import { extractConnectionToken } from '../auth/subscription-auth.js';
 import type { DataLoaderRegistry } from '../loaders/data-loader.registry.js';
@@ -15,7 +16,10 @@ import {
  * the HTTP `JwtAuthGuard` works on subscriptions unchanged. Credentials the browser attached to the
  * upgrade (cookies) are dropped: subscriptions authenticate via connection params only.
  */
-export function buildWsRequest(ctx: GqlWsConnectionContext): GqlRequest {
+export function buildWsRequest(
+  ctx: GqlWsConnectionContext,
+  clientIp: ClientIpResolver = (request) => request?.socket?.remoteAddress,
+): GqlRequest {
   const upgrade = ctx.extra.request;
   const headers: GqlRequest['headers'] = omit(upgrade?.headers ?? {}, ['cookie', 'authorization']);
   const token = extractConnectionToken(ctx.connectionParams);
@@ -29,7 +33,7 @@ export function buildWsRequest(ctx: GqlWsConnectionContext): GqlRequest {
   };
   if (ctx.extra.user !== undefined) req.user = ctx.extra.user;
   if (upgrade?.url !== undefined) req.url = upgrade.url;
-  const ip = upgrade?.socket.remoteAddress;
+  const ip = clientIp(upgrade);
   if (ip !== undefined) req.ip = ip;
   return req;
 }
@@ -41,11 +45,12 @@ export function buildWsRequest(ctx: GqlWsConnectionContext): GqlRequest {
  */
 export function createGraphqlContext(
   registry: DataLoaderRegistry,
+  clientIp?: ClientIpResolver,
 ): (requestOrWsContext: unknown, reply?: unknown) => GqlContext {
   return (requestOrWsContext, reply) => {
     const loaders = registry.createLoaders();
     if (isWsContext(requestOrWsContext)) {
-      return { req: buildWsRequest(requestOrWsContext), loaders };
+      return { req: buildWsRequest(requestOrWsContext, clientIp), loaders };
     }
     return { req: requestOrWsContext as GqlRequest, reply, loaders };
   };

@@ -25,6 +25,10 @@ import { ComplexityPlugin } from './plugins/complexity.plugin.js';
 import { ErrorRequestIdPlugin } from './plugins/error-request-id.plugin.js';
 import { OperationRateLimitPlugin } from './plugins/operation-rate-limit.plugin.js';
 import { SandboxCspHook } from './sandbox/sandbox-csp.hook.js';
+import {
+  SubscriptionGuardBinder,
+  SubscriptionGuardRef,
+} from './subscriptions/subscription-guard.js';
 
 export interface AppGraphqlModuleOptions {
   /** Extra modules the Apollo factory needs (rare: auth/config/loaders are already wired). */
@@ -55,6 +59,8 @@ export interface AppGraphqlModuleOptions {
 @Module({})
 export class AppGraphqlModule {
   static forRootAsync(options: AppGraphqlModuleOptions = {}): DynamicModule {
+    // Filled by SubscriptionGuardBinder once the schema exists (graphql-ws bypasses Apollo plugins).
+    const subscriptionGuard = new SubscriptionGuardRef();
     return {
       module: AppGraphqlModule,
       global: true,
@@ -98,10 +104,18 @@ export class AppGraphqlModule {
                 },
               ),
               buildSchemaOptions: options.buildSchemaOptions,
+              subscriptionGuard,
             }),
         }),
       ],
-      providers: [ComplexityPlugin, OperationRateLimitPlugin, ErrorRequestIdPlugin, SandboxCspHook],
+      providers: [
+        ComplexityPlugin,
+        OperationRateLimitPlugin,
+        ErrorRequestIdPlugin,
+        SandboxCspHook,
+        { provide: SubscriptionGuardRef, useValue: subscriptionGuard },
+        SubscriptionGuardBinder,
+      ],
       exports: [GraphqlLoadersModule],
     };
   }
