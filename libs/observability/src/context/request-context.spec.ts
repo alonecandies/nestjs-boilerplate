@@ -1,8 +1,8 @@
 import { type CallHandler, type INestApplicationContext, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context-host.js';
-import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
-import { ClsModule } from 'nestjs-cls';
+import { createPrincipal, HTTP_HEADERS, isUuidV7, setPrincipal } from '@platform/common';
+import { ClsModule, ClsServiceManager } from 'nestjs-cls';
 import { defer, lastValueFrom, of } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { RequestContextInterceptor } from './request-context.interceptor.js';
@@ -66,6 +66,18 @@ describe('request context', () => {
       });
       expect(isUuidV7(seen.id)).toBe(true);
       expect(seen.corr).toBe(seen.id);
+    });
+
+    it('userId prefers the CLS principal over the legacy CLS_USER_ID', () => {
+      const service = new RequestContextService(ClsServiceManager.getClsService());
+      ClsServiceManager.getClsService().run(() => {
+        service.userId = 'legacy-user';
+        expect(service.userId).toBe('legacy-user');
+        setPrincipal(
+          createPrincipal({ userId: '0190f3b2-0000-7000-8000-000000000001', tenantId: null }),
+        );
+        expect(service.userId).toBe('0190f3b2-0000-7000-8000-000000000001');
+      });
     });
   });
 

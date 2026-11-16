@@ -1,6 +1,7 @@
 import type { AuthTokens } from '@domain/identity-contracts';
 import { Logger } from '@nestjs/common';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
+import { createPrincipal, runWithPrincipal } from '@platform/common';
 import { normalizeEmail } from '../../../domain/email.js';
 import { InvalidCredentialsException } from '../../../domain/identity.errors.js';
 import type { UserSnapshot } from '../../../domain/user.aggregate.js';
@@ -41,15 +42,18 @@ export class LoginHandler implements ICommandHandler<LoginCommand> {
     const user = toUserRecord(credentials);
     const now = new Date();
     // Tenant choice (and, for a pre-tenancy account, its personal workspace) + the session: one unit.
-    return this.transaction.run(async () => {
-      const membership = await this.selection.forLogin(user, command.tenantId, now);
-      return this.sessionTokens.open({
-        user,
-        tenantId: membership.tenantId,
-        roles: membership.roles,
-        client: command.client,
-      });
-    });
+    // I-2: tenant selection is a user-scoped unit of work (no tenant yet).
+    return runWithPrincipal(createPrincipal({ userId: user.id, tenantId: null }), () =>
+      this.transaction.run(async () => {
+        const membership = await this.selection.forLogin(user, command.tenantId, now);
+        return this.sessionTokens.open({
+          user,
+          tenantId: membership.tenantId,
+          roles: membership.roles,
+          client: command.client,
+        });
+      }),
+    );
   }
 
   /**

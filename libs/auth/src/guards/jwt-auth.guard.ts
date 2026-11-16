@@ -10,6 +10,7 @@ import {
 } from '@platform/common';
 import { firstValueFrom, isObservable } from 'rxjs';
 import { AuthErrorCode, JWT_STRATEGY } from '../auth.constants.js';
+import { writePrincipal } from '../context/principal-context.js';
 import { isAuthUser } from '../tokens/token-claims.js';
 import type { AuthUser } from '../types/auth-user.js';
 import { passportFailure } from './auth-errors.js';
@@ -55,8 +56,11 @@ export class JwtAuthGuard extends AuthGuard(JWT_STRATEGY) {
     if (type === 'graphql' && isAlreadyAuthenticated(req)) return true;
     const result = super.canActivate(context);
     const allowed = isObservable(result) ? await firstValueFrom(result) : await result;
-    if (allowed && type === 'graphql' && isAuthUser(req.user)) {
-      authenticatedGraphqlRequests.set(req, req.user);
+    if (allowed && isAuthUser(req.user)) {
+      if (type === 'graphql') authenticatedGraphqlRequests.set(req, req.user);
+      // I-2: the HTTP CLS context (ClsMiddleware) is active here; later GraphQL root fields skip
+      // passport above and share this store, so the first field's write stands.
+      writePrincipal(req.user);
     }
     return allowed;
   }

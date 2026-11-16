@@ -1,9 +1,16 @@
 import { Reflector } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
-import { Public, type TenantRole, UnauthenticatedException } from '@platform/common';
+import {
+  generateId,
+  getPrincipal,
+  Public,
+  type TenantRole,
+  UnauthenticatedException,
+} from '@platform/common';
 import { authConfig, redisConfig } from '@platform/config';
 import { RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
+import { ClsServiceManager } from 'nestjs-cls';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createJwtModuleOptions } from '../auth.module.js';
 import { JwtStrategy } from '../strategies/jwt.strategy.js';
@@ -17,6 +24,7 @@ import { executionContext, type Transport } from './execution-context.test.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
 
 const config = authConfig.parse({ NODE_ENV: 'test' });
+const userId = generateId();
 const redis = new InMemoryRedis();
 const denylist = new AccessTokenDenylist(
   redis.asRedis(),
@@ -50,7 +58,7 @@ const target = (handler: () => void = Controller.prototype.secured) => ({
 const bearer = async (
   roles: TenantRole[] = ['member'],
 ): Promise<{ token: string; jti: string; exp: number }> =>
-  signTestAccessToken({ id: 'u-1', email: 'a@b.c', roles }, { config });
+  signTestAccessToken({ id: userId, email: 'a@b.c', roles }, { config });
 
 async function failureCode(promise: Promise<unknown>): Promise<string> {
   const error: unknown = await promise.then(
@@ -71,7 +79,7 @@ describe('JwtAuthGuard', () => {
     const req: Record<string, unknown> = { headers: { authorization: `Bearer ${token}` } };
     await expect(guard.canActivate(executionContext('http', target(), req))).resolves.toBe(true);
     expect(req.user).toMatchObject({
-      id: 'u-1',
+      id: userId,
       roles: ['member'],
       tenantId: TEST_TENANT_ID,
       jti,
@@ -180,5 +188,22 @@ describe('JwtAuthGuard', () => {
     const context = executionContext('graphql', target());
     vi.spyOn(context, 'getArgByIndex').mockReturnValue(undefined);
     await expect(failureCode(guard.canActivate(context))).resolves.toBe('MISSING_TOKEN');
+  });
+
+  it('writes the principal into an active CLS context after authenticating (http)', async () => {
+    const { token } = await bearer(['admin']);
+    const req: Record<string, unknown> = { headers: { authorization: `Bearer ${token}` } };
+    const seen = await ClsServiceManager.getClsService().run(async () => {
+      await guard.canActivate(executionContext('http', target(), req));
+      return getPrincipal();
+    });
+    expect(seen).toEqual({ userId, tenantId: TEST_TENANT_ID, roles: ['admin'], staff: false });
+  });
+
+  it('writes nothing without a CLS context (unit tests, rpc): the guard still authenticates', async () => {
+    const { token } = await bearer();
+    const req: Record<string, unknown> = { headers: { authorization: `Bearer ${token}` } };
+    await expect(guard.canActivate(executionContext('http', target(), req))).resolves.toBe(true);
+    expect(getPrincipal()).toBeUndefined();
   });
 });

@@ -1,10 +1,11 @@
 import { type DynamicModule, Module, type Provider } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { JwtModule, type JwtModuleOptions } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { type AuthConfig, authConfig } from '@platform/config';
 import { JWT_ALGORITHM, JWT_CLOCK_TOLERANCE_SEC } from './auth.constants.js';
+import { PrincipalContextInterceptor } from './context/principal-context.interceptor.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { PermissionsGuard } from './guards/permissions.guard.js';
 import { RolesGuard } from './guards/roles.guard.js';
@@ -41,11 +42,13 @@ export function createJwtModuleOptions(config: AuthConfig): JwtModuleOptions {
   };
 }
 
-const GLOBAL_GUARDS: Provider[] = [
+const GLOBAL_ENHANCERS: Provider[] = [
   // Order matters: authentication sets req.user, then role / permission checks read it.
   { provide: APP_GUARD, useExisting: JwtAuthGuard },
   { provide: APP_GUARD, useExisting: RolesGuard },
   { provide: APP_GUARD, useExisting: PermissionsGuard },
+  // Socket.IO / graphql-ws: their CLS context opens after the guards (RequestContextInterceptor).
+  { provide: APP_INTERCEPTOR, useClass: PrincipalContextInterceptor },
 ];
 
 /**
@@ -78,7 +81,7 @@ export class AuthModule {
         JwtAuthGuard,
         RolesGuard,
         PermissionsGuard,
-        ...((setup.globalGuards ?? true) ? GLOBAL_GUARDS : []),
+        ...((setup.globalGuards ?? true) ? GLOBAL_ENHANCERS : []),
       ],
       exports: [
         TokenService,

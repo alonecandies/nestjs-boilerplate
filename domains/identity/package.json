@@ -29,7 +29,8 @@
     "clean": "rimraf dist coverage",
     "db:generate": "drizzle-kit generate",
     "db:check": "drizzle-kit check",
-    "db:studio": "drizzle-kit studio"
+    "db:studio": "drizzle-kit studio",
+    "staff:grant": "node --env-file-if-exists=../../.env --env-file-if-exists=.env --conditions=@repo/source --import @swc-node/register/esm-register src/cli/staff-grant.main.ts"
   },
   "dependencies": {
     "@platform/auth": "workspace:*",
@@ -60,6 +61,7 @@
     "lodash-es": "catalog:",
     "nestjs-cls": "catalog:",
     "passport-local": "catalog:",
+    "postgres": "catalog:",
     "rxjs": "catalog:",
     "zod": "catalog:"
   },

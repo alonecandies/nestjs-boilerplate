@@ -1,6 +1,16 @@
 import type { AuthTokens, ClientInfo } from '@domain/identity-contracts';
 import { Injectable } from '@nestjs/common';
-import { generateId, sha256Hex, type TenantRole } from '@platform/common';
+import {
+  createPrincipal,
+  generateId,
+  getPrincipal,
+  setPrincipal,
+  sha256Hex,
+  TenancyErrorCode,
+  type TenantRole,
+  UnauthenticatedException,
+} from '@platform/common';
+import { ClsServiceManager } from 'nestjs-cls';
 import { BEARER_TOKEN_TYPE } from '../../identity.constants.js';
 import { TokenIssuer } from '../../infrastructure/security/token-issuer.service.js';
 import { toSessionClient } from '../mappers/client-info.mapper.js';
@@ -31,6 +41,20 @@ export class SessionTokensService {
   ) {}
 
   async open(input: OpenSessionInput): Promise<AuthTokens> {
+    // I-2: once a session is opened, the unit of work runs as that user in that tenant. Another
+    // user's principal is never replaced: fail closed (the caller's transaction rolls back).
+    if (ClsServiceManager.getClsService().isActive()) {
+      const current = getPrincipal();
+      if (current !== undefined && current.userId !== input.user.id) {
+        throw new UnauthenticatedException('Principal mismatch', {
+          code: TenancyErrorCode.INVALID_PRINCIPAL,
+          details: { reason: 'principal mismatch' },
+        });
+      }
+      setPrincipal(
+        createPrincipal({ userId: input.user.id, tenantId: input.tenantId, roles: input.roles }),
+      );
+    }
     const sessionId = input.sessionId ?? generateId();
     // Signing is CPU-only (HS256): both tokens in parallel, then a single INSERT.
     const [refresh, access] = await Promise.all([

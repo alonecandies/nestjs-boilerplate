@@ -16,6 +16,8 @@ export {
   STAFF_ONLY_KEY,
 } from './auth.constants.js';
 export { AuthModule, type AuthModuleSetup, createJwtModuleOptions } from './auth.module.js';
+export { PrincipalContextInterceptor } from './context/principal-context.interceptor.js';
+export { principalOf } from './context/principal-context.js';
 export { Auth } from './decorators/auth.decorator.js';
 export { CurrentUser } from './decorators/current-user.decorator.js';
 export {
