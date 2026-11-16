@@ -1,0 +1,5 @@
+# immudb's own proto (vendored, stripped of REST/Swagger annotations by scripts/strip-proto.mjs).
+# Not linted: it is upstream's API, not ours. Run `bun run --filter @platform/immudb proto:gen`.
+version: v2
+modules:
+  - path: proto

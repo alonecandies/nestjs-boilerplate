@@ -636,6 +636,26 @@
         "fastify": "catalog:",
       },
     },
+    "libs/immudb": {
+      "name": "@platform/immudb",
+      "version": "0.0.0",
+      "dependencies": {
+        "@bufbuild/protobuf": "catalog:",
+        "@grpc/grpc-js": "catalog:",
+        "@nestjs/common": "catalog:",
+        "@nestjs/config": "catalog:",
+        "@nestjs/terminus": "catalog:",
+        "@platform/config": "workspace:*",
+        "@platform/observability": "workspace:*",
+      },
+      "devDependencies": {
+        "@bufbuild/buf": "catalog:",
+        "@nestjs/testing": "catalog:",
+        "@platform/testing": "workspace:*",
+        "testcontainers": "catalog:",
+        "ts-proto": "catalog:",
+      },
+    },
     "libs/mailer": {
       "name": "@platform/mailer",
       "version": "0.0.0",
@@ -812,6 +832,7 @@
     "@aws-sdk/lib-storage": "3.1149.0",
     "@aws-sdk/s3-request-presigner": "3.1149.0",
     "@bufbuild/buf": "1.73.0",
+    "@bufbuild/protobuf": "2.15.0",
     "@fastify/compress": "9.2.1",
     "@fastify/cookie": "11.1.3",
     "@fastify/helmet": "13.1.2",
@@ -1834,6 +1855,8 @@
     "@platform/database": ["@platform/database@workspace:libs/database"],
 
     "@platform/graphql": ["@platform/graphql@workspace:libs/graphql"],
+
+    "@platform/immudb": ["@platform/immudb@workspace:libs/immudb"],
 
     "@platform/mailer": ["@platform/mailer@workspace:libs/mailer"],
 

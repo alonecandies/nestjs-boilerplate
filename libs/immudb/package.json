@@ -1,0 +1,38 @@
+{
+  "name": "@platform/immudb",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "immudb over gRPC: generated client (immudb v1.11.2 schema.proto), session pool, SQL transactions, error mapping, versioned SQL migrations with provisioning, and client-side proof verification",
+  "exports": {
+    ".": {
+      "@repo/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project immudb",
+    "clean": "rimraf dist coverage",
+    "proto:gen": "node scripts/strip-proto.mjs vendor/immudb-v1.11.2-schema.proto proto/immudb/schema/schema.proto && buf generate --template buf.gen.yaml"
+  },
+  "dependencies": {
+    "@platform/config": "workspace:*",
+    "@platform/observability": "workspace:*",
+    "@bufbuild/protobuf": "catalog:",
+    "@grpc/grpc-js": "catalog:",
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "@nestjs/terminus": "catalog:"
+  },
+  "devDependencies": {
+    "@platform/testing": "workspace:*",
+    "@bufbuild/buf": "catalog:",
+    "@nestjs/testing": "catalog:",
+    "testcontainers": "catalog:",
+    "ts-proto": "catalog:"
+  }
+}
