@@ -25,13 +25,19 @@ Implemented in [`libs/auth`](../libs/auth/README.md) (access-token verification,
 
 ### Tokens
 
-| Token   | Algorithm / secret                       | TTL (env)                        | Claims                                                   | Stored server-side                                |
-| ------- | ---------------------------------------- | -------------------------------- | -------------------------------------------------------- | ------------------------------------------------- |
-| Access  | HS256, `JWT_ACCESS_SECRET` (≥ 32 chars)  | 900 s (`JWT_ACCESS_TTL_SEC`)     | `sub`, roles, `jti` (uuidv7), `typ`, `iss`, `aud`, `exp` | no (verified locally); `jti` denylisted on logout |
-| Refresh | HS256, `JWT_REFRESH_SECRET` (≥ 32 chars) | 604800 s (`JWT_REFRESH_TTL_SEC`) | `sub`, `jti` = session id, `typ`, `iss`, `aud`, `exp`    | `sessions` row with `sha256(refreshToken)` only   |
+| Token   | Algorithm / secret                       | TTL (env)                                                                       | Claims                                                                                                                                                      | Stored server-side                                                   |
+| ------- | ---------------------------------------- | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Access  | HS256, `JWT_ACCESS_SECRET` (≥ 32 chars)  | 900 s (`JWT_ACCESS_TTL_SEC`); staff switch-in 900 s (`STAFF_SWITCH_IN_TTL_SEC`) | `sub` (user id), `email`, `tid` (active tenant), `roles` (tenant roles), `staff` (switch-in tokens only), `jti` (uuidv7), `typ`, `iss`, `aud`, `iat`, `exp` | no (verified locally); `jti` denylisted on logout                    |
+| Refresh | HS256, `JWT_REFRESH_SECRET` (≥ 32 chars) | 604800 s (`JWT_REFRESH_TTL_SEC`)                                                | `sub`, `jti` = session id, `typ`, `iss`, `aud`, `iat`, `exp`                                                                                                | `sessions` row (with its tenant) holding `sha256(refreshToken)` only |
 
 - `iss`/`aud` default to `nestjs-boilerplate` (`JWT_ISSUER`, `JWT_AUDIENCE`). Verification allows 5 s of
-  clock skew (`JWT_CLOCK_TOLERANCE_SEC`).
+  clock skew: the code constant `JWT_CLOCK_TOLERANCE_SEC` (`libs/auth/src/auth.constants.ts`), not an
+  environment variable.
+- `tid` is required: a token without it (issued before B2) is 401 `INVALID_TOKEN`; the client refreshes.
+  `roles` are the roles held in `tid` (owner ⊇ admin ⊇ member); unknown values are dropped. `staff` is
+  written only on staff switch-in tokens and counts only as the JSON boolean `true`. Permissions are never in
+  the token: each service resolves them from `roles` at verification.
+- The refresh token carries no tenant: its session row does, so a refresh stays in the session's tenant.
 - Identity signs both tokens (`TokenIssuer`, `domains/identity/src/infrastructure/security/`). The
   refresh secret and TTL live in identity's `refreshToken` namespace, which only the processes
   running `IdentityCoreModule` (monolith, identity-service) load: the gateway holds the access
@@ -276,7 +282,7 @@ are sanitised before they reach the client.
 - The app is created with `rawBody: true`; the signature (`Stripe-Signature`, `STRIPE_WEBHOOK_SECRET`)
   is verified over the exact bytes. In the gateway topology the raw bytes are forwarded over gRPC and
   billing-service verifies them.
-- Missing, forged or stale (> 300 s, `STRIPE_WEBHOOK_TOLERANCE_SEC`) signatures are a 422
+- Missing, forged or stale (> 300 s, the code constant `STRIPE_WEBHOOK_TOLERANCE_SEC` in `domains/billing/src/infrastructure/stripe/stripe.constants.ts`) signatures are a 422
   `INVALID_WEBHOOK_SIGNATURE` before any I/O.
 - Exactly-once processing: `INSERT INTO billing.stripe_events … ON CONFLICT DO NOTHING` inside the same
   transaction as the payment update; duplicates answer `duplicate: true`.

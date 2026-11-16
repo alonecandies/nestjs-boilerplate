@@ -87,25 +87,33 @@ Every route is authenticated unless it is marked `@Public()`. Clients send the a
 `Authorization: Bearer <accessToken>`. Three global guards run in order: `JwtAuthGuard`, then `RolesGuard`, then
 `PermissionsGuard`. The user id always comes from the token, never from the request body.
 
-| Token   | Lifetime                               | Notes                                                                                                                                                                                    |
-| ------- | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Access  | `JWT_ACCESS_TTL_SEC` (default 900 s)   | Signed with `JWT_ACCESS_SECRET` and checked for issuer, audience and `typ`. On logout it goes on a Redis denylist (`AUTH_DENYLIST_ENABLED`, default on), so it stops working immediately |
-| Refresh | `JWT_REFRESH_TTL_SEC` (default 7 days) | Single use: every refresh returns a new pair and revokes the token you sent. Presenting a token that was already rotated revokes every session of that user (`REFRESH_TOKEN_REUSED`)     |
+| Token   | Lifetime                               | Notes                                                                                                                                                                                                                                                                                               |
+| ------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Access  | `JWT_ACCESS_TTL_SEC` (default 900 s)   | Signed with `JWT_ACCESS_SECRET` and checked for issuer, audience and `typ`. Carries `tid` (the active tenant), your `roles` there and `email`; `staff` only on staff switch-in tokens. On logout it goes on a Redis denylist (`AUTH_DENYLIST_ENABLED`, default on), so it stops working immediately |
+| Refresh | `JWT_REFRESH_TTL_SEC` (default 7 days) | Single use: every refresh returns a new pair and revokes the token you sent. Presenting a token that was already rotated revokes every session of that user (`REFRESH_TOKEN_REUSED`)                                                                                                                |
 
-Roles only group permissions. Endpoints check permissions (`@RequirePermissions` needs all of the listed permissions,
-`@RequireAnyPermission` needs at least one). Role changes take effect on the user's next token refresh.
+Every access token belongs to one tenant (`tid`) and carries your roles there (`owner` ⊇ `admin` ⊇ `member`); the
+API acts inside that tenant only. Pick the tenant at login (`tenantId`) or switch with
+`POST /v1/auth/switch-tenant`. Endpoints check permissions (`@RequirePermissions` needs all of the listed
+permissions, `@RequireAnyPermission` at least one); each domain declares its permissions and the roles that get
+them by default. Role changes take effect on your next token refresh.
 
-| Permission            | `admin` | `moderator` | `user` |
-| --------------------- | :-----: | :---------: | :----: |
-| `users:read`          |   yes   |     yes     |        |
-| `users:write`         |   yes   |             |        |
-| `notifications:read`  |   yes   |     yes     |  yes   |
-| `notifications:write` |   yes   |     yes     |        |
-| `billing:checkout`    |   yes   |             |  yes   |
-| `billing:read-all`    |   yes   |             |        |
-| `files:read`          |   yes   |     yes     |  yes   |
-| `files:write`         |   yes   |     yes     |  yes   |
-| `files:manage`        |   yes   |             |        |
+| Permission            | `member` | `admin` | `owner` |
+| --------------------- | :------: | :-----: | :-----: |
+| `users:read`          |          |   yes   |   yes   |
+| `members:manage`      |          |   yes   |   yes   |
+| `tenant:manage`       |          |         |   yes   |
+| `notifications:read`  |   yes    |   yes   |   yes   |
+| `notifications:write` |          |   yes   |   yes   |
+| `billing:checkout`    |   yes    |   yes   |   yes   |
+| `billing:read-all`    |          |         |         |
+| `files:read`          |   yes    |   yes   |   yes   |
+| `files:write`         |   yes    |   yes   |   yes   |
+| `files:manage`        |          |         |         |
+
+`billing:read-all` and `files:manage` are declared but granted to nobody until payments and files are scoped to the
+tenant. Platform staff enter a tenant with a short-lived switch-in token (`admin` + `staff`); see
+[SECURITY.md](SECURITY.md#platform-staff-switch-in).
 
 Some rules depend on ownership rather than on a permission. They are enforced in the handler:
 
