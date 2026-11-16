@@ -6,6 +6,7 @@ import {
   toLoginCommand,
   toLogoutCommand,
   toRegisterUserCommand,
+  toStaffSwitchInCommand,
   toSwitchTenantCommand,
 } from './identity-request.mapper.js';
 import { toAccessTokenSubject, toUserContract, toUserRecord } from './user.mapper.js';
@@ -80,5 +81,16 @@ describe('identity request mappers', () => {
       refreshToken: 'r',
       accessToken: { jti: 'j', exp: 1_900_000_000 },
     });
+  });
+
+  it('toStaffSwitchInCommand: carries the staff user, tenant, reason and client', () => {
+    expect(
+      toStaffSwitchInCommand({
+        staffUserId: 's',
+        tenantId: 't',
+        reason: 'ticket #1',
+        client: { ip: '1' },
+      }),
+    ).toMatchObject({ staffUserId: 's', tenantId: 't', reason: 'ticket #1', client: { ip: '1' } });
   });
 });

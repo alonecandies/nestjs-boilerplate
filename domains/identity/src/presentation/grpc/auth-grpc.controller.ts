@@ -6,6 +6,8 @@ import {
   type LogoutRequest,
   type RefreshTokensRequest,
   type RegisterRequest,
+  type StaffAccessToken,
+  type StaffSwitchInRequest,
   type SwitchTenantRequest,
 } from '@domain/identity-contracts';
 import { CommandBus } from '@nestjs/cqrs';
@@ -16,6 +18,7 @@ import {
   toLogoutCommand,
   toRefreshSessionCommand,
   toRegisterUserCommand,
+  toStaffSwitchInCommand,
   toSwitchTenantCommand,
 } from '../../application/mappers/identity-request.mapper.js';
 import {
@@ -23,6 +26,7 @@ import {
   logoutRequestSchema,
   refreshTokensRequestSchema,
   registerRequestSchema,
+  staffSwitchInRequestSchema,
   switchTenantRequestSchema,
 } from './identity-rpc.payloads.js';
 
@@ -66,5 +70,11 @@ export class AuthGrpcController implements AuthServiceController {
     @Payload(new ZodRpcValidationPipe(switchTenantRequestSchema)) request: SwitchTenantRequest,
   ): Promise<AuthTokens> {
     return this.commandBus.execute(toSwitchTenantCommand(request));
+  }
+
+  staffSwitchIn(
+    @Payload(new ZodRpcValidationPipe(staffSwitchInRequestSchema)) request: StaffSwitchInRequest,
+  ): Promise<StaffAccessToken> {
+    return this.commandBus.execute(toStaffSwitchInCommand(request));
   }
 }

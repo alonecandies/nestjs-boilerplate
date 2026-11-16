@@ -142,3 +142,10 @@ export class StaffTokenNotAllowedException extends PermissionDeniedException {
     });
   }
 }
+
+/** 403 — switch-in by a user whose `is_platform_staff` flag is not set (read fresh, never from the token). */
+export class NotPlatformStaffException extends PermissionDeniedException {
+  constructor() {
+    super('Platform staff only', { code: IdentityErrorCode.STAFF_ONLY });
+  }
+}

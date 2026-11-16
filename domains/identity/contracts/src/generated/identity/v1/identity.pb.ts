@@ -88,6 +88,25 @@ export interface SwitchTenantRequest {
   client?: ClientInfo | undefined;
 }
 
+export interface StaffSwitchInRequest {
+  staffUserId: string;
+  tenantId: string;
+  /** Why staff enters (audited), 1..1000 characters. */
+  reason: string;
+  client?: ClientInfo | undefined;
+}
+
+export interface StaffAccessToken {
+  accessToken: string;
+  /** Lifetime in seconds (STAFF_SWITCH_IN_TTL_SEC). */
+  expiresIn: number;
+  /** Always "Bearer". */
+  tokenType: string;
+  tenantId: string;
+  /** The identity.audit_events row recording the switch-in. */
+  auditEventId: string;
+}
+
 export interface GetUserRequest {
   id: string;
   /** Scope: only a member of this tenant is found (else NOT_FOUND). Absent: any user (own profile, internal). */
@@ -163,6 +182,13 @@ export interface AuthServiceClient {
    */
 
   switchTenant(request: SwitchTenantRequest, metadata?: Metadata): Observable<AuthTokens>;
+
+  /**
+   * Platform staff enters a tenant for support: an access token only (admin + staff, short TTL), audited
+   * in the tenant. Not staff → PERMISSION_DENIED / STAFF_ONLY; unknown tenant → NOT_FOUND.
+   */
+
+  staffSwitchIn(request: StaffSwitchInRequest, metadata?: Metadata): Observable<StaffAccessToken>;
 }
 
 /** Credential flows. Every successful flow returns a fresh access + refresh token pair. */
@@ -196,11 +222,21 @@ export interface AuthServiceController {
     request: SwitchTenantRequest,
     metadata?: Metadata,
   ): Promise<AuthTokens> | Observable<AuthTokens> | AuthTokens;
+
+  /**
+   * Platform staff enters a tenant for support: an access token only (admin + staff, short TTL), audited
+   * in the tenant. Not staff → PERMISSION_DENIED / STAFF_ONLY; unknown tenant → NOT_FOUND.
+   */
+
+  staffSwitchIn(
+    request: StaffSwitchInRequest,
+    metadata?: Metadata,
+  ): Promise<StaffAccessToken> | Observable<StaffAccessToken> | StaffAccessToken;
 }
 
 export function AuthServiceControllerMethods() {
   return function (constructor: Function) {
-    const grpcMethods: string[] = ["register", "login", "refreshTokens", "logout", "switchTenant"];
+    const grpcMethods: string[] = ["register", "login", "refreshTokens", "logout", "switchTenant", "staffSwitchIn"];
     for (const method of grpcMethods) {
       const descriptor: any = Reflect.getOwnPropertyDescriptor(constructor.prototype, method);
       GrpcMethod("AuthService", method)(constructor.prototype[method], method, descriptor);

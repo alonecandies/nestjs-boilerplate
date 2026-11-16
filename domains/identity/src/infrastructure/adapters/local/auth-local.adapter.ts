@@ -4,6 +4,8 @@ import type {
   LogoutRequest,
   RefreshTokensRequest,
   RegisterRequest,
+  StaffAccessToken,
+  StaffSwitchInRequest,
   SwitchTenantRequest,
 } from '@domain/identity-contracts';
 import { Injectable } from '@nestjs/common';
@@ -13,6 +15,7 @@ import {
   toLogoutCommand,
   toRefreshSessionCommand,
   toRegisterUserCommand,
+  toStaffSwitchInCommand,
   toSwitchTenantCommand,
 } from '../../../application/mappers/identity-request.mapper.js';
 import type { AuthPort } from '../../../application/ports/auth.port.js';
@@ -40,5 +43,9 @@ export class AuthLocalAdapter implements AuthPort {
 
   switchTenant(input: SwitchTenantRequest): Promise<AuthTokens> {
     return this.commandBus.execute(toSwitchTenantCommand(input));
+  }
+
+  staffSwitchIn(input: StaffSwitchInRequest): Promise<StaffAccessToken> {
+    return this.commandBus.execute(toStaffSwitchInCommand(input));
   }
 }

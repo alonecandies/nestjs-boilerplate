@@ -19,6 +19,9 @@ service AuthService {
   // Moves the caller's session to another tenant: rotates the refresh token into a session there and
   // denylists the current access token. Not a member → PERMISSION_DENIED / TENANT_ACCESS_DENIED.
   rpc SwitchTenant(SwitchTenantRequest) returns (AuthTokens);
+  // Platform staff enters a tenant for support: an access token only (admin + staff, short TTL), audited
+  // in the tenant. Not staff → PERMISSION_DENIED / STAFF_ONLY; unknown tenant → NOT_FOUND.
+  rpc StaffSwitchIn(StaffSwitchInRequest) returns (StaffAccessToken);
 }
 
 // User queries and administration.
@@ -100,6 +103,25 @@ message SwitchTenantRequest {
   // Access token `exp` claim (epoch seconds); bounds the denylist entry TTL.
   int64 access_token_exp = 5;
   ClientInfo client = 6;
+}
+
+message StaffSwitchInRequest {
+  string staff_user_id = 1;
+  string tenant_id = 2;
+  // Why staff enters (audited), 1..1000 characters.
+  string reason = 3;
+  ClientInfo client = 4;
+}
+
+message StaffAccessToken {
+  string access_token = 1;
+  // Lifetime in seconds (STAFF_SWITCH_IN_TTL_SEC).
+  int32 expires_in = 2;
+  // Always "Bearer".
+  string token_type = 3;
+  string tenant_id = 4;
+  // The identity.audit_events row recording the switch-in.
+  string audit_event_id = 5;
 }
 
 message GetUserRequest {

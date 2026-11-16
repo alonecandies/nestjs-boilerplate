@@ -6,6 +6,7 @@ import { LoginCommand } from '../../../application/commands/login/login.command.
 import { LogoutCommand } from '../../../application/commands/logout/logout.command.js';
 import { RefreshSessionCommand } from '../../../application/commands/refresh-session/refresh-session.command.js';
 import { RegisterUserCommand } from '../../../application/commands/register-user/register-user.command.js';
+import { StaffSwitchInCommand } from '../../../application/commands/staff-switch-in/staff-switch-in.command.js';
 import { SwitchTenantCommand } from '../../../application/commands/switch-tenant/switch-tenant.command.js';
 import { GetUserByIdQuery } from '../../../application/queries/get-user-by-id/get-user-by-id.query.js';
 import { GetUsersByIdsQuery } from '../../../application/queries/get-users-by-ids/get-users-by-ids.query.js';
@@ -35,6 +36,7 @@ describe('local adapters (monolith: port → CQRS bus)', () => {
       accessTokenJti: 'j',
       accessTokenExp: '42',
     });
+    await adapter.staffSwitchIn({ staffUserId: 's', tenantId: 't', reason: 'r' });
 
     const commands = commandBus.execute.mock.calls.map(([command]) => command);
     expect(commands[0]).toBeInstanceOf(RegisterUserCommand);
@@ -44,6 +46,7 @@ describe('local adapters (monolith: port → CQRS bus)', () => {
     expect(commands[4]).toEqual(
       new SwitchTenantCommand('u', 't', 'r', { jti: 'j', exp: 42 }, undefined),
     );
+    expect(commands[5]).toEqual(new StaffSwitchInCommand('s', 't', 'r', undefined));
   });
 
   it('UsersLocalAdapter routes every read to the QueryBus', async () => {

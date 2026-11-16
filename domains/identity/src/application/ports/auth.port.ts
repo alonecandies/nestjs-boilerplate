@@ -4,6 +4,8 @@ import type {
   LogoutRequest,
   RefreshTokensRequest,
   RegisterRequest,
+  StaffAccessToken,
+  StaffSwitchInRequest,
   SwitchTenantRequest,
 } from '@domain/identity-contracts';
 
@@ -40,4 +42,11 @@ export abstract class AuthPort {
    *   RefreshTokenReuseDetectedException (401)
    */
   abstract switchTenant(input: SwitchTenantRequest): Promise<AuthTokens>;
+
+  /**
+   * Platform staff enters `tenantId` (audited). Access token only.
+   * @throws NotPlatformStaffException (403 STAFF_ONLY) | EntityNotFoundException (404) |
+   *   DomainValidationException (422; the REST DTO and the RPC schema answer 400 / INVALID_ARGUMENT first)
+   */
+  abstract staffSwitchIn(input: StaffSwitchInRequest): Promise<StaffAccessToken>;
 }

@@ -4,6 +4,7 @@ import {
   getUserRequestSchema,
   listUsersRequestSchema,
   loginRequestSchema,
+  staffSwitchInRequestSchema,
   switchTenantRequestSchema,
 } from './identity-rpc.payloads.js';
 
@@ -90,5 +91,27 @@ describe('switchTenantRequestSchema', () => {
     ['refreshToken', ''],
   ])('rejects a bad %s', (field, value) => {
     expect(switchTenantRequestSchema.safeParse({ ...valid, [field]: value }).success).toBe(false);
+  });
+});
+
+describe('staffSwitchInRequestSchema', () => {
+  const valid = {
+    staffUserId: '0190f3b2-0000-7000-8000-000000000001',
+    tenantId: '0190f3b2-0000-7000-8000-0000000000a2',
+    reason: '  ticket #42  ',
+    client: null,
+  };
+  it('trims the reason and maps a null client to undefined', () => {
+    const parsed = staffSwitchInRequestSchema.parse(valid);
+    expect(parsed.reason).toBe('ticket #42');
+    expect(parsed.client).toBeUndefined();
+  });
+  it.each([
+    ['staffUserId', 'x'],
+    ['tenantId', 'x'],
+    ['reason', '   '],
+    ['reason', 'x'.repeat(IDENTITY_LIMITS.SWITCH_IN_REASON_MAX_LENGTH + 1)],
+  ])('rejects a bad %s', (field, value) => {
+    expect(staffSwitchInRequestSchema.safeParse({ ...valid, [field]: value }).success).toBe(false);
   });
 });

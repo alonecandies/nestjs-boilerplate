@@ -161,6 +161,16 @@ Ownership rules that are **not** permissions, enforced by the handlers:
 - Files are scoped to the key prefix `users/{userId}/`; access is checked before existence (403 before 404) so keys of other users cannot be probed.
 - Notifications and payments always use the user id from the token, never from the request.
 
+### Platform staff switch-in
+
+Staff are users with `identity.users.is_platform_staff` (granted only by `staff:grant`, see "The first admin").
+`POST /v1/staff/tenants/{tenantId}/switch-in { reason }` re-reads the flag, then issues an access token for that
+tenant with `roles: ["admin"]`, `staff: true` and a lifetime of `STAFF_SWITCH_IN_TTL_SEC` (default 900 s). There is
+no refresh token and no session. Every switch-in writes a `staff.switch_in` row to the tenant's `audit_events`
+(reason, token id, expiry, client) and an `IdentityAudit` log line. Staff never get `tenant:manage` (an owner
+grant). A switch-in token cannot switch tenants (`STAFF_TOKEN_NOT_ALLOWED`); the flag is re-read on every
+switch-in, so a revocation stops new switch-ins at once.
+
 ### The first admin
 
 There is no seed account. Every registration gets the `user` role. Promote the first admin
