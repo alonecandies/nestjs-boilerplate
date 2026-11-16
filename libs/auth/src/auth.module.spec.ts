@@ -1,6 +1,6 @@
 import { Global, type INestApplicationContext, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD, NestFactory } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR, NestFactory } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { generateId } from '@platform/common';
 import { redisConfig } from '@platform/config';
@@ -9,6 +9,7 @@ import { InMemoryRedis } from '@platform/redis/testing';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AuthErrorCode } from './auth.constants.js';
 import { AuthModule } from './auth.module.js';
+import { PrincipalContextInterceptor } from './context/principal-context.interceptor.js';
 import { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 import { PermissionsGuard } from './guards/permissions.guard.js';
 import { RolesGuard } from './guards/roles.guard.js';
@@ -85,10 +86,22 @@ describe('AuthModule (DI wiring)', () => {
       RolesGuard,
       PermissionsGuard,
     ]);
+    const interceptors = (AuthModule.forRootAsync().providers ?? []).filter(
+      (provider) =>
+        typeof provider === 'object' &&
+        'provide' in provider &&
+        provider.provide === APP_INTERCEPTOR,
+    );
+    expect(interceptors.map((provider) => Reflect.get(provider, 'useClass'))).toEqual([
+      PrincipalContextInterceptor,
+    ]);
     const serviceSetup = AuthModule.forRootAsync({ globalGuards: false });
     expect(serviceSetup.global).toBe(true);
     expect(serviceSetup.providers).not.toEqual(
       expect.arrayContaining([expect.objectContaining({ provide: APP_GUARD })]),
+    );
+    expect(serviceSetup.providers).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ provide: APP_INTERCEPTOR })]),
     );
   });
 });

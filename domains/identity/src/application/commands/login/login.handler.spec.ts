@@ -1,4 +1,5 @@
 import { Logger } from '@nestjs/common';
+import { getPrincipal } from '@platform/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   makeAuthTokens,
@@ -114,5 +115,19 @@ describe('LoginHandler', () => {
       { err: failure, userId: stored.id },
       'Password re-hash failed',
     );
+  });
+
+  it('selects the tenant as a user-scoped principal (tenantId null)', async () => {
+    selection.forLogin.mockImplementation(async () => {
+      expect(getPrincipal()).toEqual({
+        userId: stored.id,
+        tenantId: null,
+        roles: [],
+        staff: false,
+      });
+      return membership;
+    });
+    await handler.execute(new LoginCommand('ada@example.com', 'pw'));
+    expect(selection.forLogin).toHaveBeenCalled();
   });
 });

@@ -38,15 +38,17 @@ import {
   Roles,
   TokenService,
 } from '@platform/auth';
-import { signTestAccessToken } from '@platform/auth/testing';
+import { signTestAccessToken, TEST_TENANT_ID } from '@platform/auth/testing';
 import {
   CorrelationIdMiddleware,
   EntityNotFoundException,
   generateId,
+  getPrincipal,
   HTTP_HEADERS,
   isUuidV7,
   MaintenanceModeMiddleware,
   PROBLEM_JSON_CONTENT_TYPE,
+  type Principal,
   type ProblemDetails,
   Public,
   provideCommonEnhancersAsync,
@@ -98,8 +100,14 @@ class SmokeController {
     id: string;
     roles: TenantRole[];
     requestId: string | undefined;
+    principal: Principal | undefined;
   } {
-    return { id: user.id, roles: user.roles, requestId: this.context.requestId };
+    return {
+      id: user.id,
+      roles: user.roles,
+      requestId: this.context.requestId,
+      principal: getPrincipal(),
+    };
   }
 
   @Get('admin')
@@ -293,6 +301,14 @@ describe('infrastructure libs compose into one Fastify app (no infrastructure)',
       });
       expect(response.statusCode).toBe(200);
       expect(response.json()).toMatchObject({ id: claims.sub, roles: ['member'] });
+      expect(response.json()).toMatchObject({
+        principal: {
+          userId: claims.sub,
+          tenantId: TEST_TENANT_ID,
+          roles: ['member'],
+          staff: false,
+        },
+      });
     });
 
     it('rejects a token denylisted in (fake) Redis: 401 TOKEN_REVOKED', async () => {

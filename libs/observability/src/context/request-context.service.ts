@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { generateId, isSafeRequestId } from '@platform/common';
+import { generateId, getPrincipal, isSafeRequestId } from '@platform/common';
 import { CLS_ID, ClsService } from 'nestjs-cls';
 import { CLS_CORRELATION_ID, CLS_USER_ID } from '../observability.constants.js';
 
@@ -45,9 +45,13 @@ export class RequestContextService {
     }
   }
 
-  /** Authenticated user of the current request (set by auth guards / gRPC metadata readers). */
+  /**
+   * Authenticated user of the current request: the CLS principal (B2, spec §7), else the legacy
+   * `CLS_USER_ID` the gRPC metadata interceptor still sets until B2-23 retires it.
+   */
   get userId(): string | undefined {
-    return this.cls.isActive() ? this.cls.get<string | undefined>(CLS_USER_ID) : undefined;
+    if (!this.cls.isActive()) return undefined;
+    return getPrincipal()?.userId ?? this.cls.get<string | undefined>(CLS_USER_ID);
   }
 
   set userId(value: string | undefined) {

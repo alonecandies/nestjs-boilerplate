@@ -1,4 +1,11 @@
-import { sha256Hex } from '@platform/common';
+import {
+  createPrincipal,
+  getPrincipal,
+  runWithPrincipal,
+  sha256Hex,
+  UnauthenticatedException,
+} from '@platform/common';
+import { ClsServiceManager } from 'nestjs-cls';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { makeUserRecord } from '../../../test/fixtures.js';
 import { mockOf } from '../../../test/mocks.js';
@@ -73,5 +80,29 @@ describe('SessionTokensService', () => {
     const [session] = sessions.create.mock.calls[0] ?? [];
     expect(session?.id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-7/);
     expect(session).toMatchObject({ tenantId: TENANT, userAgent: null, ip: null });
+  });
+
+  it('sets the principal of the opened session inside a CLS context (and nothing outside one)', async () => {
+    const user = makeUserRecord();
+    const seen = await ClsServiceManager.getClsService().run(async () => {
+      await service.open({ user, tenantId: TENANT, roles: ['owner'] });
+      return getPrincipal();
+    });
+    expect(seen).toEqual({ userId: user.id, tenantId: TENANT, roles: ['owner'], staff: false });
+    await expect(service.open({ user, tenantId: TENANT, roles: ['owner'] })).resolves.toBeDefined();
+  });
+
+  it("refuses to open a session for a user other than the unit of work's principal (fail closed)", async () => {
+    const other = createPrincipal({
+      userId: '0190f3b2-0000-7000-8000-00000000beef',
+      tenantId: null,
+    });
+    await expect(
+      ClsServiceManager.getClsService().run(() =>
+        runWithPrincipal(other, () =>
+          service.open({ user: makeUserRecord(), tenantId: TENANT, roles: ['owner'] }),
+        ),
+      ),
+    ).rejects.toBeInstanceOf(UnauthenticatedException);
   });
 });

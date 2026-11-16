@@ -34,6 +34,7 @@
     "@nestjs/passport": "catalog:",
     "ioredis": "catalog:",
     "lodash-es": "catalog:",
+    "nestjs-cls": "catalog:",
     "passport": "catalog:",
     "passport-jwt": "catalog:",
     "rxjs": "catalog:"
