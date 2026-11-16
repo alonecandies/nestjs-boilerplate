@@ -250,7 +250,8 @@ Unknown payments and impossible transitions are acknowledged with a warning (a r
 A paid session with no usable currency (none in the event, none stored) is one of them: the payment stays
 `pending` and is NOT announced (`billing.payment-succeeded.v1` requires an ISO 4217 code), the handler warns and
 increments `billing_checkout_paid_without_currency_total` — alert on it and reconcile in the Stripe dashboard.
-A paid session with no known amount is refused the same way. When Stripe charged an amount or currency other than
+A paid session with no known amount is refused the same way and increments
+`billing_checkout_paid_without_amount_total`. When Stripe charged an amount or currency other than
 the stored quote (promotion codes, tax), the charged values are recorded and `billing_checkout_amount_mismatch_total`
 increments.
 Infrastructure errors propagate, the transaction rolls back (forgetting the event id) and Stripe's retry is

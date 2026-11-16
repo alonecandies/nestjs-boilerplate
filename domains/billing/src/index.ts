@@ -23,6 +23,7 @@ export * from './application/ports/ledger.port.js';
 export * from './application/queries/list-payments/list-payments.query.js';
 // Modules and core constants
 export {
+  PAID_WITHOUT_AMOUNT_METRIC,
   PAID_WITHOUT_CURRENCY_METRIC,
   PURGE_STRIPE_EVENTS_BATCH_SIZE,
   PURGE_STRIPE_EVENTS_LOCK,

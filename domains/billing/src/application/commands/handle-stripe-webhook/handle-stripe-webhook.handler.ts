@@ -8,6 +8,7 @@ import type Stripe from 'stripe';
 import {
   AMOUNT_MISMATCH_METRIC,
   API_VERSION_MISMATCH_METRIC,
+  PAID_WITHOUT_AMOUNT_METRIC,
   PAID_WITHOUT_CURRENCY_METRIC,
 } from '../../../billing.constants.js';
 import { normalizeCurrency, type Payment } from '../../../domain/payment.aggregate.js';
@@ -71,6 +72,8 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
     private readonly amountMismatch: { inc(): void },
     @InjectMetric(API_VERSION_MISMATCH_METRIC)
     private readonly apiVersionMismatch: { inc(): void },
+    @InjectMetric(PAID_WITHOUT_AMOUNT_METRIC)
+    private readonly paidWithoutAmount: { inc(): void },
   ) {}
 
   async execute(command: HandleStripeWebhookCommand): Promise<HandleStripeWebhookResponse> {
@@ -138,6 +141,14 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
             this.paidWithoutCurrency.inc();
             this.logger.warn(
               `Stripe event ${event.id} (${event.type}): Checkout Session ${session.id} is paid but neither it nor payment ${p.id} has a currency; payment left ${p.status}, not announced`,
+            );
+            return false;
+          }
+          if (session.amount_total === null && p.amountTotal === null) {
+            // `complete()` refuses it too (it never records 0); same alert path as the currency case.
+            this.paidWithoutAmount.inc();
+            this.logger.warn(
+              `Stripe event ${event.id} (${event.type}): Checkout Session ${session.id} is paid but neither it nor payment ${p.id} has an amount; payment left ${p.status}, not announced`,
             );
             return false;
           }

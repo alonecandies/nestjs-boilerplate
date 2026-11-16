@@ -77,7 +77,18 @@ export class ImmudbSessionPool<TSession extends PoolableSession = ImmudbSession>
       return await this.factory();
     } catch (error) {
       this.open--;
+      // The slot is free again: callers queued behind it would otherwise wait forever.
+      this.drain();
       throw toImmudbError(error) ?? error;
+    }
+  }
+
+  /** Gives each queued caller its own open attempt while there are free slots. */
+  private drain(): void {
+    while (!this.closed && this.open < this.size) {
+      const waiter = this.waiting.shift();
+      if (waiter === undefined) return;
+      this.openOne().then(waiter.resolve, waiter.reject);
     }
   }
 
@@ -89,8 +100,7 @@ export class ImmudbSessionPool<TSession extends PoolableSession = ImmudbSession>
       return;
     }
     void this.discard(session);
-    const waiter = this.waiting.shift();
-    if (waiter !== undefined) this.openOne().then(waiter.resolve, waiter.reject);
+    this.drain();
   }
 
   private async discard(session: TSession): Promise<void> {
@@ -107,6 +117,7 @@ export class ImmudbSessionPool<TSession extends PoolableSession = ImmudbSession>
         if (index >= 0) {
           this.idle.splice(index, 1);
           await this.discard(session);
+          this.drain();
         }
       }
     }
