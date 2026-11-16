@@ -15,8 +15,12 @@ Later immudb versions (1.9DOM.2 and newer, including the 1.11.2 server this pack
 licensed BUSL-1.1; no code from them is copied here. Each ported function is listed below with its
 source file.
 
-| TypeScript | Source (`v1.9DOM.1`) |
-| ---------- | -------------------- |
+| TypeScript                                                                                                                                                                                | Source (`v1.9DOM.1`)                                                                                  |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `verifyHtreeInclusion` (`src/verification/htree.ts`)                                                                                                                                      | `embedded/htree/htree.go` `VerifyInclusion`                                                           |
+| `evalAhtreeInclusion`, `verifyAhtreeInclusion`, `evalAhtreeConsistency`, `verifyAhtreeConsistency`, `evalAhtreeLastInclusion`, `verifyAhtreeLastInclusion` (`src/verification/ahtree.ts`) | `embedded/ahtree/verification.go`                                                                     |
+| `leafFor`, `advanceLinearHash`, `verifyLinearProof`, `verifyLinearAdvanceProof`, `verifyDualProof`, `entrySpecDigestFor` (`src/verification/*.ts`)                                        | `embedded/store/verification.go`                                                                      |
+| `txHeaderAlh` + inner hash, tx metadata bytes (`src/verification/tx-header.ts`)                                                                                                           | `embedded/store/tx.go` `TxHeader.innerHash`/`Alh`, `embedded/store/tx_metadata.go` `TxMetadata.Bytes` |
 
 ## Apache License 2.0
 
