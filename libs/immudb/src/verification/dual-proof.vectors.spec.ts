@@ -109,6 +109,28 @@ describe('VerifyDualProof against immudb 1.11.2 vectors', () => {
     }
   });
 
+  it('maps a proof with any digest that is not 32 bytes to null', () => {
+    const c = cases.find((x) => x.source < x.target - 2n);
+    const raw = c?.raw.dualProof;
+    if (raw?.targetTxHeader === undefined) throw new Error('no distant pair');
+    expect(fromProtoDualProof(raw)).not.toBeNull();
+    const eh = raw.targetTxHeader.eH;
+    const blRoot = raw.targetTxHeader.blRoot;
+    // Re-split eh ‖ blTxId ‖ blRoot: same bytes, eh one longer, blRoot one shorter.
+    const resplit = {
+      ...raw,
+      targetTxHeader: {
+        ...raw.targetTxHeader,
+        eH: Buffer.concat([eh, Buffer.of(0)]),
+        blRoot: blRoot.subarray(1),
+      },
+    };
+    expect(fromProtoDualProof(resplit)).toBeNull();
+    const shortTerm = { ...raw, inclusionProof: [Buffer.alloc(31), ...raw.inclusionProof] };
+    expect(fromProtoDualProof(shortTerm)).toBeNull();
+    expect(fromProtoDualProof({ ...raw, targetBlTxAlh: Buffer.alloc(0) })).toBeNull();
+  });
+
   it('rejects wrong ids, swapped direction, tx 0 and a missing proof', () => {
     const c = cases.find((x) => x.source < x.target - 2n);
     if (c === undefined) throw new Error('no distant pair');

@@ -26,13 +26,45 @@ export interface DualProofData {
 
 const bytes = (list: readonly Uint8Array[]): Uint8Array[] => list.map((b) => new Uint8Array(b));
 
+const DIGEST_LENGTH = 32;
+const isDigest = (b: Uint8Array): boolean => b.length === DIGEST_LENGTH;
+const headerDigests = (h: TxHeaderData): Uint8Array[] => [h.prevAlh, h.eh, h.blRoot];
+
+/**
+ * Every digest a dual proof carries is 32 bytes. Go's DigestFromProto copies into a fixed array;
+ * here a wrong length fails closed (null) so a header cannot be re-split with the same Alh.
+ */
+function hasDigestLengths(proof: DualProofData): boolean {
+  const digests = [
+    ...headerDigests(proof.sourceTxHeader),
+    ...headerDigests(proof.targetTxHeader),
+    proof.targetBlTxAlh,
+    ...proof.inclusionProof,
+    ...proof.consistencyProof,
+    ...proof.lastInclusionProof,
+    ...(proof.linearProof?.terms ?? []),
+    ...(proof.linearAdvanceProof?.linearProofTerms ?? []),
+    ...(proof.linearAdvanceProof?.inclusionProofs.flat() ?? []),
+  ];
+  return digests.every(isDigest);
+}
+
 export function fromProtoDualProof(proof: DualProof | undefined): DualProofData | null {
   if (proof?.sourceTxHeader === undefined || proof.targetTxHeader === undefined) return null;
+  const mapped = mapDualProof(proof, proof.sourceTxHeader, proof.targetTxHeader);
+  return hasDigestLengths(mapped) ? mapped : null;
+}
+
+function mapDualProof(
+  proof: DualProof,
+  sourceTxHeader: NonNullable<DualProof['sourceTxHeader']>,
+  targetTxHeader: NonNullable<DualProof['targetTxHeader']>,
+): DualProofData {
   const linear = proof.linearProof;
   const advance = proof.LinearAdvanceProof;
   return {
-    sourceTxHeader: fromProtoTxHeader(proof.sourceTxHeader),
-    targetTxHeader: fromProtoTxHeader(proof.targetTxHeader),
+    sourceTxHeader: fromProtoTxHeader(sourceTxHeader),
+    targetTxHeader: fromProtoTxHeader(targetTxHeader),
     inclusionProof: bytes(proof.inclusionProof),
     consistencyProof: bytes(proof.consistencyProof),
     targetBlTxAlh: new Uint8Array(proof.targetBlTxAlh),
