@@ -4,6 +4,7 @@ import type {
   LogoutRequest,
   RefreshTokensRequest,
   RegisterRequest,
+  SwitchTenantRequest,
 } from '@domain/identity-contracts';
 
 /**
@@ -31,4 +32,12 @@ export abstract class AuthPort {
    * `refreshToken` — or every session of the user when it is absent ("sign out everywhere").
    */
   abstract logout(input: LogoutRequest): Promise<void>;
+
+  /**
+   * Moves the caller's session to `tenantId`: the refresh token is rotated into a session there and the
+   * current access token is denylisted.
+   * @throws TenantAccessDeniedException (403) | InvalidRefreshTokenException | SessionExpiredException |
+   *   RefreshTokenReuseDetectedException (401)
+   */
+  abstract switchTenant(input: SwitchTenantRequest): Promise<AuthTokens>;
 }

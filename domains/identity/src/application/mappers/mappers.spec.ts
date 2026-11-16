@@ -6,6 +6,7 @@ import {
   toLoginCommand,
   toLogoutCommand,
   toRegisterUserCommand,
+  toSwitchTenantCommand,
 } from './identity-request.mapper.js';
 import { toAccessTokenSubject, toUserContract, toUserRecord } from './user.mapper.js';
 
@@ -62,5 +63,22 @@ describe('identity request mappers', () => {
       toLoginCommand({ email: 'e', password: 'p', client: { ip: '1' }, tenantId: 't-1' }),
     ).toMatchObject({ email: 'e', password: 'p', client: { ip: '1' }, tenantId: 't-1' });
     expect(toLoginCommand({ email: 'e', password: 'p' }).tenantId).toBeUndefined();
+  });
+
+  it('toSwitchTenantCommand: int64 exp string → number, the access token as { jti, exp }', () => {
+    expect(
+      toSwitchTenantCommand({
+        userId: 'u',
+        tenantId: 't',
+        refreshToken: 'r',
+        accessTokenJti: 'j',
+        accessTokenExp: '1900000000',
+      }),
+    ).toMatchObject({
+      userId: 'u',
+      tenantId: 't',
+      refreshToken: 'r',
+      accessToken: { jti: 'j', exp: 1_900_000_000 },
+    });
   });
 });

@@ -4,6 +4,7 @@ import {
   getUserRequestSchema,
   listUsersRequestSchema,
   loginRequestSchema,
+  switchTenantRequestSchema,
 } from './identity-rpc.payloads.js';
 
 describe('listUsersRequestSchema.search', () => {
@@ -67,5 +68,27 @@ describe('tenant scoping of the user RPCs', () => {
     expect(getUserRequestSchema.parse({ id, tenantId: '' }).tenantId).toBeUndefined();
     expect(getUserRequestSchema.parse({ id, tenantId: null }).tenantId).toBeUndefined();
     expect(getUserRequestSchema.safeParse({ id, tenantId: 'x' }).success).toBe(false);
+  });
+});
+
+describe('switchTenantRequestSchema', () => {
+  const valid = {
+    userId: '0190f3b2-0000-7000-8000-000000000001',
+    tenantId: '0190f3b2-0000-7000-8000-0000000000a2',
+    refreshToken: 'r',
+    accessTokenJti: 'j',
+    accessTokenExp: '1900000000',
+    client: null,
+  };
+  it('accepts a full request (client null → undefined)', () => {
+    expect(switchTenantRequestSchema.parse(valid).client).toBeUndefined();
+  });
+  it.each([
+    ['tenantId', 'x'],
+    ['userId', 'x'],
+    ['accessTokenExp', 'soon'],
+    ['refreshToken', ''],
+  ])('rejects a bad %s', (field, value) => {
+    expect(switchTenantRequestSchema.safeParse({ ...valid, [field]: value }).success).toBe(false);
   });
 });

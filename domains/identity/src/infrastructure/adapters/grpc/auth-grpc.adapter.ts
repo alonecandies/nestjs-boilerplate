@@ -7,6 +7,7 @@ import {
   type LogoutRequest,
   type RefreshTokensRequest,
   type RegisterRequest,
+  type SwitchTenantRequest,
 } from '@domain/identity-contracts';
 import { Inject, Injectable, type OnModuleInit } from '@nestjs/common';
 import type { ClientGrpc } from '@nestjs/microservices';
@@ -53,5 +54,12 @@ export class AuthGrpcAdapter implements AuthPort, OnModuleInit {
 
   async logout(input: LogoutRequest): Promise<void> {
     await this.caller.call(operation('Logout'), (metadata) => this.auth.logout(input, metadata));
+  }
+
+  async switchTenant(input: SwitchTenantRequest): Promise<AuthTokens> {
+    const tokens = await this.caller.call(operation('SwitchTenant'), (metadata) =>
+      this.auth.switchTenant(input, metadata),
+    );
+    return normalizeAuthTokens(tokens);
   }
 }

@@ -5,6 +5,7 @@ import type {
   LogoutRequest,
   RefreshTokensRequest,
   RegisterRequest,
+  SwitchTenantRequest,
   User,
   UserPage,
 } from '@domain/identity-contracts';
@@ -169,6 +170,25 @@ export class FakeAuthPort extends AuthPort {
     this.state.calls.push('AuthService.Logout');
     // identity-service denylists the access jti in the Redis the gateway reads.
     await this.denylist.deny(input.accessTokenJti, Number(input.accessTokenExp));
+  }
+
+  async switchTenant(input: SwitchTenantRequest): Promise<AuthTokens> {
+    this.state.calls.push('AuthService.SwitchTenant');
+    const claims = await this.tokens.verifyRefreshToken(input.refreshToken).catch(() => {
+      throw new InvalidRefreshTokenException();
+    });
+    const session = this.state.sessions.get(claims.jti);
+    if (claims.sub !== input.userId || session?.userId !== input.userId) {
+      throw new InvalidRefreshTokenException();
+    }
+    const membership = this.state.membership(input.tenantId, input.userId);
+    if (!membership) throw new TenantAccessDeniedException();
+    const entry = this.state.users.get(input.userId);
+    if (!entry) throw new InvalidRefreshTokenException();
+    await this.denylist.deny(input.accessTokenJti, Number(input.accessTokenExp));
+    this.state.sessions.delete(claims.jti);
+    membership.lastActiveAt = Date.now();
+    return this.issue(entry.user, input.tenantId);
   }
 
   private async issue(user: User, tenantId: string): Promise<AuthTokens> {

@@ -41,6 +41,7 @@ export const IdentityErrorCode = {
   TENANT_ACCESS_DENIED: 'TENANT_ACCESS_DENIED',
   MEMBERSHIP_REVOKED: 'MEMBERSHIP_REVOKED',
   GLOBAL_ROLES_REMOVED: 'GLOBAL_ROLES_REMOVED',
+  STAFF_TOKEN_NOT_ALLOWED: 'STAFF_TOKEN_NOT_ALLOWED',
 } as const;
 export type IdentityErrorCode = (typeof IdentityErrorCode)[keyof typeof IdentityErrorCode];
 

@@ -78,6 +78,16 @@ export interface LogoutRequest {
   refreshToken?: string | undefined;
 }
 
+export interface SwitchTenantRequest {
+  userId: string;
+  tenantId: string;
+  refreshToken: string;
+  accessTokenJti: string;
+  /** Access token `exp` claim (epoch seconds); bounds the denylist entry TTL. */
+  accessTokenExp: string;
+  client?: ClientInfo | undefined;
+}
+
 export interface GetUserRequest {
   id: string;
   /** Scope: only a member of this tenant is found (else NOT_FOUND). Absent: any user (own profile, internal). */
@@ -146,6 +156,13 @@ export interface AuthServiceClient {
   /** Revokes the session and denylists the access token for its remaining lifetime. */
 
   logout(request: LogoutRequest, metadata?: Metadata): Observable<Empty>;
+
+  /**
+   * Moves the caller's session to another tenant: rotates the refresh token into a session there and
+   * denylists the current access token. Not a member → PERMISSION_DENIED / TENANT_ACCESS_DENIED.
+   */
+
+  switchTenant(request: SwitchTenantRequest, metadata?: Metadata): Observable<AuthTokens>;
 }
 
 /** Credential flows. Every successful flow returns a fresh access + refresh token pair. */
@@ -169,11 +186,21 @@ export interface AuthServiceController {
   /** Revokes the session and denylists the access token for its remaining lifetime. */
 
   logout(request: LogoutRequest, metadata?: Metadata): void | Promise<void>;
+
+  /**
+   * Moves the caller's session to another tenant: rotates the refresh token into a session there and
+   * denylists the current access token. Not a member → PERMISSION_DENIED / TENANT_ACCESS_DENIED.
+   */
+
+  switchTenant(
+    request: SwitchTenantRequest,
+    metadata?: Metadata,
+  ): Promise<AuthTokens> | Observable<AuthTokens> | AuthTokens;
 }
 
 export function AuthServiceControllerMethods() {
   return function (constructor: Function) {
-    const grpcMethods: string[] = ["register", "login", "refreshTokens", "logout"];
+    const grpcMethods: string[] = ["register", "login", "refreshTokens", "logout", "switchTenant"];
     for (const method of grpcMethods) {
       const descriptor: any = Reflect.getOwnPropertyDescriptor(constructor.prototype, method);
       GrpcMethod("AuthService", method)(constructor.prototype[method], method, descriptor);

@@ -42,6 +42,7 @@ const authPort: PortFake<AuthPort> = {
   login: vi.fn(),
   refreshTokens: vi.fn(),
   logout: vi.fn(),
+  switchTenant: vi.fn(),
 };
 const usersPort: PortFake<UsersPort> = {
   getUser: vi.fn(),
@@ -242,6 +243,37 @@ describe('identity GraphQL API (Apollo on Fastify, global guards, fake ports)', 
     );
     expect(denied.errors?.[0]?.extensions).toMatchObject({
       code: 'TENANT_ACCESS_DENIED',
+      status: 403,
+    });
+  });
+
+  it('switchTenant: the caller and its access token reach the port; staff tokens are refused', async () => {
+    const tenantId = '0190f3b2-0000-7000-8000-0000000000a2';
+    const refreshToken = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1In0.c2ln';
+    authPort.switchTenant.mockResolvedValue(makeAuthTokens({ tenantId }));
+    const ok = await gql<{ switchTenant: { tenantId: string } }>(
+      'mutation ($input: SwitchTenantInput!) { switchTenant(input: $input) { tenantId } }',
+      { input: { tenantId, refreshToken } },
+      bearer(user),
+    );
+    expect(ok.data?.switchTenant.tenantId).toBe(tenantId);
+    expect(authPort.switchTenant).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: user.id,
+        tenantId,
+        refreshToken,
+        accessTokenJti: user.jti,
+      }),
+    );
+
+    const staff = await principal(app, ['admin'], generateId(), TEST_TENANT_ID, true);
+    const refused = await gql(
+      'mutation ($input: SwitchTenantInput!) { switchTenant(input: $input) { tenantId } }',
+      { input: { tenantId, refreshToken } },
+      bearer(staff),
+    );
+    expect(refused.errors?.[0]?.extensions).toMatchObject({
+      code: 'STAFF_TOKEN_NOT_ALLOWED',
       status: 403,
     });
   });

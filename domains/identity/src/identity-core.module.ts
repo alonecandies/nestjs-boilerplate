@@ -7,6 +7,7 @@ import { LogoutHandler } from './application/commands/logout/logout.handler.js';
 import { PurgeExpiredSessionsHandler } from './application/commands/purge-expired-sessions/purge-expired-sessions.handler.js';
 import { RefreshSessionHandler } from './application/commands/refresh-session/refresh-session.handler.js';
 import { RegisterUserHandler } from './application/commands/register-user/register-user.handler.js';
+import { SwitchTenantHandler } from './application/commands/switch-tenant/switch-tenant.handler.js';
 import { UserRegisteredRelay } from './application/event-handlers/user-registered.relay.js';
 import { AuditEventsRepository } from './application/persistence/audit-events.repository.js';
 import { InvitationsRepository } from './application/persistence/invitations.repository.js';
@@ -40,6 +41,7 @@ export const IDENTITY_COMMAND_HANDLERS = [
   LoginHandler,
   RefreshSessionHandler,
   LogoutHandler,
+  SwitchTenantHandler,
   PurgeExpiredSessionsHandler,
 ];
 

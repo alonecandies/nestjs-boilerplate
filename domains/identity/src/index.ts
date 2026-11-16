@@ -13,12 +13,13 @@
 
 // The edge surface (also `@domain/identity/api`).
 export * from './api/index.js';
-// Application: commands/queries (for other in-process callers), persistence ports.
 export { LoginCommand } from './application/commands/login/login.command.js';
 export { LogoutCommand } from './application/commands/logout/logout.command.js';
 export { PurgeExpiredSessionsCommand } from './application/commands/purge-expired-sessions/purge-expired-sessions.command.js';
 export { RefreshSessionCommand } from './application/commands/refresh-session/refresh-session.command.js';
 export { RegisterUserCommand } from './application/commands/register-user/register-user.command.js';
+// Application: commands/queries (for other in-process callers), persistence ports.
+export { SwitchTenantCommand } from './application/commands/switch-tenant/switch-tenant.command.js';
 export type {
   AuditEventRecord,
   AuditEventType,
@@ -77,6 +78,7 @@ export {
   MembershipRevokedException,
   RefreshTokenReuseDetectedException,
   SessionExpiredException,
+  StaffTokenNotAllowedException,
   TenantAccessDeniedException,
   TenantSlugTakenException,
 } from './domain/identity.errors.js';

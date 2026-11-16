@@ -7,6 +7,7 @@ import type {
   LogoutRequest,
   RefreshTokensRequest,
   RegisterRequest,
+  SwitchTenantRequest,
 } from '@domain/identity-contracts';
 import { MAX_CURSOR_LENGTH, MAX_PAGE_LIMIT } from '@platform/common';
 import { z } from 'zod';
@@ -110,3 +111,12 @@ export const listUsersRequestSchema = z.object({
   /** Required here although the generated field is optional: the directory is never global. */
   tenantId: z.uuid(),
 }) satisfies z.ZodType<ListUsersRequest>;
+
+export const switchTenantRequestSchema = z.object({
+  userId: z.uuid(),
+  tenantId: z.uuid(),
+  refreshToken,
+  accessTokenJti: z.string().min(1).max(128),
+  accessTokenExp: z.string().regex(/^\d{1,12}$/, 'Expected epoch seconds'),
+  client: clientInfo,
+}) satisfies z.ZodType<SwitchTenantRequest>;
