@@ -25,6 +25,7 @@ export * from './drizzle/drizzle.types.js';
 export * from './drizzle/drizzle-query.logger.js';
 export * from './drizzle/drizzle-transactional.adapter.js';
 export * from './drizzle/inject-drizzle.decorator.js';
+export * from './drizzle/pool-usage.js';
 export * from './drizzle/postgres-options.js';
 export * from './health/database.health.js';
 export * from './migrator/migrate-cli.js';

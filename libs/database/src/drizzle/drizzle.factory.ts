@@ -8,6 +8,7 @@ import { withPlatformMigrations } from '../migrator/migration-sets.js';
 import { runMigrations } from '../migrator/run-migrations.js';
 import type { DrizzleDB, DrizzleSchema } from './drizzle.types.js';
 import { DrizzleQueryLogger } from './drizzle-query.logger.js';
+import { PoolUsage, registerPoolUsage } from './pool-usage.js';
 import {
   buildPostgresOptions,
   describePostgresUrl,
@@ -53,9 +54,12 @@ export async function createDrizzleDatabase<TSchema extends DrizzleSchema>(
       options.postgres,
     ),
   );
+  // db_pool_*{pool="runtime"}: postgres.js has no pool statistics, so operations are counted.
+  const usage = new PoolUsage('runtime', cfg.poolMax);
+  registerPoolUsage(usage);
   const db = drizzle({
     // drizzle runs every query through `unsafe()`, which postgres.js never prepares by default.
-    client: preferPreparedStatements(client),
+    client: preferPreparedStatements(usage.track(client)),
     schema: options.schema,
     // MUST equal drizzle.config.ts `casing` (drizzle-kit) or generated SQL and queries disagree.
     casing: 'snake_case',
