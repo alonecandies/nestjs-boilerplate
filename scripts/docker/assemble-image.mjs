@@ -15,6 +15,12 @@
 //     - a declared runtime dependency that the filtered production install did not provide,
 //     - a workspace symlink that is dangling, or the app's dist/main.js / dist/instrument.js, or its
 //       dist/migrate.js when the app has a src/migrate.ts (the migration release job);
+//  4b. with --trace true (default), follows the static imports of dist/main.js, dist/instrument.js and
+//      dist/migrate.js through the closure's dist/ (workspace packages file by file, via their exports maps;
+//      third-party packages by name) and deletes every untraced JS file, every workspace package without a
+//      traced file, and every node_modules package outside the manifest closure (dependencies, optional and
+//      installed peer dependencies) of the imported packages. Non-JS assets of traced packages stay.
+//      --keep a,b keeps extra packages; --verify-load true then imports dist/app.module.js once.
 //  5. removes install-only files (bun.lock, bunfig.toml, patches/);
 //  6. with --prune true, deletes from node_modules what Node never reads at runtime: type declarations,
 //     TS sources (Node refuses to strip types under node_modules), source maps (not loaded without
@@ -22,6 +28,7 @@
 //     packages such as `typescript` (an optional peer of @nestjs/graphql/swagger, used only by
 //     their CLI plugins) unless an installed package hard-depends on them. Our own dist/ is untouched.
 // Pure Node (no dependencies): it runs on the toolchain image before anything is installed globally.
+import { spawnSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
@@ -32,9 +39,10 @@ import {
   statSync,
 } from 'node:fs';
 import { findPackageJSON } from 'node:module';
-import { basename, join, relative } from 'node:path';
+import { basename, dirname, join, relative, resolve, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { parseArgs } from 'node:util';
+import { packageNameOf, traceImports } from './trace-imports.mjs';
 
 const WORKSPACE_SCOPES = ['@app/', '@domain/', '@platform/'];
 const INSTALL_ONLY = ['bun.lock', 'bunfig.toml', 'patches'];
@@ -52,10 +60,16 @@ const { values: args } = parseArgs({
     out: { type: 'string' },
     // "true" | "false": a string, so the Dockerfile can pass its build arg through unchanged.
     prune: { type: 'string', default: 'false' },
+    trace: { type: 'string', default: 'true' },
+    'verify-load': { type: 'string', default: 'false' },
+    keep: { type: 'string', default: '' },
   },
 });
 const { app, build, out } = args;
 const prune = args.prune === 'true';
+const trace = args.trace === 'true';
+const verifyLoad = args['verify-load'] === 'true';
+const extraKeep = args.keep.split(',').filter(Boolean);
 if (!app || !build || !out) {
   fail('usage: assemble-image.mjs --app <name> --build <dir> --out <dir>');
 }
@@ -114,6 +128,11 @@ for (const { dir } of workspace.values()) {
   if (!kept.has(dir)) pruneWorkspaceDir(dir);
 }
 
+// dist/migrate.js is the release job of an app that owns Postgres migration sets (src/migrate.ts);
+// the gateway and notifications-service have none, so it is required only where the source exists.
+const entrypoints = ['main.js', 'instrument.js'];
+if (existsSync(join(build, appPackage.dir, 'src', 'migrate.ts'))) entrypoints.push('migrate.js');
+
 // 3 + 4. dist/ per closure member, asset and dependency checks.
 const problems = [];
 let assetCount = 0;
@@ -149,14 +168,24 @@ for (const [name, { dir, manifest }] of closure) {
   }
 }
 
-// dist/migrate.js is the release job of an app that owns Postgres migration sets (src/migrate.ts);
-// the gateway and notifications-service have none, so it is required only where the source exists.
-const entrypoints = ['main.js', 'instrument.js'];
-if (existsSync(join(build, appPackage.dir, 'src', 'migrate.ts'))) entrypoints.push('migrate.js');
 for (const entrypoint of entrypoints) {
   if (!existsSync(join(out, appPackage.dir, 'dist', entrypoint))) {
     problems.push(`${appPackage.manifest.name}: dist/${entrypoint} is missing`);
   }
+}
+
+// 4b. File tracing (program spec §12 "Gateway image").
+let traceSummary = '';
+if (trace && problems.length === 0) {
+  const appDist = join(out, appPackage.dir, 'dist');
+  const traced = traceImports(
+    entrypoints.map((entrypoint) => join(appDist, entrypoint)),
+    resolveDist,
+  );
+  for (const { file, specifier } of traced.unresolved) {
+    problems.push(`${relative(out, file)}: cannot resolve '${specifier}'`);
+  }
+  if (problems.length === 0) traceSummary = pruneUntraced(traced);
 }
 
 if (problems.length > 0) {
@@ -168,7 +197,8 @@ for (const file of INSTALL_ONLY) rmSync(join(out, file), { recursive: true, forc
 
 console.info(
   `[assemble] ${app}: ${closure.size} workspace packages (${[...kept].sort().join(', ')}), ` +
-    `${assetCount} assets verified, ${dependencyCount} runtime dependencies resolved`,
+    `${assetCount} assets verified, ${dependencyCount} runtime dependencies resolved` +
+    (traceSummary ? `\n[assemble] ${traceSummary}` : ''),
 );
 
 // 6. Slim node_modules (after the checks, which only need package.json files).
@@ -211,6 +241,150 @@ if (prune) {
     `[assemble] pruned ${removedFiles} files + [${removed.join(', ')}] from node_modules ` +
       `(${(removedBytes / 1024 / 1024).toFixed(1)} MiB)`,
   );
+}
+
+/** dist/ resolution as Node does it at runtime: relative paths as written, workspace packages through
+ * their exports map (`default` condition); anything else is an external package. */
+function resolveDist(specifier, fromFile) {
+  if (specifier.startsWith('.')) {
+    const target = resolve(dirname(fromFile), specifier);
+    return existsSync(target) && statSync(target).isFile() ? target : undefined;
+  }
+  const name = packageNameOf(specifier);
+  const member = name === undefined ? undefined : closure.get(name);
+  if (member === undefined) return undefined;
+  const entry = member.manifest.exports?.[`.${specifier.slice(name.length)}`];
+  const file = typeof entry === 'string' ? entry : entry?.default;
+  if (typeof file !== 'string') {
+    problems.push(`${relative(out, fromFile)}: ${name} does not export '${specifier}'`);
+    return undefined;
+  }
+  return join(out, member.dir, file);
+}
+
+/** The installed package `name` as Node's node_modules lookup finds it from `fromPath`. */
+function findInstalled(name, fromPath) {
+  let dir = statSync(fromPath).isDirectory() ? fromPath : dirname(fromPath);
+  for (;;) {
+    const manifest = join(dir, 'node_modules', name, 'package.json');
+    if (existsSync(manifest)) return realpathSync(manifest);
+    if (dir === out || dirname(dir) === dir) return undefined;
+    dir = dirname(dir);
+  }
+}
+
+function pruneUntraced(traced) {
+  const tracedFiles = new Set(traced.files);
+  const tracedPackages = new Set([appPackage.manifest.name]);
+  for (const [name, { dir }] of closure) {
+    const prefix = `${join(out, dir, 'dist')}${sep}`;
+    if (traced.files.some((file) => file.startsWith(prefix))) tracedPackages.add(name);
+  }
+
+  // Workspace: drop untraced packages (and their node_modules symlinks), then untraced JS files.
+  let removedPackages = 0;
+  let removedFiles = 0;
+  const untraced = [...closure].filter(([name]) => !tracedPackages.has(name));
+  for (const [, { dir }] of untraced) kept.delete(dir);
+  for (const [name, { dir }] of untraced) {
+    pruneWorkspaceDir(dir);
+    rmSync(join(out, 'node_modules', name), { recursive: true, force: true });
+    removedPackages += 1;
+  }
+  for (const name of tracedPackages) {
+    const dist = join(out, closure.get(name).dir, 'dist');
+    for (const file of listFiles(dist)) {
+      const path = join(dist, file);
+      if (/\.[cm]?js$/.test(file) && !tracedFiles.has(path)) {
+        rmSync(path);
+        rmSync(`${path}.map`, { force: true });
+        removedFiles += 1;
+      }
+    }
+  }
+
+  // Third-party: the manifest closure of every imported (or --keep) package.
+  const keepDirs = new Set();
+  const pending = [...traced.externals].map(([name, from]) => [name, from]);
+  for (const name of extraKeep) pending.push([name, join(out, appPackage.dir)]);
+  while (pending.length > 0) {
+    const [name, from] = pending.pop();
+    const manifestPath = findInstalled(name, from);
+    if (manifestPath === undefined) continue; // an optional or peer dependency that is not installed
+    const dir = dirname(manifestPath);
+    if (keepDirs.has(dir)) continue;
+    keepDirs.add(dir);
+    const manifest = readJson(manifestPath);
+    const deps = {
+      ...manifest.dependencies,
+      ...manifest.optionalDependencies,
+      ...manifest.peerDependencies,
+    };
+    for (const dep of Object.keys(deps)) pending.push([dep, dir]);
+  }
+  let removedModules = 0;
+  const pruneModules = (modules) => {
+    if (!existsSync(modules)) return;
+    for (const entry of readdirSync(modules, { withFileTypes: true })) {
+      const path = join(modules, entry.name);
+      if (entry.name === '.bin') {
+        rmSync(path, { recursive: true, force: true });
+        continue;
+      }
+      if (entry.name.startsWith('.')) continue;
+      const children = entry.name.startsWith('@')
+        ? readdirSync(path).map((child) => [`${entry.name}/${child}`, join(path, child)])
+        : [[entry.name, path]];
+      for (const [name, packagePath] of children) {
+        if (WORKSPACE_SCOPES.some((scope) => name.startsWith(scope))) continue; // handled above
+        if (!keepDirs.has(realpathSync(packagePath))) {
+          rmSync(packagePath, { recursive: true, force: true });
+          removedModules += 1;
+        } else {
+          pruneModules(join(packagePath, 'node_modules'));
+        }
+      }
+      if (entry.name.startsWith('@') && readdirSync(path).length === 0)
+        rmSync(path, { recursive: true });
+    }
+  };
+  pruneModules(join(out, 'node_modules'));
+  for (const name of tracedPackages) pruneModules(join(out, closure.get(name).dir, 'node_modules'));
+
+  if (verifyLoad) verifyAppLoads();
+  return (
+    `traced ${traced.files.length} files in ${tracedPackages.size} workspace packages; removed ` +
+    `${removedFiles} workspace files, ${removedPackages} workspace packages, ${removedModules} node_modules packages`
+  );
+}
+
+/** Imports dist/app.module.js once in a child process: tracing must never ship a module graph that
+ * cannot load (computed imports, string-only requires the tracer cannot see). */
+function verifyAppLoads() {
+  const appModule = join(out, appPackage.dir, 'dist', 'app.module.js');
+  if (!existsSync(appModule)) return;
+  const result = spawnSync(
+    process.execPath,
+    [
+      '--input-type=module',
+      '-e',
+      `await import(${JSON.stringify(pathToFileURL(appModule).href)});`,
+    ],
+    {
+      cwd: join(out, appPackage.dir),
+      encoding: 'utf8',
+      timeout: 60_000,
+      env: { PATH: process.env.PATH, NODE_ENV: 'development', OTEL_SDK_DISABLED: 'true' },
+    },
+  );
+  if (result.status !== 0) {
+    const reason = result.error?.message ?? (result.signal ? `killed by ${result.signal}` : '');
+    fail(
+      `load check failed for ${relative(out, appModule)} (exit ${result.status}${reason ? `, ${reason}` : ''}):\n` +
+        `${result.stderr || result.stdout}`,
+    );
+  }
+  console.info('[assemble] load check passed');
 }
 
 /**
