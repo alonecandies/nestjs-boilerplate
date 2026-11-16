@@ -8,6 +8,25 @@ import postgres from 'postgres';
 export const TEST_POSTGRES_IMAGE = 'citusdata/citus:14.2.0';
 /** Shards per distributed table in specs. Citus' default is 32; fewer shards are faster to create. */
 export const TEST_POSTGRES_SHARD_COUNT = 4;
+/** testcontainers' own default wait for a healthy container. */
+export const TEST_POSTGRES_DEFAULT_STARTUP_TIMEOUT_MS = 120_000;
+
+/**
+ * How long a container may take to become healthy: `TEST_POSTGRES_STARTUP_TIMEOUT_MS` (ms) or the
+ * default. The image is amd64-only, so on a loaded Apple Silicon machine emulated start-up can need
+ * more. An invalid value throws rather than silently falling back.
+ */
+export function testPostgresStartupTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = env['TEST_POSTGRES_STARTUP_TIMEOUT_MS'];
+  if (raw === undefined || raw === '') return TEST_POSTGRES_DEFAULT_STARTUP_TIMEOUT_MS;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    throw new Error(
+      `TEST_POSTGRES_STARTUP_TIMEOUT_MS must be a positive integer (ms), got "${raw}"`,
+    );
+  }
+  return value;
+}
 
 export interface TestPostgresOptions {
   /**
@@ -103,6 +122,7 @@ export async function startTestPostgres(options: TestPostgresOptions = {}): Prom
       .withUsername('app')
       .withPassword('app')
       .withCommand(testPostgresCommand(options))
+      .withStartupTimeout(testPostgresStartupTimeoutMs())
       .start();
     url = container.getConnectionUri();
   }

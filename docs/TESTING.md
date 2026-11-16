@@ -273,8 +273,9 @@ INTEGRATION=1 bunx vitest run --project storage:int    # S3 + GCS emulators
 Postgres in every int spec is **Citus 14.2 on PostgreSQL 18.4, single node** (`citusdata/citus:14.2.0`, the
 image compose runs). The image is amd64-only: on Apple Silicon, Docker Desktop runs it under emulation
 (Rosetta), and a container starts in about 15 s. Pull it once before the first run
-(`docker pull --platform linux/amd64 citusdata/citus:14.2.0`), and run one `*:int` project at a time if a
-`beforeAll` hits the 180 s hook timeout. `startTestPostgres({ localExecution: false })` makes even one node
+(`docker pull --platform linux/amd64 citusdata/citus:14.2.0`). On a loaded machine a container can miss the
+120 s health wait ("Health check not healthy after 120000ms"): raise `TEST_POSTGRES_STARTUP_TIMEOUT_MS` (in ms;
+the int projects' hook timeout follows it, plus 60 s), or run one `*:int` project at a time. `startTestPostgres({ localExecution: false })` makes even one node
 send shard queries over connections, so a setting that would not reach a worker fails in the spec too.
 
 The Redis spec puts every key under a random `it-<id>` prefix and deletes them afterwards. The

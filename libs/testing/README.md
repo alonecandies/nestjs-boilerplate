@@ -52,6 +52,11 @@ Test.createTestingModule({ providers: [SomeHandler] }).useMocker(() => createMoc
 `INTEGRATION_DATABASE_URL`: read by `startTestPostgres` only (unless `allowExternalUrl: false`); when set and
 not empty, that database is used instead of a container.
 
+`TEST_POSTGRES_STARTUP_TIMEOUT_MS`: how long `startTestPostgres` waits for a healthy container, in ms (default
+120000, testcontainers' own). Raise it when the amd64-only Citus image starts slowly under emulation on a busy
+machine. A value that is not a positive integer throws. The root `vitest.config.ts` keeps the int projects'
+hook timeout 60 s above it.
+
 ## Gotchas
 
 - `createMock` members are `vi.fn()`s: the root Vitest config sets `clearMocks: true`, so **call history is

@@ -4,6 +4,7 @@ import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  intHookTimeoutMs,
   SETUP_FILES,
   scriptsProject,
   UNIT_HOOK_TIMEOUT_MS,
@@ -32,6 +33,14 @@ describe('vitest.config.ts', () => {
       testTimeout: UNIT_TEST_TIMEOUT_MS,
       hookTimeout: UNIT_HOOK_TIMEOUT_MS,
     });
+  });
+
+  it("keeps int projects' hook timeout a minute above the container startup wait", () => {
+    expect(intHookTimeoutMs({})).toBe(180_000);
+    expect(intHookTimeoutMs({ TEST_POSTGRES_STARTUP_TIMEOUT_MS: '60000' })).toBe(180_000);
+    expect(intHookTimeoutMs({ TEST_POSTGRES_STARTUP_TIMEOUT_MS: '360000' })).toBe(420_000);
+    // An invalid value fails in startTestPostgres itself; here it just keeps the default.
+    expect(intHookTimeoutMs({ TEST_POSTGRES_STARTUP_TIMEOUT_MS: 'abc' })).toBe(180_000);
   });
 
   it('loads reflect-metadata first, then the repo setup file by absolute path', () => {

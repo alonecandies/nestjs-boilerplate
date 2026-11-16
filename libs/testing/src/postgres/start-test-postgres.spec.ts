@@ -1,8 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   startTestPostgres,
+  TEST_POSTGRES_DEFAULT_STARTUP_TIMEOUT_MS,
   TEST_POSTGRES_IMAGE,
   testPostgresCommand,
+  testPostgresStartupTimeoutMs,
   urlWithLogin,
 } from './start-test-postgres.js';
 
@@ -57,6 +59,24 @@ describe('@platform/testing/postgres', () => {
       `citus.enable_local_execution=${expected}`,
     ]);
   });
+
+  it("waits testcontainers' 120 s for a healthy container unless TEST_POSTGRES_STARTUP_TIMEOUT_MS says otherwise", () => {
+    expect(TEST_POSTGRES_DEFAULT_STARTUP_TIMEOUT_MS).toBe(120_000);
+    expect(testPostgresStartupTimeoutMs({})).toBe(120_000);
+    expect(testPostgresStartupTimeoutMs({ TEST_POSTGRES_STARTUP_TIMEOUT_MS: '' })).toBe(120_000);
+    expect(testPostgresStartupTimeoutMs({ TEST_POSTGRES_STARTUP_TIMEOUT_MS: '360000' })).toBe(
+      360_000,
+    );
+  });
+
+  it.each(['abc', '0', '-5', '1.5', '1e3x'])(
+    'refuses TEST_POSTGRES_STARTUP_TIMEOUT_MS=%s instead of silently using the default',
+    (raw) => {
+      expect(() => testPostgresStartupTimeoutMs({ TEST_POSTGRES_STARTUP_TIMEOUT_MS: raw })).toThrow(
+        `TEST_POSTGRES_STARTUP_TIMEOUT_MS must be a positive integer (ms), got "${raw}"`,
+      );
+    },
+  );
 
   it('urlWithLogin swaps only the login and percent-encodes it, so postgres.js decodes it back', () => {
     const password = 'p@ss:w/rd%41 é#?';

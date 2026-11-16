@@ -14,6 +14,16 @@ const INTEGRATION = process.env.INTEGRATION === '1';
 export const UNIT_TEST_TIMEOUT_MS = 15_000;
 export const UNIT_HOOK_TIMEOUT_MS = 30_000;
 
+/**
+ * Int specs start a Citus container in `beforeAll`, which may take up to
+ * `TEST_POSTGRES_STARTUP_TIMEOUT_MS` (default 120 s, see @platform/testing/postgres), so the hook
+ * timeout stays a minute above it. An invalid value keeps the default here; startTestPostgres refuses it.
+ */
+export function intHookTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
+  const startup = Number(env.TEST_POSTGRES_STARTUP_TIMEOUT_MS);
+  return Math.max(180_000, (Number.isInteger(startup) && startup > 0 ? startup : 0) + 60_000);
+}
+
 /** reflect-metadata first (decorator metadata), then the repo setup (silent Nest logger). */
 export const SETUP_FILES = ['reflect-metadata', join(ROOT, 'vitest.setup.ts')];
 
@@ -76,7 +86,7 @@ const intProject = ({ name, root }: WorkspacePackage): TestProjectInlineConfigur
     root,
     include: ['src/**/*.int-spec.ts', 'test/**/*.int-spec.ts'],
     testTimeout: 120_000,
-    hookTimeout: 180_000,
+    hookTimeout: intHookTimeoutMs(),
   },
 });
 
