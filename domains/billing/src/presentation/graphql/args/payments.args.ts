@@ -5,7 +5,10 @@ import { BILLING_LIMITS } from '../../../billing.constants.js';
 
 @ArgsType()
 export class PaymentsArgs {
-  @Field({ defaultValue: false, description: "Every user's payments (requires billing:read-all)" })
+  @Field({
+    defaultValue: false,
+    description: 'Every payment of your active workspace (requires billing:read-all)',
+  })
   @IsBoolean()
   all: boolean;
 

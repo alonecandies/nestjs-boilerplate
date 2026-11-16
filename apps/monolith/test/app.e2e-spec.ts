@@ -318,11 +318,31 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
       expectProblem(response, 403, 'FORBIDDEN');
     });
 
-    it('RBAC: billing ?all=true needs billing:read-all → 403', async () => {
+    it('RBAC: billing ?all=true needs billing:read-all (a plain member) → 403', async () => {
+      // Owners and admins hold billing:read-all since B2-26 (it lists their tenant only).
+      const registered = await inject({
+        method: 'POST',
+        url: '/v1/auth/register',
+        payload: {
+          email: 'member.billing@example.com',
+          password: ADA.password,
+          displayName: 'Member',
+        },
+      });
+      const body = registered.json<AuthTokensBody & { tenantId: string }>();
+      const key = `${body.tenantId}:${body.user.id}`;
+      const owned = e2e.identity.store.memberships.get(key);
+      if (owned === undefined) throw new Error('no membership');
+      e2e.identity.store.memberships.set(key, { ...owned, roles: ['member'] });
+      const login = await inject({
+        method: 'POST',
+        url: '/v1/auth/login',
+        payload: { email: 'member.billing@example.com', password: ADA.password },
+      });
       const response = await inject({
         method: 'GET',
         url: '/v1/billing/payments?all=true',
-        headers: bearer(tokens.accessToken),
+        headers: bearer(login.json<AuthTokensBody>().accessToken),
       });
       expectProblem(response, 403);
     });

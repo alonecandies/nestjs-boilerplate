@@ -130,7 +130,7 @@ export class BillingController {
   @ApiOperation({
     summary: 'List payments',
     description:
-      "Newest first, keyset-paginated (`cursor` = the previous page's `nextCursor`). `all=true` lists every user's payments (requires billing:read-all).",
+      "Newest first, keyset-paginated (`cursor` = the previous page's `nextCursor`). `all=true` lists every payment of your active workspace (requires billing:read-all).",
   })
   @ApiOkResponse({ standardSchema: paymentListResponseSchema })
   @ApiBadRequestResponse({ description: 'Invalid query' })

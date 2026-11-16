@@ -4,7 +4,7 @@ import {
   type BillingServiceClient,
   type PaymentList,
 } from '@domain/billing-contracts';
-import { type ServiceError, status } from '@grpc/grpc-js';
+import { Metadata, type ServiceError, status } from '@grpc/grpc-js';
 import { ClientGrpcProxy } from '@nestjs/microservices';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
@@ -16,6 +16,7 @@ import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import {
   createGrpcClientOptions,
+  createOutgoingMetadata,
   GrpcCircuitBreakers,
   grpcCall,
   KafkaProducer,
@@ -134,6 +135,10 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
   let billing: BillingServiceClient;
   const breakers = new GrpcCircuitBreakers();
 
+  /** The caller metadata the gateway adapter derives from its CLS principal (B2-23). */
+  const callerOf = (userId: string, tenantId = TENANT_ID) =>
+    createOutgoingMetadata({ userId, tenantId, roles: ['member'] });
+
   /** What the gateway adapter does: deadline + breaker + ServiceError → DomainException. */
   const call = <T>(source: Observable<T>, operation: string): Promise<T> =>
     grpcCall(source, { timeoutMs: 3_000, operation, breaker: breakers.get('billing') });
@@ -229,7 +234,7 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
 
     it('ListPayments runs the real query handler + repository; int64 → string, Timestamp → Date', async () => {
       const list: PaymentList = await call(
-        billing.listPayments({ tenantId: TENANT_ID, userId: USER_ID, limit: 5 }),
+        billing.listPayments({ tenantId: TENANT_ID, userId: USER_ID, limit: 5 }, callerOf(USER_ID)),
         'BillingService.ListPayments',
       );
 
@@ -256,19 +261,17 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
 
     it('ListPayments pages with a keyset cursor (next_cursor out, cursor in → id < $cursor)', async () => {
       const first: PaymentList = await call(
-        billing.listPayments({ tenantId: TENANT_ID, userId: USER_ID, limit: 1 }),
+        billing.listPayments({ tenantId: TENANT_ID, userId: USER_ID, limit: 1 }, callerOf(USER_ID)),
         'BillingService.ListPayments',
       );
       expect(first.items.map((p) => p.id)).toEqual([PAID_ID]);
       expect(first.nextCursor).toEqual(expect.any(String));
 
       const second: PaymentList = await call(
-        billing.listPayments({
-          tenantId: TENANT_ID,
-          userId: USER_ID,
-          limit: 1,
-          cursor: first.nextCursor,
-        }),
+        billing.listPayments(
+          { tenantId: TENANT_ID, userId: USER_ID, limit: 1, cursor: first.nextCursor },
+          callerOf(USER_ID),
+        ),
         'BillingService.ListPayments',
       );
       // The fake answers only the first-page statement: the resumed query is a different one.
@@ -298,15 +301,36 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
 
     it('a database failure → INTERNAL without leaking internals; the caller sees a 502', async () => {
       const request = { tenantId: TENANT_ID, userId: BROKEN_DB_USER_ID, limit: 5 };
-      const raw = await lastValueFrom(billing.listPayments(request)).catch((e: unknown) => e);
+      const caller = callerOf(BROKEN_DB_USER_ID);
+      const raw = await lastValueFrom(billing.listPayments(request, caller)).catch(
+        (e: unknown) => e,
+      );
       expect(raw).toMatchObject({ code: status.INTERNAL });
       expect((raw as ServiceError).details).not.toContain('10.0.0.12');
 
-      const error = await call(billing.listPayments(request), 'BillingService.ListPayments').catch(
-        (e: unknown) => e,
-      );
+      const error = await call(
+        billing.listPayments(request, caller),
+        'BillingService.ListPayments',
+      ).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(ExternalServiceException);
       expect((error as Error).message).not.toContain('10.0.0.12');
+    });
+
+    it('UNAUTHENTICATED PRINCIPAL_MISSING for ListPayments without a caller', async () => {
+      const raw = await lastValueFrom(
+        billing.listPayments({ tenantId: TENANT_ID, userId: USER_ID, limit: 5 }, new Metadata()),
+      ).catch((e: unknown) => e);
+      expect(raw).toMatchObject({ code: status.UNAUTHENTICATED });
+    });
+
+    it('PERMISSION_DENIED TENANT_MISMATCH when the request tenant is not the caller tenant', async () => {
+      const raw = await lastValueFrom(
+        billing.listPayments(
+          { tenantId: TENANT_ID, userId: USER_ID, limit: 5 },
+          callerOf(USER_ID, generateId()),
+        ),
+      ).catch((e: unknown) => e);
+      expect(raw).toMatchObject({ code: status.PERMISSION_DENIED });
     });
 
     it('HandleStripeWebhook verifies the signature over the raw bytes and applies an event once', async () => {

@@ -22,7 +22,7 @@ export interface PaymentSnapshot {
   readonly status: PaymentStatus;
   readonly stripeCheckoutSessionId: string | null;
   readonly stripePaymentIntentId: string | null;
-  /** Client `Idempotency-Key`, unique per user. */
+  /** Client `Idempotency-Key`, unique per (tenant, user). */
   readonly idempotencyKey: string | null;
   /** sha256 hex of the normalized request (ledger S-2); null before B2. */
   readonly requestHash: string | null;
@@ -195,6 +195,11 @@ export class Payment extends AggregateRoot {
     return this.state.priceId === trim(request.priceId) && this.state.quantity === request.quantity;
   }
 
+  /** S-2: a stored hash must equal the replay's; payments created before B2 have none. */
+  matchesRequestHash(hash: string): boolean {
+    return this.state.requestHash === null || this.state.requestHash === hash;
+  }
+
   /**
    * Binds the Checkout Session Stripe created (or replayed) for this payment. A payment whose
    * session creation failed (`failed`, no session) is reopened as `pending` by a retried
@@ -268,6 +273,7 @@ export class Payment extends AggregateRoot {
         currency,
         completion.paidAt,
         this.state.stripePaymentIntentId,
+        this.state.tenantId,
       ),
     );
     return true;

@@ -1,7 +1,7 @@
 import type { HandleStripeWebhookResponse } from '@domain/billing-contracts';
 import { Logger } from '@nestjs/common';
 import { CommandHandler, EventPublisher, type ICommandHandler } from '@nestjs/cqrs';
-import { isUuid } from '@platform/common';
+import { createPrincipal, isUuid, runWithPrincipal } from '@platform/common';
 import { Transactional } from '@platform/database';
 import { InjectMetric } from '@platform/observability';
 import type Stripe from 'stripe';
@@ -81,7 +81,20 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
         `Stripe event ${event.id} uses API version ${event.api_version}, expected ${STRIPE_API_VERSION}: re-pin the webhook endpoint`,
       );
     }
-    const outcome = await this.applyOnce(event);
+    const owner = stripeOwnerOf(event.data.object);
+    const work = () => this.process(event, owner);
+    // Spec §9: act as the user and tenant Stripe signed; platform-level events have no user and run
+    // without a principal (B3-11 moves their writes to the system pool).
+    return owner.userId === null
+      ? work()
+      : runWithPrincipal(createPrincipal({ userId: owner.userId, tenantId: owner.tenantId }), work);
+  }
+
+  private async process(
+    event: Stripe.Event,
+    owner: StripeOwner,
+  ): Promise<HandleStripeWebhookResponse> {
+    const outcome = await this.applyOnce(event, owner);
     if (outcome.payment !== null) this.publisher.mergeObjectContext(outcome.payment).commit();
     return {
       received: true,
@@ -92,10 +105,9 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
   }
 
   @Transactional()
-  protected async applyOnce(event: Stripe.Event): Promise<WebhookOutcome> {
-    // The owner comes from metadata Stripe signed (checkout put it there); events without one are
+  protected async applyOnce(event: Stripe.Event, owner: StripeOwner): Promise<WebhookOutcome> {
+    // `owner` comes from metadata Stripe signed (checkout put it there); events without one are
     // platform-level and recorded under PLATFORM_TENANT_ID with a NULL user (spec §9, method 8).
-    const owner = stripeOwnerOf(event.data.object);
     const firstDelivery = await this.stripeEvents.markProcessed({
       tenantId: owner.tenantId,
       userId: owner.userId,

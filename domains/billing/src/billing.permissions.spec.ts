@@ -13,9 +13,13 @@ describe('BILLING_RBAC', () => {
     expect(rbac.resolve(['member'])).toEqual([BillingPermission.Checkout]);
   });
 
-  it('withholds billing:read-all from every role until B2-26 scopes it to the tenant (I-5)', () => {
-    for (const role of ['member', 'admin', 'owner'] as const) {
-      expect(rbac.resolve([role])).toEqual([BillingPermission.Checkout]);
-    }
+  it('grants billing:read-all to admins and owners: it lists the active tenant only (B2-26, I-5)', () => {
+    expect(rbac.resolve(['member'])).toEqual([BillingPermission.Checkout]);
+    expect(rbac.resolve(['admin'])).toEqual(
+      [BillingPermission.Checkout, BillingPermission.ReadAll].sort(),
+    );
+    expect(rbac.resolve(['owner'])).toEqual(
+      [BillingPermission.Checkout, BillingPermission.ReadAll].sort(),
+    );
   });
 });

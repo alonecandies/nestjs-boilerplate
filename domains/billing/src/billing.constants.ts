@@ -4,8 +4,10 @@
  */
 export const BillingErrorCode = {
   PAYMENT_NOT_FOUND: 'PAYMENT_NOT_FOUND',
+  /** 403: the request names a tenant the caller is not acting in. */
+  TENANT_MISMATCH: 'TENANT_MISMATCH',
   /**
-   * Same `Idempotency-Key` replayed with a different price/quantity, or Stripe refusing a reused
+   * Same `Idempotency-Key` replayed with a different checkout request, or Stripe refusing a reused
    * idempotency key (`StripeIdempotencyError`).
    */
   IDEMPOTENCY_KEY_REUSED: 'IDEMPOTENCY_KEY_REUSED',

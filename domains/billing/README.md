@@ -100,11 +100,11 @@ and `KafkaProducerModule`. It imports its own Stripe adapter (`StripeModule.forR
 
 ### REST (`/v1/billing`)
 
-| Method & path             | Auth                                            | Input                                                                                                                                             | Response                                                                                                                       |
-| ------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `POST /checkout-sessions` | Bearer, `billing:checkout`                      | zod body `{ priceId: string(1..255), quantity?: int 1..100 = 1 }` (strict) + optional `Idempotency-Key` header (8–255 chars of `[A-Za-z0-9._:-]`) | `201 { id, url, paymentId }`                                                                                                   |
-| `POST /webhooks/stripe`   | `@Public`, `@SkipRateLimit`, `Stripe-Signature` | raw JSON body (verified byte-for-byte)                                                                                                            | `200 { received, eventId, eventType, duplicate }`                                                                              |
-| `GET /payments`           | Bearer; `?all=true` needs `billing:read-all`    | zod query `{ all?: 'true'\|'false'\|'1'\|'0', limit?: 1..100 = 20, cursor?: string }`                                                             | `200 { items: Payment[], nextCursor: string \| null }` newest first, keyset-paginated (`amountTotal` = minor units, ISO dates) |
+| Method & path             | Auth                                                          | Input                                                                                                                                             | Response                                                                                                                       |
+| ------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `POST /checkout-sessions` | Bearer, `billing:checkout`                                    | zod body `{ priceId: string(1..255), quantity?: int 1..100 = 1 }` (strict) + optional `Idempotency-Key` header (8–255 chars of `[A-Za-z0-9._:-]`) | `201 { id, url, paymentId }`                                                                                                   |
+| `POST /webhooks/stripe`   | `@Public`, `@SkipRateLimit`, `Stripe-Signature`               | raw JSON body (verified byte-for-byte)                                                                                                            | `200 { received, eventId, eventType, duplicate }`                                                                              |
+| `GET /payments`           | Bearer; `?all=true` needs `billing:read-all` (admins, owners) | zod query `{ all?: 'true'\|'false'\|'1'\|'0', limit?: 1..100 = 20, cursor?: string }`                                                             | `200 { items: Payment[], nextCursor: string \| null }` newest first, keyset-paginated (`amountTotal` = minor units, ISO dates) |
 
 Errors are RFC 9457 `application/problem+json`: 400 (validation, `errors[]`), 401, 403, 409
 (`IDEMPOTENCY_KEY_REUSED`, `PAYMENT_CONCURRENTLY_MODIFIED`, `CHECKOUT_IN_PROGRESS`, `CHECKOUT_SESSION_CLOSED`), 422 (`INVALID_WEBHOOK_SIGNATURE`,
@@ -156,16 +156,16 @@ input CreateCheckoutSessionInput {
 }
 ```
 
-`payments(all: true)` needs `billing:read-all`. N payments cost one batched user lookup, not N.
+`payments(all: true)` lists the active tenant and needs `billing:read-all` (admins, owners). N payments cost one batched user lookup, not N.
 `amountTotal` is a `Float` holding integer minor units (GraphQL `Int` is 32-bit).
 
 ### gRPC (`billing.v1.BillingService`, billing-service)
 
-| RPC                     | → bus                          | Notes                                                                                                                                            |
-| ----------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `CreateCheckoutSession` | `CreateCheckoutSessionCommand` | zod-validated; optional `success_url`/`cancel_url` (internal callers only)                                                                       |
-| `HandleStripeWebhook`   | `HandleStripeWebhookCommand`   | `payload` is `bytes` (Buffer): the service verifies the signature                                                                                |
-| `ListPayments`          | `ListPaymentsQuery`            | `user_id` absent = all users (the gateway enforces `billing:read-all`); `limit` 0 = 20; `cursor` in, `next_cursor` out (absent on the last page) |
+| RPC                     | → bus                          | Notes                                                                                                                                                                                         |
+| ----------------------- | ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CreateCheckoutSession` | `CreateCheckoutSessionCommand` | zod-validated; optional `success_url`/`cancel_url` (internal callers only)                                                                                                                    |
+| `HandleStripeWebhook`   | `HandleStripeWebhookCommand`   | `payload` is `bytes` (Buffer): the service verifies the signature                                                                                                                             |
+| `ListPayments`          | `ListPaymentsQuery`            | `user_id` absent = every payment of `tenant_id` (the service recomputes `billing:read-all` from the caller's roles); `limit` 0 = 20; `cursor` in, `next_cursor` out (absent on the last page) |
 
 Payloads go through `ZodRpcValidationPipe` (`INVALID_ARGUMENT` + issues); `@GrpcController()` maps domain
 errors to gRPC statuses and `x-error-code` trailers, and `BillingGrpcAdapter` maps them back to the same
@@ -227,7 +227,7 @@ by `CreateCheckoutSessionHandler`, not by the adapter.
 ## Flows
 
 **Checkout** (`CreateCheckoutSessionHandler`): insert a `pending` payment (or find the one this user's
-`Idempotency-Key` already created in this tenant — unique `(tenant_id, user_id, idempotency_key)`; a different price/quantity is 409) →
+`Idempotency-Key` already created in this tenant — unique `(tenant_id, user_id, idempotency_key)`; a different request, by `request_hash` over price, quantity, email and redirect URLs, is 409) →
 `StripeService.createCheckoutSession` with Stripe idempotency key `checkout-<paymentId>`,
 `client_reference_id = paymentId` and `metadata { paymentId, userId, tenantId }` (signed by Stripe, mirrored onto the PaymentIntent; the webhook resolves the tenant from it) → bind the session id, amount and currency
 (optimistic lock on `version`). No transaction spans the Stripe call; every step is safe to repeat. A Stripe
@@ -243,7 +243,8 @@ failure marks the payment `failed`; a retry with the same key reopens it and get
      (a completed-but-`unpaid` session, i.e. a delayed payment method, stays `pending`);
    - `checkout.session.async_payment_failed` → `failed`; `checkout.session.expired` → `expired`;
    - any other signed event → acknowledged and ignored.
-3. After COMMIT the aggregate's events are published; `PaymentSucceededRelay` sends the Kafka event.
+3. The whole delivery runs as the `{ userId, tenantId }` signed into the session and PaymentIntent metadata (events without it are recorded for the platform tenant and run without a principal).
+4. After COMMIT the aggregate's events are published; `PaymentSucceededRelay` sends the Kafka event.
 
 Unknown payments and impossible transitions are acknowledged with a warning (a retry could never succeed).
 A paid session with no usable currency (none in the event, none stored) is one of them: the payment stays

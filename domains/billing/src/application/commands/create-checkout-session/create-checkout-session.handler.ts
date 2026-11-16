@@ -8,10 +8,12 @@ import {
   CheckoutUrlMissingException,
   IdempotencyKeyReusedException,
 } from '../../../domain/billing.errors.js';
+import { checkoutRequestHash } from '../../../domain/checkout-request-hash.js';
 import { Payment } from '../../../domain/payment.aggregate.js';
 import { type StripeConfig, stripeConfig } from '../../../infrastructure/stripe/stripe.config.js';
 import { StripeService } from '../../../infrastructure/stripe/stripe.service.js';
 import { PaymentsRepository } from '../../repositories/payments.repository.js';
+import { requireTenantPrincipal } from '../../tenant-scope.js';
 import { CreateCheckoutSessionCommand } from './create-checkout-session.command.js';
 
 /**
@@ -43,6 +45,8 @@ export class CreateCheckoutSessionHandler implements ICommandHandler<CreateCheck
   ) {}
 
   async execute({ request }: CreateCheckoutSessionCommand): Promise<CheckoutSession> {
+    requireTenantPrincipal(request.tenantId, request.userId);
+    const requestHash = checkoutRequestHash(request);
     const { payment, created } = await this.payments.create(
       Payment.initiate({
         id: generateId(),
@@ -51,10 +55,16 @@ export class CreateCheckoutSessionHandler implements ICommandHandler<CreateCheck
         priceId: request.priceId,
         quantity: request.quantity,
         idempotencyKey: request.idempotencyKey,
+        requestHash,
         now: new Date(),
       }),
     );
-    if (!created && !payment.matchesRequest(request)) throw new IdempotencyKeyReusedException();
+    if (
+      !created &&
+      (!payment.matchesRequest(request) || !payment.matchesRequestHash(requestHash))
+    ) {
+      throw new IdempotencyKeyReusedException();
+    }
 
     const boundId = payment.stripeCheckoutSessionId;
     const session =

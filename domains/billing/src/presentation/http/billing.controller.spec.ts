@@ -331,14 +331,15 @@ describe('BillingController (Fastify, real guards, fake BillingPort)', () => {
       expect(port.listPayments).not.toHaveBeenCalled();
     });
 
-    it('403 for all=true even for an admin: billing:read-all is withheld until payments are tenant-scoped (B2-26)', async () => {
+    it("all=true lists the admin's active tenant (billing:read-all, B2-26)", async () => {
+      port.listPayments.mockResolvedValue({ items: [] });
       const res = await app.inject({
         method: 'GET',
         url: `${PAYMENTS_URL}?all=true&limit=5`,
         headers: { authorization: admin.authorization },
       });
-      expect(res.statusCode).toBe(403);
-      expect(port.listPayments).not.toHaveBeenCalled();
+      expect(res.statusCode).toBe(200);
+      expect(port.listPayments).toHaveBeenCalledWith({ tenantId: TEST_TENANT_ID, limit: 5 });
     });
 
     it.each(['limit=abc', 'limit=0', 'limit=1000', 'all=maybe', 'cursor='])(

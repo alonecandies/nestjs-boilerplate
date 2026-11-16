@@ -3,6 +3,7 @@ import { CqrsModule, QueryBus } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
 import { RbacModule } from '@platform/auth';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
+import { createPrincipal, generateId, runWithPrincipal } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { DRIZZLE, TransactionHost } from '@platform/database';
 import { KafkaProducer } from '@platform/transport';
@@ -45,6 +46,10 @@ function fakeInfrastructure() {
 
 describe('billing modules (DI wiring per topology, no infrastructure)', () => {
   let context: INestApplicationContext | undefined;
+  const userId = generateId();
+  /** Listing needs a principal acting in the request tenant (B2-26): a member listing their own. */
+  const asMember = <T>(fn: () => T): T =>
+    runWithPrincipal(createPrincipal({ userId, tenantId: TEST_TENANT_ID, roles: ['member'] }), fn);
 
   afterEach(async () => {
     await context?.close();
@@ -68,12 +73,16 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
     // The Stripe adapter comes with the core, not from an app-level module.
     expect(context.get(StripeService, { strict: false })).toBeInstanceOf(StripeService);
     await expect(
-      context.get(QueryBus).execute(new ListPaymentsQuery({ tenantId: TEST_TENANT_ID, limit: 3 })),
+      asMember(() =>
+        context
+          ?.get(QueryBus)
+          .execute(new ListPaymentsQuery({ tenantId: TEST_TENANT_ID, userId, limit: 3 })),
+      ),
     ).resolves.toEqual({
       items: [],
     });
     // LIMIT = page size + 1 look-ahead row (keyset pagination).
-    expect(infra.queries.at(-1)?.params).toEqual([TEST_TENANT_ID, 4]);
+    expect(infra.queries.at(-1)?.params).toEqual([TEST_TENANT_ID, userId, 4]);
   });
 
   it('monolith: BillingApiModule.forLocal() binds BillingPort to the CQRS buses', async () => {
@@ -92,10 +101,12 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
 
     const port = context.get(BillingPort, { strict: false });
     expect(port).toBeInstanceOf(BillingLocalAdapter);
-    await expect(port.listPayments({ tenantId: TEST_TENANT_ID, limit: 4 })).resolves.toEqual({
+    await expect(
+      asMember(() => port.listPayments({ tenantId: TEST_TENANT_ID, userId, limit: 4 })),
+    ).resolves.toEqual({
       items: [],
     });
-    expect(infra.queries.at(-1)?.params).toEqual([TEST_TENANT_ID, 5]);
+    expect(infra.queries.at(-1)?.params).toEqual([TEST_TENANT_ID, userId, 5]);
   });
 
   it('gateway: BillingApiModule.forRemote() binds BillingPort to gRPC and needs no core', async () => {

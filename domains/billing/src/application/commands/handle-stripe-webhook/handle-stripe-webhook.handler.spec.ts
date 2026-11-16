@@ -1,7 +1,12 @@
 import { Logger } from '@nestjs/common';
 import { EventPublisher, type IEvent } from '@nestjs/cqrs';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
-import { DomainValidationException, generateId, PLATFORM_TENANT_ID } from '@platform/common';
+import {
+  DomainValidationException,
+  generateId,
+  getPrincipal,
+  PLATFORM_TENANT_ID,
+} from '@platform/common';
 import { beforeAll, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import {
   createTestStripeService,
@@ -369,6 +374,28 @@ describe('HandleStripeWebhookHandler', () => {
       expect(result).toMatchObject({ received: true, duplicate: false });
       expect(store.payment(payment.id)?.status).toBe(PaymentStatus.Pending);
       expect(published).toEqual([]);
+    });
+
+    it('applies the event as the signed { userId, tenantId } principal (spec §9)', async () => {
+      let seen: unknown;
+      const save = payments.save.bind(payments);
+      payments.save = async (p) => {
+        seen = getPrincipal();
+        return save(p);
+      };
+      await deliver(owned(TEST_TENANT_ID, 'evt_principal_1'));
+
+      expect(seen).toMatchObject({
+        userId: payment.userId,
+        tenantId: TEST_TENANT_ID,
+        roles: [],
+        staff: false,
+      });
+    });
+
+    it('publishes PaymentSucceededEvent with the payment tenant', async () => {
+      await deliver(owned(TEST_TENANT_ID, 'evt_tenant_event_1'));
+      expect(published).toEqual([expect.objectContaining({ tenantId: TEST_TENANT_ID })]);
     });
 
     it('records an event without tenant metadata for the platform tenant with a NULL user', async () => {

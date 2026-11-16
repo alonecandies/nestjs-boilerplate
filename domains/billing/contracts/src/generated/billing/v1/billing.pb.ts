@@ -21,7 +21,7 @@ export interface CreateCheckoutSessionRequest {
   cancelUrl?:
     | string
     | undefined;
-  /** Forwarded as the Stripe idempotency key (defaults to `checkout-<paymentId>`). */
+  /** Client Idempotency-Key, unique per (tenant, user). Never sent to Stripe, which gets checkout-<payment id>. */
   idempotencyKey?:
     | string
     | undefined;
@@ -72,7 +72,7 @@ export interface Payment {
 }
 
 export interface ListPaymentsRequest {
-  /** Absent = all users (requires billing:read-all at the edge). */
+  /** Absent = every payment of tenant_id (billing:read-all). */
   userId?: string | undefined;
   limit: number;
   /** Opaque keyset cursor: the `next_cursor` of the previous page. Absent = first page. */

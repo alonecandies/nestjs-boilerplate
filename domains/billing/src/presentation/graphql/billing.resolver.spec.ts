@@ -167,10 +167,14 @@ describe('BillingResolver (Apollo on Fastify, real guards, fake BillingPort)', (
       expect(port.listPayments).not.toHaveBeenCalled();
     });
 
-    it('all: true is FORBIDDEN even for an admin (billing:read-all withheld until B2-26)', async () => {
+    it("all: true lists the admin's active tenant (B2-26)", async () => {
+      port.listPayments.mockResolvedValue({ items: [] });
       const body = await gql(PAYMENTS_QUERY, { all: true }, admin);
-      expect(body.errors?.[0]?.extensions).toMatchObject({ code: 'FORBIDDEN', status: 403 });
-      expect(port.listPayments).not.toHaveBeenCalled();
+      expect(body.errors).toBeUndefined();
+      expect(port.listPayments).toHaveBeenCalledWith(
+        expect.objectContaining({ tenantId: TEST_TENANT_ID }),
+      );
+      expect(port.listPayments.mock.calls[0]?.[0]).not.toHaveProperty('userId', expect.any(String));
     });
 
     it('pages: cursor in, nextCursor out', async () => {

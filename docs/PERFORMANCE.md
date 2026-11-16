@@ -114,7 +114,7 @@ return keysetPage(rows, q.limit); // { items, nextCursor }
 is one index range scan, so page 1000 costs the same as page 1, and rows inserted meanwhile do not
 shift pages. Page size is clamped to `[1, 100]` (default 20); a malformed cursor is a 422
 `INVALID_CURSOR`. Composite filters get a matching composite index, e.g.
-`payments_user_id_id_idx (user_id, id)` for "payments of a user, newest first". A plain ASC btree
+`payments_tenant_id_user_id_id_idx (tenant_id, user_id, id)` for "a user's payments in a tenant, newest first". A plain ASC btree
 serves `DESC` by scanning backwards; avoid Drizzle's `.desc()` in index definitions, which emits
 `NULLS LAST` and no longer matches `ORDER BY … DESC`.
 
