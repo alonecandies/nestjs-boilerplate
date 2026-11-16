@@ -1,4 +1,9 @@
-import type { AccessTokenDenylist, AuthUser, TokenService } from '@platform/auth';
+import {
+  type AccessTokenDenylist,
+  type AuthUser,
+  RevocationSweeper,
+  type TokenService,
+} from '@platform/auth';
 import { UnauthenticatedException } from '@platform/common';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GqlWsConnectionContext } from '../context/gql-context.js';
@@ -7,6 +12,7 @@ import {
   createSubscriptionAuthenticator,
   extractConnectionToken,
   WS_CLOSE_TOKEN_EXPIRED,
+  WS_CLOSE_TOKEN_REVOKED,
 } from './subscription-auth.js';
 
 const nowSec = (): number => Math.floor(Date.now() / 1000);
@@ -159,6 +165,127 @@ describe('createGraphqlWsAuthHandlers', () => {
     handlers.onClose(ctx);
     vi.advanceTimersByTime(120_000);
 
+    expect(ctx.extra.socket.close).not.toHaveBeenCalled();
+  });
+});
+
+describe('createGraphqlWsAuthHandlers with a revocation sweeper', () => {
+  function sweeperWith(denied: Set<string>) {
+    const denylist = { enabled: true, isDenied: vi.fn(async (jti: string) => denied.has(jti)) };
+    return new RevocationSweeper(denylist, { name: 'graphql-ws', intervalMs: 30_000 });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('closes a revoked connection with 4401, the code of expiry', () => {
+    expect(WS_CLOSE_TOKEN_REVOKED).toBe(4401);
+    expect(WS_CLOSE_TOKEN_REVOKED).toBe(WS_CLOSE_TOKEN_EXPIRED);
+  });
+
+  it('tracks an accepted connection and untracks it on close', async () => {
+    const sweeper = sweeperWith(new Set());
+    const handlers = createGraphqlWsAuthHandlers(async () => user(), { sweeper });
+    const ctx = wsContext({ token: 'good' });
+
+    await expect(handlers.onConnect(ctx)).resolves.toBe(true);
+    expect(sweeper.size).toBe(1);
+
+    handlers.onClose(ctx);
+    handlers.onClose(ctx);
+    expect(sweeper.size).toBe(0);
+  });
+
+  it('closes a connection whose jti is denied on the next sweep, leaving another jti open', async () => {
+    const denied = new Set<string>();
+    const sweeper = sweeperWith(denied);
+    const authenticate = vi.fn(async (token: string) => user({ jti: `jti-${token}` }));
+    const handlers = createGraphqlWsAuthHandlers(authenticate, { sweeper });
+    const revoked = wsContext({ token: 'a' });
+    const live = wsContext({ token: 'b' });
+    await handlers.onConnect(revoked);
+    await handlers.onConnect(live);
+
+    denied.add('jti-a');
+    await expect(sweeper.sweep()).resolves.toBe(1);
+
+    expect(revoked.extra.socket.close).toHaveBeenCalledTimes(1);
+    expect(revoked.extra.socket.close).toHaveBeenCalledWith(
+      WS_CLOSE_TOKEN_REVOKED,
+      'Access token revoked',
+    );
+    expect(live.extra.socket.close).not.toHaveBeenCalled();
+    expect(sweeper.size).toBe(1);
+  });
+
+  it('never tracks a refused or an anonymous connection', async () => {
+    const sweeper = sweeperWith(new Set());
+    const refusing = createGraphqlWsAuthHandlers(
+      async () => {
+        throw new UnauthenticatedException('Access token has been revoked');
+      },
+      { sweeper },
+    );
+    await expect(refusing.onConnect(wsContext({ token: 'bad' }))).resolves.toBe(false);
+    await expect(refusing.onConnect(wsContext())).resolves.toBe(false);
+
+    const optional = createGraphqlWsAuthHandlers(async () => user(), {
+      requireAuth: false,
+      sweeper,
+    });
+    await expect(optional.onConnect(wsContext())).resolves.toBe(true);
+
+    expect(sweeper.size).toBe(0);
+  });
+
+  it('still closes 4401 Access token expired when the token expires', async () => {
+    vi.useFakeTimers();
+    const sweeper = sweeperWith(new Set());
+    const handlers = createGraphqlWsAuthHandlers(async () => user({ exp: nowSec() + 60 }), {
+      sweeper,
+    });
+    const ctx = wsContext({ token: 'good' });
+
+    await handlers.onConnect(ctx);
+    vi.advanceTimersByTime(61_000);
+
+    expect(ctx.extra.socket.close).toHaveBeenCalledWith(
+      WS_CLOSE_TOKEN_EXPIRED,
+      'Access token expired',
+    );
+  });
+
+  it('neither tracks nor times a socket that closed while its token was being verified', async () => {
+    vi.useFakeTimers();
+    const sweeper = sweeperWith(new Set(['jti-1']));
+    let resolve: (value: AuthUser) => void = () => undefined;
+    const handlers = createGraphqlWsAuthHandlers(
+      () =>
+        new Promise<AuthUser>((done) => {
+          resolve = done;
+        }),
+      { sweeper },
+    );
+    const ctx = wsContext({ token: 'good' });
+
+    const connecting = handlers.onConnect(ctx);
+    handlers.onClose(ctx);
+    resolve(user({ exp: nowSec() + 60 }));
+    await connecting;
+
+    expect(sweeper.size).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('tracks nothing and throws nothing without a sweeper', async () => {
+    const handlers = createGraphqlWsAuthHandlers(async () => user());
+    const ctx = wsContext({ token: 'good' });
+
+    await expect(handlers.onConnect(ctx)).resolves.toBe(true);
+    expect(() => {
+      handlers.onClose(ctx);
+    }).not.toThrow();
     expect(ctx.extra.socket.close).not.toHaveBeenCalled();
   });
 });

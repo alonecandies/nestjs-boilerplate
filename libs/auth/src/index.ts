@@ -58,6 +58,11 @@ export type {
   TokenType,
 } from './types/auth-user.js';
 export {
+  type RevocableSession,
+  RevocationSweeper,
+  type RevocationSweeperOptions,
+} from './ws/revocation-sweeper.js';
+export {
   authenticateSocket,
   extractBearerToken,
   extractSocketToken,

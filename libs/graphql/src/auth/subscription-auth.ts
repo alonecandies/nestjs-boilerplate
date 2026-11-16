@@ -1,5 +1,10 @@
 import { Logger } from '@nestjs/common';
-import type { AccessTokenDenylist, AuthUser, TokenService } from '@platform/auth';
+import type {
+  AccessTokenDenylist,
+  AuthUser,
+  RevocationSweeper,
+  TokenService,
+} from '@platform/auth';
 import { UnauthenticatedException } from '@platform/common';
 import { find, isString, trim } from 'lodash-es';
 import type { GqlWsConnectionContext, GqlWsExtra } from '../context/gql-context.js';
@@ -9,6 +14,12 @@ export type SubscriptionAuthenticator = (token: string) => Promise<AuthUser>;
 
 /** Close code sent when the access token of a live subscription socket expires. */
 export const WS_CLOSE_TOKEN_EXPIRED = 4401;
+
+/**
+ * Close code sent when the access token of a live subscription socket is revoked (logout, tenant
+ * switch). The code of `WS_CLOSE_TOKEN_EXPIRED`; the reason is `Access token revoked`.
+ */
+export const WS_CLOSE_TOKEN_REVOKED = 4401;
 
 /** Connection-param keys accepted for the token, in precedence order (clients differ). */
 const TOKEN_PARAMS = ['authorization', 'Authorization', 'token', 'authToken'] as const;
@@ -56,6 +67,12 @@ export interface GraphqlWsAuthOptions {
    * are public: anonymous sockets are then accepted and each operation's guards decide.
    */
   requireAuth?: boolean;
+  /**
+   * Tracks each authenticated socket by its token's `jti`, so the sweep closes it (4401
+   * `Access token revoked`) once that token is on the denylist. Without it, the denylist is read
+   * only at `connection_init`.
+   */
+  sweeper?: RevocationSweeper;
 }
 
 /** `onConnect` / `onClose` handlers for Nest's `subscriptions['graphql-ws']` options. */
@@ -74,6 +91,8 @@ export interface GraphqlWsAuthHandlers {
  * - Tokens are short-lived but sockets are not. The socket is closed (4401) when the token
  *   expires, and the client must reconnect with a fresh token, so pushes stop reaching a session
  *   that is no longer valid.
+ * - With `options.sweeper`, the socket is tracked by its `jti` and closed (4401
+ *   `Access token revoked`) by the sweep after that token is revoked; `onClose` untracks it.
  */
 export function createGraphqlWsAuthHandlers(
   authenticate: SubscriptionAuthenticator,
@@ -81,6 +100,9 @@ export function createGraphqlWsAuthHandlers(
 ): GraphqlWsAuthHandlers {
   const logger = new Logger('GraphqlWsAuth');
   const expiryTimers = new WeakMap<GqlWsExtra, NodeJS.Timeout>();
+  const untrackers = new WeakMap<GqlWsExtra, () => void>();
+  // graphql-ws calls onClose even when the socket closes while onConnect is still verifying.
+  const closed = new WeakSet<GqlWsExtra>();
 
   const scheduleExpiry = (extra: GqlWsExtra, expEpochSec: number): void => {
     const socket = extra.socket;
@@ -93,14 +115,28 @@ export function createGraphqlWsAuthHandlers(
     expiryTimers.set(extra, timer);
   };
 
+  const trackRevocation = (extra: GqlWsExtra, jti: string): void => {
+    const socket = extra.socket;
+    if (options.sweeper === undefined || socket === undefined) return;
+    const untrack = options.sweeper.track({
+      jti,
+      end: () => {
+        socket.close(WS_CLOSE_TOKEN_REVOKED, 'Access token revoked');
+      },
+    });
+    untrackers.set(extra, untrack);
+  };
+
   return {
     async onConnect(ctx) {
       const token = extractConnectionToken(ctx.connectionParams);
       if (token === undefined) return !(options.requireAuth ?? true);
       try {
         const user = await authenticate(token);
+        if (closed.has(ctx.extra)) return false;
         ctx.extra.user = user;
         scheduleExpiry(ctx.extra, user.exp);
+        trackRevocation(ctx.extra, user.jti);
         return true;
       } catch (error) {
         logger.debug(
@@ -110,6 +146,9 @@ export function createGraphqlWsAuthHandlers(
       }
     },
     onClose(ctx) {
+      closed.add(ctx.extra);
+      untrackers.get(ctx.extra)?.();
+      untrackers.delete(ctx.extra);
       const timer = expiryTimers.get(ctx.extra);
       if (timer !== undefined) clearTimeout(timer);
       expiryTimers.delete(ctx.extra);
