@@ -4,6 +4,7 @@ import {
   createHttpApp,
   installProcessHandlers,
   listen,
+  listenMetrics,
   runClustered,
   setupApiDocs,
 } from '@platform/bootstrap';
@@ -37,6 +38,7 @@ async function bootstrap(): Promise<void> {
     connectKafkaConsumer(app, { groupId: gatewayConfig.parse().kafkaGroupId });
     setupApiDocs(app, GATEWAY_API_DOCS);
     await app.startAllMicroservices();
+    await listenMetrics(app);
     await listen(app);
   } catch (error) {
     // Close what init already opened (Redis, gRPC channels, Kafka, sockets) before exiting.

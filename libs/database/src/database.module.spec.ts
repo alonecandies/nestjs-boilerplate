@@ -26,8 +26,12 @@ vi.mock('./migrator/run-migrations.js', () => ({
   runMigrations: vi.fn(async () => ({ sets: [], total: 0, applied: 0 })),
 }));
 // HealthContributor is an abstract marker class; mocking the barrel keeps this unit test free of
-// observability's module graph (pino, prom-client, OpenTelemetry).
-vi.mock('@platform/observability', () => ({ HealthContributor: class HealthContributor {} }));
+// observability's module graph (pino, prom-client, OpenTelemetry). DatabaseModule registers the
+// db_pool_* gauges (PoolUsage); their scrape-time collect never runs here.
+vi.mock('@platform/observability', () => ({
+  HealthContributor: class HealthContributor {},
+  getOrCreateGauge: () => undefined,
+}));
 
 const items = pgTable('items', { id: uuid().primaryKey(), name: text().notNull() });
 const schema = { items };

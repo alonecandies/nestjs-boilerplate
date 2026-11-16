@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { BILLING_GRPC_PACKAGE } from '@domain/billing-contracts';
 import { Logger } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
-import { createServiceApp, listen } from '@platform/bootstrap';
+import { createServiceApp, listen, listenMetrics } from '@platform/bootstrap';
 import { withTimeout } from '@platform/common';
 import { flushLogs } from '@platform/observability';
 import { connectGrpcServer } from '@platform/transport';
@@ -15,7 +15,7 @@ const logger = new Logger('Bootstrap');
 let app: NestFastifyApplication | undefined;
 
 try {
-  // HTTP (PORT, default 3003 via .env) serves only /health/* and /metrics: the Stripe webhook is
+  // HTTP (PORT, default 3003 via .env) serves only /health/* (/metrics: METRICS_PORT): the Stripe webhook is
   // received by the gateway (raw body) and forwarded over gRPC, so no raw-body parser here.
   // createServiceApp also installs the process safety nets and SIGTERM/SIGINT → graceful
   // shutdown: gRPC health NOT_SERVING → HTTP + gRPC drain (an in-flight webhook transaction
@@ -25,6 +25,7 @@ try {
   connectGrpcServer(app, [BILLING_GRPC_PACKAGE]);
   await app.startAllMicroservices();
   // Last: the HTTP port (readiness probes) only opens once gRPC accepts calls.
+  await listenMetrics(app);
   await listen(app);
 } catch (error) {
   // Fail fast: a service that cannot reach its dependencies must not look healthy. The

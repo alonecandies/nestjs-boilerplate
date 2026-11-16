@@ -39,6 +39,7 @@ describe('monolith .env.example', () => {
   it('pins the app identity, port, consumer group and boot-time migrations', () => {
     const config = validateAllEnv(env, NAMESPACES);
     expect(config.app).toMatchObject({ serviceName: 'monolith', port: 3000 });
+    expect(config.observability.metricsPort).toBe(9464);
     expect(config.kafka.groupId).toBe('monolith');
     expect(config.monolith.kafkaGroupId).toBe('monolith');
     expect(config.database.runMigrations).toBe(true);

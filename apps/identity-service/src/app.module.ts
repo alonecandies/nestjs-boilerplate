@@ -16,7 +16,7 @@ import { DATABASE_MIGRATIONS } from './database.migrations.js';
  * identity-service: `identity.v1.AuthService` + `identity.v1.UsersService` over gRPC (served by
  * `connectGrpcServer` in main.ts), backed by Postgres (users, sessions), Redis (access-token
  * denylist, cron lock) and Kafka (produces `identity.user-registered.v1`). The HTTP port only
- * serves `/health/*` and `/metrics`.
+ * serves `/health/*` (`/metrics` is on `METRICS_PORT`).
  */
 @Module({
   imports: [

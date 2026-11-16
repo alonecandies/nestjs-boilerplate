@@ -53,6 +53,7 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       logLevel: 'info',
       logPretty: true,
       metricsEnabled: true,
+      metricsPort: 9464,
       metricsBearerToken: undefined,
       observe: { enabled: false, appKey: undefined, appSecret: undefined, serviceId: 'app' },
     });

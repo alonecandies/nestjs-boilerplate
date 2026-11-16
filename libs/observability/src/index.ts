@@ -39,11 +39,7 @@ export {
   resolveRpcRequestId,
 } from './logging/request-id.js';
 export { createStandaloneLogger } from './logging/standalone-logger.js';
-export {
-  enableClusterMetricsAggregation,
-  enableClusterMetricsWorker,
-  requestClusterMetrics,
-} from './metrics/cluster-metrics.js';
+export { collectClusterMetrics, enableClusterMetricsWorker } from './metrics/cluster-metrics.js';
 export {
   type HttpMetricLabels,
   HttpMetricsHook,
@@ -51,13 +47,27 @@ export {
   httpMetricLabels,
 } from './metrics/http-metrics.hook.js';
 export {
+  getOrCreateCounter,
+  getOrCreateGauge,
+  getOrCreateHistogram,
+} from './metrics/metric-registry.js';
+export {
   HTTP_DURATION_BUCKETS,
   HTTP_METRIC_LABEL_NAMES,
   HTTP_REQUEST_DURATION_SECONDS,
   METRICS_PATH,
   UNMATCHED_ROUTE,
 } from './metrics/metrics.constants.js';
-export { MetricsController } from './metrics/metrics.controller.js';
+export { MetricsListener } from './metrics/metrics-listener.js';
+export {
+  METRICS_NOT_FOUND,
+  type MetricsRequest,
+  type MetricsScrape,
+  type MetricsServer,
+  type MetricsServerOptions,
+  scrapeMetrics,
+  startMetricsServer,
+} from './metrics/metrics-server.js';
 export {
   CLS_CORRELATION_ID,
   CLS_USER_ID,

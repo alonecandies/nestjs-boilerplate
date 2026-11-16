@@ -3,8 +3,9 @@ import { availableParallelism } from 'node:os';
 import type { LoggerService } from '@nestjs/common';
 import { computeBackoffDelay } from '@platform/common';
 import { appConfig } from '@platform/config';
-import { createStandaloneLogger, enableClusterMetricsAggregation } from '@platform/observability';
+import { createStandaloneLogger } from '@platform/observability';
 import { once, times } from 'lodash-es';
+import { startClusterPrimaryMetrics } from './primary-metrics.js';
 
 export interface RunClusteredOptions {
   /** Worker count; `0` = one per core. Default `CLUSTER_WORKERS` (`appConfig.clusterWorkers`). */
@@ -160,7 +161,7 @@ export class ClusterSupervisor {
  * Runs `bootstrap` in a node:cluster (vertical scaling on VMs / bare metal). With one worker —
  * the default, and the right choice under Kubernetes, which scales by pods — it simply awaits
  * `bootstrap()` in this process. Otherwise the primary only supervises (it never boots Nest) and
- * aggregates `/metrics` across workers; each worker runs `bootstrap()`.
+ * serves the aggregated `/metrics` of all workers on `METRICS_PORT`; each worker runs `bootstrap()`.
  *
  * Config is read with `appConfig.parse()` (no Nest in the primary). Start with
  * `node --import ./dist/instrument.js dist/main.js`: workers inherit `execArgv`, so each gets the
@@ -182,7 +183,8 @@ export async function runClustered(
     return;
   }
 
-  enableClusterMetricsAggregation();
+  // The primary serves the cluster-wide /metrics on METRICS_PORT; workers never bind it.
+  const metrics = await startClusterPrimaryMetrics();
   const supervisor = new ClusterSupervisor(
     {
       workers,
@@ -195,5 +197,9 @@ export async function runClustered(
     cluster,
     process,
   );
-  await supervisor.run();
+  try {
+    await supervisor.run();
+  } finally {
+    await metrics?.close();
+  }
 }

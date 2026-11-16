@@ -1,12 +1,13 @@
 import type { INestApplication, INestApplicationContext, INestMicroservice } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { CustomStrategy, KafkaOptions } from '@nestjs/microservices';
+import type { CustomStrategy } from '@nestjs/microservices';
 import { type GrpcConfig, grpcConfig, type KafkaConfig, kafkaConfig } from '@platform/config';
 import type { GrpcPackageSpec } from '@platform/contracts';
 import {
   createGrpcServerStrategy,
   type GrpcServerOptionsExtras,
 } from '../grpc/grpc-server.options.js';
+import { InstrumentedServerKafka } from '../kafka/instrumented-server-kafka.js';
 import { createKafkaServerOptions, type KafkaServerOptionsExtras } from '../kafka/kafka.options.js';
 
 interface ConfigNamespaceLike<T> {
@@ -65,14 +66,17 @@ export function connectGrpcServer(
  * Attaches a Kafka consumer (consumer group `groupId`, default `kafkaConfig.groupId`) to a hybrid
  * app. Handlers are `@KafkaEventPattern()` methods on `@KafkaConsumerController()` controllers.
  * Same `inheritAppConfig` and ordering rules as `connectGrpcServer`. Every subscribed topic must
- * exist, because auto-creation is off.
+ * exist, because auto-creation is off. It connects `InstrumentedServerKafka` (Nest's Kafka server plus the
+ * `kafka_consumer_lag` gauge) as a custom strategy; `transportId` stays `Transport.KAFKA`.
  */
 export function connectKafkaConsumer(
   app: INestApplication,
   options: KafkaServerOptionsExtras = {},
 ): INestMicroservice {
   const cfg = resolveConfig<KafkaConfig>(app, kafkaConfig);
-  return app.connectMicroservice<KafkaOptions>(createKafkaServerOptions(cfg, options), {
-    inheritAppConfig: true,
-  });
+  const { options: kafkaOptions } = createKafkaServerOptions(cfg, options);
+  return app.connectMicroservice<CustomStrategy>(
+    { strategy: new InstrumentedServerKafka(kafkaOptions) },
+    { inheritAppConfig: true },
+  );
 }

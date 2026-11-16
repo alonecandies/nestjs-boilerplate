@@ -8,19 +8,19 @@ Everything here is wired by one global module, `ObservabilityModule.forRoot()` f
 
 ## Overview
 
-| Signal           | Produced by                                                  | Where it goes                                              | Local UI                                    |
-| ---------------- | ------------------------------------------------------------ | ---------------------------------------------------------- | ------------------------------------------- |
-| Logs             | pino (nestjs-pino), JSON on stdout                           | container stdout → Grafana Alloy → Loki (`logs` profile)   | Grafana Explore, `http://localhost:3300`    |
-| Metrics          | prom-client (`@willsoto/nestjs-prometheus`), `GET /metrics`  | scraped by Prometheus every 15 s (`observability` profile) | Grafana dashboard, `http://localhost:3300`  |
-| Traces           | OpenTelemetry Node SDK, preloaded by `src/instrument.ts`     | OTLP/HTTP → Jaeger 2.20 (`observability` profile)          | Jaeger `http://localhost:16686`, or Grafana |
-| Health           | `@nestjs/terminus`, `GET /health/live` + `GET /health/ready` | orchestrator probes, Docker `HEALTHCHECK`, k6 `setup()`    | curl                                        |
-| Observe (opt-in) | `@nestjs/observe`, only when its credentials are set         | the Observe backend                                        | Observe                                     |
+| Signal           | Produced by                                                                          | Where it goes                                              | Local UI                                    |
+| ---------------- | ------------------------------------------------------------------------------------ | ---------------------------------------------------------- | ------------------------------------------- |
+| Logs             | pino (nestjs-pino), JSON on stdout                                                   | container stdout → Grafana Alloy → Loki (`logs` profile)   | Grafana Explore, `http://localhost:3300`    |
+| Metrics          | prom-client (`@willsoto/nestjs-prometheus`), `GET /metrics` on `METRICS_PORT` (9464) | scraped by Prometheus every 15 s (`observability` profile) | Grafana dashboard, `http://localhost:3300`  |
+| Traces           | OpenTelemetry Node SDK, preloaded by `src/instrument.ts`                             | OTLP/HTTP → Jaeger 2.20 (`observability` profile)          | Jaeger `http://localhost:16686`, or Grafana |
+| Health           | `@nestjs/terminus`, `GET /health/live` + `GET /health/ready`                         | orchestrator probes, Docker `HEALTHCHECK`, k6 `setup()`    | curl                                        |
+| Observe (opt-in) | `@nestjs/observe`, only when its credentials are set                                 | the Observe backend                                        | Observe                                     |
 
 ```mermaid
 flowchart LR
   subgraph app["Nest process (any app)"]
     P[pino logger] -->|stdout JSON| OUT[(stdout)]
-    M[prom-client registry] --> ME["GET /metrics"]
+    M[prom-client registry] --> ME["GET /metrics :9464"]
     T[OTel NodeSDK] -->|OTLP http/protobuf| J
     H[terminus] --> HE["GET /health/live, /health/ready"]
   end
@@ -150,11 +150,26 @@ not logged (`includePayload: false`).
 
 ### What is exported
 
-| Metric                                                                | Type      | Labels                           | Source                                                                                                 |
-| --------------------------------------------------------------------- | --------- | -------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `http_request_duration_seconds` (`_bucket`, `_sum`, `_count`)         | histogram | `method`, `route`, `status_code` | Fastify `onResponse` hook (`HttpMetricsHook`); buckets 5 ms, 10, 25, 50, 100, 250, 500 ms, 1, 2.5, 5 s |
-| `process_*`, `nodejs_*` (CPU, RSS, heap, GC, event-loop lag, handles) | various   | —                                | prom-client default metrics (event-loop monitoring precision 10 ms)                                    |
-| `billing_checkout_paid_without_currency_total`                        | counter   | —                                | billing: paid Stripe Checkout Sessions left pending because no currency was known                      |
+| Metric                                                                | Type      | Labels                                     | Source                                                                                                                                                                                                                                                                                                                                                                                                    |
+| --------------------------------------------------------------------- | --------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `http_request_duration_seconds` (`_bucket`, `_sum`, `_count`)         | histogram | `method`, `route`, `status_code`           | Fastify `onResponse` hook (`HttpMetricsHook`); buckets 5 ms, 10, 25, 50, 100, 250, 500 ms, 1, 2.5, 5 s                                                                                                                                                                                                                                                                                                    |
+| `process_*`, `nodejs_*` (CPU, RSS, heap, GC, event-loop lag, handles) | various   | —                                          | prom-client default metrics (event-loop monitoring precision 10 ms)                                                                                                                                                                                                                                                                                                                                       |
+| `grpc_server_handled_total`                                           | counter   | `grpc_service`, `grpc_method`, `grpc_code` | every `@GrpcController()` (`GrpcMetricsInterceptor`); `grpc_code` is the grpc status name the controller's filter sends (`OK`, `NOT_FOUND`, …)                                                                                                                                                                                                                                                            |
+| `grpc_server_handling_seconds` (`_bucket`, `_sum`, `_count`)          | histogram | `grpc_service`, `grpc_method`              | same interceptor; HTTP buckets                                                                                                                                                                                                                                                                                                                                                                            |
+| `grpc_client_handled_total`                                           | counter   | `grpc_service`, `grpc_method`, `grpc_code` | every `grpcCall`; `grpc_code` is the grpc status name, `DEADLINE_EXCEEDED` for the local deadline, `CIRCUIT_OPEN` when the breaker rejected without sending, `UNKNOWN` otherwise                                                                                                                                                                                                                          |
+| `grpc_client_handling_seconds` (`_bucket`, `_sum`, `_count`)          | histogram | `grpc_service`, `grpc_method`              | same function; HTTP buckets                                                                                                                                                                                                                                                                                                                                                                               |
+| `grpc_client_circuit_breaker_state`                                   | gauge     | `upstream`, `state`                        | every `GrpcCircuitBreakers` (one per `GrpcClientsModule.register()`); one-hot, 1 for the current `state` (`closed`, `half_open`, `open`), 0 for the other two; alert on `grpc_client_circuit_breaker_state{state="open"} == 1`                                                                                                                                                                            |
+| `kafka_consumer_messages_total`                                       | counter   | `topic`, `outcome`                         | every `@KafkaConsumerController()` message. `success`: the handler completed, after in-process retries if any (`KafkaContextInterceptor`); `dead_letter`: published to `<topic>.dlq` (`KafkaDeadLetterFilter`); `redelivery`: left for kafkajs to redeliver, a `KafkaRetriableException` or a failed DLQ publish                                                                                          |
+| `kafka_consumer_retries_total`                                        | counter   | `topic`                                    | in-process retries of a failing handler (`KafkaRetryInterceptor`), one per retry                                                                                                                                                                                                                                                                                                                          |
+| `kafka_consumer_lag`                                                  | gauge     | `group`, `topic`, `partition`              | kafkajs `END_BATCH_PROCESS` `offsetLag`, set by `InstrumentedServerKafka` at the end of each batch: it holds the last batch's value while a partition is idle or stuck                                                                                                                                                                                                                                    |
+| `db_pool_connections_in_use`                                          | gauge     | `pool`                                     | `PoolUsage` of the runtime postgres.js pool (`pool="runtime"`): operations in flight, capped at the pool size. postgres.js exposes no pool statistics, so an operation is a top-level query from the moment it is awaited until it settles, or a `begin()` transaction for its whole callback (queries inside it are not counted again); `reserve()`, `listen()` and the migration client are not counted |
+| `db_pool_operations_waiting`                                          | gauge     | `pool`                                     | operations beyond the pool size (`max(0, outstanding - max)`): they wait for, or are pipelined behind, another operation on the same connection. These are operations, not connections. Sustained `> 0`: raise `DATABASE_POOL_MAX` or shorten transactions                                                                                                                                                |
+| `db_pool_connections_max`                                             | gauge     | `pool`                                     | the configured pool size (`DATABASE_POOL_MAX`)                                                                                                                                                                                                                                                                                                                                                            |
+| `billing_checkout_paid_without_currency_total`                        | counter   | —                                          | billing: paid Stripe Checkout Sessions left pending because no currency was known                                                                                                                                                                                                                                                                                                                         |
+
+The `db_pool_*` gauges describe the app's client pool: behind PgBouncer (program spec §16, sharding
+design) they are the demand towards PgBouncer, whose `SHOW POOLS` columns `cl_waiting` and `sv_active` are the
+server-side view.
 
 Label rules:
 
@@ -168,7 +183,9 @@ Label rules:
 - GraphQL over HTTP shows up as `POST /graphql`. WebSocket, gRPC and Kafka traffic is not HTTP and
   is **not** in this histogram. `/metrics` itself is excluded; `/health/*` probes are counted.
 
-There are no app-level gRPC, Kafka, Redis or database metrics yet. Postgres and Redis are covered
+`grpc_service` is the fully qualified proto service name on both sides (`billing.v1.BillingService`),
+read from the grpc-js path on the server and from the adapter's `operation` on the client. There are
+no app-level Redis or database metrics yet. Postgres and Redis are covered
 by `postgres-exporter` and `redis-exporter` in the `observability` profile.
 
 Add your own with the re-exported helpers:
@@ -188,31 +205,33 @@ Keep label values bounded (enums, route templates), never ids or emails.
 
 ### `GET /metrics` and its protection
 
-`/metrics` is served on the **same port as the API** (VERSION_NEUTRAL, so no `/v1` prefix;
-`@Public()`, so auth guards skip it; the throttler and maintenance mode skip it too).
+`/metrics` is served by a separate `node:http` listener on `METRICS_PORT` (default `9464`; host dev
+`9464`-`9467`, see each `apps/*/.env.example`), **never on the API port**, which answers 404 for
+it. The listener bypasses the API's auth guards, throttler, maintenance mode and logs by
+construction. `METRICS_PORT` must differ from `PORT` and a port already in use fails the boot.
 
 | Setting                                    | Effect                                                                                                                                                                                           |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `METRICS_ENABLED=false`                    | `/metrics` answers 404 and default metrics are not collected.                                                                                                                                    |
+| `METRICS_ENABLED=false`                    | No metrics listener is opened and default metrics are not collected.                                                                                                                             |
 | `METRICS_BEARER_TOKEN=<at least 16 chars>` | Scrapes must send `Authorization: Bearer <token>` (compared in constant time). A missing or wrong token gets **404**, the same as a disabled endpoint, so the route's existence is not revealed. |
 | neither                                    | Open (the local default).                                                                                                                                                                        |
 
 ```bash
-curl -s http://localhost:3000/metrics | grep '^http_request_duration_seconds_count' | head
-curl -s -H "Authorization: Bearer $METRICS_BEARER_TOKEN" http://localhost:3000/metrics | head
+curl -s http://localhost:9464/metrics | grep '^http_request_duration_seconds_count' | head
+curl -s -H "Authorization: Bearer $METRICS_BEARER_TOKEN" http://localhost:9464/metrics | head
 ```
 
-In production, **never route `/metrics` (or `/docs`) through the public ingress**: scrape it from
-inside the cluster, and set `METRICS_BEARER_TOKEN` as defence in depth (Prometheus:
+In production, **never publish `METRICS_PORT` outside the cluster network** (and never route `/docs`
+through the public ingress): scrape it from inside the cluster, and set `METRICS_BEARER_TOKEN` as defence in depth (Prometheus:
 `authorization: { credentials_file: … }` on the scrape job). See [SECURITY.md](SECURITY.md).
 
 ### Cluster mode
 
 With `CLUSTER_WORKERS` > 1 (monolith and gateway use `runClustered()`), each worker has its own
-registry, and the primary load-balances connections, so a plain scrape would return one random
-worker's counters. Instead, the worker that receives the scrape asks the primary over IPC, and the
-primary returns the sum of every worker's registry (prom-client `AggregatorRegistry`). Same port,
-no extra server. If the primary does not answer within 3 s the worker serves its own registry.
+registry, so a worker's `/metrics` would only show its own counters. Instead, the primary serves the
+aggregate on `METRICS_PORT`: it asks every worker over IPC and returns the sum of every worker's
+registry (prom-client `AggregatorRegistry`). Workers never bind the metrics port, and the primary
+refuses to start when `METRICS_PORT` equals `PORT`.
 
 ### Scrape configuration (local)
 
@@ -221,12 +240,12 @@ retention 7 days):
 
 | Job                                         | Targets                                                                                                                                                                        | `service` label               |
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
-| `nestjs-apps`                               | DNS service discovery of `monolith`, `gateway`, `identity-service`, `notifications-service`, `billing-service` on port 3000; one target per replica, so `--scale` is picked up | the compose service name      |
-| `host-apps`                                 | `host.docker.internal:3000`…`3003` (apps started with `bun run dev:*`)                                                                                                         | `host:3000` … `host:3003`     |
+| `nestjs-apps`                               | DNS service discovery of `monolith`, `gateway`, `identity-service`, `notifications-service`, `billing-service` on port 9464; one target per replica, so `--scale` is picked up | the compose service name      |
+| `host-apps`                                 | `host.docker.internal:9464`…`9467` (apps started with `bun run dev:*`)                                                                                                         | `host:9464` … `host:9467`     |
 | `postgres`, `redis`, `jaeger`, `prometheus` | exporters and the tools themselves                                                                                                                                             | `postgres`, `redis`, `jaeger` |
 
-When the API runs in compose, host port 3000 is that container, so `service="host:3000"`
-duplicates it. Deselect it in the dashboard's `service` variable.
+Containers never publish `9464`, so the `host-apps` targets cannot duplicate the in-network
+`nestjs-apps` job.
 
 ## Grafana dashboard
 
@@ -414,6 +433,7 @@ except the `OTEL_*` variables that only `otel.ts` reads. Full catalogue: [CONFIG
 | `LOG_LEVEL`                                                                                                                                              | `info`                                               | `fatal` `error` `warn` `info` `debug` `trace` `silent`                 |
 | `LOG_PRETTY`                                                                                                                                             | `true` only in development                           | ~5x slower; needs the `pino-pretty` devDependency                      |
 | `METRICS_ENABLED`                                                                                                                                        | `true`                                               | `false` → `/metrics` 404, no default metrics                           |
+| `METRICS_PORT`                                                                                                                                           | `9464`                                               | separate listener; must differ from `PORT`; `0` = OS-picked            |
 | `METRICS_BEARER_TOKEN`                                                                                                                                   | unset                                                | min 16 chars; wrong/missing token → 404                                |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`                                                                                                                            | unset                                                | setting it turns tracing on (`http://localhost:4318` for local Jaeger) |
 | `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`                                                                                                                     | unset                                                | traces-only override; also turns tracing on                            |
@@ -429,11 +449,7 @@ except the `OTEL_*` variables that only `otel.ts` reads. Full catalogue: [CONFIG
 
 ## Known follow-ups
 
-- **Separate metrics listener.** `/metrics` shares the API port today, so its protection relies on
-  ingress routing plus `METRICS_BEARER_TOKEN`. A dedicated internal port would remove it from the
-  public surface entirely.
-- **No app-level gRPC, Kafka, cache or database metrics** (call rates, breaker state, consumer lag,
-  pool usage). `GrpcCircuitBreakers.states()` exists and is a natural first gauge.
+- **Cache metrics** (hit/miss of `AppCacheService`) are not exported yet.
 - **Tracing gaps** for NestJS 12, graphql 17 and postgres.js: rely on `@Span()` / `@Traceable()`
   until upstream instrumentations support them.
 - **Jaeger** stays on 2.20 until Grafana's Jaeger datasource supports the 2.21+ API.

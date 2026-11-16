@@ -4,6 +4,7 @@ import {
   createHttpApp,
   installProcessHandlers,
   listen,
+  listenMetrics,
   runClustered,
   setupApiDocs,
 } from '@platform/bootstrap';
@@ -37,6 +38,7 @@ async function bootstrap(): Promise<void> {
     connectKafkaConsumer(app, { groupId: monolithConfig.parse().kafkaGroupId });
     setupApiDocs(app, MONOLITH_API_DOCS);
     await app.startAllMicroservices();
+    await listenMetrics(app);
     await listen(app);
   } catch (error) {
     // Close what init already opened (pools, Redis, Kafka, sockets) before the process exits.

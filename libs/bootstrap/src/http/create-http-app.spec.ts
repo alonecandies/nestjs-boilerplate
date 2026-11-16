@@ -14,6 +14,7 @@ import { CorrelationIdMiddleware, HTTP_HEADERS, isUuidV7 } from '@platform/commo
 import { AppConfigModule, appConfig, observabilityConfig } from '@platform/config';
 import {
   HealthContributor,
+  MetricsListener,
   ObservabilityModule,
   RequestContextService,
 } from '@platform/observability';
@@ -31,6 +32,12 @@ class PingController {
   @Get()
   ping(): { requestId: string | undefined } {
     return { requestId: this.context.requestId };
+  }
+
+  /** Above the 1 KiB compression threshold. */
+  @Get('large')
+  large(): { padding: string } {
+    return { padding: 'x'.repeat(4_096) };
   }
 }
 
@@ -101,10 +108,12 @@ describe('createHttpApp (smoke, no infrastructure)', () => {
     await app.inject({ method: 'GET', url: '/v1/ping' });
     await app.inject({ method: 'GET', url: '/nope/42' });
 
-    const response = await app.inject({ method: 'GET', url: '/metrics' });
-    expect(response.statusCode).toBe(200);
-    expect(response.headers['content-type']).toContain('text/plain');
-    const body = response.body;
+    // /metrics is not served on the API port (METRICS_PORT has its own listener).
+    expect((await app.inject({ method: 'GET', url: '/metrics' })).statusCode).toBe(404);
+    const scrape = await app.get(MetricsListener, { strict: false }).scrape();
+    expect(scrape.status).toBe(200);
+    expect(scrape.contentType).toContain('text/plain');
+    const body = scrape.body;
     expect(body).toMatch(
       /http_request_duration_seconds_count\{method="GET",route="\/v1\/ping",status_code="200"\} \d+/,
     );
@@ -119,7 +128,7 @@ describe('createHttpApp (smoke, no infrastructure)', () => {
   it('applies helmet and compression', async () => {
     const response = await app.inject({
       method: 'GET',
-      url: '/metrics',
+      url: '/v1/ping/large',
       headers: { 'accept-encoding': 'br' },
     });
     expect(response.headers['content-security-policy']).toContain("default-src 'self'");
@@ -179,7 +188,7 @@ describe('readiness over HTTP', () => {
   });
 });
 
-describe('GET /metrics with METRICS_BEARER_TOKEN', () => {
+describe('the metrics listener with METRICS_BEARER_TOKEN', () => {
   const TOKEN = 'scrape-token-0123456789abcdef';
 
   it('answers 404 without the right bearer token and 200 with it', async () => {
@@ -188,18 +197,20 @@ describe('GET /metrics with METRICS_BEARER_TOKEN', () => {
     try {
       await app.init();
       await app.getHttpAdapter().getInstance().ready();
-      const scrape = (authorization?: string) =>
-        app.inject({
-          method: 'GET',
-          url: '/metrics',
-          ...(authorization === undefined ? {} : { headers: { authorization } }),
-        });
-      expect((await scrape()).statusCode).toBe(404);
-      expect((await scrape('Bearer wrong-token-0123456789abcdef')).statusCode).toBe(404);
-      expect((await scrape(TOKEN)).statusCode).toBe(404);
-      const ok = await scrape(`Bearer ${TOKEN}`);
-      expect(ok.statusCode).toBe(200);
+      const listener = app.get(MetricsListener, { strict: false });
+      expect((await listener.scrape()).status).toBe(404);
+      expect((await listener.scrape('Bearer wrong-token-0123456789abcdef')).status).toBe(404);
+      expect((await listener.scrape(TOKEN)).status).toBe(404);
+      const ok = await listener.scrape(`Bearer ${TOKEN}`);
+      expect(ok.status).toBe(200);
       expect(ok.body).toContain('process_resident_memory_bytes');
+      // Even with the right token, the API port never serves /metrics.
+      const api = await app.inject({
+        method: 'GET',
+        url: '/metrics',
+        headers: { authorization: `Bearer ${TOKEN}` },
+      });
+      expect(api.statusCode).toBe(404);
     } finally {
       delete process.env['METRICS_BEARER_TOKEN'];
       await app.close();

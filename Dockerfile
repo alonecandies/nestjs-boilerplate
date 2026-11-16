@@ -85,11 +85,14 @@ RUN --mount=type=cache,id=bun-install-cache,target=/var/cache/bun,sharing=locked
 FROM toolchain AS assemble
 ARG APP
 ARG PRUNE_NODE_MODULES=true
+# File tracing (only what dist/main.js, instrument.js and migrate.js import) + a load check of
+# dist/app.module.js. `--build-arg TRACE_FILES=false` copies every closure package whole, as before.
+ARG TRACE_FILES=true
 COPY --from=prod-deps /repo /out
-COPY scripts/docker/assemble-image.mjs /usr/local/lib/assemble-image.mjs
+COPY scripts/docker/assemble-image.mjs scripts/docker/trace-imports.mjs /usr/local/lib/
 RUN --mount=type=bind,from=build,source=/repo,target=/build \
     node /usr/local/lib/assemble-image.mjs --app "${APP}" --build /build --out /out \
-      --prune "${PRUNE_NODE_MODULES}"
+      --prune "${PRUNE_NODE_MODULES}" --trace "${TRACE_FILES}" --verify-load "${TRACE_FILES}"
 
 # Runtime notes (both runtime stages):
 # - UV_THREADPOOL_SIZE (libuv pool: Argon2id hashing, zlib, fs, dns.lookup) defaults to 4. Keep it

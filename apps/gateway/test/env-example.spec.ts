@@ -39,6 +39,7 @@ describe('gateway .env.example', () => {
   it('pins the app identity, port, push consumer group and upstream targets', () => {
     const config = validateAllEnv(env, NAMESPACES);
     expect(config.app).toMatchObject({ serviceName: 'gateway', port: 3000 });
+    expect(config.observability.metricsPort).toBe(9464);
     expect(config.kafka.groupId).toBe('gateway-push');
     expect(config.gateway.kafkaGroupId).toBe('gateway-push');
     expect(config.identityGrpcClient.url).toBe('localhost:50051');

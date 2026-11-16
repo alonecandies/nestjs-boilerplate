@@ -32,7 +32,8 @@ x-env-base: &env-base
   LOG_LEVEL: ${DOCKER_LOG_LEVEL:-info}
   LOG_PRETTY: "false"
   HOST: 0.0.0.0
-  PORT: "3000" # every container serves HTTP (API or health + metrics) on 3000
+  PORT: "3000" # every container serves HTTP (API or health) on 3000
+  METRICS_PORT: "9464" # /metrics listener; Prometheus scrapes it in-network, never published
   CLUSTER_WORKERS: "1" # scale with replicas (`--scale`), not node:cluster, in containers
   SHUTDOWN_TIMEOUT_MS: "15000" # < stop_grace_period
   METRICS_ENABLED: "true"

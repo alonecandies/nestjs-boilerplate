@@ -1,10 +1,10 @@
-# Prometheus v3: scrapes every NestJS app's GET /metrics (prom-client via @willsoto/nestjs-prometheus;
+# Prometheus v3: scrapes every NestJS app's GET /metrics on METRICS_PORT (prom-client;
 # `http_request_duration_seconds{method,route,status_code}` + Node default metrics) and the exporters.
 #
 # Apps are found with DNS service discovery against Docker's embedded DNS: one A record per running
 # replica, so `docker compose up --scale identity-service=3` is picked up automatically and services
 # whose profile is not running simply yield no targets (instead of permanently-down static targets).
-# Every app container serves HTTP (health + metrics) on port 3000 inside the network.
+# Every app container serves /metrics on its own listener, port 9464 (METRICS_PORT), inside the network.
 # Prometheus sets the `service` label from the DNS name; the apps must not add their own.
 global:
   scrape_interval: 15s
@@ -28,7 +28,7 @@ scrape_configs:
           - notifications-service
           - billing-service
         type: A
-        port: 3000
+        port: 9464
         refresh_interval: 15s
     relabel_configs:
       - source_labels: [__meta_dns_name]
@@ -37,18 +37,18 @@ scrape_configs:
         target_label: instance
 
   # Apps started on the host (`bun run dev:*`), reached through host.docker.internal
-  # (Docker Desktop built-in; `extra_hosts: host-gateway` in compose for Linux). Default host ports:
-  # 3000 monolith|gateway, 3001 identity, 3002 notifications, 3003 billing. Targets that are not
-  # running are simply `down`. NOTE: when the API runs IN compose, host port 3000 is that container
-  # (published), so service="host:3000" then duplicates it — filter it out in Grafana.
+  # (Docker Desktop built-in; `extra_hosts: host-gateway` in compose for Linux). Default host metrics
+  # ports (METRICS_PORT in apps/*/.env.example): 9464 monolith|gateway, 9465 identity, 9466
+  # notifications, 9467 billing. Targets that are not running are simply `down`. Containers never
+  # publish 9464, so these targets cannot duplicate the in-network `nestjs-apps` job.
   - job_name: host-apps
     metrics_path: /metrics
     static_configs:
       - targets:
-          - host.docker.internal:3000
-          - host.docker.internal:3001
-          - host.docker.internal:3002
-          - host.docker.internal:3003
+          - host.docker.internal:9464
+          - host.docker.internal:9465
+          - host.docker.internal:9466
+          - host.docker.internal:9467
     relabel_configs:
       - source_labels: [__address__]
         regex: "[^:]+:(\\d+)"

@@ -22,7 +22,7 @@ import { KafkaHealthIndicator, KafkaProducerModule } from '@platform/transport';
  * - Kafka consumers: `identity.user-registered.v1` → welcome, `billing.payment-succeeded.v1` →
  *   receipt (group pinned in main.ts), producing `notifications.notification-created.v1`;
  * - BullMQ `mail` worker (SMTP) and the daily digest cron (`@WithLock`, one replica).
- * The HTTP port only serves `/health/*` and `/metrics`.
+ * The HTTP port only serves `/health/*` (`/metrics` is on `METRICS_PORT`).
  */
 @Module({
   imports: [

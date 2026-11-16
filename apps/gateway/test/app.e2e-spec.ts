@@ -18,6 +18,7 @@ import {
 import { passwordConfig, refreshTokenConfig } from '@domain/identity';
 import { ConfigService } from '@nestjs/config';
 import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
+import { MetricsListener } from '@platform/observability';
 import { PARAMS_PROVIDER_TOKEN, type Params } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createGatewayE2eApp, type GatewayE2e } from './support/gateway-e2e-app.js';
@@ -93,12 +94,17 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
       expect(Object.keys(response.json<{ details: object }>().details)).toEqual(['redis']);
     });
 
-    it('GET /metrics → Prometheus text with the HTTP latency histogram', async () => {
+    it('GET /metrics is not served on the API port (METRICS_PORT has its own listener)', async () => {
+      expect((await inject({ method: 'GET', url: '/metrics' })).statusCode).toBe(404);
+    });
+
+    it('the metrics listener answers with Prometheus text and the HTTP latency histogram', async () => {
       await inject({ method: 'GET', url: '/health/live' });
-      const response = await inject({ method: 'GET', url: '/metrics' });
-      expect(response.statusCode).toBe(200);
-      expect(response.headers['content-type']).toMatch(/^text\/plain/);
-      expect(response.body).toContain('http_request_duration_seconds_bucket');
+      const scrape = await e2e.app.get(MetricsListener, { strict: false }).scrape();
+      expect(scrape.status).toBe(200);
+      expect(scrape.contentType).toMatch(/^text\/plain/);
+      expect(scrape.body).toContain('# TYPE http_request_duration_seconds histogram');
+      expect(scrape.body).toContain('process_cpu_user_seconds_total');
     });
 
     it('GET /openapi.json documents the whole edge API under /v1 (ops routes excluded)', async () => {

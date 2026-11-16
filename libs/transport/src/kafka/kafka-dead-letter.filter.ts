@@ -9,6 +9,7 @@ import { KafkaContext, KafkaRetriableException } from '@nestjs/microservices';
 import { isDomainException } from '@platform/common';
 import { defer, map, type Observable, throwError } from 'rxjs';
 import { errorTypeOf, sendToDeadLetter } from './dead-letter.js';
+import { recordKafkaOutcome } from './kafka-metrics.js';
 
 /**
  * Controller-scoped catch-all for Kafka consumers (`@UseFilters(KafkaDeadLetterFilter)`, or the
@@ -37,7 +38,9 @@ export class KafkaDeadLetterFilter implements RpcExceptionFilter<unknown> {
 
   catch(exception: unknown, host: ArgumentsHost): Observable<null> {
     const context = host.getType() === 'rpc' ? host.switchToRpc().getContext<unknown>() : undefined;
-    if (!(context instanceof KafkaContext) || exception instanceof KafkaRetriableException) {
+    if (!(context instanceof KafkaContext)) return throwError(() => exception);
+    if (exception instanceof KafkaRetriableException) {
+      recordKafkaOutcome(context.getTopic(), 'redelivery');
       return throwError(() => exception);
     }
     return defer(() => this.deadLetter(context, exception)).pipe(map(() => null));
@@ -47,6 +50,7 @@ export class KafkaDeadLetterFilter implements RpcExceptionFilter<unknown> {
     const source = `${context.getTopic()}[${context.getPartition()}]@${context.getMessage().offset}`;
     try {
       const record = await sendToDeadLetter(context, exception);
+      recordKafkaOutcome(context.getTopic(), 'dead_letter');
       const summary = `Dead-lettered ${source} to ${record.topic} (${errorTypeOf(exception)}): ${exception instanceof Error ? exception.message : String(exception)}`;
       // A rejected record (4xx-class, e.g. INVALID_EVENT) is a producer bug, not an outage here.
       if (isDomainException(exception) && exception.httpStatus < HttpStatus.INTERNAL_SERVER_ERROR) {
@@ -59,6 +63,7 @@ export class KafkaDeadLetterFilter implements RpcExceptionFilter<unknown> {
         `Could not dead-letter ${source}; leaving it for redelivery: ${String(publishError)}`,
         exception instanceof Error ? exception.stack : undefined,
       );
+      recordKafkaOutcome(context.getTopic(), 'redelivery');
       throw exception;
     }
   }

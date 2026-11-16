@@ -15,6 +15,7 @@ import { DomainValidationException, EntityNotFoundException, generateId } from '
 import { type GrpcConfig, grpcConfig } from '@platform/config';
 import { createEventEnvelope } from '@platform/contracts';
 import { MAIL_QUEUE, MailProcessor } from '@platform/mailer';
+import { MetricsListener } from '@platform/observability';
 import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import {
@@ -160,12 +161,17 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
       expect(response.json()).toMatchObject({ status: 'ok' });
     });
 
-    it('GET /metrics → Prometheus text (Node default metrics + HTTP latency histogram)', async () => {
-      const response = await app.inject({ method: 'GET', url: '/metrics' });
-      expect(response.statusCode).toBe(200);
-      expect(response.headers['content-type']).toContain('text/plain');
-      expect(response.body).toContain('process_cpu_user_seconds_total');
-      expect(response.body).toContain('# TYPE http_request_duration_seconds histogram');
+    it('GET /metrics is not served on the HTTP port (METRICS_PORT has its own listener)', async () => {
+      expect((await app.inject({ method: 'GET', url: '/metrics' })).statusCode).toBe(404);
+    });
+
+    it('the metrics listener answers with Node default metrics and the HTTP latency histogram', async () => {
+      await app.inject({ method: 'GET', url: '/health/live' });
+      const scrape = await app.get(MetricsListener, { strict: false }).scrape();
+      expect(scrape.status).toBe(200);
+      expect(scrape.contentType).toMatch(/^text\/plain/);
+      expect(scrape.body).toContain('process_cpu_user_seconds_total');
+      expect(scrape.body).toContain('# TYPE http_request_duration_seconds histogram');
     });
 
     it('GET /health/ready → checks exactly cassandra, redis and kafka (no broker → 503)', async () => {

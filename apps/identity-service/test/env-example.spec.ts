@@ -21,6 +21,7 @@ describe('identity-service .env.example', () => {
   it('pins the service identity, ports and boot-time migrations', () => {
     const config = validateAllEnv(env, [passwordConfig, refreshTokenConfig]);
     expect(config.app).toMatchObject({ serviceName: 'identity-service', port: 3001 });
+    expect(config.observability.metricsPort).toBe(9465);
     expect(config.grpc.url).toBe('0.0.0.0:50051');
     expect(config.kafka.groupId).toBe('identity-service');
     expect(config.database.runMigrations).toBe(true);

@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { IDENTITY_GRPC_PACKAGE } from '@domain/identity-contracts';
 import { Logger } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
-import { createServiceApp, listen } from '@platform/bootstrap';
+import { createServiceApp, listen, listenMetrics } from '@platform/bootstrap';
 import { withTimeout } from '@platform/common';
 import { flushLogs } from '@platform/observability';
 import { connectGrpcServer } from '@platform/transport';
@@ -15,7 +15,7 @@ const logger = new Logger('Bootstrap');
 let app: NestFastifyApplication | undefined;
 
 try {
-  // HTTP (PORT, default 3001 via .env) serves only /health/* and /metrics. createServiceApp also
+  // HTTP (PORT, default 3001 via .env) serves only /health/* (/metrics: METRICS_PORT). createServiceApp also
   // installs the process safety nets and SIGTERM/SIGINT → graceful shutdown: gRPC health
   // NOT_SERVING → HTTP + gRPC servers drain → Postgres/Redis/Kafka closed → exit 0, bounded by
   // SHUTDOWN_TIMEOUT_MS.
@@ -24,6 +24,7 @@ try {
   connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE]);
   await app.startAllMicroservices();
   // Last: the HTTP port (readiness probes) only opens once gRPC accepts calls.
+  await listenMetrics(app);
   await listen(app);
 } catch (error) {
   // Fail fast: a service that cannot reach its dependencies must not look healthy. The

@@ -12,6 +12,7 @@ import { z } from 'zod';
 import { DomainToGrpcExceptionFilter } from './domain-to-grpc-exception.filter.js';
 import { GrpcContextInterceptor } from './grpc-context.interceptor.js';
 import { GrpcController } from './grpc-controller.decorator.js';
+import { GrpcMetricsInterceptor } from './grpc-metrics.interceptor.js';
 import type { GrpcErrorResponse } from './grpc-status.mapping.js';
 import { ZodRpcValidationPipe } from './zod-rpc-validation.pipe.js';
 
@@ -92,13 +93,14 @@ describe('@GrpcController()', () => {
   @GrpcController()
   class DecoratedController {}
 
-  it('is a Nest controller with the gRPC filter and context interceptor at controller scope', () => {
+  it('is a Nest controller with the gRPC filter, context and metrics interceptors at controller scope', () => {
     expect(Reflect.getMetadata(PATH_METADATA, DecoratedController)).toBe('/');
     expect(Reflect.getMetadata(EXCEPTION_FILTERS_METADATA, DecoratedController)).toEqual([
       DomainToGrpcExceptionFilter,
     ]);
     expect(Reflect.getMetadata(INTERCEPTORS_METADATA, DecoratedController)).toEqual([
       GrpcContextInterceptor,
+      GrpcMetricsInterceptor,
     ]);
   });
 });
