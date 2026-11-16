@@ -15,17 +15,24 @@
 export * from './api/index.js';
 export { CreateTenantCommand } from './application/commands/create-tenant/create-tenant.command.js';
 export { CreateTenantHandler } from './application/commands/create-tenant/create-tenant.handler.js';
+export { LeaveTenantCommand } from './application/commands/leave-tenant/leave-tenant.command.js';
+export { LeaveTenantHandler } from './application/commands/leave-tenant/leave-tenant.handler.js';
 export { LoginCommand } from './application/commands/login/login.command.js';
 export { LogoutCommand } from './application/commands/logout/logout.command.js';
 export { PurgeExpiredSessionsCommand } from './application/commands/purge-expired-sessions/purge-expired-sessions.command.js';
 export { RefreshSessionCommand } from './application/commands/refresh-session/refresh-session.command.js';
 export { RegisterUserCommand } from './application/commands/register-user/register-user.command.js';
+export { RemoveMemberCommand } from './application/commands/remove-member/remove-member.command.js';
+export { RemoveMemberHandler } from './application/commands/remove-member/remove-member.handler.js';
 export { RenameTenantCommand } from './application/commands/rename-tenant/rename-tenant.command.js';
 export { RenameTenantHandler } from './application/commands/rename-tenant/rename-tenant.handler.js';
 // Application: commands/queries (for other in-process callers), persistence ports.
 export { StaffSwitchInCommand } from './application/commands/staff-switch-in/staff-switch-in.command.js';
 export { StaffSwitchOutCommand } from './application/commands/staff-switch-out/staff-switch-out.command.js';
 export { SwitchTenantCommand } from './application/commands/switch-tenant/switch-tenant.command.js';
+export { UpdateMemberRolesCommand } from './application/commands/update-member-roles/update-member-roles.command.js';
+export { UpdateMemberRolesHandler } from './application/commands/update-member-roles/update-member-roles.handler.js';
+export { toMemberContract } from './application/mappers/member.mapper.js';
 export {
   normalizeTenantName,
   toMyTenantContract,
@@ -46,6 +53,7 @@ export type {
 } from './application/persistence/invitations.repository.js';
 export { InvitationsRepository } from './application/persistence/invitations.repository.js';
 export type {
+  MemberRecord,
   MembershipRecord,
   NewMembership,
   TenantMembership,
@@ -64,6 +72,8 @@ export type { ListUsersCriteria, UserRecord } from './application/persistence/us
 export { UsersRepository } from './application/persistence/users.repository.js';
 export { GetUserByIdQuery } from './application/queries/get-user-by-id/get-user-by-id.query.js';
 export { GetUsersByIdsQuery } from './application/queries/get-users-by-ids/get-users-by-ids.query.js';
+export { ListMembersHandler } from './application/queries/list-members/list-members.handler.js';
+export { ListMembersQuery } from './application/queries/list-members/list-members.query.js';
 export { ListMyTenantsHandler } from './application/queries/list-my-tenants/list-my-tenants.handler.js';
 export { ListMyTenantsQuery } from './application/queries/list-my-tenants/list-my-tenants.query.js';
 export { ListUsersQuery } from './application/queries/list-users/list-users.query.js';
@@ -92,9 +102,11 @@ export {
   InvalidRefreshTokenException,
   InvalidRolesException,
   InvalidUserException,
+  LastOwnerException,
   MembershipAlreadyExistsException,
   MembershipRevokedException,
   NotPlatformStaffException,
+  OwnerRankRequiredException,
   RefreshTokenReuseDetectedException,
   SessionExpiredException,
   StaffTokenNotAllowedException,
@@ -107,6 +119,11 @@ export {
   INVITATION_TOKEN_BYTES,
   INVITATION_TTL_MS,
 } from './domain/invitation-token.js';
+export {
+  assertCanAssignRoles,
+  assertCanRemove,
+  parseTenantRoles,
+} from './domain/member-roles.policy.js';
 export { TENANT_ROLE_VALUES } from './domain/tenant-role.js';
 export {
   deriveTenantSlug,

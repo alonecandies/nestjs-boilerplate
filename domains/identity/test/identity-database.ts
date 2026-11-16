@@ -20,9 +20,13 @@ export interface IdentityDatabase {
 /**
  * A fresh Citus 14.2 database (`startTestPostgres`) with the platform set and identity's history
  * applied by the real `DatabaseModule`, and `providers` (repositories under test) on top. Int specs only.
+ * `options.localExecution: false` makes Citus execute on workers like a cluster (tenant-isolation specs).
  */
-export async function startIdentityDatabase(providers: Provider[]): Promise<IdentityDatabase> {
-  const pg = await startTestPostgres();
+export async function startIdentityDatabase(
+  providers: Provider[],
+  options: { localExecution?: boolean } = {},
+): Promise<IdentityDatabase> {
+  const pg = await startTestPostgres({ localExecution: options.localExecution ?? true });
   vi.stubEnv('DATABASE_URL', pg.url);
   vi.stubEnv('SERVICE_NAME', 'identity-int');
 

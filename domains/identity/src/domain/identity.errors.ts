@@ -152,3 +152,19 @@ export class NotPlatformStaffException extends PermissionDeniedException {
     super('Platform staff only', { code: IdentityErrorCode.STAFF_ONLY });
   }
 }
+
+/** 422 — the change would leave the tenant without an owner. */
+export class LastOwnerException extends BusinessRuleViolationException {
+  constructor() {
+    super('A workspace must keep at least one owner', { code: IdentityErrorCode.LAST_OWNER });
+  }
+}
+
+/** 403 — only an owner can grant, revoke or remove the owner role. */
+export class OwnerRankRequiredException extends PermissionDeniedException {
+  constructor() {
+    super('Only an owner can change or remove an owner', {
+      code: IdentityErrorCode.OWNER_RANK_REQUIRED,
+    });
+  }
+}

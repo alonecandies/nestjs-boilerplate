@@ -16,6 +16,8 @@ import { DrizzleAuditEventsRepository } from './drizzle-audit-events.repository.
 import { DrizzleInvitationsRepository } from './drizzle-invitations.repository.js';
 import { DrizzleMembershipsRepository } from './drizzle-memberships.repository.js';
 import { DrizzleTenantsRepository } from './drizzle-tenants.repository.js';
+import { DrizzleTransactionRunner } from './drizzle-transaction.runner.js';
+import { DrizzleUsersRepository } from './drizzle-users.repository.js';
 
 /*
  * identity's tenancy repositories against Citus 14.2 (single node, @platform/testing/postgres) with
@@ -35,20 +37,27 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     let memberships: DrizzleMembershipsRepository;
     let invitations: DrizzleInvitationsRepository;
     let auditEvents: DrizzleAuditEventsRepository;
+    let transactions: DrizzleTransactionRunner;
     const run = generateId().slice(-8);
     const slug = (name: string): string => `${name}-${run}`;
 
     beforeAll(async () => {
-      database = await startIdentityDatabase([
-        DrizzleTenantsRepository,
-        DrizzleMembershipsRepository,
-        DrizzleInvitationsRepository,
-        DrizzleAuditEventsRepository,
-      ]);
+      database = await startIdentityDatabase(
+        [
+          DrizzleTenantsRepository,
+          DrizzleMembershipsRepository,
+          DrizzleInvitationsRepository,
+          DrizzleAuditEventsRepository,
+          DrizzleTransactionRunner,
+          DrizzleUsersRepository,
+        ],
+        { localExecution: false },
+      );
       tenants = database.app.get(DrizzleTenantsRepository);
       memberships = database.app.get(DrizzleMembershipsRepository);
       invitations = database.app.get(DrizzleInvitationsRepository);
       auditEvents = database.app.get(DrizzleAuditEventsRepository);
+      transactions = database.app.get(DrizzleTransactionRunner);
     });
 
     afterAll(async () => {
@@ -337,6 +346,52 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           insert into identity.audit_events (tenant_id, actor_id, type)
           values (${tenantId}, ${generateId()}, 'member.left') returning data`);
         expect(row?.data).toEqual({});
+      });
+    });
+
+    describe('members (B2-13)', () => {
+      it('listMembers pages inside the tenant with user profiles; updateRoles and delete report a match', async () => {
+        const tenantId = await newTenant('members');
+        const ids = [await newUser('m1'), await newUser('m2'), await newUser('m3')];
+        for (const userId of ids) {
+          await memberships.insert({ tenantId, userId, roles: ['member'], lastActiveAt: null });
+        }
+        const first = await memberships.listMembers(tenantId, { limit: 2 });
+        expect(first.items.map((m) => m.userId)).toEqual([...ids].sort().reverse().slice(0, 2));
+        expect(first.items[0]).toMatchObject({
+          email: expect.stringContaining('@'),
+          roles: ['member'],
+        });
+        const rest = await memberships.listMembers(tenantId, {
+          limit: 2,
+          cursor: first.nextCursor ?? undefined,
+        });
+        expect(rest.items).toHaveLength(1);
+        await expect(memberships.updateRoles(tenantId, ids[0] as string, ['admin'])).resolves.toBe(
+          true,
+        );
+        await expect(
+          memberships.updateRoles(generateId(), ids[0] as string, ['admin']),
+        ).resolves.toBe(false);
+        await expect(memberships.delete(tenantId, ids[1] as string)).resolves.toBe(true);
+        await expect(memberships.findMember(tenantId, ids[1] as string)).resolves.toBeNull();
+      });
+
+      it('countOwnersLocked serialises owner changes: two owners demoting each other leave exactly one', async () => {
+        const tenantId = await newTenant('owners');
+        const [a, b] = [await newUser('oa'), await newUser('ob')] as [string, string];
+        await memberships.insert({ tenantId, userId: a, roles: ['owner'], lastActiveAt: null });
+        await memberships.insert({ tenantId, userId: b, roles: ['owner'], lastActiveAt: null });
+        const demote = (target: string) =>
+          transactions.run(async () => {
+            const owners = await memberships.countOwnersLocked(tenantId);
+            await new Promise((resolve) => setTimeout(resolve, 100)); // hold the lock
+            if (owners <= 1) return false;
+            return memberships.updateRoles(tenantId, target, ['admin']);
+          });
+        const results = await Promise.all([demote(a), demote(b)]);
+        expect(results.filter(Boolean)).toHaveLength(1);
+        await expect(memberships.countOwnersLocked(tenantId)).resolves.toBe(1);
       });
     });
   },

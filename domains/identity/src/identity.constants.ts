@@ -45,6 +45,8 @@ export const IdentityErrorCode = {
   GLOBAL_ROLES_REMOVED: 'GLOBAL_ROLES_REMOVED',
   STAFF_TOKEN_NOT_ALLOWED: 'STAFF_TOKEN_NOT_ALLOWED',
   STAFF_ONLY: 'STAFF_ONLY',
+  LAST_OWNER: 'LAST_OWNER',
+  OWNER_RANK_REQUIRED: 'OWNER_RANK_REQUIRED',
 } as const;
 export type IdentityErrorCode = (typeof IdentityErrorCode)[keyof typeof IdentityErrorCode];
 

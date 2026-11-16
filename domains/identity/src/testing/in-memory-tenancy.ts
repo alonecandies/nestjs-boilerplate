@@ -1,11 +1,12 @@
-import { type CursorPage, normalizeTenantRoles } from '@platform/common';
-import { decodeIdCursor, keysetPage } from '@platform/database';
+import { type CursorPage, normalizeTenantRoles, type TenantRole } from '@platform/common';
+import { decodeIdCursor, keysetPage, keysetPageBy } from '@platform/database';
 import {
   type AuditEventRecord,
   AuditEventsRepository,
   InvalidRolesException,
   type InvitationRecord,
   InvitationsRepository,
+  type MemberRecord,
   MembershipAlreadyExistsException,
   type MembershipRecord,
   MembershipsRepository,
@@ -102,6 +103,65 @@ export class InMemoryMembershipsRepository extends MembershipsRepository {
     const key = membershipKey(tenantId, userId);
     const membership = this.store.memberships.get(key);
     if (membership) this.store.memberships.set(key, { ...membership, lastActiveAt: at });
+  }
+
+  async updateRoles(
+    tenantId: string,
+    userId: string,
+    roles: readonly TenantRole[],
+  ): Promise<boolean> {
+    const key = membershipKey(tenantId, userId);
+    const membership = this.store.memberships.get(key);
+    if (!membership) return false;
+    this.store.memberships.set(key, { ...membership, roles: normalizeTenantRoles(roles) });
+    return true;
+  }
+
+  async delete(tenantId: string, userId: string): Promise<boolean> {
+    return this.store.memberships.delete(membershipKey(tenantId, userId));
+  }
+
+  /** Single-threaded fake: no lock needed; the count is what the Drizzle version returns. */
+  async countOwnersLocked(tenantId: string): Promise<number> {
+    return [...this.store.memberships.values()].filter(
+      (m) => m.tenantId === tenantId && m.roles.includes('owner'),
+    ).length;
+  }
+
+  async findMember(tenantId: string, userId: string): Promise<MemberRecord | null> {
+    const membership = this.store.memberships.get(membershipKey(tenantId, userId));
+    return membership ? this.toMember(membership) : null;
+  }
+
+  async listMembers(
+    tenantId: string,
+    criteria: { limit: number; cursor?: string | undefined },
+  ): Promise<CursorPage<MemberRecord>> {
+    const after =
+      criteria.cursor === undefined || criteria.cursor === ''
+        ? undefined
+        : decodeIdCursor(criteria.cursor).id;
+    const rows = [...this.store.memberships.values()]
+      .filter((m) => m.tenantId === tenantId && (after === undefined || m.userId < after))
+      .sort((a, b) => b.userId.localeCompare(a.userId))
+      .flatMap((m) => {
+        const member = this.toMember(m);
+        return member ? [member] : [];
+      })
+      .slice(0, criteria.limit + 1);
+    return keysetPageBy(rows, criteria.limit, (member) => ({ id: member.userId }));
+  }
+
+  private toMember(membership: MembershipRecord): MemberRecord | null {
+    const user = this.store.users.get(membership.userId);
+    if (!user) return null;
+    return {
+      userId: membership.userId,
+      email: user.email,
+      displayName: user.displayName,
+      roles: membership.roles,
+      joinedAt: membership.createdAt,
+    };
   }
 
   private ofUser(userId: string): MembershipRecord[] {
