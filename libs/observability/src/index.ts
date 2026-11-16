@@ -47,6 +47,11 @@ export {
   httpMetricLabels,
 } from './metrics/http-metrics.hook.js';
 export {
+  getOrCreateCounter,
+  getOrCreateGauge,
+  getOrCreateHistogram,
+} from './metrics/metric-registry.js';
+export {
   HTTP_DURATION_BUCKETS,
   HTTP_METRIC_LABEL_NAMES,
   HTTP_REQUEST_DURATION_SECONDS,

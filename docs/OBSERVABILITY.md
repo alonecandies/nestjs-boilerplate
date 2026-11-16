@@ -150,11 +150,15 @@ not logged (`includePayload: false`).
 
 ### What is exported
 
-| Metric                                                                | Type      | Labels                           | Source                                                                                                 |
-| --------------------------------------------------------------------- | --------- | -------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| `http_request_duration_seconds` (`_bucket`, `_sum`, `_count`)         | histogram | `method`, `route`, `status_code` | Fastify `onResponse` hook (`HttpMetricsHook`); buckets 5 ms, 10, 25, 50, 100, 250, 500 ms, 1, 2.5, 5 s |
-| `process_*`, `nodejs_*` (CPU, RSS, heap, GC, event-loop lag, handles) | various   | —                                | prom-client default metrics (event-loop monitoring precision 10 ms)                                    |
-| `billing_checkout_paid_without_currency_total`                        | counter   | —                                | billing: paid Stripe Checkout Sessions left pending because no currency was known                      |
+| Metric                                                                | Type      | Labels                                     | Source                                                                                                                                                                           |
+| --------------------------------------------------------------------- | --------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `http_request_duration_seconds` (`_bucket`, `_sum`, `_count`)         | histogram | `method`, `route`, `status_code`           | Fastify `onResponse` hook (`HttpMetricsHook`); buckets 5 ms, 10, 25, 50, 100, 250, 500 ms, 1, 2.5, 5 s                                                                           |
+| `process_*`, `nodejs_*` (CPU, RSS, heap, GC, event-loop lag, handles) | various   | —                                          | prom-client default metrics (event-loop monitoring precision 10 ms)                                                                                                              |
+| `grpc_server_handled_total`                                           | counter   | `grpc_service`, `grpc_method`, `grpc_code` | every `@GrpcController()` (`GrpcMetricsInterceptor`); `grpc_code` is the grpc status name the controller's filter sends (`OK`, `NOT_FOUND`, …)                                   |
+| `grpc_server_handling_seconds` (`_bucket`, `_sum`, `_count`)          | histogram | `grpc_service`, `grpc_method`              | same interceptor; HTTP buckets                                                                                                                                                   |
+| `grpc_client_handled_total`                                           | counter   | `grpc_service`, `grpc_method`, `grpc_code` | every `grpcCall`; `grpc_code` is the grpc status name, `DEADLINE_EXCEEDED` for the local deadline, `CIRCUIT_OPEN` when the breaker rejected without sending, `UNKNOWN` otherwise |
+| `grpc_client_handling_seconds` (`_bucket`, `_sum`, `_count`)          | histogram | `grpc_service`, `grpc_method`              | same function; HTTP buckets                                                                                                                                                      |
+| `billing_checkout_paid_without_currency_total`                        | counter   | —                                          | billing: paid Stripe Checkout Sessions left pending because no currency was known                                                                                                |
 
 Label rules:
 
@@ -168,7 +172,9 @@ Label rules:
 - GraphQL over HTTP shows up as `POST /graphql`. WebSocket, gRPC and Kafka traffic is not HTTP and
   is **not** in this histogram. `/metrics` itself is excluded; `/health/*` probes are counted.
 
-There are no app-level gRPC, Kafka, Redis or database metrics yet. Postgres and Redis are covered
+`grpc_service` is the fully qualified proto service name on both sides (`billing.v1.BillingService`),
+read from the grpc-js path on the server and from the adapter's `operation` on the client. There are
+no app-level Kafka, Redis or database metrics yet. Postgres and Redis are covered
 by `postgres-exporter` and `redis-exporter` in the `observability` profile.
 
 Add your own with the re-exported helpers:

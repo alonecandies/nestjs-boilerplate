@@ -100,7 +100,7 @@ export class BillingGrpcAdapter implements BillingPort, OnModuleInit {
     const metadata = createOutgoingMetadata(callerContextFromCls(this.cls, caller));
     return grpcCall(invoke(metadata), {
       timeoutMs: this.config.deadlineMs,
-      operation: `billing.BillingService/${method}`,
+      operation: `${BILLING_GRPC_PACKAGE.package}.${BILLING_SERVICE_NAME}/${method}`,
       breaker: this.breakers.get(BILLING_GRPC_UPSTREAM),
     });
   }

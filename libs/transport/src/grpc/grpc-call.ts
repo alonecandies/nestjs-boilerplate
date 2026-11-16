@@ -1,5 +1,6 @@
 import { lastValueFrom, type Observable, timeout } from 'rxjs';
 import type { GrpcCircuitBreaker } from './grpc-circuit-breakers.js';
+import { grpcClientCode, parseGrpcOperation, recordGrpcCall } from './grpc-metrics.js';
 import { grpcErrorToDomainException } from './grpc-status.mapping.js';
 
 export interface GrpcCallOptions {
@@ -8,7 +9,10 @@ export interface GrpcCallOptions {
    * Use `grpcConfig.deadlineMs`, which is also the deadline in the service config.
    */
   timeoutMs: number;
-  /** For logs and error details, e.g. `'orders.OrdersService/GetOrder'`. */
+  /**
+   * `<proto package>.<Service>/<Method>`, e.g. `'orders.v1.OrdersService/GetOrder'`: logs, error details
+   * and the `grpc_client_*` labels. Build it from the contracts' package constant and service name.
+   */
   operation: string;
   /** Upstream breaker from `GrpcCircuitBreakers.get(name)`. */
   breaker?: GrpcCircuitBreaker | undefined;
@@ -27,11 +31,17 @@ export interface GrpcCallOptions {
  */
 export async function grpcCall<T>(source: Observable<T>, options: GrpcCallOptions): Promise<T> {
   const task = (): Promise<T> => lastValueFrom(source.pipe(timeout({ first: options.timeoutMs })));
+  const target = parseGrpcOperation(options.operation);
+  const startedAt = performance.now();
+  const seconds = (): number => (performance.now() - startedAt) / 1_000;
   try {
-    if (options.breaker === undefined) return await task();
     // The breaker's action is `(task) => task()`, so the resolved value is exactly task()'s T.
-    return (await options.breaker.fire(task)) as T;
+    const result =
+      options.breaker === undefined ? await task() : ((await options.breaker.fire(task)) as T);
+    recordGrpcCall('client', target, 'OK', seconds());
+    return result;
   } catch (error) {
+    recordGrpcCall('client', target, grpcClientCode(error), seconds());
     throw grpcErrorToDomainException(error, options.operation);
   }
 }

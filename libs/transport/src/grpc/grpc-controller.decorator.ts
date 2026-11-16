@@ -8,10 +8,12 @@ import {
 } from '@nestjs/common';
 import { DomainToGrpcExceptionFilter } from './domain-to-grpc-exception.filter.js';
 import { GrpcContextInterceptor } from './grpc-context.interceptor.js';
+import { GrpcMetricsInterceptor } from './grpc-metrics.interceptor.js';
 
 /**
  * Use this instead of `@Controller()` on every gRPC controller. It applies
- * `DomainToGrpcExceptionFilter` and `GrpcContextInterceptor` at controller scope, which is the only
+ * `DomainToGrpcExceptionFilter`, `GrpcContextInterceptor` and `GrpcMetricsInterceptor` (the
+ * `grpc_server_*` call metrics) at controller scope, which is the only
  * reliable way to scope gRPC error handling in a hybrid app:
  * - `app.useGlobalFilters()` with `inheritAppConfig: true` also catches HTTP errors, and the
  *   request then hangs.
@@ -26,7 +28,7 @@ export const GrpcController = (): ClassDecorator =>
   applyDecorators(
     Controller(),
     UseFilters(DomainToGrpcExceptionFilter),
-    UseInterceptors(GrpcContextInterceptor),
+    UseInterceptors(GrpcContextInterceptor, GrpcMetricsInterceptor),
   );
 
 /**
