@@ -1,4 +1,5 @@
 import { ImmudbClient } from '../client/immudb.client.js';
+import { ImmudbError } from '../errors/immudb.error.js';
 import type {
   ImmudbParams,
   ImmudbRow,
@@ -9,7 +10,7 @@ import type {
 
 export interface RecordedStatement {
   readonly mode: 'readWrite' | 'readOnly';
-  readonly kind: 'exec' | 'query';
+  readonly kind: 'exec' | 'query' | 'verify';
   readonly sql: string;
   readonly params: ImmudbParams;
 }
@@ -45,6 +46,36 @@ export class RecordingImmudbClient extends ImmudbClient {
       txHash: new Uint8Array(32),
       signature: null,
     };
+  }
+
+  override async verifyConsistency(trusted: ImmudbState, target: ImmudbState): Promise<void> {
+    const statement = {
+      mode: 'readOnly',
+      kind: 'verify',
+      sql: 'verifyConsistency',
+      params: { trustedTxId: trusted.txId, targetTxId: target.txId },
+    } as const;
+    this.statements.push(statement);
+    this.respond(statement);
+  }
+
+  /** Answers with the first row `respond` returns for `verifiedRow <table>` (params `pk0`, `pk1`, ...). */
+  override async verifiedRow(
+    table: string,
+    pk: readonly ImmudbValue[],
+    trusted: ImmudbState,
+  ): Promise<{ row: Record<string, ImmudbValue>; txId: bigint; state: ImmudbState }> {
+    const statement = {
+      mode: 'readOnly',
+      kind: 'verify',
+      sql: `verifiedRow ${table}`,
+      params: Object.fromEntries(pk.map((value, i) => [`pk${i}`, value])),
+    } as const;
+    this.statements.push(statement);
+    const [row] = this.respond(statement);
+    if (row === undefined)
+      throw new ImmudbError('verification-failed', `no scripted row in ${table}`);
+    return { row, txId: trusted.txId, state: trusted };
   }
 
   private tx(mode: RecordedStatement['mode'], onExec: () => void): ImmudbTx {

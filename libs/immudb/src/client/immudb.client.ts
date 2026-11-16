@@ -1,4 +1,4 @@
-import type { ImmudbState, ImmudbTx } from '../immudb.types.js';
+import type { ImmudbState, ImmudbTx, ImmudbValue } from '../immudb.types.js';
 
 /** The immudb SQL client every consumer injects (DI token: this class). */
 export abstract class ImmudbClient {
@@ -14,4 +14,14 @@ export abstract class ImmudbClient {
   ): Promise<T>;
 
   abstract currentState(): Promise<ImmudbState>;
+
+  /** Dual proof from `trusted` to `target` (and the target's signature when a key is pinned). */
+  abstract verifyConsistency(trusted: ImmudbState, target: ImmudbState): Promise<void>;
+
+  /** Row by primary key, proven included in a tx consistent with `trusted`. */
+  abstract verifiedRow(
+    table: string,
+    pk: readonly ImmudbValue[],
+    trusted: ImmudbState,
+  ): Promise<{ row: Record<string, ImmudbValue>; txId: bigint; state: ImmudbState }>;
 }

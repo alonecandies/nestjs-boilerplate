@@ -1,6 +1,10 @@
 import { ImmudbError, isSessionGone, toImmudbError } from '../errors/immudb.error.js';
 import { type ImmutableState, TxMode } from '../generated/immudb/schema/schema.pb.js';
 import type { ImmudbParams, ImmudbState, ImmudbTx, ImmudbValue } from '../immudb.types.js';
+import { equalBytes } from '../verification/bytes.js';
+import { fromProtoDualProof, verifyDualProof } from '../verification/dual-proof.js';
+import { verifySqlEntry } from '../verification/sql-row.js';
+import { verifyStateSignature } from '../verification/state-signature.js';
 import { ImmudbClient } from './immudb.client.js';
 import type { ImmudbSession } from './immudb-session.js';
 import type { ImmudbSessionPool } from './session-pool.js';
@@ -63,7 +67,10 @@ class SessionTx implements ImmudbTx {
 }
 
 export class GrpcImmudbClient extends ImmudbClient {
-  constructor(private readonly pool: ImmudbSessionPool) {
+  constructor(
+    private readonly pool: ImmudbSessionPool,
+    private readonly options: { serverSigningPublicKeyPem?: string } = {},
+  ) {
     super();
   }
 
@@ -96,6 +103,58 @@ export class GrpcImmudbClient extends ImmudbClient {
 
   override currentState(): Promise<ImmudbState> {
     return this.pool.use(async (session) => toImmudbState(await mapped(session.currentState())));
+  }
+
+  override async verifyConsistency(trusted: ImmudbState, target: ImmudbState): Promise<void> {
+    const failed = (message: string): never => {
+      throw new ImmudbError('verification-failed', message);
+    };
+    if (trusted.database !== target.database) failed('states of different databases');
+    if (trusted.txId > target.txId) {
+      failed(`trusted tx ${trusted.txId} is newer than target tx ${target.txId}`);
+    }
+    const key = this.options.serverSigningPublicKeyPem;
+    if (key !== undefined && !verifyStateSignature(target, key)) {
+      failed(`state signature of tx ${target.txId} does not verify`);
+    }
+    if (trusted.txId === 0n) return;
+    if (trusted.txId === target.txId) {
+      if (!equalBytes(trusted.txHash, target.txHash)) failed(`tx ${target.txId} hash changed`);
+      return;
+    }
+    const proven = await this.pool.use((session) =>
+      mapped(session.verifiableTxById(target.txId, trusted.txId)),
+    );
+    const proof = fromProtoDualProof(proven.dualProof);
+    if (!verifyDualProof(proof, trusted.txId, target.txId, trusted.txHash, target.txHash)) {
+      failed(`no valid consistency proof from tx ${trusted.txId} to tx ${target.txId}`);
+    }
+  }
+
+  override async verifiedRow(
+    table: string,
+    pk: readonly ImmudbValue[],
+    trusted: ImmudbState,
+  ): Promise<{ row: Record<string, ImmudbValue>; txId: bigint; state: ImmudbState }> {
+    // A trusted state the server has not reached means a rolled-back or forked server: fail closed
+    // as verification (the server itself would answer with an unmapped "lower than" error).
+    const current = await this.currentState();
+    if (trusted.txId > current.txId) {
+      throw new ImmudbError(
+        'verification-failed',
+        `trusted tx ${trusted.txId} is ahead of the server (tx ${current.txId})`,
+      );
+    }
+    const entry = await this.pool.use((session) =>
+      mapped(session.verifiableSqlGet(table, pk, trusted.txId)),
+    );
+    const key = this.options.serverSigningPublicKeyPem;
+    return verifySqlEntry(
+      entry,
+      pk,
+      trusted,
+      key === undefined ? undefined : (state) => verifyStateSignature(state, key),
+    );
   }
 
   private async run<T>(

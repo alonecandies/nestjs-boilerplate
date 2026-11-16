@@ -78,8 +78,11 @@ export class ImmudbModule {
         },
         {
           provide: ImmudbClient,
-          inject: [ImmudbSessionPool],
-          useFactory: (pool: ImmudbSessionPool): ImmudbClient => new GrpcImmudbClient(pool),
+          inject: [ImmudbSessionPool, immudbConfig.KEY],
+          useFactory: (pool: ImmudbSessionPool, cfg: ImmudbConfig): ImmudbClient =>
+            new GrpcImmudbClient(pool, {
+              serverSigningPublicKeyPem: cfg.serverSigningPublicKeyPem,
+            }),
         },
         ImmudbLifecycle,
         ImmudbHealthIndicator,
