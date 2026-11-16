@@ -82,6 +82,7 @@ export { IpThrottlerGuard, IpThrottlerModule } from './throttler/ip-throttler.gu
 export { LockoutResetInterceptor } from './throttler/lockout-reset.interceptor.js';
 export { RateLimit, SkipRateLimit } from './throttler/rate-limit.decorator.js';
 export { type RateLimitFeatureOptions, RateLimitModule } from './throttler/rate-limit.module.js';
+export { RateLimitCharger } from './throttler/rate-limit-charger.js';
 export {
   type RateLimitBucket,
   RateLimitGuardBase,
@@ -127,5 +128,9 @@ export {
   type ThrottlerName,
 } from './throttler/throttle.constants.js';
 export { createThrottleSkipIf, isThrottleExemptPath } from './throttler/throttle-exempt.util.js';
-export { authenticatedTenantId, throttleTracker } from './throttler/throttle-tracker.util.js';
+export {
+  authenticatedTenantId,
+  authenticatedUserId,
+  throttleTracker,
+} from './throttler/throttle-tracker.util.js';
 export { WsThrottlerGuard } from './throttler/ws-throttler.guard.js';

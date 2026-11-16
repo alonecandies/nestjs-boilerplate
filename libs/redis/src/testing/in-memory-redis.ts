@@ -26,10 +26,12 @@ export interface InMemoryRedisOptions {
  */
 function throttleScriptModel(redis: InMemoryRedis, keys: string[], args: string[]): ThrottleReply {
   const [hitsKey = '', blockKey = ''] = keys;
-  const [ttl = 0, limit = 0, block = 0] = args.map(Number);
+  const [ttl = 0, limit = 0, block = 0, weight = 1] = args.map(Number);
   const blockTtl = redis.pttlSync(blockKey);
   if (blockTtl > 0) return [Number(redis.getSync(blockKey) ?? 0), blockTtl, 1, blockTtl];
-  const hits = redis.incrSync(hitsKey);
+  // INCRBY, statement by statement: `weight` INCRs on the in-memory primitive.
+  let hits = 0;
+  for (let i = 0; i < Math.max(1, weight); i += 1) hits = redis.incrSync(hitsKey);
   let hitsTtl = redis.pttlSync(hitsKey);
   if (hitsTtl < 0) {
     redis.pexpireSync(hitsKey, ttl);

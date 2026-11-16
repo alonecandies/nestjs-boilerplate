@@ -83,12 +83,24 @@ export class RedisThrottlerStorage implements ThrottlerStorage {
     defineThrottleCommand(redis);
   }
 
-  async increment(
+  increment(
     key: string,
     ttl: number,
     limit: number,
     blockDuration: number,
     throttlerName: string,
+  ): Promise<ThrottlerStorageRecord> {
+    return this.incrementBy(key, ttl, limit, blockDuration, throttlerName, 1);
+  }
+
+  /** `increment` with a weight (GraphQL cost): the window counter grows by `weight` in one call. */
+  async incrementBy(
+    key: string,
+    ttl: number,
+    limit: number,
+    blockDuration: number,
+    throttlerName: string,
+    weight: number,
   ): Promise<ThrottlerStorageRecord> {
     // Fast path while disconnected: don't park the request in ioredis' offline queue (it would
     // wait for up to maxRetriesPerRequest reconnect attempts before failing).
@@ -105,6 +117,7 @@ export class RedisThrottlerStorage implements ThrottlerStorage {
           Math.max(1, Math.ceil(ttl)),
           limit,
           Math.ceil(blockDuration),
+          Math.max(1, Math.ceil(weight)),
         ),
       );
       return {

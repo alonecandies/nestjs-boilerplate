@@ -9,6 +9,7 @@ import { RedisKeyService } from '../keys/redis-key.service.js';
 import { REDIS_CLIENT } from '../redis.constants.js';
 import { AppThrottlerGuard } from './app-throttler.guard.js';
 import { LockoutResetInterceptor } from './lockout-reset.interceptor.js';
+import { RateLimitCharger } from './rate-limit-charger.js';
 import { RateLimitPolicyRegistry } from './rate-limit-policy.js';
 import { RateLimitPolicyValidator } from './rate-limit-policy.validator.js';
 import {
@@ -61,6 +62,7 @@ export class AppThrottlerModule {
       AppThrottlerGuard,
       WsThrottlerGuard,
       RateLimitPolicyRegistry,
+      RateLimitCharger,
       RateLimitPolicyValidator,
       LockoutResetInterceptor,
       { provide: APP_INTERCEPTOR, useExisting: LockoutResetInterceptor },
@@ -104,7 +106,7 @@ export class AppThrottlerModule {
         }),
       ],
       providers,
-      exports: [AppThrottlerGuard, WsThrottlerGuard, RateLimitPolicyRegistry],
+      exports: [AppThrottlerGuard, WsThrottlerGuard, RateLimitPolicyRegistry, RateLimitCharger],
     };
   }
 }

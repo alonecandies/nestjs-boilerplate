@@ -17,6 +17,7 @@ export const RATE_LIMIT_HEADER_ORDER: readonly string[] = Object.freeze([
   'ip',
   'user',
   'tenant',
+  'graphql',
   'route',
   'auth',
 ]);

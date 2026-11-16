@@ -24,7 +24,7 @@ describe('RedisThrottlerStorage (fixed window + block, script model)', () => {
 
   it('registers the Lua command under a name that cannot collide with redlock', () => {
     expect(THROTTLE_COMMAND).not.toMatch(/^(acquireLock|extendLock|releaseLock)$/);
-    expect(THROTTLE_SCRIPT).toContain("redis.call('INCR', KEYS[1])");
+    expect(THROTTLE_SCRIPT).toContain("redis.call('INCRBY', KEYS[1]");
     expect(Reflect.get(redis, THROTTLE_COMMAND)).toBeTypeOf('function');
   });
 
@@ -88,7 +88,7 @@ describe('RedisThrottlerStorage (fixed window + block, script model)', () => {
   it('rounds fractional ttl / blockDuration up (PEXPIRE requires integers)', async () => {
     const call = vi.spyOn(redis.asRedis(), 'appThrottleHit');
     await storage.increment('k', 999.2, 5, 10.5, 'default');
-    expect(call).toHaveBeenCalledWith(expect.any(String), expect.any(String), 1_000, 5, 11);
+    expect(call).toHaveBeenCalledWith(expect.any(String), expect.any(String), 1_000, 5, 11, 1);
   });
 
   it('fails open while Redis is disconnected (no command queued)', async () => {
@@ -120,6 +120,22 @@ describe('RedisThrottlerStorage (fixed window + block, script model)', () => {
     expect(msToSeconds(1_000)).toBe(1);
     expect(msToSeconds(1_001)).toBe(2);
     expect(msToSeconds(-5)).toBe(0);
+  });
+});
+
+it('incrementBy() adds the weight and blocks once the weighted total passes the limit', async () => {
+  const storage = makeStorage();
+  await expect(
+    storage.incrementBy('op', 60_000, 100, 60_000, 'graphql', 60),
+  ).resolves.toMatchObject({ totalHits: 60, isBlocked: false });
+  await expect(
+    storage.incrementBy('op', 60_000, 100, 60_000, 'graphql', 40),
+  ).resolves.toMatchObject({ totalHits: 100, isBlocked: false });
+  await expect(storage.incrementBy('op', 60_000, 100, 60_000, 'graphql', 1)).resolves.toMatchObject(
+    { isBlocked: true },
+  );
+  await expect(storage.increment('one', 60_000, 1, 0, 'user')).resolves.toMatchObject({
+    totalHits: 1,
   });
 });
 

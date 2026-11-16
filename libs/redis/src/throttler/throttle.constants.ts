@@ -11,6 +11,8 @@ export const THROTTLER = {
   ROUTE: 'route',
   AUTH: 'auth',
   LOCKOUT: 'lockout',
+  /** GraphQL cost budget, charged per operation by `OperationRateLimitPlugin` (not a guard throttler). */
+  GRAPHQL: 'graphql',
 } as const;
 
 export type ThrottlerName = (typeof THROTTLER)[keyof typeof THROTTLER];

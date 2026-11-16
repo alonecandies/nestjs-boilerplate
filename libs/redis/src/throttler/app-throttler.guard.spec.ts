@@ -333,6 +333,37 @@ describe('AppThrottlerGuard', () => {
   });
 });
 
+describe('GraphQL per-request charging (C-5)', () => {
+  it('charges the global budgets once per GraphQL request, however many root fields run', async () => {
+    const { guard, increment } = await createGuard();
+    const req = { headers: {}, user: { id: 'u-1', tenantId: 't-1' } };
+    for (let i = 0; i < 5; i += 1) await guard.canActivate(context('graphql', req));
+    expect(increment.mock.calls.filter(([, , , , n]) => n === 'user')).toHaveLength(1);
+    expect(increment.mock.calls.filter(([, , , , n]) => n === 'tenant')).toHaveLength(1);
+  });
+
+  it('still charges a route policy per resolver', async () => {
+    const { guard, increment } = await createGuard();
+    const req = { headers: {}, user: { id: 'u-1' } };
+    await guard.canActivate(context('graphql', req, Controller.prototype.upload));
+    await guard.canActivate(context('graphql', req, Controller.prototype.upload));
+    expect(increment.mock.calls.filter(([, , , , n]) => n === 'route')).toHaveLength(2);
+  });
+
+  it('refuses every later root field of a GraphQL request once a global budget refused it', async () => {
+    const { guard, increment } = await createGuard();
+    increment.mockResolvedValue(record({ isBlocked: true, totalHits: 101, timeToBlockExpire: 5 }));
+    const req = { headers: {}, user: { id: 'u-1' } };
+    await expect(guard.canActivate(context('graphql', req))).rejects.toBeInstanceOf(
+      ThrottlerException,
+    );
+    await expect(guard.canActivate(context('graphql', req))).rejects.toBeInstanceOf(
+      ThrottlerException,
+    );
+    expect(increment.mock.calls.filter(([, , , , n]) => n === 'user')).toHaveLength(1);
+  });
+});
+
 describe('auth throttler (credentials policies)', () => {
   const credKey = (email: string, ip = 'ip:1.2.3.4') =>
     rateLimitKey('auth', 'id.credentials', `cred:${credentialHash(email)}|${ip}`);
