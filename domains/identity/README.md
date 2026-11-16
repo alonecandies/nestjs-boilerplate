@@ -167,20 +167,69 @@ Types: `User { id: UUID!, email, displayName, createdAt: DateTime!, updatedAt: D
 
 ## gRPC (`identity.v1`, served by identity-service)
 
-| Service        | RPC             | Dispatches                  |
-| -------------- | --------------- | --------------------------- |
-| `AuthService`  | `Register`      | `RegisterUserCommand`       |
-|                | `Login`         | `LoginCommand`              |
-|                | `RefreshTokens` | `RefreshSessionCommand`     |
-|                | `Logout`        | `LogoutCommand` (→ `Empty`) |
-| `UsersService` | `GetUser`       | `GetUserByIdQuery`          |
-|                | `GetUsersByIds` | `GetUsersByIdsQuery`        |
-|                | `ListUsers`     | `ListUsersQuery`            |
+| Service          | RPC                                                | Dispatches                                                              |
+| ---------------- | -------------------------------------------------- | ----------------------------------------------------------------------- |
+| `AuthService`    | `Register`                                         | `RegisterUserCommand`                                                   |
+|                  | `Login`                                            | `LoginCommand`                                                          |
+|                  | `RefreshTokens`                                    | `RefreshSessionCommand`                                                 |
+|                  | `Logout`                                           | `LogoutCommand` (→ `Empty`)                                             |
+| `UsersService`   | `GetUser`                                          | `GetUserByIdQuery`                                                      |
+|                  | `GetUsersByIds`                                    | `GetUsersByIdsQuery`                                                    |
+|                  | `ListUsers`                                        | `ListUsersQuery`                                                        |
+| `TenantsService` | `ListMyTenants`, `ListMembers`                     | `ListMyTenantsQuery`, `ListMembersQuery` (retried on `UNAVAILABLE`)     |
+|                  | `CreateTenant`, `RenameTenant`                     | `CreateTenantCommand`, `RenameTenantCommand`                            |
+|                  | `UpdateMemberRoles`, `RemoveMember`, `LeaveTenant` | `UpdateMemberRolesCommand`, `RemoveMemberCommand`, `LeaveTenantCommand` |
+|                  | `CreateInvitation`, `AcceptInvitation`             | `CreateInvitationCommand`, `AcceptInvitationCommand`                    |
 
 Controllers use `@GrpcController()` + the generated `…ServiceControllerMethods()` and validate
 payloads with `ZodRpcValidationPipe` (`INVALID_ARGUMENT` + issues). Domain codes survive the hop
 (`x-error-code` trailer). The gateway adapters apply `GRPC_DEADLINE_MS`, the `identity` circuit
 breaker and caller metadata, and normalise proto-loader `null`s.
+
+## Tenancy
+
+Every account owns a personal tenant from registration, can create more, and belongs to a tenant through a
+membership (`member`, `admin`, `owner`; `owner` ⊇ `admin` ⊇ `member`). The access token names the active tenant (`tid`)
+and the roles there; `POST /v1/auth/switch-tenant` moves between tenants.
+
+**Ports and adapters.** Three abstract ports, each with a local adapter (CommandBus / QueryBus, monolith and
+identity-service) and a gRPC adapter over `identity.v1.TenantsService` (gateway, `IdentityApiModule.forRemote()`):
+
+| Port              | Operations                                                        | Local adapter             | gRPC adapter             |
+| ----------------- | ----------------------------------------------------------------- | ------------------------- | ------------------------ |
+| `TenantsPort`     | `listMyTenants`, `createTenant`, `renameTenant`                   | `TenantsLocalAdapter`     | `TenantsGrpcAdapter`     |
+| `MembersPort`     | `listMembers`, `updateMemberRoles`, `removeMember`, `leaveTenant` | `MembersLocalAdapter`     | `MembersGrpcAdapter`     |
+| `InvitationsPort` | `createInvitation`, `acceptInvitation`                            | `InvitationsLocalAdapter` | `InvitationsGrpcAdapter` |
+
+REST (`TenantsController`, `MembersController`, `InvitationsController`) and GraphQL (`TenancyResolver`) depend only on
+the ports, so both topologies behave the same. Endpoints: `GET`/`POST /v1/tenants`, `PATCH /v1/tenant`
+(`tenant:manage`), `GET /v1/tenant/members`, `PATCH`/`DELETE /v1/tenant/members/:userId` (`members:manage`),
+`POST /v1/tenant/leave`, `POST /v1/tenant/invitations` (`members:manage`), `POST /v1/invitations/accept`; GraphQL
+`myTenants`, `tenantMembers`, `createTenant`, `renameTenant`, `inviteMember`, `acceptInvitation`, `updateMemberRoles`,
+`removeMember`, `leaveTenant`. The tables are in [docs/API.md](../../docs/API.md#tenants-members-and-invitations).
+
+**Rules.**
+
+- The actor and tenant come from the principal (`requireTenantActor`); a staff switch-in principal has no membership
+  and cannot accept an invitation or leave.
+- Only an owner can grant, revoke, invite or remove `owner` (`OWNER_RANK_REQUIRED`); roles are a non-empty, unique set
+  (`INVALID_ROLES`).
+- A tenant keeps at least one owner (`LAST_OWNER`): role changes, removals and departures run under a per-tenant lock,
+  so two owners demoting each other at once cannot both succeed.
+- An invitation is 32 random bytes (only the sha256 is stored), valid 7 days, single use. The mail job carries the raw
+  token and is deleted once sent or failed (`INVITATION_MAIL_RETENTION`); the link is
+  `<MAIL_APP_URL>/invitations/accept?token=…`. The accepting account's email must equal the invitation email.
+  Unknown, expired and replayed tokens are one `INVITATION_INVALID`.
+- Renames, role changes, removals, departures and invitations (sent and accepted) are written to the tenant's
+  `audit_events`.
+
+**Error codes** (`IdentityErrorCode`): `TENANT_SLUG_TAKEN` (409), `MEMBERSHIP_EXISTS` (409), `TENANT_ACCESS_DENIED`
+(403), `OWNER_RANK_REQUIRED` (403), `INVITATION_EMAIL_MISMATCH` (403), `INVITATION_INVALID` (404), `LAST_OWNER` (422),
+`INVALID_ROLES` (422), `MEMBERSHIP_REVOKED` (401), `STAFF_ONLY` and `STAFF_TOKEN_NOT_ALLOWED` (403).
+
+**Testing.** `FakeTenancyState`, `FakeTenantsPort`, `FakeMembersPort` and `FakeInvitationsPort` (from
+`@domain/identity/testing`) stand behind the gateway; `tenancy.repositories.int-spec.ts` covers the repositories, the
+last-owner concurrency and the invitation accept against Citus.
 
 ## Events
 

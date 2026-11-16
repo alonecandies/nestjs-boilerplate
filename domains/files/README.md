@@ -21,7 +21,7 @@ src/
   files.constants.ts       USER_FILES_ROOT, UPLOAD_FILE_FIELD, content-type allow-list (+ regex), size ceilings
   api/index.ts             the ./api entry: FilesModule + its config namespace (what the gateway imports)
   files.module.ts          FilesModule
-  domain/                  files.errors.ts (FilesErrorCode + 4 DomainExceptions), file-content-type.ts (allow-list policy)
+  domain/                  files.errors.ts (FilesErrorCode + 5 DomainExceptions), file-content-type.ts (allow-list policy)
   application/             files.service.ts (use cases), file-key.ts (key building / ownership), file-access.policy.ts, files.types.ts
   presentation/http/       FilesController, zod request DTOs, zod response schemas + mappers, multipart options, ApiMultipartFileBody
   presentation/graphql/    FilesResolver, CreateUploadUrlInput, PresignedUploadModel, mapper

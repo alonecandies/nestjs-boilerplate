@@ -133,12 +133,12 @@ What a `*GrpcAdapter` adds on every call (via `grpcCall()` in `@platform/transpo
 | Concern         | Behaviour                                                                                                                                                                                                                                                                                                                                                                                                           |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Deadline        | `GRPC_DEADLINE_MS` (default `5000`): an rxjs `timeout` that cancels the call, plus the same value as the per-method `timeout` in the channel's service config                                                                                                                                                                                                                                                       |
-| Retry           | Only `UNAVAILABLE`, only for idempotent methods (`GetUser`, `GetUsersByIds`, `ListUsers`, `ListNotifications`, `ListPayments`); 3 attempts by default (grpc-js caps it at 5), with `retryThrottling { maxTokens: 10, tokenRatio: 0.1 }`. `Register`, `RefreshTokens` and other writes are never retried: replaying `RefreshTokens` would trip refresh-token reuse detection                                         |
+| Retry           | Only `UNAVAILABLE`, only for idempotent methods (`GetUser`, `GetUsersByIds`, `ListUsers`, `ListMyTenants`, `ListMembers`, `ListNotifications`, `ListPayments`); 3 attempts by default (grpc-js caps it at 5), with `retryThrottling { maxTokens: 10, tokenRatio: 0.1 }`. `Register`, `RefreshTokens` and other writes are never retried: replaying `RefreshTokens` would trip refresh-token reuse detection         |
 | Circuit breaker | One opossum breaker per upstream (`identity`, `notifications`, `billing`), shared by every method of that upstream. Opens at 50 % failures once ≥ 10 calls fall in a 10 s window, half-opens after 5 s, bulkhead of 1000 concurrent calls. Caller errors (`INVALID_ARGUMENT`, `NOT_FOUND`, `ALREADY_EXISTS`, `PERMISSION_DENIED`, `UNAUTHENTICATED`, `FAILED_PRECONDITION`, `OUT_OF_RANGE`, `ABORTED`) do not count |
-| Metadata        | `x-request-id`, `x-correlation-id`, `x-user-id`, `x-user-roles` from nestjs-cls. The service adopts the request id, so logs line up across hops                                                                                                                                                                                                                                                                     |
+| Metadata        | `x-request-id`, `x-correlation-id` and the principal (`x-user-id`, `x-tenant-id`, `x-user-roles`, `x-staff`) from nestjs-cls. The service adopts the request id and rebuilds the principal, so logs line up across hops                                                                                                                                                                                             |
 | Error mapping   | Every failure becomes a `DomainException`: the original class and code when the server sent `x-error-code` / `x-error-details-bin` trailers, `OperationTimeoutException` (504) on deadline, `ServiceUnavailableException` (503) when the breaker is open or the bulkhead is full                                                                                                                                    |
 
-The gateway verifies access tokens itself (JWT + the Redis denylist), so authentication costs no RPC. Services trust the caller identity in metadata: run them inside the service mesh only. See [SECURITY.md](SECURITY.md) for gRPC TLS (`GRPC_TLS_*`).
+The gateway verifies access tokens itself (JWT + the Redis denylist), so authentication costs no RPC. Services trust the caller's principal in metadata (user, tenant, roles, staff): run them inside the service mesh only. See [SECURITY.md](SECURITY.md) for gRPC TLS (`GRPC_TLS_*`).
 
 ## 5. Module composition per app
 
@@ -270,6 +270,8 @@ Keying by user id keeps one user's events ordered on one partition.
 | `version`       | Major version, taken from the topic's `.v<major>` suffix                                                                                                                    |
 | `occurredAt`    | ISO-8601 UTC time of the fact                                                                                                                                               |
 | `source`        | Producing service (`SERVICE_NAME`)                                                                                                                                          |
+| `tenantId`      | Optional. The tenant the event belongs to (the producer's principal by default); the nil UUID marks a platform event                                                        |
+| `actorId`       | Optional. The user who caused the event, or `null` for system work; consumers act as `{ userId: actorId, tenantId }`                                                        |
 | `correlationId` | From the originating request (nestjs-cls), for cross-service tracing                                                                                                        |
 | `payload`       | Topic-specific, zod schema in `domains/<x>/contracts/src/events/*.events.ts`                                                                                                |
 
@@ -279,7 +281,7 @@ Record headers: `x-event-type` and `x-correlation-id` (tools can route and trace
 
 **Consumer pipeline.** `@KafkaConsumerController()` applies, at controller scope:
 
-1. `KafkaContextInterceptor`: request and correlation ids into nestjs-cls.
+1. `KafkaContextInterceptor`: request and correlation ids into nestjs-cls, and the actor's principal (`{ userId: actorId, tenantId }`) when the envelope carries both.
 2. `KafkaRetryInterceptor`: transient failures (driver, connection, timeout, 5xx-class `DomainException`) retried in-process, 4 attempts with 0.25 s / 0.5 s / 1 s backoff.
 3. `KafkaDeadLetterFilter`: anything still failing (including an invalid envelope rejected by the pipe) is written to `<topic>.dlq` with headers `x-original-topic`, `x-original-partition`, `x-original-offset`, `x-error-message`, `x-error-type`, `x-failed-at`, then the offset commits so a poison message never blocks its partition. If the DLQ publish itself fails, the original error is rethrown and kafkajs redelivers. Throwing `KafkaRetriableException` explicitly asks kafkajs to retry.
 
@@ -307,6 +309,15 @@ Notes:
 - **Why controller-scoped RPC filters.** A global filter in a hybrid app would also catch HTTP errors (`app.useGlobalFilters()` with `inheritAppConfig`), and `ms.useGlobalFilters()` after `connectMicroservice()` is ignored. `@GrpcController()` and `@KafkaConsumerController()` are composites that attach the right filter and interceptors to each RPC controller. `AllExceptionsFilter` rethrows for `rpc`.
 - **Kafka handlers must not throw past the filter.** An escaping error makes kafkajs restart the consumer on the same offset forever.
 - **Request context.** `ClsMiddleware` (HTTP) or `RequestContextInterceptor` (everything else) puts the request id in nestjs-cls; the pino logger, the Kafka producer (`correlationId`) and the gRPC adapters (outgoing metadata) read it from there. No REQUEST-scoped providers are used.
+- **Request principal.** `{ userId, tenantId, roles, staff }` (spec §7) lives in nestjs-cls (`getPrincipal()`,
+  `requirePrincipal()` in `@platform/common`); `userId` of the request context comes from it. Its writers: the edge
+  (`JwtAuthGuard` / `PrincipalContextInterceptor` write it from the verified token, REST, GraphQL and WebSocket); gRPC
+  (B2-23: the gateway forwards it as `x-user-id`, `x-tenant-id`, `x-user-roles`, `x-staff`, and
+  `GrpcContextInterceptor` rebuilds it, recomputing permissions from the roles); Kafka (B2-24: envelopes carry
+  `tenantId` / `actorId`, and `KafkaContextInterceptor` sets the actor as principal); the Stripe webhook (it acts as the
+  `{ userId, tenantId }` signed into the object's metadata, or as no principal for platform events); and invitation
+  acceptance (it joins the tenant as the accepting user). DataLoader batches keep the request context (B2-25), so a
+  batched load still sees the principal. No other code may write it.
 - **WebSocket session lifetime.** A socket is disconnected (after an `exception` with `TOKEN_EXPIRED`) when its access token expires, and every 30 s each replica disconnects sockets whose token was revoked (`TOKEN_REVOKED`).
 
 ```mermaid

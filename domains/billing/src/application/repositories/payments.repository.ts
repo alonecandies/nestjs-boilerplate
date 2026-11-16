@@ -10,7 +10,7 @@ export interface CreatePaymentResult {
 export interface ListPaymentsCriteria {
   /** Always set: listings never cross a tenant (sharding design §2.1.5). */
   tenantId: string;
-  /** Omitted = every payment of the tenant (`billing:read-all` at the edge). */
+  /** Omitted = every payment of the tenant (`ListPaymentsHandler` requires `billing:read-all`). */
   userId?: string | undefined;
   limit: number;
   /** Opaque keyset cursor (`nextCursor` of the previous page); absent = first page. */

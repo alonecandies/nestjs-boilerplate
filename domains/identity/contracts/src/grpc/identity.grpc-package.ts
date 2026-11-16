@@ -21,8 +21,8 @@ export const IDENTITY_GRPC_PACKAGE: GrpcPackageSpec = {
   protoPath: ['identity/v1/identity.proto'],
   services: [AUTH_SERVICE_NAME, USERS_SERVICE_NAME, TENANTS_SERVICE_NAME],
   clientToken: 'IDENTITY_GRPC_CLIENT',
-  // AuthService (Register, Login, RefreshTokens, Logout, SwitchTenant) is deliberately absent:
-  // none of its calls is idempotent (SwitchTenant rotates the session; it is never retried). Of
+  // AuthService is deliberately absent: none of its calls is idempotent (Register, Login,
+  // RefreshTokens, Logout, SwitchTenant, StaffSwitchIn and StaffSwitchOut are never retried). Of
   // TenantsService only the two reads are retried; every tenant, member and invitation write is not.
   idempotentMethods: {
     [USERS_SERVICE_NAME]: ['GetUser', 'GetUsersByIds', 'ListUsers'],

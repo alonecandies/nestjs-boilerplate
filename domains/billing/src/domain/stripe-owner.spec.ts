@@ -21,6 +21,16 @@ describe('stripeOwnerOf', () => {
   });
 
   it.each([
+    ['the nil UUID', PLATFORM_TENANT_ID],
+    ['the nil UUID in upper case', PLATFORM_TENANT_ID.toUpperCase()],
+  ])('keeps the tenant and treats %s as no user (createPrincipal rejects it)', (_label, nil) => {
+    expect(stripeOwnerOf({ metadata: { tenantId, userId: nil } })).toEqual({
+      tenantId,
+      userId: null,
+    });
+  });
+
+  it.each([
     ['no metadata (payout.paid)', { object: 'payout' }],
     ['empty metadata (a session created before B2)', { metadata: {} }],
     ['a tenant that is not a UUID', { metadata: { tenantId: 'acme', userId } }],
