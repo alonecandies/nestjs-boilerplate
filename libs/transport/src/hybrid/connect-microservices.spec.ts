@@ -12,9 +12,13 @@ import { grpcConfig, kafkaConfig } from '@platform/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FIXTURE_GRPC_PACKAGE } from '../../test/fixtures/fixture.grpc-package.js';
 import { HealthReportingGrpcServer } from '../grpc/grpc-server.options.js';
+import { InstrumentedServerKafka } from '../kafka/instrumented-server-kafka.js';
 import { connectGrpcServer, connectKafkaConsumer } from './connect-microservices.js';
 
 type Connect = (options: unknown, hybrid: unknown) => INestMicroservice;
+
+const kafkaOptionsOf = (options: unknown) =>
+  (options as { strategy: InstrumentedServerKafka }).strategy.kafkaOptions;
 
 /**
  * An app whose ConfigService holds `loaded` (namespace → value, as `ConfigModule.forFeature`
@@ -73,13 +77,11 @@ describe('connectKafkaConsumer', () => {
 
     const [options, hybrid] = connect.mock.calls[0] ?? [];
     expect(hybrid).toEqual({ inheritAppConfig: true });
-    expect(options).toMatchObject({
-      transport: Transport.KAFKA,
-      options: {
-        postfixId: '',
-        client: { clientId: 'alerts-service' },
-        consumer: { groupId: 'gateway-push' },
-      },
+    expect(options).toEqual({ strategy: expect.any(InstrumentedServerKafka) });
+    expect(kafkaOptionsOf(options)).toMatchObject({
+      postfixId: '',
+      client: { clientId: 'alerts-service' },
+      consumer: { groupId: 'gateway-push' },
     });
   });
 
@@ -87,8 +89,8 @@ describe('connectKafkaConsumer', () => {
     const cfg = kafkaConfig.parse({ SERVICE_NAME: 'alerts-service' });
     const { app, connect } = fakeApp({ [kafkaConfig.namespace]: cfg });
     connectKafkaConsumer(app);
-    expect(connect.mock.calls[0]?.[0]).toMatchObject({
-      options: { consumer: { groupId: 'alerts-service' } },
+    expect(kafkaOptionsOf(connect.mock.calls[0]?.[0])).toMatchObject({
+      consumer: { groupId: 'alerts-service' },
     });
   });
 });
@@ -137,7 +139,7 @@ describe('config resolution on a real Nest application context', () => {
 
   it('falls back to the environment without logging "Nest could not find CONFIGURATION(kafka)"', async () => {
     const options = await connectKafkaOn([ConfigModule.forRoot({ ignoreEnvFile: true })]);
-    expect(options).toMatchObject({ transport: Transport.KAFKA });
+    expect(options).toEqual({ strategy: expect.any(InstrumentedServerKafka) });
     expect(errors).toEqual([]);
   });
 
@@ -148,7 +150,9 @@ describe('config resolution on a real Nest application context', () => {
       ConfigModule.forFeature(kafkaConfig),
     ]);
     // The env was reset after the container parsed it: only the container has this client id.
-    expect(options).toMatchObject({ options: { client: { clientId: 'loaded-by-the-container' } } });
+    expect(kafkaOptionsOf(options)).toMatchObject({
+      client: { clientId: 'loaded-by-the-container' },
+    });
     expect(errors).toEqual([]);
   });
 });

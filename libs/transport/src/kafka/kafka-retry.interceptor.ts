@@ -10,6 +10,7 @@ import { computeBackoffDelay, getContextType, isDomainException } from '@platfor
 import { type Observable, retry, throwError, timer } from 'rxjs';
 import { z } from 'zod';
 import { errorTypeOf } from './dead-letter.js';
+import { recordKafkaRetry } from './kafka-metrics.js';
 
 /** Bounded in-process retry of a failing Kafka handler (`KafkaRetryInterceptor`). */
 export interface KafkaRetryOptions {
@@ -79,6 +80,7 @@ export class KafkaRetryInterceptor implements NestInterceptor {
           this.logger.warn(
             `Retrying ${source} in ${delayMs} ms (attempt ${retryCount + 1}/${retries + 1}) after ${errorTypeOf(error)}: ${error instanceof Error ? error.message : String(error)}`,
           );
+          recordKafkaRetry(kafka.getTopic());
           return timer(delayMs);
         },
       }),

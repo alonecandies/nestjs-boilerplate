@@ -92,7 +92,7 @@ export interface KafkaServerOptionsExtras {
 export function createKafkaServerOptions(
   cfg: KafkaNamespaceConfig,
   extras: KafkaServerOptionsExtras = {},
-): KafkaOptions {
+): KafkaOptions & Required<Pick<KafkaOptions, 'options'>> {
   return {
     transport: Transport.KAFKA,
     options: {

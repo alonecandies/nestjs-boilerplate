@@ -10,8 +10,9 @@ import { generateId, getContextType, isSafeRequestId } from '@platform/common';
 import { KAFKA_HEADERS } from '@platform/contracts';
 import { tagActiveSpan } from '@platform/observability';
 import { CLS_ID, ClsService } from 'nestjs-cls';
-import { Observable } from 'rxjs';
+import { Observable, tap } from 'rxjs';
 import { RPC_CLS_KEYS } from '../context/transport-context.js';
+import { recordKafkaOutcome } from './kafka-metrics.js';
 
 const headerString = (headers: unknown, name: string): string | undefined => {
   const value = (headers as Record<string, unknown> | null | undefined)?.[name];
@@ -56,7 +57,10 @@ export class KafkaContextInterceptor implements NestInterceptor {
         cls.set(CLS_ID, requestId);
         cls.set(RPC_CLS_KEYS.CORRELATION_ID, correlationId);
         tagActiveSpan({ requestId, correlationId });
-        return next.handle().subscribe(subscriber);
+        return next
+          .handle()
+          .pipe(tap({ complete: () => recordKafkaOutcome(kafka.getTopic(), 'success') }))
+          .subscribe(subscriber);
       }),
     );
   }
