@@ -8,6 +8,7 @@ import { PasswordHasher } from '../../../infrastructure/security/password-hasher
 import { toUserRecord } from '../../mappers/user.mapper.js';
 import { TransactionRunner } from '../../persistence/transaction-runner.js';
 import { UsersRepository } from '../../persistence/users.repository.js';
+import { PersonalWorkspaces } from '../../services/personal-workspaces.service.js';
 import { SessionTokensService } from '../../services/session-tokens.service.js';
 import { RegisterUserCommand } from './register-user.command.js';
 
@@ -19,6 +20,7 @@ export class RegisterUserHandler implements ICommandHandler<RegisterUserCommand>
     private readonly sessionTokens: SessionTokensService,
     private readonly transaction: TransactionRunner,
     private readonly publisher: EventPublisher,
+    private readonly workspaces: PersonalWorkspaces,
   ) {}
 
   async execute(command: RegisterUserCommand): Promise<AuthTokens> {
@@ -28,20 +30,23 @@ export class RegisterUserHandler implements ICommandHandler<RegisterUserCommand>
     if (await this.users.existsByEmail(email)) throw new EmailAlreadyTakenException();
 
     const passwordHash = await this.hasher.hash(command.password);
+    const now = new Date();
     const user = this.publisher.mergeObjectContext(
       UserAggregate.register({
         id: generateId(),
         email,
         displayName: command.displayName,
         passwordHash,
-        now: new Date(),
+        now,
       }),
     );
 
-    // User + first session commit or roll back together.
+    // User, personal workspace (tenant + owner membership) and first session: one transaction.
     const tokens = await this.transaction.run(async () => {
       await this.users.insert(user);
-      return this.sessionTokens.open(toUserRecord(user.toSnapshot()), command.client);
+      const snapshot = user.toSnapshot();
+      await this.workspaces.create(snapshot, now);
+      return this.sessionTokens.open(toUserRecord(snapshot), command.client);
     });
 
     // Publish UserRegisteredEvent only once the row is committed (the relay then goes to Kafka).

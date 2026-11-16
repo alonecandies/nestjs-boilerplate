@@ -1,7 +1,11 @@
 import { billingSchema } from '@domain/billing';
 import {
+  AuditEventsRepository,
+  InvitationsRepository,
   identitySchema,
+  MembershipsRepository,
   SessionsRepository,
+  TenantsRepository,
   TransactionRunner,
   UsersRepository,
 } from '@domain/identity';
@@ -46,6 +50,7 @@ export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
  * | `REDIS_CLIENT` (denylist, throttler, locks) | `InMemoryRedis`                              |
  * | `DRIZZLE`                                  | real drizzle over a fake postgres.js client (rows: `options.postgresRows`) |
  * | identity repositories + TransactionRunner  | in-memory (the handlers above them are real) |
+ * | identity tenancy repositories                | in-memory (same store as users and sessions) |
  * | `CASSANDRA_CLIENT`                         | empty result sets                            |
  * | BullMQ `mail` queue / `MailProcessor`      | recording queue / no worker                  |
  * | `CACHE_MANAGER`                            | real L1 tier only (L2 is node-redis)         |
@@ -84,6 +89,14 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     .useValue(identity.sessions)
     .overrideProvider(TransactionRunner)
     .useValue(identity.transactions)
+    .overrideProvider(TenantsRepository)
+    .useValue(identity.tenants)
+    .overrideProvider(MembershipsRepository)
+    .useValue(identity.memberships)
+    .overrideProvider(InvitationsRepository)
+    .useValue(identity.invitations)
+    .overrideProvider(AuditEventsRepository)
+    .useValue(identity.auditEvents)
     .overrideProvider(CASSANDRA_CLIENT)
     .useValue(cassandra.client)
     .overrideProvider(getQueueToken(MAIL_QUEUE))

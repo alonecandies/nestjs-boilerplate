@@ -7,6 +7,7 @@ import { EmailAlreadyTakenException } from '../../../domain/identity.errors.js';
 import type { UserAggregate } from '../../../domain/user.aggregate.js';
 import type { PasswordHasher } from '../../../infrastructure/security/password-hasher.service.js';
 import type { UsersRepository } from '../../persistence/users.repository.js';
+import type { PersonalWorkspaces } from '../../services/personal-workspaces.service.js';
 import type { SessionTokensService } from '../../services/session-tokens.service.js';
 import { RegisterUserCommand } from './register-user.command.js';
 import { RegisterUserHandler } from './register-user.handler.js';
@@ -18,6 +19,7 @@ describe('RegisterUserHandler', () => {
   let sessionTokens: ReturnType<typeof mockOf<SessionTokensService>>;
   let transaction: ReturnType<typeof passThroughTransaction>;
   let events: ReturnType<typeof recordingPublisher>;
+  let workspaces: ReturnType<typeof mockOf<PersonalWorkspaces>>;
   let handler: RegisterUserHandler;
   const order: string[] = [];
 
@@ -38,7 +40,26 @@ describe('RegisterUserHandler', () => {
     });
     transaction = passThroughTransaction();
     events = recordingPublisher();
-    handler = new RegisterUserHandler(users, hasher, sessionTokens, transaction, events.publisher);
+    workspaces = mockOf<PersonalWorkspaces>({
+      create: async () => {
+        order.push('create-workspace');
+        return {
+          tenantId: 'tenant-1',
+          userId: 'user-1',
+          roles: ['owner'],
+          lastActiveAt: null,
+          createdAt: new Date(),
+        };
+      },
+    });
+    handler = new RegisterUserHandler(
+      users,
+      hasher,
+      sessionTokens,
+      transaction,
+      events.publisher,
+      workspaces,
+    );
   });
 
   const command = new RegisterUserCommand(' Ada@Example.com ', 'correct horse', ' Ada ', {
@@ -51,7 +72,7 @@ describe('RegisterUserHandler', () => {
     expect(users.existsByEmail).toHaveBeenCalledWith('ada@example.com');
     expect(hasher.hash).toHaveBeenCalledWith('correct horse');
     expect(transaction.runs).toBe(1);
-    expect(order).toEqual(['insert', 'open-session']);
+    expect(order).toEqual(['insert', 'create-workspace', 'open-session']);
 
     const inserted = users.insert.mock.calls[0]?.[0] as UserAggregate;
     expect(inserted.toSnapshot()).toMatchObject({
@@ -60,6 +81,10 @@ describe('RegisterUserHandler', () => {
       passwordHash: '$argon2id$hash',
       roles: ['user'],
     });
+    expect(workspaces.create).toHaveBeenCalledWith(
+      expect.objectContaining({ id: inserted.id, email: 'ada@example.com', displayName: 'Ada' }),
+      inserted.toSnapshot().createdAt,
+    );
     const [record, client] = sessionTokens.open.mock.calls[0] ?? [];
     expect(record).not.toHaveProperty('passwordHash');
     expect(record).toMatchObject({ id: inserted.id, email: 'ada@example.com' });

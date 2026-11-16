@@ -1,12 +1,16 @@
 import type { CursorPage } from '@platform/common';
 import { decodeIdCursor, keysetPage } from '@platform/database';
 import {
+  type AuditEventRecord,
   EmailAlreadyTakenException,
+  type InvitationRecord,
   type ListUsersCriteria,
+  type MembershipRecord,
   type NewSession,
   type RotateSessionInput,
   type SessionRecord,
   SessionsRepository,
+  type TenantRecord,
   TransactionRunner,
   UserAggregate,
   type UserRecord,
@@ -14,6 +18,12 @@ import {
   type UserSnapshot,
   UsersRepository,
 } from '../index.js';
+import {
+  InMemoryAuditEventsRepository,
+  InMemoryInvitationsRepository,
+  InMemoryMembershipsRepository,
+  InMemoryTenantsRepository,
+} from './in-memory-tenancy.js';
 
 /**
  * In-memory implementations of identity's persistence ports (`UsersRepository`,
@@ -25,10 +35,20 @@ import {
 export class InMemoryIdentityStore {
   readonly users = new Map<string, UserSnapshot>();
   readonly sessions = new Map<string, SessionRecord>();
+  readonly tenants = new Map<string, TenantRecord>();
+  /** Keyed by `membershipKey(tenantId, userId)`. */
+  readonly memberships = new Map<string, MembershipRecord>();
+  /** Keyed by `${tenantId}:${id}`. */
+  readonly invitations = new Map<string, InvitationRecord>();
+  readonly auditEvents: AuditEventRecord[] = [];
 
   clear(): void {
     this.users.clear();
     this.sessions.clear();
+    this.tenants.clear();
+    this.memberships.clear();
+    this.invitations.clear();
+    this.auditEvents.length = 0;
   }
 }
 
@@ -178,12 +198,16 @@ export class InlineTransactionRunner extends TransactionRunner {
   }
 }
 
-/** The three identity persistence bindings, sharing one store. */
+/** Every identity persistence binding, sharing one store. */
 export function createInMemoryIdentityPersistence(store = new InMemoryIdentityStore()) {
   return {
     store,
     users: new InMemoryUsersRepository(store),
     sessions: new InMemorySessionsRepository(store),
     transactions: new InlineTransactionRunner(),
+    tenants: new InMemoryTenantsRepository(store),
+    memberships: new InMemoryMembershipsRepository(store),
+    invitations: new InMemoryInvitationsRepository(store),
+    auditEvents: new InMemoryAuditEventsRepository(store),
   };
 }

@@ -20,6 +20,7 @@ import { UsersRepository } from './application/persistence/users.repository.js';
 import { GetUserByIdHandler } from './application/queries/get-user-by-id/get-user-by-id.handler.js';
 import { GetUsersByIdsHandler } from './application/queries/get-users-by-ids/get-users-by-ids.handler.js';
 import { ListUsersHandler } from './application/queries/list-users/list-users.handler.js';
+import { PersonalWorkspaces } from './application/services/personal-workspaces.service.js';
 import { SessionTokensService } from './application/services/session-tokens.service.js';
 import { TenantAuditLog } from './application/services/tenant-audit-log.service.js';
 import { DrizzleAuditEventsRepository } from './infrastructure/persistence/drizzle-audit-events.repository.js';
@@ -87,6 +88,7 @@ const PERSISTENCE: Provider[] = [
     PasswordHasher,
     TokenIssuer,
     SessionTokensService,
+    PersonalWorkspaces,
     TenantAuditLog,
     PurgeExpiredSessionsCron,
   ],

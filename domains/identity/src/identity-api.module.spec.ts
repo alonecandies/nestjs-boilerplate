@@ -104,7 +104,7 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
     expect(app.get(UsersPort)).toBeInstanceOf(UsersLocalAdapter);
   });
 
-  it('register → user + session rows → tokens, then identity.user-registered.v1 on Kafka', async () => {
+  it('register → user, workspace and session rows → tokens, then identity.user-registered.v1 on Kafka', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/auth/register',
@@ -118,10 +118,12 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
     expect(statements).toEqual([
       'select "id" from "identity"."users" where "identity"."users"."email" = $1 limit $2',
       'insert into "identity"."users"',
+      'insert into "identity"."tenants"',
+      'insert into "identity"."memberships"',
       'insert into "identity"."sessions"',
     ]);
     // The refresh token itself is never stored: the session row carries its sha256.
-    const sessionInsert = database.executed[2];
+    const sessionInsert = database.executed[4];
     expect(sessionInsert?.params).not.toContain(res.json<{ refreshToken: string }>().refreshToken);
 
     await vi.waitFor(() => expect(kafka.published(USER_REGISTERED_EVENT)).toHaveLength(1));

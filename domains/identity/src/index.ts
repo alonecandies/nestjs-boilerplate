@@ -54,6 +54,7 @@ export { UsersRepository } from './application/persistence/users.repository.js';
 export { GetUserByIdQuery } from './application/queries/get-user-by-id/get-user-by-id.query.js';
 export { GetUsersByIdsQuery } from './application/queries/get-users-by-ids/get-users-by-ids.query.js';
 export { ListUsersQuery } from './application/queries/list-users/list-users.query.js';
+export { PersonalWorkspaces } from './application/services/personal-workspaces.service.js';
 export {
   type TenantAuditEntry,
   TenantAuditLog,
