@@ -149,12 +149,38 @@ const summarize = (sets: MigrationSetSummary[]): MigrationRunSummary => ({
 });
 
 /**
+ * drizzle applies a set's pending files in ONE transaction; on Citus two settings make that work:
+ * - local execution on: with it off (a `localExecution: false` test server, or a role default),
+ *   the coordinator creates its own shards over a loopback connection that cannot see a schema or
+ *   enum created earlier in the same transaction, so a fresh database's `0000_init` plus its
+ *   `distribute` file fail with `type "<schema>.<enum>" does not exist`;
+ * - sequential shard modification: DDL on a table with a reference-table foreign key fails after
+ *   any parallel shard operation in the same transaction (shards on workers), so one file can
+ *   distribute tables and then add their foreign keys only in this mode (sharding design P-10).
+ * Session `SET`s are safe: this client is private (`max: 1`) and must reach the coordinator
+ * directly, never through a transaction pooler. Without the citus extension nothing is sent.
+ */
+async function configureCitusSession(sql: Sql, logger: LoggerService): Promise<void> {
+  const [row] = await sql<{ citus: boolean }[]>`
+    select exists (select 1 from pg_extension where extname = 'citus') as citus`;
+  if (row?.citus !== true) return;
+  await sql`set citus.enable_local_execution to on`;
+  await sql`set citus.multi_shard_modify_mode to 'sequential'`;
+  logger.log(
+    'Citus detected: migration session uses local execution and sequential shard modification',
+  );
+}
+
+/**
  * Applies the pending drizzle-kit migrations of several sets, in order, safely under concurrency:
  * - ONE advisory lock around every set, so different services sharing a database migrate one
  *   after the other;
  * - a dedicated `max: 1` client so the session-level lock and every `migrate()` share ONE
  *   connection (`max_lifetime: null` — a recycled socket would silently drop the lock);
  * - `statement_timeout: 0` for this session only: DDL / backfills may legitimately run long;
+ * - on Citus (the `citus` extension is installed), `citus.enable_local_execution = on` and
+ *   `citus.multi_shard_modify_mode = 'sequential'` for this session, so a set can create a schema
+ *   or enum, distribute tables and add their foreign keys in one transaction;
  * - each set writes its own bookkeeping table: drizzle applies only files newer than the LAST row
  *   of that table, so a shared table would skip the files of the set with older timestamps;
  * - drizzle runs a set's pending migrations in one transaction (all-or-nothing per set), so
@@ -212,6 +238,7 @@ export async function runMigrations(
       logger,
     );
     locked = true;
+    await configureCitusSession(sql, logger);
     const results: MigrationSetSummary[] = [];
     for (const { set, total } of plan) {
       if (total === null) {

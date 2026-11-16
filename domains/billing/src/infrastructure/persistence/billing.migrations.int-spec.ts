@@ -11,7 +11,7 @@ import {
   type DrizzleDB,
   platformMigrations,
 } from '@platform/database';
-import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { startTestPostgres, type TestPostgres } from '@platform/testing/postgres';
 import { sql } from 'drizzle-orm';
 import { ClsModule } from 'nestjs-cls';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -24,9 +24,8 @@ import { type BillingSchema, billingSchema } from './billing.schema.js';
  * Opt-in (needs Docker):
  *   INTEGRATION=1 bunx vitest run --project billing:int
  * Set INTEGRATION_DATABASE_URL to use an existing throwaway database instead of testcontainers.
+ * The container is Citus 14.2 on PostgreSQL 18, single node (@platform/testing/postgres).
  */
-
-const IMAGE = 'postgres:18.6-alpine3.24';
 
 @Module({
   imports: [
@@ -60,7 +59,7 @@ const journalSize = (set: DatabaseMigrationSet): number => {
 };
 
 describe.skipIf(process.env['INTEGRATION'] !== '1')('billing migrations on PostgreSQL 18', () => {
-  let container: StartedPostgreSqlContainer | undefined;
+  let pg: TestPostgres | undefined;
   let app: INestApplicationContext | undefined;
   let db: DrizzleDB<BillingSchema>;
 
@@ -73,16 +72,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing migrations on Postg
   };
 
   beforeAll(async () => {
-    let url = process.env['INTEGRATION_DATABASE_URL'];
-    if (url === undefined) {
-      container = await new PostgreSqlContainer(IMAGE)
-        .withDatabase('app')
-        .withUsername('app')
-        .withPassword('app')
-        .start();
-      url = container.getConnectionUri();
-    }
-    vi.stubEnv('DATABASE_URL', url);
+    pg = await startTestPostgres();
+    vi.stubEnv('DATABASE_URL', pg.url);
     vi.stubEnv('SERVICE_NAME', 'billing-int');
     app = await boot();
     db = app.get(DRIZZLE);
@@ -90,7 +81,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing migrations on Postg
 
   afterAll(async () => {
     await app?.close();
-    await container?.stop();
+    await pg?.stop();
     vi.unstubAllEnvs();
   });
 
@@ -100,6 +91,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing migrations on Postg
       where table_schema in ('app', 'billing', 'identity')`);
     expect(tables.map((row) => row.name).toSorted()).toEqual([
       'app.__drizzle_migrations',
+      'app.tenant_colocation',
       'billing.__drizzle_migrations',
       'billing.payments',
       'billing.stripe_events',
@@ -122,8 +114,10 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing migrations on Postg
     // The platform set's pg_trgm puts functions, operators and types in public, never tables.
     // Under this spec's role `app`, an unqualified table or enum lands in schema `app` instead
     // (search_path "$user", public), where the first test's lists catch it.
+    // Citus adds its views (citus_tables, citus_shards, …) to public: views are not tables.
     const tables = await db.execute<{ name: string }>(sql`
-      select table_name as name from information_schema.tables where table_schema = 'public'`);
+      select table_name as name from information_schema.tables
+      where table_schema = 'public' and table_type = 'BASE TABLE'`);
     expect(tables.map((row) => row.name)).toEqual([]);
     const types = await db.execute<{ name: string }>(sql`
       select t.typname as name from pg_type t join pg_namespace n on n.oid = t.typnamespace

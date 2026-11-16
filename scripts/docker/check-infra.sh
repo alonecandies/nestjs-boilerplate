@@ -70,15 +70,19 @@ ks="$(compose exec -T cassandra cqlsh -e "DESCRIBE KEYSPACE ${CASSANDRA_KEYSPACE
 grep -q "'${CASSANDRA_DC:-datacenter1}': '1'" <<<"${ks}" || fail "unexpected keyspace: ${ks}"
 echo "  ${ks}"
 
-log "postgres: extensions + native uuidv7()"
-exts="$(compose exec -T postgres psql -U "${POSTGRES_USER:-app}" -d "${POSTGRES_DB:-app}" -tAc \
-  "select string_agg(extname, ',' order by extname) from pg_extension")"
-for ext in pg_stat_statements pg_trgm; do
+log "postgres: Citus single node, extensions + native uuidv7()"
+psql_app() {
+  compose exec -T postgres psql -U "${POSTGRES_USER:-app}" -d "${POSTGRES_DB:-app}" -tAc "$1"
+}
+preload="$(psql_app "show shared_preload_libraries")"
+[[ "${preload}" == citus,* ]] || fail "shared_preload_libraries must start with citus (have: ${preload})"
+exts="$(psql_app "select string_agg(extname, ',' order by extname) from pg_extension")"
+for ext in citus pg_stat_statements pg_trgm; do
   [[ ",${exts}," == *",${ext},"* ]] || fail "extension ${ext} missing (have: ${exts})"
 done
-version="$(compose exec -T postgres psql -U "${POSTGRES_USER:-app}" -d "${POSTGRES_DB:-app}" -tAc \
-  "select current_setting('server_version') || ' uuidv7=' || uuidv7()")"
-echo "  extensions: ${exts}; ${version}"
+version="$(psql_app "select current_setting('server_version') || ' uuidv7=' || uuidv7() \
+  || ' shard_count=' || current_setting('citus.shard_count') || ' ' || citus_version()")"
+echo "  preload: ${preload}; extensions: ${exts}; ${version}"
 
 log "redis: reachable from another container WITHOUT a password; BullMQ-safe eviction policy"
 network="$(docker network ls -q --filter "label=com.docker.compose.project=${PROJECT}" | head -1)"

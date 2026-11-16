@@ -467,6 +467,69 @@ Notes:
 - CI runs `bun run db:generate` and fails if it produces a diff or a new untracked file under `domains/*/src/infrastructure/persistence/migrations`. A `*.schema.ts` change without its migration cannot merge.
 - After merging branches that both generated migrations in one domain, run `bun run db:check`. It runs `drizzle-kit check` in every Postgres domain and fails when two snapshots share a parent; regenerate the later migration on top of the merged history. CI runs it too.
 
+### Citus-ready schema rules
+
+Postgres is Citus 14.2 in compose, in CI and in every int spec (single node: one server holds every shard). These
+rules bind every table a migration creates from B2 on, so that each domain's `distribute` migration can shard it
+later without a rewrite. Background and probes:
+[sharding design](superpowers/specs/2026-11-09-sharding-citus-pgbouncer-design.md), sections 2 and 4.
+
+| Kind               | Use it for                                                                             | Distribution call                                      | Keys                                                                                  |
+| ------------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| reference          | global, small, read-mostly tables that policy helpers read or every tenant table joins | `SELECT app.make_reference('<schema>.<table>');`       | any; global uniques work                                                              |
+| tenant-distributed | rows owned by one tenant                                                               | `SELECT app.distribute_by_tenant('<schema>.<table>');` | `tenant_id uuid NOT NULL`; PK `(tenant_id, id)`; every UNIQUE starts with `tenant_id` |
+| user-distributed   | rows looked up by user across tenants                                                  | `SELECT app.distribute_by_user('<schema>.<table>');`   | `user_id uuid NOT NULL`; PK `(user_id, id)`; every UNIQUE starts with `user_id`       |
+| coordinator-local  | bookkeeping and system-only tables (`<schema>.__drizzle_migrations`, …)                | none                                                   | any                                                                                   |
+
+1. **One kind per table.** Note it on the table in `*.schema.ts` (`// citus: reference`, `// citus: tenant`,
+   `// citus: user`, `// citus: local`); the domain's `distribute` migration is the source of truth.
+2. **Keys.** On a distributed table the PK and every UNIQUE (constraint or unique index) start with the
+   distribution column; Citus rejects anything else. `id` stays `uuid` with `DEFAULT uuidv7()`, but
+   `uuid().primaryKey()` alone is only valid on reference and local tables. In Drizzle:
+   `(t) => [primaryKey({ columns: [t.tenantId, t.id] }), uniqueIndex('<table>_tenant_id_<col>_uq').on(t.tenantId, t.<col>)]`.
+3. **Foreign keys.** Distributed → reference: allowed (`ON DELETE CASCADE` too). Distributed → distributed: only
+   between tables of the same kind, and the key includes the distribution column
+   (`(tenant_id, parent_id) REFERENCES parent (tenant_id, id)`). Reference → distributed: never. Distributed →
+   coordinator-local and local → distributed: never; such a column (for example a run id) is a plain column. No
+   foreign key crosses a domain schema: a domain's `tenant_id` or `user_id` that points into another domain is a
+   plain column.
+4. **Policies (B3).** No subquery anywhere in a policy: call `app.user_id()`, `app.tenant_id()`, `app.elevated()`
+   directly, never `(select app.x())`. A cross-table check goes through a `STABLE` SQL helper that reads
+   **reference tables only**; one that reads a distributed table fails inside pushed-down queries.
+5. **Queries.** Every tenant-scoped repository query carries an explicit `tenant_id = $param` predicate from the
+   principal, even where RLS filters too: without it the query fans out to every shard.
+6. **Locks and session state.** No `SELECT … FOR UPDATE` without an equality on the distribution column (Citus
+   refuses multi-shard row locks). Use `pg_advisory_xact_lock`, never `pg_advisory_lock`; no session `SET` or
+   `set_config(…, false)` outside the migrator (a transaction pooler arrives with B3).
+7. **Cross-shard work** (crons, relays, reconciliation) runs on the system pool as multi-shard statements without
+   row locks, or loops per tenant.
+8. **Platform tenant.** Platform-level rows of a tenant-distributed table (for example platform Stripe events and
+   their ledger rows) use `PLATFORM_TENANT_ID`, the nil UUID `00000000-0000-0000-0000-000000000000`, as
+   `tenant_id`. It is never issued as a tenant id and never accepted as a runtime principal's tenant, so only the
+   system role reads or writes those rows; they all hash to one shard, which is fine for their small volume.
+
+**Distribution migrations.** Each domain gets one hand-written migration,
+`bun run --filter @domain/<x> db:generate --custom --name distribute`, that holds only helper calls, in this
+order: reference tables (parents before children), then tenant-distributed, then user-distributed tables
+(identity and billing get theirs right after their B2 table tasks). Every table created **after** that migration
+carries its own call in the migration that creates it, in the order CREATE TABLE → distribution call → indexes →
+foreign keys → RLS and policies: drizzle-kit writes foreign keys at the end of a generated file, so add the call by
+hand right after each `CREATE TABLE` (the CI drift check compares snapshots, not SQL). A coordinator-local table
+gets no call. Migrations of one domain are serialized on one lane, and each takes the next free `NNNN` at merge
+time. The helpers come from the platform set
+(`0001_citus_helpers.sql`): they do nothing without the `citus` extension, a second call is a no-op, and a call
+that would change a table's kind raises. On Citus the migrator runs with `citus.enable_local_execution = on` and
+`citus.multi_shard_modify_mode = 'sequential'`, so one migration can create a schema or enum, distribute tables
+and then add their foreign keys in its single transaction (drizzle applies all pending files of a set in one).
+
+**Shard count.** All tenant tables share the shard map of `app.tenant_colocation`, fixed by the server's
+`citus.shard_count` when the first tenant table is distributed (8 in compose, 4 in int specs, Citus' default 32
+elsewhere). Set it in the server config before the first `distribute` migration runs in production.
+
+**Tools.** Migrations, `drizzle-kit` and `db:studio` connect to the Citus coordinator directly
+(`DATABASE_MIGRATION_URL` from B3 on), never through a pooler. Citus hides shards from `pg_class` and
+`information_schema` (`citus.override_table_visibility`), so Studio and `drizzle-kit pull` see each table once.
+
 ## Cassandra CQL migrations
 
 The notifications inbox lives in Cassandra. Its schema is versioned as CQL files that ship with the lib (SWC `copyFiles` copies `.cql` into `dist`):

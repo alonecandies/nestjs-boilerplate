@@ -135,13 +135,17 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
 - Unit (`bunx vitest run --project database`) needs no database. `test/fake-sql.ts` fakes the postgres.js pool
   (`unsafe`, `begin`, `end`), so drizzle's real session code runs: module wiring, `@Transactional()` commit and
   rollback, boot retries, the platform-first rule, the per-set runner under one lock, the CLI and health are covered.
-- Integration (`INTEGRATION=1 bunx vitest run --project database:int`) uses `postgres:18.6-alpine3.24` through
-  testcontainers. It covers concurrent `runMigrations` over two sets, separate bookkeeping tables (`gadgets`, a set
+- Integration (`INTEGRATION=1 bunx vitest run --project database:int`) uses `startTestPostgres()` from
+  `@platform/testing/postgres` (Citus 14.2 on PostgreSQL 18.4; the databases it creates have no `citus`
+  extension, so they are plain Postgres). It covers concurrent `runMigrations` over two sets, separate bookkeeping tables (`gadgets`, a set
   with older timestamps, still applies), the CLI (`test/fixtures/migrate.ts`, an app-style entry), boot migrations,
   startup GUCs, `uuidv7()` defaults, transactions, keyset paging, health and shutdown. `test/fixtures/migrations` is
   real drizzle-kit output
   (`drizzle-kit generate --dialect=postgresql --schema=./test/fixtures/widgets.schema.ts --out=./test/fixtures/migrations --casing=snake_case`);
-  `test/fixtures/gadgets/migrations` is hand-written.
+  `test/fixtures/gadgets/migrations` is hand-written. `test/citus.int-spec.ts` covers the
+  Citus helpers (placement, colocation, idempotency, kind changes, the plain-Postgres no-op) and the runner's
+  Citus session settings (a set applied while sessions default to remote execution, and the parallel-mode
+  failure they avoid), with the `test/fixtures/citus` set.
 
 ## Gotchas
 
@@ -180,6 +184,18 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
 owns: the `app` schema and the extensions domain tables rely on (`pg_trgm` for a domain's trigram index, created
 `WITH SCHEMA public` because drizzle-kit writes `gin_trgm_ops` unqualified). It is applied before every domain set,
 under the same advisory lock, and cannot be left out.
+
+`0001_citus_helpers.sql` adds the Citus distribution helpers: `app.citus_enabled()`, the empty colocation
+anchor `app.tenant_colocation (tenant_id uuid PRIMARY KEY)`, `app.citus_table_kind(regclass)`,
+`app.distribute_by_tenant(regclass)` (hash on `tenant_id`, colocated with the anchor),
+`app.distribute_by_user(regclass)` (hash on `user_id`, one group for all user tables) and
+`app.make_reference(regclass)`. Without the `citus` extension they return at once; with it they check
+`pg_dist_partition` first, so a re-run is a no-op, and they raise instead of changing a table's kind. Domain
+sets call them from a hand-written `distribute` migration ([DEVELOPMENT.md](../../docs/DEVELOPMENT.md#citus-ready-schema-rules)).
+When the database has the `citus` extension, `runMigrations` sets `citus.enable_local_execution = on` and
+`citus.multi_shard_modify_mode = 'sequential'` on its private session, so a set can create a schema or enum,
+distribute tables and add their foreign keys in one transaction, also on a server whose sessions default to
+remote execution. The migration URL must reach the coordinator directly, never a transaction pooler.
 
 The files are hand-written: drizzle-kit has nothing to diff here, and `drizzle-kit generate --custom` refuses to run
 without a schema file. The runtime migrator reads only `meta/_journal.json` and the `.sql` files. To add a file:

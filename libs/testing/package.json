@@ -3,12 +3,17 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Test helpers: Fastify e2e app factory and Proxy-based Vitest auto mocks.",
+  "description": "Test helpers: Fastify e2e app factory, Proxy-based Vitest auto mocks, Citus test containers.",
   "exports": {
     ".": {
       "@repo/source": "./src/index.ts",
       "types": "./src/index.ts",
       "default": "./dist/index.js"
+    },
+    "./postgres": {
+      "@repo/source": "./src/postgres/index.ts",
+      "types": "./src/postgres/index.ts",
+      "default": "./dist/postgres/index.js"
     },
     "./package.json": "./package.json"
   },
@@ -23,6 +28,8 @@
     "@nestjs/core": "catalog:",
     "@nestjs/platform-fastify": "catalog:",
     "@nestjs/testing": "catalog:",
+    "@testcontainers/postgresql": "catalog:",
+    "postgres": "catalog:",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
     "vitest": "catalog:"
