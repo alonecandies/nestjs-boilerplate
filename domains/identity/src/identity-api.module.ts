@@ -19,6 +19,8 @@ import { MembersLocalAdapter } from './infrastructure/adapters/local/members-loc
 import { TenantsLocalAdapter } from './infrastructure/adapters/local/tenants-local.adapter.js';
 import { UsersLocalAdapter } from './infrastructure/adapters/local/users-local.adapter.js';
 import { AuthResolver } from './presentation/graphql/auth.resolver.js';
+import { MeTenantResolver } from './presentation/graphql/me-tenant.resolver.js';
+import { TenancyResolver } from './presentation/graphql/tenancy.resolver.js';
 import { UsersResolver } from './presentation/graphql/users.resolver.js';
 import { UsersLoaderRegistrar } from './presentation/graphql/users-loader.registrar.js';
 import { AuthController } from './presentation/http/auth.controller.js';
@@ -43,6 +45,8 @@ const PRESENTATION: Provider[] = [
 const PORT_EXPORTS = [AuthPort, UsersPort];
 /** Tenancy endpoints: local-only until the gRPC adapter exists (`forRemote()` gains them in Task 11). */
 const TENANCY_CONTROLLERS = [TenantsController, MembersController, InvitationsController];
+/** Tenancy GraphQL: local-only like the controllers (the gateway gains them with Task 11). */
+const TENANCY_PROVIDERS: Provider[] = [TenancyResolver, MeTenantResolver];
 
 /**
  * Edge API of the identity context: REST (`/v1/auth`, `/v1/users`), GraphQL (me, user, users,
@@ -71,6 +75,7 @@ export class IdentityApiModule {
       controllers: [...CONTROLLERS, ...TENANCY_CONTROLLERS],
       providers: [
         ...PRESENTATION,
+        ...TENANCY_PROVIDERS,
         { provide: AuthPort, useClass: AuthLocalAdapter },
         { provide: UsersPort, useClass: UsersLocalAdapter },
         { provide: TenantsPort, useClass: TenantsLocalAdapter },
