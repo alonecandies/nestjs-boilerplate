@@ -119,6 +119,7 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       issuer: 'nestjs-boilerplate',
       audience: 'nestjs-boilerplate',
       denylistEnabled: true,
+      wsRevocationSweepIntervalMs: 30_000,
     } satisfies AuthConfig);
     expect(graphqlConfig.parse({})).toMatchObject({
       path: '/graphql',
@@ -255,6 +256,23 @@ describe('config namespaces — invalid values produce errors naming the env var
     expect(error.namespace).toBe('*');
     expect(error.message).toContain('→ at app.PORT');
     expect(error.message).toContain('→ at redis.REDIS_URL');
+  });
+});
+
+describe('auth WS_REVOCATION_SWEEP_INTERVAL_MS', () => {
+  const intervalOf = (value: string): number =>
+    authConfig.parse({ WS_REVOCATION_SWEEP_INTERVAL_MS: value }).wsRevocationSweepIntervalMs;
+
+  it('defaults to 30 s and accepts the 100 ms floor', () => {
+    expect(authConfig.parse({}).wsRevocationSweepIntervalMs).toBe(30_000);
+    expect(intervalOf('100')).toBe(100);
+    expect(intervalOf('300000')).toBe(300_000);
+  });
+
+  it.each(['99', '300001', '250.5', 'often'])('rejects %s', (value) => {
+    expect(errorOf(() => intervalOf(value)).message).toContain(
+      '→ at WS_REVOCATION_SWEEP_INTERVAL_MS',
+    );
   });
 });
 

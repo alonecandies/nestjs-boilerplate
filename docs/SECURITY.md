@@ -80,11 +80,14 @@ session of the given `refreshToken`, or **every** session when the body omits it
 - The denylist **fails closed**: a Redis error or a check slower than 250 ms answers 503, never
   "allowed". `AUTH_DENYLIST_ENABLED=false` turns it off (not recommended).
 - WebSockets authenticate at the handshake (the denylist is checked there). Per message,
-  `WsSessionGuard` re-checks the denylist; every 30 s each replica disconnects its sockets whose
-  token was revoked (`TOKEN_REVOKED`), and a per-socket timer disconnects a socket when its access
-  token expires (`TOKEN_EXPIRED`).
+  `WsSessionGuard` re-checks the denylist; every `WS_REVOCATION_SWEEP_INTERVAL_MS` (30 s by
+  default) each replica disconnects its sockets whose token was revoked (`TOKEN_REVOKED`), and a
+  per-socket timer disconnects a socket when its access token expires (`TOKEN_EXPIRED`).
 - graphql-ws subscriptions authenticate at `connection_init` (close code 4403 for an invalid,
-  expired, revoked or missing token) and are closed with 4401 when the token's `exp` passes.
+  expired, revoked or missing token) and are closed with 4401 `Access token expired` when the
+  token's `exp` passes. They are swept too: each socket is tracked by its token's `jti`, and every
+  `WS_REVOCATION_SWEEP_INTERVAL_MS` each replica closes those whose token was revoked with 4401
+  `Access token revoked`. Both transports share one `RevocationSweeper` (`@platform/auth`).
 
 ### Passwords
 
@@ -386,4 +389,7 @@ Prometheus scrape the pods directly. A separate metrics listener is a [known gap
 - No admin seed or bootstrap command (manual SQL above).
 - Integration events are published after commit, with no transactional outbox: a crash between
   commit and publish loses the event (not a security issue, but an audit-trail one).
-- WebSocket revocation is enforced by the per-message guard and a 30 s sweep, not instantly.
+- WebSocket revocation is not instant: a live socket whose token is revoked is closed by the next
+  sweep, up to `WS_REVOCATION_SWEEP_INTERVAL_MS` (30 s by default) later, on both transports.
+  Socket.IO messages and new graphql-ws operations are refused at once (their guards re-check the
+  denylist); a running subscription keeps receiving pushes until the sweep closes its socket.

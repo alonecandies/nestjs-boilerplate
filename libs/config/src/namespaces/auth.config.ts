@@ -18,6 +18,8 @@ export const authEnvSchema = z
     JWT_ISSUER: zStr('nestjs-boilerplate'),
     JWT_AUDIENCE: zStr('nestjs-boilerplate'),
     AUTH_DENYLIST_ENABLED: zBool(true),
+    // How often each replica closes its WebSockets (Socket.IO and graphql-ws) whose token was revoked.
+    WS_REVOCATION_SWEEP_INTERVAL_MS: zInt(30_000, { min: 100, max: 300_000 }),
     // LOCAL compose stack only: accept the publicly known compose fallbacks in production mode.
     ALLOW_KNOWN_LOCAL_SECRETS: zBool(false),
   })
@@ -49,8 +51,12 @@ export const authEnvSchema = z
     issuer: env.JWT_ISSUER,
     audience: env.JWT_AUDIENCE,
     denylistEnabled: env.AUTH_DENYLIST_ENABLED,
+    wsRevocationSweepIntervalMs: env.WS_REVOCATION_SWEEP_INTERVAL_MS,
   }));
 
-/** Access tokens: secret and TTL (signer side), `iss`/`aud` and the denylist (every verifier). */
+/**
+ * Access tokens: secret and TTL (signer side), `iss`/`aud`, the denylist and the WebSocket
+ * revocation sweep interval (every verifier).
+ */
 export const authConfig = defineConfigNamespace('auth', authEnvSchema);
 export type AuthConfig = ConfigType<typeof authConfig>;

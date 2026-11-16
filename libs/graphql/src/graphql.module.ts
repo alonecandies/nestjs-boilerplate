@@ -2,9 +2,13 @@ import { ApolloDriver, type ApolloDriverConfig } from '@nestjs/apollo';
 import { type DynamicModule, Module, type ModuleMetadata } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { type BuildSchemaOptions, GraphQLModule } from '@nestjs/graphql';
-import { AccessTokenDenylist, TokenService } from '@platform/auth';
+import { AccessTokenDenylist, type RevocationSweeper, TokenService } from '@platform/auth';
 import { type AppConfig, appConfig, type GraphqlConfig, graphqlConfig } from '@platform/config';
 import { createApolloDriverConfig } from './apollo-config.factory.js';
+import {
+  GRAPHQL_WS_REVOCATION_SWEEPER,
+  GraphqlWsRevocationModule,
+} from './auth/graphql-ws-revocation.module.js';
 import {
   createGraphqlWsAuthHandlers,
   createSubscriptionAuthenticator,
@@ -36,6 +40,10 @@ export interface AppGraphqlModuleOptions {
  *
  * It needs `AppConfigModule` and `AuthModule.forRootAsync()` (global `TokenService` /
  * `AccessTokenDenylist`) in the app. Resolvers are ordinary providers in any module.
+ *
+ * graphql-ws sockets are tracked by their token's `jti`; one `RevocationSweeper` (`graphql-ws`,
+ * every `WS_REVOCATION_SWEEP_INTERVAL_MS`) closes those whose token was revoked (4401
+ * `Access token revoked`). It starts on application bootstrap and stops on shutdown.
  */
 @Module({})
 export class AppGraphqlModule {
@@ -51,6 +59,7 @@ export class AppGraphqlModule {
           imports: [
             ConfigModule.forFeature(graphqlConfig),
             GraphqlLoadersModule,
+            GraphqlWsRevocationModule,
             ...(options.imports ?? []),
           ],
           inject: [
@@ -59,6 +68,7 @@ export class AppGraphqlModule {
             DataLoaderRegistry,
             TokenService,
             AccessTokenDenylist,
+            GRAPHQL_WS_REVOCATION_SWEEPER,
           ],
           useFactory: (
             graphql: GraphqlConfig,
@@ -66,6 +76,7 @@ export class AppGraphqlModule {
             loaders: DataLoaderRegistry,
             tokens: TokenService,
             denylist: AccessTokenDenylist,
+            sweeper: RevocationSweeper,
           ): ApolloDriverConfig =>
             createApolloDriverConfig({
               graphql,
@@ -75,6 +86,7 @@ export class AppGraphqlModule {
                 createSubscriptionAuthenticator(tokens, denylist),
                 {
                   requireAuth: options.requireSubscriptionAuth ?? true,
+                  sweeper,
                 },
               ),
               buildSchemaOptions: options.buildSchemaOptions,
