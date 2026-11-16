@@ -91,6 +91,8 @@ message LogoutRequest {
 
 message GetUserRequest {
   string id = 1;
+  // Scope: only a member of this tenant is found (else NOT_FOUND). Absent: any user (own profile, internal).
+  optional string tenant_id = 2;
 }
 
 message GetUsersByIdsRequest {
@@ -107,6 +109,8 @@ message ListUsersRequest {
   optional string cursor = 2;
   // Case-insensitive substring match on email / display name.
   optional string search = 3;
+  // Required since B2: list the members of this tenant only (INVALID_ARGUMENT when absent).
+  optional string tenant_id = 4;
 }
 
 message UserPage {

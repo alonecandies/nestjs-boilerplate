@@ -209,17 +209,25 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
 
   it('list: keyset pages newest first, search is a literal ILIKE', async () => {
     const token = `kst${run}`;
+    const [tenant] = await db.execute<{ id: string }>(
+      sql`insert into identity.tenants (slug, name) values (${`dir-k-${run}`}, 'K') returning id`,
+    );
+    const tenantId = tenant?.id ?? '';
     const created: string[] = [];
     for (const name of ['one', 'two', 'three']) {
       const user = register(email(`${token}-${name}`), `Keyset ${name}`);
       await usersRepo.insert(user);
+      await db.execute(
+        sql`insert into identity.memberships (tenant_id, user_id, roles) values (${tenantId}, ${user.id}, '{member}')`,
+      );
       created.push(user.id);
     }
-    const first = await usersRepo.list({ limit: 2, search: token.toUpperCase() });
+    const first = await usersRepo.list({ tenantId, limit: 2, search: token.toUpperCase() });
     expect(first.items.map((row) => row.id)).toEqual([created[2], created[1]]);
     expect(first.nextCursor).toEqual(expect.any(String));
 
     const second = await usersRepo.list({
+      tenantId,
       limit: 2,
       search: token,
       cursor: first.nextCursor ?? '',
@@ -228,9 +236,31 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     expect(second.nextCursor).toBeNull();
 
     // `%` is escaped: it must not act as a wildcard.
-    await expect(usersRepo.list({ limit: 5, search: `${token}%` })).resolves.toMatchObject({
-      items: [],
+    await expect(
+      usersRepo.list({ tenantId, limit: 5, search: `${token}%` }),
+    ).resolves.toMatchObject({ items: [] });
+  });
+
+  it('list and findByIdInTenant see only the members of the tenant', async () => {
+    const [tenantA] = await db.execute<{ id: string }>(
+      sql`insert into identity.tenants (slug, name) values (${`dir-a-${run}`}, 'A') returning id`,
+    );
+    const [tenantB] = await db.execute<{ id: string }>(
+      sql`insert into identity.tenants (slug, name) values (${`dir-b-${run}`}, 'B') returning id`,
+    );
+    const inA = register(email('dir-a'));
+    const inB = register(email('dir-b'));
+    await usersRepo.insert(inA);
+    await usersRepo.insert(inB);
+    await db.execute(sql`insert into identity.memberships (tenant_id, user_id, roles) values
+      (${tenantA?.id}, ${inA.id}, '{member}'), (${tenantB?.id}, ${inB.id}, '{owner}')`);
+
+    const page = await usersRepo.list({ tenantId: tenantA?.id ?? '', limit: 50 });
+    expect(page.items.map((user) => user.id)).toEqual([inA.id]);
+    await expect(usersRepo.findByIdInTenant(inA.id, tenantA?.id ?? '')).resolves.toMatchObject({
+      id: inA.id,
     });
+    await expect(usersRepo.findByIdInTenant(inB.id, tenantA?.id ?? '')).resolves.toBeNull();
   });
 
   it('isPlatformStaff: false by default, true once flagged, false for an unknown id', async () => {

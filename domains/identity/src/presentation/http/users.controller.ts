@@ -45,13 +45,19 @@ export class UsersController {
 
   @Get()
   @RequirePermissions(IdentityPermission.UsersRead)
-  @ApiOperation({ summary: 'List users (keyset pagination, newest first)' })
+  @ApiOperation({
+    summary: 'List the members of your active tenant (keyset pagination, newest first)',
+  })
   @ApiOkResponse({ type: UserPageResponse })
   @ApiBadRequestResponse({ type: ProblemResponse })
   @ApiForbiddenResponse({ type: ProblemResponse, description: 'Requires `users:read`.' })
   @ApiUnprocessableEntityResponse({ type: ProblemResponse, description: '`INVALID_CURSOR`' })
-  async list(@Query() query: ListUsersQueryDto): Promise<UserPageResponse> {
+  async list(
+    @Query() query: ListUsersQueryDto,
+    @CurrentUser() actor: AuthUser,
+  ): Promise<UserPageResponse> {
     const page = await this.users.listUsers({
+      tenantId: actor.tenantId,
       limit: query.limit,
       cursor: query.cursor,
       search: query.search,
@@ -60,7 +66,9 @@ export class UsersController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get a user (yourself, or anyone with `users:read`)' })
+  @ApiOperation({
+    summary: 'Get a user (yourself, or a member of your active tenant with `users:read`)',
+  })
   @ApiParam({ name: 'id', format: 'uuid' })
   @ApiOkResponse({ type: UserResponse })
   @ApiBadRequestResponse({ type: ProblemResponse, description: 'Not a uuidv7.' })
@@ -71,6 +79,10 @@ export class UsersController {
     @CurrentUser() actor: AuthUser,
   ): Promise<UserResponse> {
     assertCanReadUser(actor, id);
-    return UserResponse.from(await this.cache.getUser(id));
+    const user =
+      actor.id === id
+        ? await this.cache.getUser(id)
+        : await this.cache.getScopedUser(id, { tenantId: actor.tenantId });
+    return UserResponse.from(user);
   }
 }

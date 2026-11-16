@@ -94,6 +94,7 @@ export const logoutRequestSchema = z.object({
 
 export const getUserRequestSchema = z.object({
   id: z.uuid(),
+  tenantId: optionalUuid,
 }) satisfies z.ZodType<GetUserRequest>;
 
 export const getUsersByIdsRequestSchema = z.object({
@@ -106,4 +107,6 @@ export const listUsersRequestSchema = z.object({
   limit: z.number().int().min(0).max(MAX_PAGE_LIMIT),
   cursor: optionalString(MAX_CURSOR_LENGTH),
   search: searchTerm,
+  /** Required here although the generated field is optional: the directory is never global. */
+  tenantId: z.uuid(),
 }) satisfies z.ZodType<ListUsersRequest>;

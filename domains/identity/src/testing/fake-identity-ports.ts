@@ -199,10 +199,13 @@ export class FakeUsersPort extends UsersPort {
     super();
   }
 
-  async getUser(id: string): Promise<User> {
+  async getUser(id: string, scope?: { tenantId: string }): Promise<User> {
     this.state.calls.push('UsersService.GetUser');
     const entry = this.state.users.get(id);
     if (!entry) throw new EntityNotFoundException('User', id);
+    if (scope !== undefined && this.state.membership(scope.tenantId, id) === undefined) {
+      throw new EntityNotFoundException('User', id);
+    }
     return entry.user;
   }
 
@@ -217,6 +220,7 @@ export class FakeUsersPort extends UsersPort {
   async listUsers(query: ListUsersRequest): Promise<UserPage> {
     this.state.calls.push('UsersService.ListUsers');
     const items = [...this.state.users.values()]
+      .filter((entry) => this.state.membership(query.tenantId ?? '', entry.user.id) !== undefined)
       .map((entry) => entry.user)
       .sort((a, b) => b.id.localeCompare(a.id))
       .slice(0, query.limit);

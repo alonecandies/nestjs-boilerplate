@@ -97,4 +97,22 @@ describe('tenancy through the gateway (remote ports over the fake identity-servi
     expect(denied.statusCode).toBe(403);
     expect(denied.json<{ code: string }>().code).toBe('TENANT_ACCESS_DENIED');
   });
+
+  it('GET /v1/users through the gateway lists only the members of the active tenant', async () => {
+    const reg = await inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: { email: 'dir.gw@example.com', password: PASSWORD, displayName: 'Dir' },
+    });
+    const body = reg.json<AuthTokensBody>();
+    const list = await inject({
+      method: 'GET',
+      url: '/v1/users',
+      headers: { authorization: `Bearer ${body.accessToken}` },
+    });
+    expect(list.statusCode, list.body).toBe(200);
+    expect(list.json<{ items: { id: string }[] }>().items.map((user) => user.id)).toEqual([
+      body.user.id,
+    ]);
+  });
 });

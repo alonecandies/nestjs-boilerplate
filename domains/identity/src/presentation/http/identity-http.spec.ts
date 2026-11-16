@@ -1,6 +1,6 @@
 import { Test } from '@nestjs/testing';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
-import { EntityNotFoundException, provideCommonEnhancers } from '@platform/common';
+import { EntityNotFoundException, generateId, provideCommonEnhancers } from '@platform/common';
 import { AppCacheService, RATE_LIMIT_POLICY_KEY } from '@platform/redis';
 import { createFastifyTestApp, createMock } from '@platform/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -311,7 +311,12 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(usersPort.listUsers).toHaveBeenCalledWith({ limit: 5, cursor: 'c1', search: 'ada' });
+      expect(usersPort.listUsers).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
+        limit: 5,
+        cursor: 'c1',
+        search: 'ada',
+      });
       expect(res.json()).toEqual({
         items: [expect.objectContaining({ id: listed.id })],
         nextCursor: 'c2',
@@ -335,6 +340,7 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
       expect(blank.statusCode).toBe(200);
       expect(usersPort.listUsers).toHaveBeenCalledTimes(1);
       expect(usersPort.listUsers).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
         limit: 20,
         cursor: undefined,
         search: undefined,
@@ -399,15 +405,28 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
       expect(other.statusCode).toBe(403);
     });
 
-    it('users:read holders read anyone; unknown ids are 404', async () => {
-      usersPort.getUser.mockRejectedValue(new EntityNotFoundException('User', admin.id));
-      const res = await app.inject({
+    it('users:read holders read members of their active tenant (scoped, uncached); others are 404', async () => {
+      const target = generateId();
+      usersPort.getUser.mockResolvedValue(makeUser({ id: target }));
+      const ok = await app.inject({
         method: 'GET',
-        url: `/v1/users/${admin.id}`,
+        url: `/v1/users/${target}`,
         headers: bearer(moderator),
       });
-      expect(res.statusCode).toBe(404);
-      expect(res.json()).toMatchObject({ code: 'NOT_FOUND' });
+      expect(ok.statusCode).toBe(200);
+      expect(usersPort.getUser).toHaveBeenLastCalledWith(target, { tenantId: TEST_TENANT_ID });
+      await app.inject({ method: 'GET', url: `/v1/users/${target}`, headers: bearer(moderator) });
+      expect(usersPort.getUser).toHaveBeenCalledTimes(2);
+      expect(cache.loads).toHaveLength(0);
+
+      usersPort.getUser.mockRejectedValue(new EntityNotFoundException('User', target));
+      const missing = await app.inject({
+        method: 'GET',
+        url: `/v1/users/${target}`,
+        headers: bearer(moderator),
+      });
+      expect(missing.statusCode).toBe(404);
+      expect(missing.json()).toMatchObject({ code: 'NOT_FOUND' });
     });
   });
 });

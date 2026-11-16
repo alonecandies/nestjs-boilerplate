@@ -1,10 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { IDENTITY_LIMITS } from '../../identity.constants.js';
-import { listUsersRequestSchema, loginRequestSchema } from './identity-rpc.payloads.js';
+import {
+  getUserRequestSchema,
+  listUsersRequestSchema,
+  loginRequestSchema,
+} from './identity-rpc.payloads.js';
 
 describe('listUsersRequestSchema.search', () => {
   const parse = (search: string | null | undefined) =>
-    listUsersRequestSchema.safeParse({ limit: 0, search });
+    listUsersRequestSchema.safeParse({
+      limit: 0,
+      search,
+      tenantId: '0190f3b2-0000-7000-8000-0000000000aa',
+    });
 
   it('trims; blank / null / absent → undefined (no filter)', () => {
     expect(parse(' ada ').data?.search).toBe('ada');
@@ -45,5 +53,19 @@ describe('loginRequestSchema.tenantId', () => {
     for (const bad of ['nope', '0190f3b2-0000-7000-8000-0000000000aa; drop', 42]) {
       expect(parse(bad).success).toBe(false);
     }
+  });
+});
+
+describe('tenant scoping of the user RPCs', () => {
+  it('ListUsers requires a tenant_id UUID', () => {
+    expect(listUsersRequestSchema.safeParse({ limit: 0 }).success).toBe(false);
+    expect(listUsersRequestSchema.safeParse({ limit: 0, tenantId: 'x' }).success).toBe(false);
+  });
+
+  it('GetUser takes an optional tenant_id UUID ("" and null = unscoped)', () => {
+    const id = '0190f3b2-0000-7000-8000-000000000001';
+    expect(getUserRequestSchema.parse({ id, tenantId: '' }).tenantId).toBeUndefined();
+    expect(getUserRequestSchema.parse({ id, tenantId: null }).tenantId).toBeUndefined();
+    expect(getUserRequestSchema.safeParse({ id, tenantId: 'x' }).success).toBe(false);
   });
 });

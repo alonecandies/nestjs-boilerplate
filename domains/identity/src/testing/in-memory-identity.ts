@@ -22,6 +22,7 @@ import {
   InMemoryInvitationsRepository,
   InMemoryMembershipsRepository,
   InMemoryTenantsRepository,
+  membershipKey,
 } from './in-memory-tenancy.js';
 
 /**
@@ -66,6 +67,11 @@ export class InMemoryUsersRepository extends UsersRepository {
     return user ? toRecord(user) : null;
   }
 
+  async findByIdInTenant(id: string, tenantId: string): Promise<UserRecord | null> {
+    if (!this.store.memberships.has(membershipKey(tenantId, id))) return null;
+    return this.findById(id);
+  }
+
   async findByIds(ids: readonly string[]): Promise<UserRecord[]> {
     return ids.flatMap((id) => {
       const user = this.store.users.get(id);
@@ -89,6 +95,7 @@ export class InMemoryUsersRepository extends UsersRepository {
     const after = criteria.cursor === undefined ? undefined : decodeIdCursor(criteria.cursor).id;
     const search = criteria.search?.toLowerCase();
     const rows = [...this.store.users.values()]
+      .filter((user) => this.store.memberships.has(membershipKey(criteria.tenantId, user.id)))
       .filter((user) => after === undefined || user.id < after)
       .filter(
         (user) =>

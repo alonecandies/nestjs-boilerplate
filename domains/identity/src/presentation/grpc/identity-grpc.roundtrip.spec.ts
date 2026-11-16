@@ -45,6 +45,8 @@ import { UsersGrpcController } from './users-grpc.controller.js';
  * (DomainException → status + trailers → DomainException with the same code).
  */
 
+const TENANT = '0190f3b2-0000-7000-8000-0000000000aa';
+
 const commandBus = { execute: vi.fn() };
 const queryBus = { execute: vi.fn() };
 
@@ -140,12 +142,12 @@ describe('identity over gRPC (forRemote adapters ↔ gRPC controllers)', () => {
     queryBus.execute.mockResolvedValueOnce([a, b]).mockResolvedValueOnce({ items: [a] });
 
     await expect(users.getUsersByIds([a.id, b.id])).resolves.toEqual([a, b]);
-    const page = await users.listUsers({ limit: 0 });
+    const page = await users.listUsers({ limit: 0, tenantId: TENANT });
 
     expect(queryBus.execute).toHaveBeenNthCalledWith(1, new GetUsersByIdsQuery([a.id, b.id]));
     expect(queryBus.execute).toHaveBeenNthCalledWith(
       2,
-      new ListUsersQuery(0, undefined, undefined),
+      new ListUsersQuery(TENANT, 0, undefined, undefined),
     );
     expect(page).toEqual({ items: [a] });
     expect(page).not.toHaveProperty('nextCursor');

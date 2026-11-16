@@ -5,6 +5,8 @@ import type { UserAggregate, UserSnapshot } from '../../domain/user.aggregate.js
 export type UserRecord = Omit<UserSnapshot, 'passwordHash'>;
 
 export interface ListUsersCriteria {
+  /** Only members of this tenant (join on identity.memberships). */
+  tenantId: string;
   /** Already clamped to `[1, MAX_PAGE_LIMIT]`. */
   limit: number;
   /** Opaque keyset cursor from a previous page. */
@@ -20,6 +22,9 @@ export interface ListUsersCriteria {
  */
 export abstract class UsersRepository {
   abstract findById(id: string): Promise<UserRecord | null>;
+
+  /** The user when they are a member of `tenantId`, else null. */
+  abstract findByIdInTenant(id: string, tenantId: string): Promise<UserRecord | null>;
 
   /** ONE query for all ids (no N+1). Unknown ids are omitted; order is unspecified. */
   abstract findByIds(ids: readonly string[]): Promise<UserRecord[]>;

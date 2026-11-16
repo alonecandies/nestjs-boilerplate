@@ -227,4 +227,38 @@ describe('tenancy: workspaces and tenant-bound sessions (monolith)', () => {
       staff: false,
     });
   });
+
+  it("the user directory shows the active tenant's members only; other users are 404", async () => {
+    const boss = await register('boss.dir@example.com', 'Boss');
+    const peer = await register('peer.dir@example.com', 'Peer');
+    const stranger = await register('stranger.dir@example.com', 'Stranger');
+    e2e.identity.store.memberships.set(`${boss.tenantId}:${peer.user.id}`, {
+      tenantId: boss.tenantId,
+      userId: peer.user.id,
+      roles: ['member'],
+      lastActiveAt: null,
+      createdAt: new Date(),
+    });
+    const auth = { authorization: `Bearer ${boss.accessToken}` };
+
+    const list = await inject({ method: 'GET', url: '/v1/users?limit=100', headers: auth });
+    expect(list.statusCode, list.body).toBe(200);
+    const ids = list.json<{ items: { id: string }[] }>().items.map((user) => user.id);
+    expect(ids.sort()).toEqual([boss.user.id, peer.user.id].sort());
+
+    const one = await inject({ method: 'GET', url: `/v1/users/${peer.user.id}`, headers: auth });
+    expect(one.statusCode).toBe(200);
+    const hidden = await inject({
+      method: 'GET',
+      url: `/v1/users/${stranger.user.id}`,
+      headers: auth,
+    });
+    expect(hidden.statusCode).toBe(404);
+
+    const gql = await inject(graphql('{ users(limit: 100) { items { id } } }', undefined, auth));
+    const gqlIds = gql
+      .json<{ data: { users: { items: { id: string }[] } } }>()
+      .data.users.items.map((u) => u.id);
+    expect(gqlIds.sort()).toEqual([boss.user.id, peer.user.id].sort());
+  });
 });

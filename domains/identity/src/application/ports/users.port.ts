@@ -6,12 +6,15 @@ import type { ListUsersRequest, User, UserPage } from '@domain/identity-contract
  * gRPC `identity.v1.UsersService`.
  */
 export abstract class UsersPort {
-  /** @throws EntityNotFoundException (404) */
-  abstract getUser(id: string): Promise<User>;
+  /** @throws EntityNotFoundException (404) — also for a user outside `scope.tenantId`. */
+  abstract getUser(id: string, scope?: { tenantId: string }): Promise<User>;
 
   /** One round trip for all ids; unknown ids are omitted, order follows `ids` (deduplicated). */
   abstract getUsersByIds(ids: readonly string[]): Promise<User[]>;
 
-  /** Keyset page (uuidv7 ids, newest first); `nextCursor` is absent on the last page. */
+  /**
+   * Keyset page of the members of `query.tenantId` only (required; uuidv7 ids, newest first);
+   * `nextCursor` is absent on the last page.
+   */
   abstract listUsers(query: ListUsersRequest): Promise<UserPage>;
 }

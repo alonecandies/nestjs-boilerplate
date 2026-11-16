@@ -103,7 +103,9 @@ describe('DrizzleUsersRepository', () => {
     const cursorId = generateId();
     const { repository, executed } = setup(() => ids.map((id) => row(id)));
 
+    const tenantId = generateId();
     const page = await repository.list({
+      tenantId,
       limit: 2,
       cursor: encodeIdCursor(cursorId),
       search: '50%_off\\',
@@ -111,19 +113,27 @@ describe('DrizzleUsersRepository', () => {
 
     const [query] = executed;
     expect(query?.sql).toContain(
-      'where (("identity"."users"."email" ilike $1 or "identity"."users"."display_name" ilike $2) and "identity"."users"."id" < $3) order by "identity"."users"."id" desc limit $4',
+      'from "identity"."users" inner join "identity"."memberships" on ("identity"."memberships"."user_id" = "identity"."users"."id" and "identity"."memberships"."tenant_id" = $1) where (("identity"."users"."email" ilike $2 or "identity"."users"."display_name" ilike $3) and "identity"."users"."id" < $4) order by "identity"."users"."id" desc limit $5',
     );
-    expect(query?.params).toEqual(['%50\\%\\_off\\\\%', '%50\\%\\_off\\\\%', cursorId, 3]);
+    expect(query?.params).toEqual([
+      tenantId,
+      '%50\\%\\_off\\\\%',
+      '%50\\%\\_off\\\\%',
+      cursorId,
+      3,
+    ]);
     expect(page.items.map((user) => user.id)).toEqual(ids.slice(0, 2));
     expect(page.nextCursor).toBe(encodeIdCursor(ids[1] ?? ''));
   });
 
-  it('list without search/cursor has no WHERE and no next cursor on the last page', async () => {
+  it('list without search/cursor has only the tenant join and no next cursor on the last page', async () => {
+    const tenantId = generateId();
     const { repository, executed } = setup(() => [row(generateId())]);
-    const page = await repository.list({ limit: 20 });
+    const page = await repository.list({ tenantId, limit: 20 });
     expect(executed[0]?.sql).toBe(
-      'select "id", "email", "display_name", "is_platform_staff", "created_at", "updated_at" from "identity"."users" order by "identity"."users"."id" desc limit $1',
+      'select "identity"."users"."id", "identity"."users"."email", "identity"."users"."display_name", "identity"."users"."is_platform_staff", "identity"."users"."created_at", "identity"."users"."updated_at" from "identity"."users" inner join "identity"."memberships" on ("identity"."memberships"."user_id" = "identity"."users"."id" and "identity"."memberships"."tenant_id" = $1) order by "identity"."users"."id" desc limit $2',
     );
+    expect(executed[0]?.params).toEqual([tenantId, 21]);
     expect(page.nextCursor).toBeNull();
   });
 

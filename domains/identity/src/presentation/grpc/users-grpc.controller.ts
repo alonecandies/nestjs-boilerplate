@@ -30,7 +30,7 @@ export class UsersGrpcController implements UsersServiceController {
   getUser(
     @Payload(new ZodRpcValidationPipe(getUserRequestSchema)) request: GetUserRequest,
   ): Promise<User> {
-    return this.queryBus.execute(new GetUserByIdQuery(request.id));
+    return this.queryBus.execute(new GetUserByIdQuery(request.id, request.tenantId));
   }
 
   async getUsersByIds(

@@ -80,6 +80,8 @@ export interface LogoutRequest {
 
 export interface GetUserRequest {
   id: string;
+  /** Scope: only a member of this tenant is found (else NOT_FOUND). Absent: any user (own profile, internal). */
+  tenantId?: string | undefined;
 }
 
 export interface GetUsersByIdsRequest {
@@ -97,7 +99,11 @@ export interface ListUsersRequest {
     | string
     | undefined;
   /** Case-insensitive substring match on email / display name. */
-  search?: string | undefined;
+  search?:
+    | string
+    | undefined;
+  /** Required since B2: list the members of this tenant only (INVALID_ARGUMENT when absent). */
+  tenantId?: string | undefined;
 }
 
 export interface UserPage {

@@ -11,8 +11,8 @@ import { GetUsersByIdsQuery } from '../../../application/queries/get-users-by-id
 export class UsersLocalAdapter implements UsersPort {
   constructor(private readonly queryBus: QueryBus) {}
 
-  getUser(id: string): Promise<User> {
-    return this.queryBus.execute(new GetUserByIdQuery(id));
+  getUser(id: string, scope?: { tenantId: string }): Promise<User> {
+    return this.queryBus.execute(new GetUserByIdQuery(id, scope?.tenantId));
   }
 
   getUsersByIds(ids: readonly string[]): Promise<User[]> {

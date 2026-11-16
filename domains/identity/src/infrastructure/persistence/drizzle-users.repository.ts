@@ -18,7 +18,7 @@ import type {
 } from '../../application/persistence/users.repository.js';
 import { EmailAlreadyTakenException } from '../../domain/identity.errors.js';
 import { UserAggregate, type UserSnapshot } from '../../domain/user.aggregate.js';
-import { type IdentitySchema, users } from './identity.schema.js';
+import { type IdentitySchema, memberships, users } from './identity.schema.js';
 import { isUniqueViolation } from './postgres-errors.js';
 
 type Db = DrizzleDB<IdentitySchema>;
@@ -115,10 +115,27 @@ export class DrizzleUsersRepository implements UsersRepository {
     const rows = await this.txHost.tx
       .select(publicColumns)
       .from(users)
+      .innerJoin(
+        memberships,
+        and(eq(memberships.userId, users.id), eq(memberships.tenantId, criteria.tenantId)),
+      )
       .where(and(searchFilter(criteria.search), keysetWhere(users.id, criteria.cursor)))
       .orderBy(keysetOrder(users.id))
       .limit(keysetFetchLimit(criteria.limit));
     return keysetPage(rows, criteria.limit);
+  }
+
+  async findByIdInTenant(id: string, tenantId: string): Promise<UserRecord | null> {
+    const [row] = await this.txHost.tx
+      .select(publicColumns)
+      .from(users)
+      .innerJoin(
+        memberships,
+        and(eq(memberships.userId, users.id), eq(memberships.tenantId, tenantId)),
+      )
+      .where(eq(users.id, id))
+      .limit(1);
+    return row ?? null;
   }
 
   async insert(user: UserAggregate): Promise<void> {

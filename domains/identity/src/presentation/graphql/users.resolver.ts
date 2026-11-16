@@ -26,23 +26,33 @@ export class UsersResolver {
     return toUserModel(await this.cache.getUser(userId));
   }
 
-  @Query(() => UserModel, { description: 'A user: yourself, or anyone with `users:read`' })
+  @Query(() => UserModel, {
+    description: 'A user: yourself, or a member of your active tenant with `users:read`',
+  })
   async user(
     @Args('id', { type: () => GraphQLUUID }) id: string,
     @CurrentUser() actor: AuthUser,
   ): Promise<UserModel> {
     assertCanReadUser(actor, id);
-    return toUserModel(await this.cache.getUser(id));
+    const user =
+      actor.id === id
+        ? await this.cache.getUser(id)
+        : await this.cache.getScopedUser(id, { tenantId: actor.tenantId });
+    return toUserModel(user);
   }
 
   @Query(() => UserConnectionModel, {
-    description: 'Users, newest first (requires `users:read`)',
+    description: 'Members of your active tenant, newest first (requires `users:read`)',
     // A page fans out to up to MAX_PAGE_LIMIT users: cost it above a single lookup.
     complexity: 10,
   })
   @RequirePermissions(IdentityPermission.UsersRead)
-  async users(@Args() args: UsersArgs): Promise<UserConnectionModel> {
+  async users(
+    @Args() args: UsersArgs,
+    @CurrentUser() actor: AuthUser,
+  ): Promise<UserConnectionModel> {
     const page = await this.usersPort.listUsers({
+      tenantId: actor.tenantId,
       limit: args.limit,
       cursor: args.cursor ?? undefined,
       search: args.search ?? undefined,

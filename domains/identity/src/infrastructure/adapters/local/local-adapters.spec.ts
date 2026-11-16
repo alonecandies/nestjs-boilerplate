@@ -38,13 +38,15 @@ describe('local adapters (monolith: port → CQRS bus)', () => {
   it('UsersLocalAdapter routes every read to the QueryBus', async () => {
     const adapter = new UsersLocalAdapter(queryBus);
     await adapter.getUser('u-1');
+    await adapter.getUser('u-1', { tenantId: 't' });
     await adapter.getUsersByIds(['u-1', 'u-2']);
-    await adapter.listUsers({ limit: 10, search: 'ada' });
+    await adapter.listUsers({ limit: 10, search: 'ada', tenantId: 't' });
 
     expect(queryBus.execute.mock.calls.map(([query]) => query)).toEqual([
-      new GetUserByIdQuery('u-1'),
+      new GetUserByIdQuery('u-1', undefined),
+      new GetUserByIdQuery('u-1', 't'),
       new GetUsersByIdsQuery(['u-1', 'u-2']),
-      new ListUsersQuery(10, undefined, 'ada'),
+      new ListUsersQuery('t', 10, undefined, 'ada'),
     ]);
     expect(commandBus.execute).not.toHaveBeenCalled();
   });

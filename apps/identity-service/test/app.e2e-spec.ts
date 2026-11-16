@@ -223,6 +223,15 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
       expect(postgres.executed).toHaveLength(before);
     });
 
+    it('UsersService.ListUsers without tenant_id → INVALID_ARGUMENT before any SQL', async () => {
+      const before = postgres.executed.length;
+      const error = await call(usersClient.listUsers({ limit: 5 }), 'UsersService.ListUsers').catch(
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(DomainValidationException);
+      expect(postgres.executed).toHaveLength(before);
+    });
+
     it('AuthService.Login with an unknown e-mail → UNAUTHENTICATED / INVALID_CREDENTIALS', async () => {
       const request = { email: 'nobody@example.com', password: 'correct horse battery' };
       const raw = await lastValueFrom(authClient.login(request)).catch((e: unknown) => e);

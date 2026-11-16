@@ -2,6 +2,7 @@ import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
 import { Global, Module } from '@nestjs/common';
 import { CqrsModule } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { provideCommonEnhancers } from '@platform/common';
 import { DRIZZLE, TransactionHost } from '@platform/database';
 import { AppCacheService } from '@platform/redis';
@@ -38,6 +39,16 @@ const database = createFakePostgres((sql, params): FakeResult => {
   }
   if (sql.startsWith('select "id", "email", "password_hash"')) {
     return [...users.values()].filter((row) => row['email'] === params[0]);
+  }
+  // Scoped read (a member of the caller's tenant): users inner join memberships on tenant_id = $1.
+  if (sql.startsWith('select "identity"."users"."id", "identity"."users"."email"')) {
+    if (!sql.includes('inner join "identity"."memberships"') || params[0] !== TEST_TENANT_ID) {
+      return [];
+    }
+    const row = users.get(String(params[1]));
+    if (!row) return [];
+    const { password_hash: _hash, ...rest } = row;
+    return [rest];
   }
   if (sql.startsWith('select "id", "email", "display_name"')) {
     const row = users.get(String(params[0]));

@@ -30,6 +30,14 @@ export class UserReadCache {
     return reviveUser(user);
   }
 
+  /**
+   * A profile seen from a tenant (`scope.tenantId`): never cached, so a removed member disappears at
+   * once and one tenant's read can never serve another's.
+   */
+  getScopedUser(id: string, scope: { tenantId: string }): Promise<User> {
+    return this.users.getUser(id, scope);
+  }
+
   /** Best effort: the write already happened, a cache outage must not turn it into a 500. */
   async invalidate(id: string): Promise<void> {
     try {

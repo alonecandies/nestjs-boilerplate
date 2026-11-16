@@ -1,4 +1,5 @@
 import { Test } from '@nestjs/testing';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { generateId, provideCommonEnhancers } from '@platform/common';
 import { AppGraphqlModule, DataLoaderRegistry } from '@platform/graphql';
 import { AppCacheService } from '@platform/redis';
@@ -165,6 +166,7 @@ describe('identity GraphQL API (Apollo on Fastify, global guards, fake ports)', 
       nextCursor: null,
     });
     expect(usersPort.listUsers).toHaveBeenCalledWith({
+      tenantId: TEST_TENANT_ID,
       limit: 5,
       cursor: undefined,
       search: 'ada',

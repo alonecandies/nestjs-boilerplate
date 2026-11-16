@@ -28,9 +28,12 @@ export class UsersGrpcAdapter implements UsersPort, OnModuleInit {
     this.users = this.client.getService<UsersServiceClient>(USERS_SERVICE_NAME);
   }
 
-  async getUser(id: string): Promise<User> {
+  async getUser(id: string, scope?: { tenantId: string }): Promise<User> {
     const user = await this.caller.call(operation('GetUser'), (metadata) =>
-      this.users.getUser({ id }, metadata),
+      this.users.getUser(
+        { id, ...(scope === undefined ? {} : { tenantId: scope.tenantId }) },
+        metadata,
+      ),
     );
     return normalizeUser(user);
   }

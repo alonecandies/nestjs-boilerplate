@@ -34,5 +34,6 @@ export const toLogoutCommand = (request: LogoutRequest): LogoutCommand =>
     request.refreshToken,
   );
 
+/** An absent tenant becomes '' and fails in the handler (the directory is never global). */
 export const toListUsersQuery = (request: ListUsersRequest): ListUsersQuery =>
-  new ListUsersQuery(request.limit, request.cursor, request.search);
+  new ListUsersQuery(request.tenantId ?? '', request.limit, request.cursor, request.search);

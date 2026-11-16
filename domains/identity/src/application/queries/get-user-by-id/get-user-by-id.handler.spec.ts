@@ -32,4 +32,22 @@ describe('GetUserByIdHandler', () => {
       details: { entity: 'User', id },
     });
   });
+
+  it('with a tenant: only a member of that tenant is found; anyone else is 404', async () => {
+    const tenantId = '0190f3b2-0000-7000-8000-0000000000aa';
+    const member = makeUserRecord();
+    const users = mockOf<UsersRepository>({
+      findById: async () => member,
+      findByIdInTenant: async (id: string) => (id === member.id ? member : null),
+    });
+    const handler = new GetUserByIdHandler(users);
+    await expect(handler.execute(new GetUserByIdQuery(member.id, tenantId))).resolves.toMatchObject(
+      { id: member.id },
+    );
+    expect(users.findByIdInTenant).toHaveBeenCalledWith(member.id, tenantId);
+    await expect(
+      handler.execute(new GetUserByIdQuery('0190f3b2-0000-7000-8000-00000000dead', tenantId)),
+    ).rejects.toBeInstanceOf(EntityNotFoundException);
+    expect(users.findById).not.toHaveBeenCalled();
+  });
 });
