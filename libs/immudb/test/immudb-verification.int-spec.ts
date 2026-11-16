@@ -95,6 +95,43 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('immudb verification (real s
       await expect(client.verifiedRow('vt', ['b'], tampered)).rejects.toMatchObject({
         kind: 'verification-failed',
       });
+      const sameTxOtherHash: ImmudbState = {
+        ...target,
+        txHash: Uint8Array.from(target.txHash, (b, i) => (i === 0 ? b ^ 1 : b)),
+      };
+      await expect(client.verifyConsistency(target, sameTxOtherHash)).rejects.toMatchObject({
+        kind: 'verification-failed',
+        message: expect.stringContaining('hash changed'),
+      });
+      await expect(
+        client.verifyConsistency({ ...trusted, database: 'otherdb' }, target),
+      ).rejects.toMatchObject({
+        kind: 'verification-failed',
+        message: expect.stringContaining('states of different databases'),
+      });
+    } finally {
+      await close();
+    }
+  });
+
+  it('rejects a primary key never inserted, a deleted row and a missing table as verification', async () => {
+    if (plain === undefined) throw new Error('container not started');
+    const { client, close } = clientFor(plain);
+    try {
+      await client.readWrite((tx) =>
+        tx.exec('CREATE TABLE IF NOT EXISTS gone (id VARCHAR[8], PRIMARY KEY id)'),
+      );
+      await client.readWrite((tx) => tx.exec("INSERT INTO gone (id) VALUES ('d')"));
+      const beforeDelete = await client.currentState();
+      await expect(client.verifiedRow('gone', ['d'], beforeDelete)).resolves.toMatchObject({
+        row: { id: 'd' },
+      });
+      await client.readWrite((tx) => tx.exec("DELETE FROM gone WHERE id = 'd'"));
+      const trusted = await client.currentState();
+      const missing = { kind: 'verification-failed', message: expect.stringContaining('no row') };
+      await expect(client.verifiedRow('gone', ['never'], trusted)).rejects.toMatchObject(missing);
+      await expect(client.verifiedRow('gone', ['d'], trusted)).rejects.toMatchObject(missing);
+      await expect(client.verifiedRow('nosuch', ['d'], trusted)).rejects.toMatchObject(missing);
     } finally {
       await close();
     }

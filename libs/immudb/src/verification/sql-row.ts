@@ -13,6 +13,8 @@ const ROW_PREFIX = new TextEncoder().encode('R.');
 const PK_INDEX_ID = 0;
 const KEY_NULL = 0x20;
 const KEY_NOT_NULL = 0x80;
+/** embedded/sql `MaxKeyLen`: no indexed VARCHAR is longer, so a bigger length is a hostile server. */
+export const MAX_KEY_LEN = 512;
 
 function fail(message: string): never {
   throw new ImmudbError('verification-failed', message);
@@ -24,6 +26,9 @@ export function encodeKeyValue(value: ImmudbValue, type: string, maxLen: number)
   switch (type) {
     case 'VARCHAR': {
       if (typeof value !== 'string') fail('a VARCHAR primary key needs a string');
+      if (!Number.isInteger(maxLen) || maxLen < 0 || maxLen > MAX_KEY_LEN) {
+        fail(`primary key column length ${maxLen} is out of range`);
+      }
       const bytes = new TextEncoder().encode(value);
       if (bytes.length > maxLen) fail('primary key value is longer than its column');
       const out = new Uint8Array(1 + maxLen + 4);
@@ -68,7 +73,10 @@ function decodeValue(raw: Uint8Array, type: string): ImmudbValue {
   }
 }
 
-/** `decodeRow` (pkg/client/sql.go): u32 count, then (u32 colId, u32 length, value) per column. */
+/**
+ * `decodeRow` (pkg/client/sql.go): u32 count, then (u32 colId, u32 length, value) per column. The
+ * encoding leaves NULL columns out; they come back as `null`, as a plain SELECT returns them.
+ */
 export function decodeRowValue(
   encoded: Uint8Array,
   colTypes: Readonly<Record<number, string>>,
@@ -99,10 +107,21 @@ export function decodeRowValue(
     }
     row[colNames[colId] ?? fail('corrupted row value: unnamed column')] = decodeValue(raw, type);
   }
+  for (const name of Object.values(colNames)) {
+    if (!Object.hasOwn(row, name)) row[name] = null;
+  }
   return row;
 }
 
-/** Port of `immuClient.VerifyRow` (pkg/client/sql.go), returning the proven row instead of comparing. */
+/**
+ * Port of `immuClient.VerifyRow` (pkg/client/sql.go), returning the proven row instead of comparing.
+ *
+ * Limitation (same as upstream): only the key and value bytes are proven. The catalog the server
+ * sends with the entry (`DatabaseId`, `TableId`, `PKIDs`, column types, lengths and names) is not
+ * bound to the requested table, so a server or an attacker on a plaintext link can answer with a
+ * proven row of another table that has the same primary key, or relabel its columns. Callers that
+ * must rule this out compare the row with content they hashed themselves (the ledger's payload hash).
+ */
 export function verifySqlEntry(
   entry: VerifiableSQLEntry,
   pk: readonly ImmudbValue[],

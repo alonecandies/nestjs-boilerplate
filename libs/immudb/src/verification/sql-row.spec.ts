@@ -3,7 +3,8 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { VerifiableSQLEntry } from '../generated/immudb/schema/schema.pb.js';
 import type { ImmudbState } from '../immudb.types.js';
-import { decodeRowValue, encodeKeyValue, verifySqlEntry } from './sql-row.js';
+import { u32, u64 } from './bytes.js';
+import { decodeRowValue, encodeKeyValue, MAX_KEY_LEN, verifySqlEntry } from './sql-row.js';
 
 interface Vectors {
   states: { txId: string; txHash: string }[];
@@ -39,6 +40,47 @@ describe('SQL row encoding', () => {
     expect([...encodeKeyValue(null, 'VARCHAR', 4)]).toEqual([0x20]);
     expect(() => encodeKeyValue('abcde', 'VARCHAR', 4)).toThrow(/longer/);
     expect(() => encodeKeyValue(true, 'BOOLEAN', 1)).toThrow(/unsupported/);
+    expect(() => encodeKeyValue('a', 'VARCHAR', MAX_KEY_LEN + 1)).toThrow(/out of range/);
+    expect(encodeKeyValue('a', 'VARCHAR', MAX_KEY_LEN)).toHaveLength(1 + MAX_KEY_LEN + 4);
+  });
+
+  it('decodes BOOLEAN, BLOB, TIMESTAMP and UUID columns and fills NULL columns', () => {
+    const column = (id: number, bytes: number[]): number[] => [
+      ...u32(id),
+      ...u32(bytes.length),
+      ...bytes,
+    ];
+    const micros = 1_700_000_000_123_456n;
+    const value = Uint8Array.from([
+      ...u32(5),
+      ...column(1, [1]),
+      ...column(2, [0]),
+      ...column(3, [0xde, 0xad]),
+      ...column(4, [...u64(micros)]),
+      ...column(5, [...Buffer.from('0123456789abcdef0123456789abcdef', 'hex')]),
+    ]);
+    const types = {
+      1: 'BOOLEAN',
+      2: 'BOOLEAN',
+      3: 'BLOB',
+      4: 'TIMESTAMP',
+      5: 'UUID',
+      6: 'VARCHAR',
+    };
+    const names = { 1: 't', 2: 'f', 3: 'bl', 4: 'ts', 5: 'u', 6: 'missing' };
+    expect(decodeRowValue(value, types, names, 6)).toEqual({
+      t: true,
+      f: false,
+      bl: Uint8Array.of(0xde, 0xad),
+      ts: new Date(1_700_000_000_123),
+      u: '01234567-89ab-cdef-0123-456789abcdef',
+      missing: null,
+    });
+    const corrupt = (id: number, bytes: number[]): Uint8Array =>
+      Uint8Array.from([...u32(1), ...column(id, bytes)]);
+    expect(() => decodeRowValue(corrupt(1, [1, 0]), types, names, 6)).toThrow(/BOOLEAN/);
+    expect(() => decodeRowValue(corrupt(4, [1]), types, names, 6)).toThrow(/TIMESTAMP/);
+    expect(() => decodeRowValue(corrupt(5, [1]), types, names, 6)).toThrow(/UUID/);
   });
 
   it('decodes a row value and skips dropped columns', () => {

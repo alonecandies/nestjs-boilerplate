@@ -18,7 +18,12 @@ export abstract class ImmudbClient {
   /** Dual proof from `trusted` to `target` (and the target's signature when a key is pinned). */
   abstract verifyConsistency(trusted: ImmudbState, target: ImmudbState): Promise<void>;
 
-  /** Row by primary key, proven included in a tx consistent with `trusted`. */
+  /**
+   * Row by primary key, proven included in a tx consistent with `trusted`. A missing row or table
+   * and every failed proof throw `ImmudbError` with kind `verification-failed`. Only the row's key
+   * and value bytes are proven, not the table catalog the server labels them with (see
+   * `verifySqlEntry`).
+   */
   abstract verifiedRow(
     table: string,
     pk: readonly ImmudbValue[],

@@ -17,6 +17,23 @@ async function mapped<T>(call: Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * immudb 1.11.2 answers a missing primary key (never inserted, or removed by SQL `DELETE`) with
+ * `tbtree: key not found` and a missing table with `table does not exist`, both as gRPC UNKNOWN. For a
+ * row the caller expects to exist, either one is a failed verification, not a transport error.
+ */
+const ROW_MISSING = /key not found|table does not exist/;
+
+function rowLookupError(error: unknown, table: string): unknown {
+  const known = toImmudbError(error);
+  if (known !== undefined) return known;
+  const message = error instanceof Error ? error.message : String(error);
+  if (!ROW_MISSING.test(message)) return error;
+  return new ImmudbError('verification-failed', `no row to verify in ${table}: ${message}`, {
+    cause: error,
+  });
+}
+
 export function toImmudbState(state: ImmutableState): ImmudbState {
   const signature = state.signature?.signature;
   return {
@@ -145,9 +162,13 @@ export class GrpcImmudbClient extends ImmudbClient {
         `trusted tx ${trusted.txId} is ahead of the server (tx ${current.txId})`,
       );
     }
-    const entry = await this.pool.use((session) =>
-      mapped(session.verifiableSqlGet(table, pk, trusted.txId)),
-    );
+    const entry = await this.pool.use(async (session) => {
+      try {
+        return await session.verifiableSqlGet(table, pk, trusted.txId);
+      } catch (error) {
+        throw rowLookupError(error, table);
+      }
+    });
     const key = this.options.serverSigningPublicKeyPem;
     return verifySqlEntry(
       entry,
