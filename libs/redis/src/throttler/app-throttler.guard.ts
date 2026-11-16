@@ -25,7 +25,8 @@ interface GqlContextLike {
 
 /**
  * Global throttler guard for HTTP and GraphQL (ws: `WsThrottlerGuard`; rpc: limited at the edge).
- * Charges the `user` budget (user id, else client IP; scope `global`), the `route` budget of a
+ * Charges the `user` budget (user id, else client IP; scope `global`), the `tenant` budget of the
+ * principal's active tenant (authenticated requests only), the `route` budget of a
  * `@RateLimit` policy and, for `credentials` policies, the `auth` bucket (sha256(email)+IP) plus the
  * per-account `lockout` bucket. Register it AFTER `AuthModule` so `req.user` is set.
  */
@@ -33,6 +34,7 @@ interface GqlContextLike {
 export class AppThrottlerGuard extends RateLimitGuardBase {
   protected override readonly enforced: ReadonlySet<string> = new Set<string>([
     THROTTLER.USER,
+    THROTTLER.TENANT,
     THROTTLER.ROUTE,
     THROTTLER.AUTH,
   ]);

@@ -66,6 +66,24 @@ describe('throttle Lua script (real Redis) == JS model', () => {
   });
 });
 
+describe('throttle Lua script, weighted hits (real Redis)', () => {
+  it('INCRBY adds the weight and blocks once the weighted total passes the limit', async () => {
+    const storage = new RedisThrottlerStorage(redis, keys);
+    const hit = (weight: number) =>
+      storage.incrementBy('w', 60_000, 100, 60_000, 'graphql', weight);
+    await expect(hit(60)).resolves.toMatchObject({ totalHits: 60, isBlocked: false });
+    await expect(hit(40)).resolves.toMatchObject({ totalHits: 100, isBlocked: false });
+    await expect(hit(1)).resolves.toMatchObject({
+      totalHits: 101,
+      isBlocked: true,
+      timeToBlockExpire: 60,
+    });
+    const base = keys.key('throttle', '{graphql:w}');
+    expect(await redis.exists(`${base}:hits`)).toBe(0);
+    expect(await redis.exists(`${base}:block`)).toBe(1);
+  });
+});
+
 describe('DistributedLockService (real redlock)', () => {
   it('lets exactly one concurrent caller run, auto-extends long runs, then releases', async () => {
     const locks = new DistributedLockService(new Redlock([redis], REDLOCK_SETTINGS), keys);

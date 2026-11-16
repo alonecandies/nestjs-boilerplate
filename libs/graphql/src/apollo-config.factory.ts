@@ -2,12 +2,15 @@ import { ApolloServerPluginLandingPageLocalDefault } from '@apollo/server/plugin
 import type { ApolloDriverConfig } from '@nestjs/apollo';
 import type { BuildSchemaOptions } from '@nestjs/graphql';
 import type { AppConfig, GraphqlConfig } from '@platform/config';
+import { createClientIpResolver } from '@platform/redis';
+import { type DocumentNode, parse } from 'graphql';
 import type { GraphqlWsAuthHandlers } from './auth/subscription-auth.js';
 import { isWsContext } from './context/gql-context.js';
-import { createGraphqlContext } from './context/graphql-context.factory.js';
+import { buildWsRequest, createGraphqlContext } from './context/graphql-context.factory.js';
 import { formatExecutionResult, formatGraphqlError } from './errors/format-graphql-error.js';
 import type { DataLoaderRegistry } from './loaders/data-loader.registry.js';
 import { GRAPHQL_SCALAR_RESOLVERS } from './scalars/index.js';
+import type { SubscriptionGuardRef } from './subscriptions/subscription-guard.js';
 
 /** graphql-ws clients must send `connection_init` within this window, or the socket is closed. */
 export const GRAPHQL_WS_INIT_TIMEOUT_MS = 10_000;
@@ -18,6 +21,8 @@ export interface ApolloConfigDeps {
   loaders: DataLoaderRegistry;
   wsAuth: GraphqlWsAuthHandlers;
   buildSchemaOptions?: BuildSchemaOptions | undefined;
+  /** Filled at bootstrap with the graphql-ws complexity + cost check (C-6); unset → no check. */
+  subscriptionGuard?: SubscriptionGuardRef | undefined;
 }
 
 /**
@@ -40,6 +45,7 @@ export function createApolloDriverConfig(deps: ApolloConfigDeps): ApolloDriverCo
   const { graphql, app, loaders, wsAuth } = deps;
   const exposeInternal = !app.isProduction;
   const formatError = formatGraphqlError({ exposeInternal });
+  const clientIp = createClientIpResolver(app.trustProxy);
   return {
     path: graphql.path,
     autoSchemaFile: graphql.schemaFile ?? true,
@@ -57,7 +63,7 @@ export function createApolloDriverConfig(deps: ApolloConfigDeps): ApolloDriverCo
     resolvers: { ...GRAPHQL_SCALAR_RESOLVERS },
     // Scalars that no field uses must not fail boot ("UUID defined in resolvers, but not in schema").
     resolverValidationOptions: { requireResolversToMatchSchema: 'ignore' },
-    context: createGraphqlContext(loaders),
+    context: createGraphqlContext(loaders, clientIp),
     subscriptions: {
       'graphql-ws': {
         path: graphql.path,
@@ -66,6 +72,25 @@ export function createApolloDriverConfig(deps: ApolloConfigDeps): ApolloDriverCo
         onConnect: (ctx) => (isWsContext(ctx) ? wsAuth.onConnect(ctx) : false),
         onClose: (ctx) => {
           if (isWsContext(ctx)) wsAuth.onClose(ctx);
+        },
+        // Apollo plugins never see graphql-ws operations: run the same complexity check and the
+        // per-operation cost budget here. Returning errors rejects the subscription.
+        onSubscribe: async (ctx, _id, payload) => {
+          if (!isWsContext(ctx) || deps.subscriptionGuard === undefined) return undefined;
+          let document: DocumentNode;
+          try {
+            document = parse(payload.query);
+          } catch {
+            return undefined; // graphql-ws reports the syntax error itself
+          }
+          const req = buildWsRequest(ctx, clientIp);
+          return deps.subscriptionGuard.run({
+            document,
+            operationName: payload.operationName,
+            variables: payload.variables ?? undefined,
+            user: req.user,
+            ip: req.ip,
+          });
         },
         // Same error format (and internals hiding) for subscription events as for HTTP.
         onNext: (_ctx, _id, _payload, _args, result) => formatExecutionResult(result, formatError),

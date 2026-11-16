@@ -17,7 +17,7 @@ interface SocketLike {
  * Per-MESSAGE rate limiting for WebSocket gateways (the global `AppThrottlerGuard` skips `ws`).
  * Apply it on the gateway, never as APP_GUARD: `@UseGuards(WsThrottlerGuard)`, with
  * `@RateLimit('<domain>.<name>')` on handlers that need their own budget. Charges the global `user`
- * budget and the handler's policy. IP = the handshake request's client IP under `TRUST_PROXY`
+ * and `tenant` budgets and the handler's policy. IP = the handshake request's client IP under `TRUST_PROXY`
  * (same rules as HTTP `req.ip`), else the handshake address. A blocked message raises `ThrottlerException` (429), which
  * `@UseWsExceptionFilter()` delivers as `{ ok: false, error }`. Requires `AppThrottlerModule`.
  */
@@ -25,6 +25,7 @@ interface SocketLike {
 export class WsThrottlerGuard extends RateLimitGuardBase {
   protected override readonly enforced: ReadonlySet<string> = new Set<string>([
     THROTTLER.USER,
+    THROTTLER.TENANT,
     THROTTLER.ROUTE,
   ]);
 

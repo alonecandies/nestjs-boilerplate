@@ -15,7 +15,7 @@ export const THROTTLE_COMMAND = 'appThrottleHit';
  * - `blockDuration <= 0` → no block key; requests are rejected until the window resets.
  *
  * KEYS[1] hits counter, KEYS[2] block marker (same hash slot via a hash tag).
- * ARGV[1] window ms, ARGV[2] limit, ARGV[3] block duration ms.
+ * ARGV[1] window ms, ARGV[2] limit, ARGV[3] block duration ms, ARGV[4] weight (default 1; GraphQL cost).
  * Returns { totalHits, timeToExpireMs, isBlocked (0|1), timeToBlockExpireMs }.
  */
 export const THROTTLE_SCRIPT = `
@@ -24,7 +24,7 @@ if blockTtl > 0 then
   return { tonumber(redis.call('GET', KEYS[2])) or 0, blockTtl, 1, blockTtl }
 end
 local ttl = tonumber(ARGV[1])
-local hits = redis.call('INCR', KEYS[1])
+local hits = redis.call('INCRBY', KEYS[1], tonumber(ARGV[4]) or 1)
 local hitsTtl = redis.call('PTTL', KEYS[1])
 if hitsTtl < 0 then
   redis.call('PEXPIRE', KEYS[1], ttl)
@@ -53,6 +53,7 @@ declare module 'ioredis' {
       ttlMs: number,
       limit: number,
       blockDurationMs: number,
+      weight?: number,
     ): Result<ThrottleReply, Context>;
   }
 }

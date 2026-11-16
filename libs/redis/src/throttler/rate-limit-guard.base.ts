@@ -1,5 +1,11 @@
 import { type ExecutionContext, Inject } from '@nestjs/common';
-import { normalizeIp, ThrottlerGuard, type ThrottlerRequest } from '@nestjs/throttler';
+import {
+  normalizeIp,
+  ThrottlerGuard,
+  type ThrottlerLimitDetail,
+  type ThrottlerRequest,
+} from '@nestjs/throttler';
+import { getContextType } from '@platform/common';
 import {
   collectDecision,
   formatRateLimit,
@@ -9,7 +15,7 @@ import {
 import { rateLimitKey } from './rate-limit-key.util.js';
 import { type RateLimitPolicy, RateLimitPolicyRegistry } from './rate-limit-policy.js';
 import { GLOBAL_SCOPE, RATE_LIMIT_POLICY_KEY, THROTTLER } from './throttle.constants.js';
-import { authenticatedUserId } from './throttle-tracker.util.js';
+import { authenticatedTenantId, authenticatedUserId } from './throttle-tracker.util.js';
 
 /** Who a request or message is charged to. `user` is read structurally (`{ id }`). */
 export interface RateLimitSubject {
@@ -26,6 +32,19 @@ export interface RateLimitBucket {
   ttlMs: number;
   blockMs: number;
 }
+
+/**
+ * Global budgets charged for one GraphQL request (one operation, many root resolvers), per throttler:
+ * the charge in flight, settling to the refusal to repeat (`ThrottlerLimitDetail`) or `null` when the
+ * budget admitted the request. The promise goes in the map BEFORE the storage is awaited: graphql-js
+ * starts every root field of a query in one synchronous loop, so a value stored only after the await
+ * would let each field charge again. graphql-ws builds a fresh `req` per operation
+ * (`buildWsRequest`), so subscriptions are charged once each.
+ */
+const chargedGraphqlRequests = new WeakMap<
+  object,
+  Map<string, Promise<ThrottlerLimitDetail | null>>
+>();
 
 /**
  * Shared logic of the HTTP/GraphQL, pre-auth IP and WebSocket guards. `ThrottlerGuard.canActivate`
@@ -86,6 +105,10 @@ export abstract class RateLimitGuardBase extends ThrottlerGuard {
         return { ...global, tracker: this.ipTracker(subject.ip) };
       case THROTTLER.USER:
         return { ...global, tracker: this.userTracker(subject) };
+      case THROTTLER.TENANT: {
+        const tenantId = authenticatedTenantId(subject.user);
+        return tenantId === undefined ? undefined : { ...global, tracker: `tenant:${tenantId}` };
+      }
       case THROTTLER.ROUTE: {
         const policy = this.policyFor(request.context);
         if (policy === undefined || policy.key === 'credentials') return undefined;
@@ -114,6 +137,40 @@ export abstract class RateLimitGuardBase extends ThrottlerGuard {
 
   /** Increments `bucket`; throws `ThrottlerException` (429, `Retry-After`) when it is blocked. */
   protected async charge(context: ExecutionContext, bucket: RateLimitBucket): Promise<void> {
+    const charged = this.graphqlChargesOf(context, bucket);
+    let pending = charged?.get(bucket.throttler);
+    if (pending === undefined) {
+      pending = this.chargeStorage(context, bucket);
+      charged?.set(bucket.throttler, pending);
+    }
+    const refusal = await pending;
+    if (refusal === null) return;
+    const res = this.responseOf(context);
+    if (res !== undefined) this.setResponseHeader(res, 'Retry-After', refusal.timeToBlockExpire);
+    await this.throwThrottlingException(context, refusal);
+  }
+
+  /** The charges of this GraphQL request, for a global budget; `undefined` when not shared. */
+  private graphqlChargesOf(
+    context: ExecutionContext,
+    bucket: RateLimitBucket,
+  ): Map<string, Promise<ThrottlerLimitDetail | null>> | undefined {
+    if (bucket.scope !== GLOBAL_SCOPE || getContextType(context) !== 'graphql') return undefined;
+    const req = context.getArgByIndex<{ req?: object } | undefined>(2)?.req;
+    if (req === undefined) return undefined;
+    let charged = chargedGraphqlRequests.get(req);
+    if (charged === undefined) {
+      charged = new Map();
+      chargedGraphqlRequests.set(req, charged);
+    }
+    return charged;
+  }
+
+  /** Charges the storage once and records the decision; resolves to the refusal, else `null`. */
+  private async chargeStorage(
+    context: ExecutionContext,
+    bucket: RateLimitBucket,
+  ): Promise<ThrottlerLimitDetail | null> {
     const key = rateLimitKey(bucket.throttler, bucket.scope, bucket.tracker);
     const record = await this.storageService.increment(
       key,
@@ -132,16 +189,8 @@ export abstract class RateLimitGuardBase extends ThrottlerGuard {
       blocked: record.isBlocked,
       retryAfterSeconds: record.isBlocked ? record.timeToBlockExpire : 0,
     });
-    if (!record.isBlocked) return;
-    const res = this.responseOf(context);
-    if (res !== undefined) this.setResponseHeader(res, 'Retry-After', record.timeToBlockExpire);
-    await this.throwThrottlingException(context, {
-      limit: bucket.limit,
-      ttl: bucket.ttlMs,
-      key,
-      tracker: bucket.tracker,
-      ...record,
-    });
+    if (!record.isBlocked) return null;
+    return { limit: bucket.limit, ttl: bucket.ttlMs, key, tracker: bucket.tracker, ...record };
   }
 
   /**

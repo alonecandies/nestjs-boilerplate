@@ -1,14 +1,18 @@
 /**
  * Named throttlers (spec §11). Each guard enforces its own subset (`RateLimitGuardBase.enforced`):
- * `ip` before authentication, `user`/`route`/`auth` after it, `user`/`route` per WebSocket message.
+ * `ip` before authentication, `user`/`tenant`/`route`/`auth` after it, `user`/`tenant`/`route` per
+ * WebSocket message.
  * `lockout` is a bucket the `auth` throttler maintains, not a configured throttler.
  */
 export const THROTTLER = {
   IP: 'ip',
   USER: 'user',
+  TENANT: 'tenant',
   ROUTE: 'route',
   AUTH: 'auth',
   LOCKOUT: 'lockout',
+  /** GraphQL cost budget, charged per operation by `OperationRateLimitPlugin` (not a guard throttler). */
+  GRAPHQL: 'graphql',
 } as const;
 
 export type ThrottlerName = (typeof THROTTLER)[keyof typeof THROTTLER];
@@ -17,6 +21,7 @@ export type ThrottlerName = (typeof THROTTLER)[keyof typeof THROTTLER];
 export const RATE_LIMIT_THROTTLERS: readonly ThrottlerName[] = Object.freeze([
   THROTTLER.IP,
   THROTTLER.USER,
+  THROTTLER.TENANT,
   THROTTLER.ROUTE,
   THROTTLER.AUTH,
 ]);

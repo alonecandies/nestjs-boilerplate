@@ -15,6 +15,8 @@ export * from './loaders/graphql-loaders.module.js';
 export * from './loaders/loader.decorator.js';
 export * from './plugins/complexity.plugin.js';
 export * from './plugins/error-request-id.plugin.js';
+export * from './plugins/operation-rate-limit.plugin.js';
 export * from './pubsub/pubsub.constants.js';
 export * from './pubsub/pubsub.module.js';
 export * from './scalars/index.js';
+export * from './subscriptions/subscription-guard.js';

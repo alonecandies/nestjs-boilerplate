@@ -9,6 +9,7 @@ import { RedisKeyService } from '../keys/redis-key.service.js';
 import { REDIS_CLIENT } from '../redis.constants.js';
 import { AppThrottlerGuard } from './app-throttler.guard.js';
 import { LockoutResetInterceptor } from './lockout-reset.interceptor.js';
+import { RateLimitCharger } from './rate-limit-charger.js';
 import { RateLimitPolicyRegistry } from './rate-limit-policy.js';
 import { RateLimitPolicyValidator } from './rate-limit-policy.validator.js';
 import {
@@ -47,6 +48,7 @@ export interface AppThrottlerModuleOptions {
  * Redis-backed rate limiting for every replica (global module):
  * - ip: THROTTLE_IP_LIMIT per THROTTLE_IP_TTL_MS per client IP, charged by IpThrottlerGuard (import IpThrottlerModule BEFORE AuthModule);
  * - `user`: `THROTTLE_LIMIT` per `THROTTLE_TTL_MS`, one budget per user (else client IP) across routes;
+ * - tenant: THROTTLE_TENANT_LIMIT per THROTTLE_TENANT_TTL_MS per active tenant (all its members);
  * - `route`: named policies (`@RateLimit`), declared by domains with `RateLimitModule.forFeature`;
  * - `auth`: credentials policies, sha256(email)+IP, with a per-account lockout reset on success;
  * - `@SkipRateLimit()` opts out; ops paths are exempt.
@@ -60,6 +62,7 @@ export class AppThrottlerModule {
       AppThrottlerGuard,
       WsThrottlerGuard,
       RateLimitPolicyRegistry,
+      RateLimitCharger,
       RateLimitPolicyValidator,
       LockoutResetInterceptor,
       { provide: APP_INTERCEPTOR, useExisting: LockoutResetInterceptor },
@@ -86,6 +89,7 @@ export class AppThrottlerModule {
             throttlers: [
               { name: THROTTLER.IP, ttl: config.ipTtlMs, limit: config.ipLimit },
               { name: THROTTLER.USER, ttl: config.ttlMs, limit: config.limit },
+              { name: THROTTLER.TENANT, ttl: config.tenantTtlMs, limit: config.tenantLimit },
               // Real values come from the route's @RateLimit policy (RateLimitGuardBase.bucketFor).
               { name: THROTTLER.ROUTE, ttl: config.ttlMs, limit: config.limit },
               // Real values come from the route's credentials policy; the account lockout rides on it.
@@ -102,7 +106,7 @@ export class AppThrottlerModule {
         }),
       ],
       providers,
-      exports: [AppThrottlerGuard, WsThrottlerGuard, RateLimitPolicyRegistry],
+      exports: [AppThrottlerGuard, WsThrottlerGuard, RateLimitPolicyRegistry, RateLimitCharger],
     };
   }
 }

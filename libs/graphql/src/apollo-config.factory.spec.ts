@@ -7,6 +7,7 @@ import type { GraphqlWsAuthHandlers } from './auth/subscription-auth.js';
 import type { GqlContext } from './context/gql-context.js';
 import { DataLoaderRegistry } from './loaders/data-loader.registry.js';
 import { JSONObjectResolver, UUIDResolver } from './scalars/index.js';
+import { SubscriptionGuardRef } from './subscriptions/subscription-guard.js';
 
 type WsOptions = {
   onConnect: (ctx: unknown) => unknown;
@@ -124,6 +125,40 @@ describe('createApolloDriverConfig', () => {
     expect(wsAuth.onConnect).toHaveBeenCalledWith(ctx);
     expect(wsAuth.onClose).toHaveBeenCalledWith(ctx);
     expect(ws.onConnect({ extra: 'not-an-object' })).toBe(false);
+  });
+
+  it('onSubscribe hands the parsed operation, user and proxy-aware IP to the subscription guard', async () => {
+    const guard = new SubscriptionGuardRef();
+    const run = vi.spyOn(guard, 'run').mockResolvedValue(undefined);
+    const config = createApolloDriverConfig({
+      graphql: graphqlConfig.parse({}),
+      app: appConfig.parse({ TRUST_PROXY: '10.0.0.0/8' }),
+      loaders: new DataLoaderRegistry(),
+      wsAuth: { onConnect: vi.fn(async () => true), onClose: vi.fn() },
+      subscriptionGuard: guard,
+    });
+    const ws = config.subscriptions?.['graphql-ws'] as unknown as {
+      onSubscribe: (ctx: unknown, id: string, payload: unknown) => Promise<unknown>;
+    };
+    const ctx = {
+      connectionParams: {},
+      extra: {
+        user: { id: 'u-1' },
+        request: {
+          socket: { remoteAddress: '10.0.0.5' },
+          headers: { 'x-forwarded-for': '6.6.6.6, 1.2.3.4' },
+        },
+      },
+    };
+
+    await ws.onSubscribe(ctx, '1', { query: 'subscription Tick { tick }', operationName: 'Tick' });
+    expect(run).toHaveBeenCalledWith(
+      expect.objectContaining({ operationName: 'Tick', user: { id: 'u-1' }, ip: '1.2.3.4' }),
+    );
+
+    run.mockClear();
+    await expect(ws.onSubscribe(ctx, '2', { query: 'subscription {' })).resolves.toBeUndefined();
+    expect(run).not.toHaveBeenCalled();
   });
 
   it('formats subscription event errors with the production rules', () => {

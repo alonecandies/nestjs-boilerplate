@@ -3,7 +3,13 @@ import { type DynamicModule, Module, type ModuleMetadata } from '@nestjs/common'
 import { ConfigModule } from '@nestjs/config';
 import { type BuildSchemaOptions, GraphQLModule } from '@nestjs/graphql';
 import { AccessTokenDenylist, type RevocationSweeper, TokenService } from '@platform/auth';
-import { type AppConfig, appConfig, type GraphqlConfig, graphqlConfig } from '@platform/config';
+import {
+  type AppConfig,
+  appConfig,
+  type GraphqlConfig,
+  graphqlConfig,
+  throttleConfig,
+} from '@platform/config';
 import { createApolloDriverConfig } from './apollo-config.factory.js';
 import {
   GRAPHQL_WS_REVOCATION_SWEEPER,
@@ -17,7 +23,12 @@ import { DataLoaderRegistry } from './loaders/data-loader.registry.js';
 import { GraphqlLoadersModule } from './loaders/graphql-loaders.module.js';
 import { ComplexityPlugin } from './plugins/complexity.plugin.js';
 import { ErrorRequestIdPlugin } from './plugins/error-request-id.plugin.js';
+import { OperationRateLimitPlugin } from './plugins/operation-rate-limit.plugin.js';
 import { SandboxCspHook } from './sandbox/sandbox-csp.hook.js';
+import {
+  SubscriptionGuardBinder,
+  SubscriptionGuardRef,
+} from './subscriptions/subscription-guard.js';
 
 export interface AppGraphqlModuleOptions {
   /** Extra modules the Apollo factory needs (rare: auth/config/loaders are already wired). */
@@ -48,11 +59,14 @@ export interface AppGraphqlModuleOptions {
 @Module({})
 export class AppGraphqlModule {
   static forRootAsync(options: AppGraphqlModuleOptions = {}): DynamicModule {
+    // Filled by SubscriptionGuardBinder once the schema exists (graphql-ws bypasses Apollo plugins).
+    const subscriptionGuard = new SubscriptionGuardRef();
     return {
       module: AppGraphqlModule,
       global: true,
       imports: [
         ConfigModule.forFeature(graphqlConfig),
+        ConfigModule.forFeature(throttleConfig),
         GraphqlLoadersModule,
         GraphQLModule.forRootAsync<ApolloDriverConfig>({
           driver: ApolloDriver,
@@ -90,10 +104,18 @@ export class AppGraphqlModule {
                 },
               ),
               buildSchemaOptions: options.buildSchemaOptions,
+              subscriptionGuard,
             }),
         }),
       ],
-      providers: [ComplexityPlugin, ErrorRequestIdPlugin, SandboxCspHook],
+      providers: [
+        ComplexityPlugin,
+        OperationRateLimitPlugin,
+        ErrorRequestIdPlugin,
+        SandboxCspHook,
+        { provide: SubscriptionGuardRef, useValue: subscriptionGuard },
+        SubscriptionGuardBinder,
+      ],
       exports: [GraphqlLoadersModule],
     };
   }
