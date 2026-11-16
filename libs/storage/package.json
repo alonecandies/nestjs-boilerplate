@@ -36,6 +36,7 @@
     "lodash-es": "catalog:"
   },
   "devDependencies": {
-    "@types/lodash-es": "catalog:"
+    "@types/lodash-es": "catalog:",
+    "testcontainers": "catalog:"
   }
 }

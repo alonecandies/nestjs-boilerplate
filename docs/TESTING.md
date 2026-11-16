@@ -45,7 +45,7 @@ package (`<domain>-contracts`):
 
 | Project name | Created for                                | Includes                                        | Timeouts (test / hook) |
 | ------------ | ------------------------------------------ | ----------------------------------------------- | ---------------------- |
-| `<name>`     | every package (unit)                       | `src/**/*.spec.ts`, `test/**/*.spec.ts`         | Vitest defaults        |
+| `<name>`     | every package (unit)                       | `src/**/*.spec.ts`, `test/**/*.spec.ts`         | 15 s / 30 s            |
 | `<app>:e2e`  | every app                                  | `test/**/*.e2e-spec.ts`                         | 30 s / 60 s            |
 | `<name>:int` | every package, **only if `INTEGRATION=1`** | `src/**/*.int-spec.ts`, `test/**/*.int-spec.ts` | 120 s / 180 s          |
 
@@ -235,6 +235,19 @@ loads twice:
 So: **do not** add `vi.mock('graphql')` or alias workarounds for "another realm" errors. If one
 appears, a resolve condition is out of sync with Node.
 
+## Test output and timeouts
+
+`vitest.setup.ts` is loaded by every project after `reflect-metadata`. It drops Nest's static logger
+and mutes the errors of the `TestingLogger` that `Test.createTestingModule().compile()` installs, so
+specs that exercise failure paths print no `[Nest]` lines or stack traces. To see them while
+debugging, set `TEST_LOGS=1` (for example `TEST_LOGS=1 npx vitest run --project billing`). Specs
+that assert on logging spy on `Logger.prototype` methods, which still run, or pass their own logger
+with `Test.createTestingModule(…).setLogger(…)`.
+
+Unit and `scripts` projects allow 15 s per test and 30 s per hook (`UNIT_TEST_TIMEOUT_MS`,
+`UNIT_HOOK_TIMEOUT_MS` in `vitest.config.ts`), because they compile Nest modules and run gRPC round
+trips in-process. e2e projects keep 30 s / 60 s and integration projects 120 s / 180 s.
+
 ## Integration tests (testcontainers)
 
 `*.int-spec.ts` files run against real infrastructure. Their `<name>:int` projects only exist when
@@ -247,12 +260,14 @@ appears, a resolve condition is out of sync with Node.
 | [`libs/testing/src/postgres/start-test-postgres.int-spec.ts`](../libs/testing/src/postgres/start-test-postgres.int-spec.ts)                                         | `testing:int`  | Docker (`@platform/testing/postgres`)                                                                                      | the Citus test container: version, shard count, local vs remote execution (`localExecution`), `initSql`, `urlFor` logins with URL-reserved characters                                                                                                                         |
 | [`domains/identity/src/infrastructure/persistence/users.repository.int-spec.ts`](../domains/identity/src/infrastructure/persistence/users.repository.int-spec.ts)   | `identity:int` | Docker (`@platform/testing/postgres`: Citus), **or** `INTEGRATION_DATABASE_URL` pointing at an existing throwaway database | drizzle users/sessions repositories through the real `DatabaseModule`, which applies the platform set and identity's own history at boot: tables, enum and indexes in schema `identity`, nothing in `public`, bookkeeping counts match the journals, a second boot is a no-op |
 | [`domains/billing/src/infrastructure/persistence/billing.migrations.int-spec.ts`](../domains/billing/src/infrastructure/persistence/billing.migrations.int-spec.ts) | `billing:int`  | Docker (`@platform/testing/postgres`: Citus), **or** `INTEGRATION_DATABASE_URL` pointing at an existing throwaway database | billing's generated history after the platform set: tables, enum and indexes in schema `billing`, nothing in `public`, bookkeeping counts match the journals, DB defaults, a second boot is a no-op                                                                           |
+| [`libs/storage/test/storage-drivers.int-spec.ts`](../libs/storage/test/storage-drivers.int-spec.ts)                                                                 | `storage:int`  | Docker (testcontainers `rustfs/rustfs:1.0.0`, `fsouza/fake-gcs-server:1.56.1`)                                             | both drivers against their emulators: buffer and multipart stream upload, HEAD, idempotent DELETE, presigned PUT/GET signed for a public host that differs from the API's endpoint (keys with spaces and non-ASCII), S3 content-length pinning and download filename          |
 | [`libs/redis/src/redis.int-spec.ts`](../libs/redis/src/redis.int-spec.ts)                                                                                           | `redis:int`    | a running Redis at `REDIS_URL` (for example `bun run docker:infra`). Not testcontainers                                    | the throttle Lua script against its `InMemoryRedis` JS model, cache, Redlock, the socket.io Redis adapter                                                                                                                                                                     |
 
 ```bash
 bun run docker:infra                                   # Redis (and the rest of the infra) for redis:int
 bun run test:int                                       # every *:int project
 INTEGRATION=1 bunx vitest run --project database:int   # just one
+INTEGRATION=1 bunx vitest run --project storage:int    # S3 + GCS emulators
 ```
 
 Postgres in every int spec is **Citus 14.2 on PostgreSQL 18.4, single node** (`citusdata/citus:14.2.0`, the

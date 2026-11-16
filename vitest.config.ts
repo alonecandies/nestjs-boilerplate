@@ -7,6 +7,16 @@ import { defineConfig, type TestProjectInlineConfiguration } from 'vitest/config
 const ROOT = import.meta.dirname;
 const INTEGRATION = process.env.INTEGRATION === '1';
 
+/**
+ * Unit (and scripts) specs compile Nest modules and run gRPC round trips in-process; under a
+ * parallel full run Vitest's 5 s / 10 s defaults flake. e2e and int projects keep their own.
+ */
+export const UNIT_TEST_TIMEOUT_MS = 15_000;
+export const UNIT_HOOK_TIMEOUT_MS = 30_000;
+
+/** reflect-metadata first (decorator metadata), then the repo setup (silent Nest logger). */
+export const SETUP_FILES = ['reflect-metadata', join(ROOT, 'vitest.setup.ts')];
+
 type WorkspaceDir = 'apps' | 'domains' | 'libs';
 
 interface WorkspacePackage {
@@ -36,12 +46,14 @@ const packagesIn = (dir: WorkspaceDir): WorkspacePackage[] =>
         : [{ name: entry.name, root }];
     });
 
-const unitProject = ({ name, root }: WorkspacePackage): TestProjectInlineConfiguration => ({
+export const unitProject = ({ name, root }: WorkspacePackage): TestProjectInlineConfiguration => ({
   extends: true,
   test: {
     name,
     root,
     include: ['src/**/*.spec.ts', 'test/**/*.spec.ts'],
+    testTimeout: UNIT_TEST_TIMEOUT_MS,
+    hookTimeout: UNIT_HOOK_TIMEOUT_MS,
   },
 });
 
@@ -73,9 +85,15 @@ const libs = packagesIn('libs');
 const apps = packagesIn('apps');
 
 /** Repo tooling under scripts/ (e.g. the layer boundary check), specs only. */
-const scriptsProject: TestProjectInlineConfiguration = {
+export const scriptsProject: TestProjectInlineConfiguration = {
   extends: true,
-  test: { name: 'scripts', root: join(ROOT, 'scripts'), include: ['**/*.spec.ts'] },
+  test: {
+    name: 'scripts',
+    root: join(ROOT, 'scripts'),
+    include: ['**/*.spec.ts'],
+    testTimeout: UNIT_TEST_TIMEOUT_MS,
+    hookTimeout: UNIT_HOOK_TIMEOUT_MS,
+  },
 };
 
 export default defineConfig({
@@ -118,7 +136,7 @@ export default defineConfig({
   },
   test: {
     globals: true,
-    setupFiles: ['reflect-metadata'],
+    setupFiles: SETUP_FILES,
     // Nest apps hold sockets/timers; forks is the most robust pool for them.
     pool: 'forks',
     clearMocks: true,

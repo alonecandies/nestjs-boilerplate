@@ -1,6 +1,7 @@
 # CI: quality gate (lint + typecheck + tests + build + generated-artefact drift + commitlint), the
-# integration tests against real Postgres/Redis, one production image per app (built, not pushed)
-# and a boot check of the docker compose infra stack.
+# integration tests against real Postgres/Redis, one production image per app (built, not pushed),
+# a boot check of the docker compose infra stack, and a smoke test that boots both app topologies
+# from those images.
 name: CI
 
 on:
@@ -91,6 +92,15 @@ jobs:
           --from ${{ github.event.pull_request.base.sha }}
           --to ${{ github.event.pull_request.head.sha }}
 
+      # A deleted field, renamed RPC or changed type in a contracts package breaks running
+      # consumers: ship it as <ctx>.v2 instead (docs/RELEASING.md). New packages are skipped.
+      - name: Proto breaking changes (buf, PRs only)
+        if: github.event_name == 'pull_request'
+        run: >-
+          node scripts/check-proto-breaking.mjs
+          --against ${{ github.event.pull_request.base.sha }}
+          --error-format github-actions
+
       - name: Config drift (.env.example, Kafka topics)
         run: |
           node scripts/check-env-example.mjs
@@ -173,6 +183,49 @@ jobs:
           docker image inspect boilerplate/${{ matrix.app }}:ci \
             --format 'size={{.Size}} user={{.Config.User}} workdir={{.Config.WorkingDir}} cmd={{json .Config.Cmd}}'
           docker image ls boilerplate/${{ matrix.app }}:ci
+
+      # The topology job boots these exact images (no rebuild).
+      - name: Save ${{ matrix.app }} for the topology smoke test
+        run: docker save boilerplate/${{ matrix.app }}:ci | gzip -1 > "${RUNNER_TEMP}/image-${{ matrix.app }}.tar.gz"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: image-${{ matrix.app }}
+          path: ${{ runner.temp }}/image-${{ matrix.app }}.tar.gz
+          retention-days: 1
+          compression-level: 0
+
+  topology:
+    name: Topology smoke ${{ matrix.topology }}
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        topology: [monolith, microservices]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: image-*
+          path: ${{ runner.temp }}/images
+          merge-multiple: true
+
+      - name: Load the app images (boilerplate/<app>:ci)
+        run: for f in "${RUNNER_TEMP}"/images/image-*.tar.gz; do gunzip -c "$f" | docker load; done
+
+      # Isolated project bp-topology-<topology>, host ports +20000; register + /v1/auth/me; down -v.
+      - name: Boot ${{ matrix.topology }}, wait for /health/ready, REST journey, tear down
+        env:
+          TAG: ci
+          NO_BUILD: "1"
+        run: node scripts/docker/check-topology.ts up ${{ matrix.topology }}
 
   compose:
     name: Compose config + infra boot
