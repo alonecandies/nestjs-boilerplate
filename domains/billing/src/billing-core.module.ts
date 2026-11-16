@@ -11,6 +11,7 @@ import { StripeEventsRepository } from './application/repositories/stripe-events
 import {
   AMOUNT_MISMATCH_METRIC,
   API_VERSION_MISMATCH_METRIC,
+  PAID_WITHOUT_AMOUNT_METRIC,
   PAID_WITHOUT_CURRENCY_METRIC,
 } from './billing.constants.js';
 import { DrizzlePaymentsRepository } from './infrastructure/persistence/drizzle-payments.repository.js';
@@ -44,6 +45,10 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
     makeCounterProvider({
       name: PAID_WITHOUT_CURRENCY_METRIC,
       help: 'Paid Stripe Checkout Sessions left pending because no currency was known (no receipt sent)',
+    }),
+    makeCounterProvider({
+      name: PAID_WITHOUT_AMOUNT_METRIC,
+      help: 'Paid Stripe Checkout Sessions left pending because no amount was known (no receipt sent)',
     }),
     makeCounterProvider({
       name: AMOUNT_MISMATCH_METRIC,

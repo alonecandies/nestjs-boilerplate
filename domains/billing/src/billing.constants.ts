@@ -76,6 +76,13 @@ export const PURGE_STRIPE_EVENTS_BATCH_SIZE = 5_000;
 export const PAID_WITHOUT_CURRENCY_METRIC = 'billing_checkout_paid_without_currency_total';
 
 /**
+ * Prometheus counter: Checkout Sessions Stripe reported paid without any amount (none in the event,
+ * none stored, for example when the session was never bound). The payment is left `pending` and NOT
+ * announced: alert on any increase and reconcile it against the Stripe dashboard.
+ */
+export const PAID_WITHOUT_AMOUNT_METRIC = 'billing_checkout_paid_without_amount_total';
+
+/**
  * Prometheus counter: paid Checkout Sessions whose charged amount or currency differs from the quote
  * stored at session creation (promotion codes, tax, price changes). The charged values are recorded;
  * reconcile any increase (ledger reconciliation R3 later writes a discrepancy row).

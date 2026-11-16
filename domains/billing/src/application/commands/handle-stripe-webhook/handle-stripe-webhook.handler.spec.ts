@@ -35,6 +35,7 @@ describe('HandleStripeWebhookHandler', () => {
   let handler: HandleStripeWebhookHandler;
   let payment: Payment;
   let paidWithoutCurrency: { inc: Mock<() => void> };
+  let paidWithoutAmount: { inc: Mock<() => void> };
   let amountMismatch: { inc: Mock<() => void> };
   let apiVersionMismatch: { inc: Mock<() => void> };
 
@@ -85,6 +86,7 @@ describe('HandleStripeWebhookHandler', () => {
       }),
     };
     paidWithoutCurrency = { inc: vi.fn<() => void>() };
+    paidWithoutAmount = { inc: vi.fn<() => void>() };
     amountMismatch = { inc: vi.fn<() => void>() };
     apiVersionMismatch = { inc: vi.fn<() => void>() };
     handler = new HandleStripeWebhookHandler(
@@ -95,6 +97,7 @@ describe('HandleStripeWebhookHandler', () => {
       paidWithoutCurrency,
       amountMismatch,
       apiVersionMismatch,
+      paidWithoutAmount,
     );
     payment = makePayment({
       stripeCheckoutSessionId: 'cs_paid_1',
@@ -147,6 +150,31 @@ describe('HandleStripeWebhookHandler', () => {
     });
     expect(published[0]).toMatchObject({ currency: 'usd' });
     expect(paidWithoutCurrency.inc).not.toHaveBeenCalled();
+  });
+
+  it('paid session without any amount: acknowledged, warned + counted, never announced with 0', async () => {
+    const unpriced = makePayment({
+      stripeCheckoutSessionId: 'cs_no_amount_1',
+      amountTotal: null,
+      currency: 'usd',
+    });
+    store.seed(unpriced);
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+
+    const response = await deliver(
+      completed(
+        { id: 'cs_no_amount_1', client_reference_id: unpriced.id, amount_total: null },
+        'evt_no_amount_1',
+      ),
+    );
+
+    expect(response).toMatchObject({ received: true, duplicate: false });
+    expect(store.payment(unpriced.id)).toMatchObject({ status: PaymentStatus.Pending, version: 0 });
+    expect(published).toEqual([]);
+    expect(paidWithoutAmount.inc).toHaveBeenCalledTimes(1);
+    expect(paidWithoutCurrency.inc).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('has an amount'));
+    warn.mockRestore();
   });
 
   it('paid session without any currency: acknowledged, warned + counted, never announced with ""', async () => {
