@@ -1,3 +1,5 @@
+import type { JobsOptions } from 'bullmq';
+
 /**
  * A templated mail. Rendered with Handlebars (`strict`), so misspelled variables fail loudly.
  * `TTemplate` narrows the template name for typed builders (`defineMail`); `MailService` takes any.
@@ -41,3 +43,10 @@ export interface TypedMailMessage<TContextMap, TTemplate extends keyof TContextM
   extends Omit<MailMessage<TTemplate>, 'context'> {
   context: TContextMap[TTemplate];
 }
+
+/**
+ * Overrides of the retention in `MAIL_JOB_OPTIONS`, for mails whose job data is a secret (one-time
+ * codes, invitation tokens): `{ removeOnComplete: true, removeOnFail: true }` deletes the job as soon
+ * as it is sent or gives up. The idempotency window then ends with the job.
+ */
+export type MailJobRetention = Pick<JobsOptions, 'removeOnComplete' | 'removeOnFail'>;

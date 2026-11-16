@@ -156,6 +156,115 @@ export interface UpdateUserRolesRequest {
   actorId: string;
 }
 
+/** A tenant (workspace). */
+export interface Tenant {
+  id: string;
+  slug: string;
+  name: string;
+  personal: boolean;
+  createdAt?: Date | undefined;
+}
+
+/** One of the caller's tenants and their roles in it. */
+export interface MyTenant {
+  tenant?: Tenant | undefined;
+  roles: string[];
+  lastActiveAt?: Date | undefined;
+}
+
+/** The caller's tenants, most recently active first. */
+export interface MyTenantList {
+  items: MyTenant[];
+}
+
+/** A member of a tenant with their roles in it. */
+export interface Member {
+  userId: string;
+  email: string;
+  displayName: string;
+  roles: string[];
+  joinedAt?: Date | undefined;
+}
+
+/** One keyset page of tenant members. */
+export interface MemberPage {
+  items: Member[];
+  /** Pass as cursor for the next page; absent on the last page. */
+  nextCursor?: string | undefined;
+}
+
+/** A pending invitation to join a tenant (the raw token is only ever mailed). */
+export interface Invitation {
+  id: string;
+  tenantId: string;
+  email: string;
+  roles: string[];
+  expiresAt?: Date | undefined;
+  createdAt?: Date | undefined;
+}
+
+/** Lists the tenants the user belongs to. */
+export interface ListMyTenantsRequest {
+  userId: string;
+}
+
+/** Creates a tenant owned by the user. */
+export interface CreateTenantRequest {
+  userId: string;
+  name: string;
+}
+
+/** Renames a tenant on behalf of the actor. */
+export interface RenameTenantRequest {
+  tenantId: string;
+  actorId: string;
+  name: string;
+}
+
+/** Lists one page of a tenant's members. */
+export interface ListMembersRequest {
+  tenantId: string;
+  limit: number;
+  /** Opaque cursor from a previous MemberPage.next_cursor. */
+  cursor?: string | undefined;
+}
+
+/** Replaces a member's roles on behalf of the actor. */
+export interface UpdateMemberRolesRequest {
+  tenantId: string;
+  actorId: string;
+  userId: string;
+  roles: string[];
+}
+
+/** Removes a member on behalf of the actor. */
+export interface RemoveMemberRequest {
+  tenantId: string;
+  actorId: string;
+  userId: string;
+}
+
+/** The user leaves a tenant. */
+export interface LeaveTenantRequest {
+  tenantId: string;
+  userId: string;
+}
+
+/** Invites an email to a tenant on behalf of the actor. */
+export interface CreateInvitationRequest {
+  tenantId: string;
+  actorId: string;
+  email: string;
+  roles: string[];
+}
+
+/** Accepts an invitation as the logged-in user. */
+export interface AcceptInvitationRequest {
+  userId: string;
+  /** The raw token from the invitation mail (base64url, 43 chars); stored hashed. */
+  token: string;
+}
+
 wrappers[".google.protobuf.Timestamp"] = {
   fromObject(value: Date) {
     return { seconds: value.getTime() / 1000, nanos: (value.getTime() % 1000) * 1e6 };
@@ -334,3 +443,133 @@ export function UsersServiceControllerMethods() {
 }
 
 export const USERS_SERVICE_NAME = "UsersService";
+
+/**
+ * Tenancy (B2-12..B2-14). Requests name the acting user and tenant explicitly (copied from the access
+ * token by the gateway); the principal in the gRPC metadata repeats them and the service cross-checks.
+ */
+
+export interface TenantsServiceClient {
+  /** The caller's tenants with their roles, most recently active first. */
+
+  listMyTenants(request: ListMyTenantsRequest, metadata?: Metadata): Observable<MyTenantList>;
+
+  /** A new tenant with the caller as its only owner. */
+
+  createTenant(request: CreateTenantRequest, metadata?: Metadata): Observable<MyTenant>;
+
+  /** Renames the actor's active tenant (owner only: tenant:manage). */
+
+  renameTenant(request: RenameTenantRequest, metadata?: Metadata): Observable<Tenant>;
+
+  /** Members of a tenant (keyset pages on user id, newest first). */
+
+  listMembers(request: ListMembersRequest, metadata?: Metadata): Observable<MemberPage>;
+
+  /** Replaces a member's roles (members:manage; owner rank to grant or revoke owner; never the last owner). */
+
+  updateMemberRoles(request: UpdateMemberRolesRequest, metadata?: Metadata): Observable<Member>;
+
+  /** Removes a member (members:manage; owner rank for an owner; never the last owner). */
+
+  removeMember(request: RemoveMemberRequest, metadata?: Metadata): Observable<Empty>;
+
+  /** The caller leaves a tenant (never the last owner). */
+
+  leaveTenant(request: LeaveTenantRequest, metadata?: Metadata): Observable<Empty>;
+
+  /** Invites an email with roles and mails the accept link (members:manage; owner rank to invite an owner). */
+
+  createInvitation(request: CreateInvitationRequest, metadata?: Metadata): Observable<Invitation>;
+
+  /** The logged-in caller (whose email must match) joins the invitation's tenant. */
+
+  acceptInvitation(request: AcceptInvitationRequest, metadata?: Metadata): Observable<MyTenant>;
+}
+
+/**
+ * Tenancy (B2-12..B2-14). Requests name the acting user and tenant explicitly (copied from the access
+ * token by the gateway); the principal in the gRPC metadata repeats them and the service cross-checks.
+ */
+
+export interface TenantsServiceController {
+  /** The caller's tenants with their roles, most recently active first. */
+
+  listMyTenants(
+    request: ListMyTenantsRequest,
+    metadata?: Metadata,
+  ): Promise<MyTenantList> | Observable<MyTenantList> | MyTenantList;
+
+  /** A new tenant with the caller as its only owner. */
+
+  createTenant(request: CreateTenantRequest, metadata?: Metadata): Promise<MyTenant> | Observable<MyTenant> | MyTenant;
+
+  /** Renames the actor's active tenant (owner only: tenant:manage). */
+
+  renameTenant(request: RenameTenantRequest, metadata?: Metadata): Promise<Tenant> | Observable<Tenant> | Tenant;
+
+  /** Members of a tenant (keyset pages on user id, newest first). */
+
+  listMembers(
+    request: ListMembersRequest,
+    metadata?: Metadata,
+  ): Promise<MemberPage> | Observable<MemberPage> | MemberPage;
+
+  /** Replaces a member's roles (members:manage; owner rank to grant or revoke owner; never the last owner). */
+
+  updateMemberRoles(
+    request: UpdateMemberRolesRequest,
+    metadata?: Metadata,
+  ): Promise<Member> | Observable<Member> | Member;
+
+  /** Removes a member (members:manage; owner rank for an owner; never the last owner). */
+
+  removeMember(request: RemoveMemberRequest, metadata?: Metadata): void | Promise<void>;
+
+  /** The caller leaves a tenant (never the last owner). */
+
+  leaveTenant(request: LeaveTenantRequest, metadata?: Metadata): void | Promise<void>;
+
+  /** Invites an email with roles and mails the accept link (members:manage; owner rank to invite an owner). */
+
+  createInvitation(
+    request: CreateInvitationRequest,
+    metadata?: Metadata,
+  ): Promise<Invitation> | Observable<Invitation> | Invitation;
+
+  /** The logged-in caller (whose email must match) joins the invitation's tenant. */
+
+  acceptInvitation(
+    request: AcceptInvitationRequest,
+    metadata?: Metadata,
+  ): Promise<MyTenant> | Observable<MyTenant> | MyTenant;
+}
+
+export function TenantsServiceControllerMethods() {
+  return function (constructor: Function) {
+    const grpcMethods: string[] = [
+      "listMyTenants",
+      "createTenant",
+      "renameTenant",
+      "listMembers",
+      "updateMemberRoles",
+      "removeMember",
+      "leaveTenant",
+      "createInvitation",
+      "acceptInvitation",
+    ];
+    for (const method of grpcMethods) {
+      const descriptor: any = Reflect.getOwnPropertyDescriptor(constructor.prototype, method);
+      GrpcMethod("TenantsService", method)(constructor.prototype[method], method, descriptor);
+      Object.defineProperty(constructor.prototype, method, descriptor);
+    }
+    const grpcStreamMethods: string[] = [];
+    for (const method of grpcStreamMethods) {
+      const descriptor: any = Reflect.getOwnPropertyDescriptor(constructor.prototype, method);
+      GrpcStreamMethod("TenantsService", method)(constructor.prototype[method], method, descriptor);
+      Object.defineProperty(constructor.prototype, method, descriptor);
+    }
+  };
+}
+
+export const TENANTS_SERVICE_NAME = "TenantsService";

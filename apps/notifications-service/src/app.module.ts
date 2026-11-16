@@ -1,3 +1,4 @@
+import { IDENTITY_MAIL_TEMPLATES_DIR } from '@domain/identity-contracts';
 import {
   NOTIFICATIONS_MAIL_TEMPLATES_DIR,
   NotificationsGrpcModule,
@@ -46,10 +47,10 @@ import { KafkaHealthIndicator, KafkaProducerModule } from '@platform/transport';
     RedisModule.forRootAsync(),
     // BullMQ connection for the `mail` queue; AppMailerModule registers the queue, MailService
     // and the MailProcessor worker (this service delivers mail, rendering the notifications
-    // templates).
+    // and identity templates).
     AppQueueModule.forRootAsync(),
     AppMailerModule.forRootAsync({
-      templateDirs: [NOTIFICATIONS_MAIL_TEMPLATES_DIR],
+      templateDirs: [NOTIFICATIONS_MAIL_TEMPLATES_DIR, IDENTITY_MAIL_TEMPLATES_DIR],
       worker: true,
     }),
     KafkaProducerModule.forRootAsync(),

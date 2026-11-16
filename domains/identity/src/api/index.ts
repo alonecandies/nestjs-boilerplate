@@ -7,6 +7,9 @@
  * this entry ships without them (assemble-image file tracing).
  */
 export { AuthPort } from '../application/ports/auth.port.js';
+export { InvitationsPort } from '../application/ports/invitations.port.js';
+export { MembersPort } from '../application/ports/members.port.js';
+export { TenantsPort } from '../application/ports/tenants.port.js';
 export { UsersPort } from '../application/ports/users.port.js';
 export {
   IDENTITY_LIMITS,

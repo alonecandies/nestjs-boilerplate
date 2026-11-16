@@ -1,0 +1,100 @@
+import { createPrincipal, generateId, runWithPrincipal } from '@platform/common';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { FakeIdentityState } from './fake-identity-ports.js';
+import {
+  FakeInvitationsPort,
+  FakeMembersPort,
+  FakeTenancyState,
+  FakeTenantsPort,
+} from './fake-tenancy-ports.js';
+
+describe('gateway tenancy fakes', () => {
+  let identity: FakeIdentityState;
+  let state: FakeTenancyState;
+  const ada = generateId();
+  const bob = generateId();
+  const tenantId = generateId();
+
+  beforeEach(() => {
+    identity = new FakeIdentityState();
+    for (const [id, email] of [
+      [ada, 'ada@example.com'],
+      [bob, 'bob@example.com'],
+    ] as const) {
+      identity.users.set(id, {
+        user: {
+          id,
+          email,
+          displayName: email,
+          roles: [],
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+        password: 'x',
+      });
+    }
+    identity.tenants.set(tenantId, { id: tenantId, name: 'Acme', personal: false });
+    identity.addMembership(tenantId, ada, ['owner']);
+    state = new FakeTenancyState(identity);
+  });
+
+  it('create → list mine', async () => {
+    const tenants = new FakeTenantsPort(state);
+    const created = await tenants.createTenant({ userId: bob, name: 'Bob Co' });
+    expect(created.roles).toEqual(['owner']);
+    expect((await tenants.listMyTenants({ userId: bob })).items).toHaveLength(1);
+  });
+
+  it('invite → accept (email must match, single use) → member', async () => {
+    const invitations = new FakeInvitationsPort(state);
+    await invitations.createInvitation({
+      tenantId,
+      actorId: ada,
+      email: 'bob@example.com',
+      roles: ['member'],
+    });
+    const token = state.lastTokenFor('bob@example.com');
+    expect(token).toEqual(expect.any(String));
+    await expect(
+      invitations.acceptInvitation({ userId: ada, token: token! }),
+    ).rejects.toMatchObject({
+      code: 'INVITATION_EMAIL_MISMATCH',
+    });
+    await expect(
+      invitations.acceptInvitation({ userId: bob, token: token! }),
+    ).resolves.toMatchObject({ roles: ['member'] });
+    expect(identity.membership(tenantId, bob)?.roles).toEqual(['member']);
+    await expect(
+      invitations.acceptInvitation({ userId: bob, token: token! }),
+    ).rejects.toMatchObject({
+      code: 'INVITATION_INVALID',
+    });
+  });
+
+  it('a staff switch-in principal acts with its token roles: members yes, owners never', async () => {
+    const members = new FakeMembersPort(state);
+    const staff = generateId();
+    identity.addMembership(tenantId, bob, ['member']);
+    await runWithPrincipal(
+      createPrincipal({ userId: staff, tenantId, roles: ['admin'], staff: true }),
+      async () => {
+        await expect(
+          members.updateMemberRoles({ tenantId, actorId: staff, userId: bob, roles: ['admin'] }),
+        ).resolves.toMatchObject({ roles: ['admin'] });
+        await expect(
+          members.updateMemberRoles({ tenantId, actorId: staff, userId: ada, roles: ['member'] }),
+        ).rejects.toMatchObject({ code: 'OWNER_RANK_REQUIRED' });
+      },
+    );
+  });
+
+  it('protects the last owner', async () => {
+    const members = new FakeMembersPort(state);
+    await expect(
+      members.updateMemberRoles({ tenantId, actorId: ada, userId: ada, roles: ['admin'] }),
+    ).rejects.toMatchObject({ code: 'LAST_OWNER' });
+    await expect(members.leaveTenant({ tenantId, userId: ada })).rejects.toMatchObject({
+      code: 'LAST_OWNER',
+    });
+  });
+});

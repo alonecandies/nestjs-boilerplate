@@ -31,8 +31,13 @@ export function mailFromName(from: string): string | undefined {
 export function defaultMailContext(
   from: string,
   now: Date = new Date(),
-): Required<Pick<BaseMailContext, 'appName' | 'year'>> {
-  return { appName: mailFromName(from) ?? DEFAULT_MAIL_APP_NAME, year: now.getUTCFullYear() };
+  appUrl?: string,
+): Required<Pick<BaseMailContext, 'appName' | 'year'>> & Pick<BaseMailContext, 'appUrl'> {
+  return {
+    appName: mailFromName(from) ?? DEFAULT_MAIL_APP_NAME,
+    year: now.getUTCFullYear(),
+    ...(appUrl === undefined ? {} : { appUrl }),
+  };
 }
 
 const moneyFormats = new Map<string, Intl.NumberFormat>();

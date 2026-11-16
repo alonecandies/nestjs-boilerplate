@@ -5,6 +5,7 @@ import {
   type UsersServiceClient,
 } from '@domain/identity-contracts';
 import { type ServiceError, status } from '@grpc/grpc-js';
+import { getQueueToken } from '@nestjs/bullmq';
 import { ClientGrpcProxy } from '@nestjs/microservices';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
@@ -16,6 +17,7 @@ import {
 } from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
 import { DRIZZLE } from '@platform/database';
+import { MAIL_QUEUE } from '@platform/mailer';
 import { MetricsListener } from '@platform/observability';
 import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
@@ -102,7 +104,10 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
       .overrideProvider(REDIS_CLIENT)
       .useValue(new InMemoryRedis().asRedis())
       .overrideProvider(KafkaProducer)
-      .useValue(new FakeKafkaProducer({ source: 'identity-service' }));
+      .useValue(new FakeKafkaProducer({ source: 'identity-service' }))
+      // The invitation mail queue (B2-14): a recording stub, so no BullMQ connection opens.
+      .overrideProvider(getQueueToken(MAIL_QUEUE))
+      .useValue({ add: vi.fn(), close: vi.fn(), on: vi.fn() });
     app = await startServiceTestApp(builder, { grpc: [IDENTITY_GRPC_PACKAGE] });
 
     client = new ClientGrpcProxy(

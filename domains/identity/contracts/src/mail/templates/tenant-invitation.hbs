@@ -1,0 +1,6 @@
+{{> header title=(concat "Join " tenantName) preheader="You have been invited to a workspace."}}
+<h1 style="margin:0 0 16px;font-size:22px;color:#1f2933;">{{inviterName}} invited you to {{tenantName}}</h1>
+<p style="margin:0 0 12px;">You were invited as <strong>{{roles}}</strong> on {{appName}}. Log in (or sign up) with this email address, then accept the invitation.</p>
+{{#if acceptUrl}}{{> button url=acceptUrl label="Accept the invitation"}}{{/if}}
+<p style="margin:16px 0 0;color:#52606d;">Invitation code: <code>{{token}}</code><br>It expires on {{expiresAt}}. If you did not expect this invitation, ignore this email.</p>
+{{> footer}}

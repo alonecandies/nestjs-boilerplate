@@ -8,5 +8,6 @@
 // Identity's real signer: fakes and the gateway e2e mint refresh tokens with it (not a production export).
 export { TokenIssuer } from '../infrastructure/security/token-issuer.service.js';
 export * from './fake-identity-ports.js';
+export * from './fake-tenancy-ports.js';
 export * from './in-memory-identity.js';
 export * from './in-memory-tenancy.js';

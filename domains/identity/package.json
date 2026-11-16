@@ -40,6 +40,7 @@
     "@domain/identity-contracts": "workspace:*",
     "@platform/database": "workspace:*",
     "@platform/graphql": "workspace:*",
+    "@platform/mailer": "workspace:*",
     "@platform/redis": "workspace:*",
     "@platform/transport": "workspace:*",
     "@grpc/grpc-js": "catalog:",

@@ -4,39 +4,63 @@ import { RbacModule } from '@platform/auth';
 import { GraphqlLoadersModule } from '@platform/graphql';
 import { GrpcClientsModule, type GrpcClientsModuleOptions } from '@platform/transport';
 import { AuthPort } from './application/ports/auth.port.js';
+import { InvitationsPort } from './application/ports/invitations.port.js';
+import { MembersPort } from './application/ports/members.port.js';
+import { TenantsPort } from './application/ports/tenants.port.js';
 import { UsersPort } from './application/ports/users.port.js';
 import { IDENTITY_RBAC } from './identity.permissions.js';
 import { AuthGrpcAdapter } from './infrastructure/adapters/grpc/auth-grpc.adapter.js';
 import { IdentityGrpcCaller } from './infrastructure/adapters/grpc/identity-grpc.caller.js';
 import { identityGrpcClientConfig } from './infrastructure/adapters/grpc/identity-grpc-client.config.js';
+import { InvitationsGrpcAdapter } from './infrastructure/adapters/grpc/invitations-grpc.adapter.js';
+import { MembersGrpcAdapter } from './infrastructure/adapters/grpc/members-grpc.adapter.js';
+import { TenantsGrpcAdapter } from './infrastructure/adapters/grpc/tenants-grpc.adapter.js';
 import { UsersGrpcAdapter } from './infrastructure/adapters/grpc/users-grpc.adapter.js';
 import { AuthLocalAdapter } from './infrastructure/adapters/local/auth-local.adapter.js';
+import { InvitationsLocalAdapter } from './infrastructure/adapters/local/invitations-local.adapter.js';
+import { MembersLocalAdapter } from './infrastructure/adapters/local/members-local.adapter.js';
+import { TenantsLocalAdapter } from './infrastructure/adapters/local/tenants-local.adapter.js';
 import { UsersLocalAdapter } from './infrastructure/adapters/local/users-local.adapter.js';
 import { AuthResolver } from './presentation/graphql/auth.resolver.js';
+import { MeTenantResolver } from './presentation/graphql/me-tenant.resolver.js';
+import { TenancyResolver } from './presentation/graphql/tenancy.resolver.js';
 import { UsersResolver } from './presentation/graphql/users.resolver.js';
 import { UsersLoaderRegistrar } from './presentation/graphql/users-loader.registrar.js';
 import { AuthController } from './presentation/http/auth.controller.js';
+import { InvitationsController } from './presentation/http/invitations.controller.js';
+import { MembersController } from './presentation/http/members.controller.js';
 import { StaffController } from './presentation/http/staff.controller.js';
 import { LocalStrategy } from './presentation/http/strategies/local.strategy.js';
+import { TenantsController } from './presentation/http/tenants.controller.js';
 import { UsersController } from './presentation/http/users.controller.js';
 import { IdentityRateLimitModule } from './presentation/rate-limit/identity-rate-limit.js';
 import { UserReadCache } from './presentation/shared/user-read.cache.js';
 
 /** Topology-independent presentation: the same classes in the monolith and the gateway. */
-const CONTROLLERS = [AuthController, UsersController, StaffController];
+const CONTROLLERS = [
+  AuthController,
+  UsersController,
+  StaffController,
+  TenantsController,
+  MembersController,
+  InvitationsController,
+];
 const PRESENTATION: Provider[] = [
   LocalStrategy,
   UserReadCache,
   UsersResolver,
   AuthResolver,
   UsersLoaderRegistrar,
+  TenancyResolver,
+  MeTenantResolver,
 ];
-const PORT_EXPORTS = [AuthPort, UsersPort];
+const PORT_EXPORTS = [AuthPort, UsersPort, TenantsPort, MembersPort, InvitationsPort];
 
 /**
- * Edge API of the identity context: REST (`/v1/auth`, `/v1/users`), GraphQL (me, user, users,
- * register, login, refreshTokens), the passport-local strategy and the `users`
- * DataLoader. Presentation depends only on `AuthPort` / `UsersPort`; the binding decides the
+ * Edge API of the identity context: REST (`/v1/auth`, `/v1/users`, `/v1/tenant*`), GraphQL (me, user,
+ * users, register, login, refreshTokens, the tenancy queries and mutations), the passport-local
+ * strategy and the `users` DataLoader. Presentation depends only on the ports (`AuthPort`,
+ * `UsersPort`, `TenantsPort`, `MembersPort`, `InvitationsPort`); the binding decides the
  * topology:
  * - `forLocal()` (monolith): ports → CommandBus/QueryBus. The app imports `IdentityCoreModule` itself
  *   (from `@domain/identity`): this module is part of `@domain/identity/api`, which never reaches core code.
@@ -62,6 +86,9 @@ export class IdentityApiModule {
         ...PRESENTATION,
         { provide: AuthPort, useClass: AuthLocalAdapter },
         { provide: UsersPort, useClass: UsersLocalAdapter },
+        { provide: TenantsPort, useClass: TenantsLocalAdapter },
+        { provide: MembersPort, useClass: MembersLocalAdapter },
+        { provide: InvitationsPort, useClass: InvitationsLocalAdapter },
       ],
       exports: PORT_EXPORTS,
     };
@@ -87,6 +114,9 @@ export class IdentityApiModule {
         IdentityGrpcCaller,
         { provide: AuthPort, useClass: AuthGrpcAdapter },
         { provide: UsersPort, useClass: UsersGrpcAdapter },
+        { provide: TenantsPort, useClass: TenantsGrpcAdapter },
+        { provide: MembersPort, useClass: MembersGrpcAdapter },
+        { provide: InvitationsPort, useClass: InvitationsGrpcAdapter },
       ],
       exports: PORT_EXPORTS,
     };

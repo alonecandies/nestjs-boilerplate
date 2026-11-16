@@ -37,6 +37,29 @@ service UsersService {
   rpc UpdateUserRoles(UpdateUserRolesRequest) returns (User);
 }
 
+// Tenancy (B2-12..B2-14). Requests name the acting user and tenant explicitly (copied from the access
+// token by the gateway); the principal in the gRPC metadata repeats them and the service cross-checks.
+service TenantsService {
+  // The caller's tenants with their roles, most recently active first.
+  rpc ListMyTenants(ListMyTenantsRequest) returns (MyTenantList);
+  // A new tenant with the caller as its only owner.
+  rpc CreateTenant(CreateTenantRequest) returns (MyTenant);
+  // Renames the actor's active tenant (owner only: tenant:manage).
+  rpc RenameTenant(RenameTenantRequest) returns (Tenant);
+  // Members of a tenant (keyset pages on user id, newest first).
+  rpc ListMembers(ListMembersRequest) returns (MemberPage);
+  // Replaces a member's roles (members:manage; owner rank to grant or revoke owner; never the last owner).
+  rpc UpdateMemberRoles(UpdateMemberRolesRequest) returns (Member);
+  // Removes a member (members:manage; owner rank for an owner; never the last owner).
+  rpc RemoveMember(RemoveMemberRequest) returns (google.protobuf.Empty);
+  // The caller leaves a tenant (never the last owner).
+  rpc LeaveTenant(LeaveTenantRequest) returns (google.protobuf.Empty);
+  // Invites an email with roles and mails the accept link (members:manage; owner rank to invite an owner).
+  rpc CreateInvitation(CreateInvitationRequest) returns (Invitation);
+  // The logged-in caller (whose email must match) joins the invitation's tenant.
+  rpc AcceptInvitation(AcceptInvitationRequest) returns (MyTenant);
+}
+
 message User {
   string id = 1;
   string email = 2;
@@ -169,4 +192,113 @@ message UpdateUserRolesRequest {
   repeated string roles = 2;
   // Unused since B2.
   string actor_id = 3;
+}
+
+// A tenant (workspace).
+message Tenant {
+  string id = 1;
+  string slug = 2;
+  string name = 3;
+  bool personal = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+// One of the caller's tenants and their roles in it.
+message MyTenant {
+  Tenant tenant = 1;
+  repeated string roles = 2;
+  google.protobuf.Timestamp last_active_at = 3;
+}
+
+// The caller's tenants, most recently active first.
+message MyTenantList {
+  repeated MyTenant items = 1;
+}
+
+// A member of a tenant with their roles in it.
+message Member {
+  string user_id = 1;
+  string email = 2;
+  string display_name = 3;
+  repeated string roles = 4;
+  google.protobuf.Timestamp joined_at = 5;
+}
+
+// One keyset page of tenant members.
+message MemberPage {
+  repeated Member items = 1;
+  // Pass as cursor for the next page; absent on the last page.
+  optional string next_cursor = 2;
+}
+
+// A pending invitation to join a tenant (the raw token is only ever mailed).
+message Invitation {
+  string id = 1;
+  string tenant_id = 2;
+  string email = 3;
+  repeated string roles = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+// Lists the tenants the user belongs to.
+message ListMyTenantsRequest {
+  string user_id = 1;
+}
+
+// Creates a tenant owned by the user.
+message CreateTenantRequest {
+  string user_id = 1;
+  string name = 2;
+}
+
+// Renames a tenant on behalf of the actor.
+message RenameTenantRequest {
+  string tenant_id = 1;
+  string actor_id = 2;
+  string name = 3;
+}
+
+// Lists one page of a tenant's members.
+message ListMembersRequest {
+  string tenant_id = 1;
+  int32 limit = 2;
+  // Opaque cursor from a previous MemberPage.next_cursor.
+  optional string cursor = 3;
+}
+
+// Replaces a member's roles on behalf of the actor.
+message UpdateMemberRolesRequest {
+  string tenant_id = 1;
+  string actor_id = 2;
+  string user_id = 3;
+  repeated string roles = 4;
+}
+
+// Removes a member on behalf of the actor.
+message RemoveMemberRequest {
+  string tenant_id = 1;
+  string actor_id = 2;
+  string user_id = 3;
+}
+
+// The user leaves a tenant.
+message LeaveTenantRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+}
+
+// Invites an email to a tenant on behalf of the actor.
+message CreateInvitationRequest {
+  string tenant_id = 1;
+  string actor_id = 2;
+  string email = 3;
+  repeated string roles = 4;
+}
+
+// Accepts an invitation as the logged-in user.
+message AcceptInvitationRequest {
+  string user_id = 1;
+  // The raw token from the invitation mail (base64url, 43 chars); stored hashed.
+  string token = 2;
 }

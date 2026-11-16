@@ -27,6 +27,7 @@
     "@domain/identity-contracts": "workspace:*",
     "@platform/database": "workspace:*",
     "@domain/identity": "workspace:*",
+    "@platform/mailer": "workspace:*",
     "@platform/observability": "workspace:*",
     "@platform/redis": "workspace:*",
     "@platform/transport": "workspace:*",
@@ -48,6 +49,7 @@
   },
   "devDependencies": {
     "@platform/testing": "workspace:*",
+    "@nestjs/bullmq": "catalog:",
     "@nestjs/testing": "catalog:",
     "drizzle-orm": "catalog:"
   }
