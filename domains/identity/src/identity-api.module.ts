@@ -4,6 +4,7 @@ import { RbacModule } from '@platform/auth';
 import { GraphqlLoadersModule } from '@platform/graphql';
 import { GrpcClientsModule, type GrpcClientsModuleOptions } from '@platform/transport';
 import { AuthPort } from './application/ports/auth.port.js';
+import { InvitationsPort } from './application/ports/invitations.port.js';
 import { MembersPort } from './application/ports/members.port.js';
 import { TenantsPort } from './application/ports/tenants.port.js';
 import { UsersPort } from './application/ports/users.port.js';
@@ -13,6 +14,7 @@ import { IdentityGrpcCaller } from './infrastructure/adapters/grpc/identity-grpc
 import { identityGrpcClientConfig } from './infrastructure/adapters/grpc/identity-grpc-client.config.js';
 import { UsersGrpcAdapter } from './infrastructure/adapters/grpc/users-grpc.adapter.js';
 import { AuthLocalAdapter } from './infrastructure/adapters/local/auth-local.adapter.js';
+import { InvitationsLocalAdapter } from './infrastructure/adapters/local/invitations-local.adapter.js';
 import { MembersLocalAdapter } from './infrastructure/adapters/local/members-local.adapter.js';
 import { TenantsLocalAdapter } from './infrastructure/adapters/local/tenants-local.adapter.js';
 import { UsersLocalAdapter } from './infrastructure/adapters/local/users-local.adapter.js';
@@ -20,6 +22,7 @@ import { AuthResolver } from './presentation/graphql/auth.resolver.js';
 import { UsersResolver } from './presentation/graphql/users.resolver.js';
 import { UsersLoaderRegistrar } from './presentation/graphql/users-loader.registrar.js';
 import { AuthController } from './presentation/http/auth.controller.js';
+import { InvitationsController } from './presentation/http/invitations.controller.js';
 import { MembersController } from './presentation/http/members.controller.js';
 import { StaffController } from './presentation/http/staff.controller.js';
 import { LocalStrategy } from './presentation/http/strategies/local.strategy.js';
@@ -39,7 +42,7 @@ const PRESENTATION: Provider[] = [
 ];
 const PORT_EXPORTS = [AuthPort, UsersPort];
 /** Tenancy endpoints: local-only until the gRPC adapter exists (`forRemote()` gains them in Task 11). */
-const TENANCY_CONTROLLERS = [TenantsController, MembersController];
+const TENANCY_CONTROLLERS = [TenantsController, MembersController, InvitationsController];
 
 /**
  * Edge API of the identity context: REST (`/v1/auth`, `/v1/users`), GraphQL (me, user, users,
@@ -72,8 +75,9 @@ export class IdentityApiModule {
         { provide: UsersPort, useClass: UsersLocalAdapter },
         { provide: TenantsPort, useClass: TenantsLocalAdapter },
         { provide: MembersPort, useClass: MembersLocalAdapter },
+        { provide: InvitationsPort, useClass: InvitationsLocalAdapter },
       ],
-      exports: [...PORT_EXPORTS, TenantsPort, MembersPort],
+      exports: [...PORT_EXPORTS, TenantsPort, MembersPort, InvitationsPort],
     };
   }
 

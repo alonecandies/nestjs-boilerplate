@@ -6,6 +6,7 @@ import {
 } from '@domain/billing';
 import { FilesModule } from '@domain/files';
 import { IdentityApiModule, IdentityCoreModule, identitySchema } from '@domain/identity';
+import { IDENTITY_MAIL_TEMPLATES_DIR } from '@domain/identity-contracts';
 import {
   NOTIFICATIONS_MAIL_TEMPLATES_DIR,
   NotificationsApiModule,
@@ -88,7 +89,9 @@ const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
 
     // Async work and external services.
     AppQueueModule.forRootAsync(),
-    AppMailerModule.forRootAsync({ templateDirs: [NOTIFICATIONS_MAIL_TEMPLATES_DIR] }),
+    AppMailerModule.forRootAsync({
+      templateDirs: [NOTIFICATIONS_MAIL_TEMPLATES_DIR, IDENTITY_MAIL_TEMPLATES_DIR],
+    }),
     KafkaProducerModule.forRootAsync(),
     StorageModule.forRootAsync(),
 

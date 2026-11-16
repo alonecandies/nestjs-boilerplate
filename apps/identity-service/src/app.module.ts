@@ -7,8 +7,9 @@ import { AuthModule } from '@platform/auth';
 import { CorrelationIdMiddleware, provideCommonEnhancersAsync } from '@platform/common';
 import { type AppConfig, AppConfigModule, appConfig, grpcConfig } from '@platform/config';
 import { DatabaseHealthIndicator, DatabaseModule } from '@platform/database';
+import { AppMailerModule } from '@platform/mailer';
 import { ObservabilityModule } from '@platform/observability';
-import { RedisHealthIndicator, RedisModule } from '@platform/redis';
+import { AppQueueModule, RedisHealthIndicator, RedisModule } from '@platform/redis';
 import { KafkaProducerModule } from '@platform/transport';
 import { DATABASE_MIGRATIONS } from './database.migrations.js';
 
@@ -38,6 +39,10 @@ import { DATABASE_MIGRATIONS } from './database.migrations.js';
     // boot when DATABASE_RUN_MIGRATIONS=true (advisory-locked: replicas starting together apply them once).
     DatabaseModule.forRootAsync({ schema: identitySchema, migrations: DATABASE_MIGRATIONS }),
     RedisModule.forRootAsync(),
+    // BullMQ connection and the `mail` queue: CreateInvitationHandler enqueues invitation mail.
+    AppQueueModule.forRootAsync(),
+    // Enqueue-only: notifications-service (and the monolith) deliver identity mail.
+    AppMailerModule.forRootAsync({ templateDirs: [], worker: false }),
     KafkaProducerModule.forRootAsync(),
     // AccessTokenDenylist for LogoutHandler (PasswordHasher and TokenIssuer come with
     // IdentityCoreModule). No global guards: the service only answers the gateway, which

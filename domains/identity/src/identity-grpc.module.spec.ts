@@ -4,9 +4,10 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { AuthModule, TokenService } from '@platform/auth';
 import { AppConfigModule } from '@platform/config';
 import { DRIZZLE, TransactionHost } from '@platform/database';
+import { MailService } from '@platform/mailer';
 import { KafkaProducer } from '@platform/transport';
 import { FakeKafkaProducer } from '@platform/transport/testing';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { FakeRedisModule } from '../test/auth-test.module.js';
 import { createFakePostgres } from '../test/fake-postgres.js';
 import { NOW } from '../test/fixtures.js';
@@ -41,8 +42,10 @@ const database = createFakePostgres((sql) =>
       useValue: { tx: database.db, withTransaction: (work: () => Promise<unknown>) => work() },
     },
     { provide: KafkaProducer, useValue: new FakeKafkaProducer() },
+    // AppMailerModule's global MailService (the invitation mail is queued through it).
+    { provide: MailService, useValue: { enqueue: vi.fn() } },
   ],
-  exports: [DRIZZLE, TransactionHost, KafkaProducer],
+  exports: [DRIZZLE, TransactionHost, KafkaProducer, MailService],
 })
 class FakeInfrastructureModule {}
 

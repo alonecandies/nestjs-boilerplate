@@ -1,7 +1,7 @@
 import type { ConfigType } from '@nestjs/config';
 import { z } from 'zod';
 import { defineConfigNamespace } from '../define-config-namespace.js';
-import { zBool, zInt, zNodeEnv, zPort, zStr } from '../env/env.helpers.js';
+import { zBool, zInt, zNodeEnv, zPort, zStr, zUrl } from '../env/env.helpers.js';
 import { isLoopbackHost } from '../env/production-guards.js';
 
 /** Reserved example/test domains (RFC 2606, RFC 6761): mail sent "from" them is undeliverable. */
@@ -27,6 +27,8 @@ export const mailEnvSchema = z
     SMTP_USER: zStr(),
     SMTP_PASSWORD: zStr(),
     MAIL_FROM: zStr('NestJS Boilerplate <no-reply@example.com>'),
+    // Public URL of the web app: mail buttons and links (invitation accept page) point here.
+    MAIL_APP_URL: zUrl(undefined, /^https?$/),
     SMTP_POOL: zBool(true),
     SMTP_MAX_CONNECTIONS: zInt(5, { min: 1 }),
     MAIL_QUEUE_CONCURRENCY: zInt(5, { min: 1 }),
@@ -42,6 +44,14 @@ export const mailEnvSchema = z
       });
     }
     if (env.NODE_ENV !== 'production' || env.SMTP_ALLOW_INSECURE) return;
+    if (env.MAIL_APP_URL?.startsWith('http://')) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['MAIL_APP_URL'],
+        message:
+          'MAIL_APP_URL must be https in production (mail links carry invitation tokens), or set SMTP_ALLOW_INSECURE=true for the local compose stack only',
+      });
+    }
     const loopback = isLoopbackHost(env.SMTP_HOST);
     if (loopback && env.SMTP_PORT === MAILPIT_PORT) {
       ctx.addIssue({
@@ -86,6 +96,8 @@ export const mailEnvSchema = z
         ? { user: env.SMTP_USER, pass: env.SMTP_PASSWORD }
         : undefined,
     from: env.MAIL_FROM,
+    /** Public web app URL without a trailing slash (mail links), or undefined. */
+    appUrl: env.MAIL_APP_URL?.replace(/\/+$/, ''),
     /** Reuse SMTP connections instead of a TLS handshake per mail. */
     pool: env.SMTP_POOL,
     maxConnections: env.SMTP_MAX_CONNECTIONS,

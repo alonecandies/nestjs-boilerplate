@@ -5,6 +5,7 @@ import { Test } from '@nestjs/testing';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { provideCommonEnhancers } from '@platform/common';
 import { DRIZZLE, TransactionHost } from '@platform/database';
+import { MailService } from '@platform/mailer';
 import { AppCacheService } from '@platform/redis';
 import { createFastifyTestApp } from '@platform/testing';
 import { KafkaProducer } from '@platform/transport';
@@ -72,7 +73,7 @@ const database = createFakePostgres((sql, params): FakeResult => {
 });
 const kafka = new FakeKafkaProducer({ source: 'monolith' });
 
-/** What DatabaseModule / KafkaProducerModule / AppCacheModule provide globally in the app. */
+/** What DatabaseModule / KafkaProducerModule / AppCacheModule / AppMailerModule provide globally. */
 @Global()
 @Module({
   providers: [
@@ -83,8 +84,10 @@ const kafka = new FakeKafkaProducer({ source: 'monolith' });
     },
     { provide: KafkaProducer, useValue: kafka },
     { provide: AppCacheService, useValue: new InMemoryAppCache() },
+    // AppMailerModule's global MailService (the invitation mail is queued through it).
+    { provide: MailService, useValue: { enqueue: vi.fn() } },
   ],
-  exports: [DRIZZLE, TransactionHost, KafkaProducer, AppCacheService],
+  exports: [DRIZZLE, TransactionHost, KafkaProducer, AppCacheService, MailService],
 })
 class FakeInfrastructureModule {}
 

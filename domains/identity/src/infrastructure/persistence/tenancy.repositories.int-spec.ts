@@ -296,6 +296,36 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           where c.conname = 'invitations_tenant_id_id_pk'`);
         expect(pk?.columns).toBe('tenant_id,id');
       });
+
+      describe('invitations accept (B2-14)', () => {
+        it('two concurrent markAccepted calls: exactly one wins', async () => {
+          const tenantId = await newTenant('i-race');
+          const inviter = await newUser('i-race');
+          const live = await invite(tenantId, inviter, new Date(Date.now() + INVITATION_TTL_MS));
+          const now = new Date();
+          const results = await Promise.all([
+            invitations.markAccepted(tenantId, live.id, now),
+            invitations.markAccepted(tenantId, live.id, now),
+          ]);
+          expect(results.filter(Boolean)).toHaveLength(1);
+        });
+
+        it('findByTokenHash finds the invitation across tenants (system read)', async () => {
+          const [a, b] = [await newTenant('i-sys-a'), await newTenant('i-sys-b')] as [
+            string,
+            string,
+          ];
+          const inviter = await newUser('i-sys');
+          const inA = await invite(a, inviter, new Date(Date.now() + INVITATION_TTL_MS));
+          const inB = await invite(b, inviter, new Date(Date.now() + INVITATION_TTL_MS));
+          await expect(
+            invitations.findByTokenHash(hashInvitationToken(inA.token)),
+          ).resolves.toMatchObject({ tenantId: a, id: inA.id });
+          await expect(
+            invitations.findByTokenHash(hashInvitationToken(inB.token)),
+          ).resolves.toMatchObject({ tenantId: b, id: inB.id });
+        });
+      });
     });
 
     describe('audit_events (append-only, tenant-distributed)', () => {

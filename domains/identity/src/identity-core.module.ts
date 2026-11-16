@@ -1,7 +1,9 @@
 import { Module, type Provider } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
-import { authConfig } from '@platform/config';
+import { authConfig, mailConfig } from '@platform/config';
+import { AcceptInvitationHandler } from './application/commands/accept-invitation/accept-invitation.handler.js';
+import { CreateInvitationHandler } from './application/commands/create-invitation/create-invitation.handler.js';
 import { CreateTenantHandler } from './application/commands/create-tenant/create-tenant.handler.js';
 import { LeaveTenantHandler } from './application/commands/leave-tenant/leave-tenant.handler.js';
 import { LoginHandler } from './application/commands/login/login.handler.js';
@@ -23,6 +25,7 @@ import { SessionsRepository } from './application/persistence/sessions.repositor
 import { TenantsRepository } from './application/persistence/tenants.repository.js';
 import { TransactionRunner } from './application/persistence/transaction-runner.js';
 import { UsersRepository } from './application/persistence/users.repository.js';
+import { InvitationMailer } from './application/ports/invitation-mailer.port.js';
 import { GetUserByIdHandler } from './application/queries/get-user-by-id/get-user-by-id.handler.js';
 import { GetUsersByIdsHandler } from './application/queries/get-users-by-ids/get-users-by-ids.handler.js';
 import { ListMembersHandler } from './application/queries/list-members/list-members.handler.js';
@@ -32,6 +35,7 @@ import { PersonalWorkspaces } from './application/services/personal-workspaces.s
 import { SessionTokensService } from './application/services/session-tokens.service.js';
 import { TenantAuditLog } from './application/services/tenant-audit-log.service.js';
 import { TenantSelection } from './application/services/tenant-selection.service.js';
+import { QueuedInvitationMailer } from './infrastructure/mail/queued-invitation.mailer.js';
 import { DrizzleAuditEventsRepository } from './infrastructure/persistence/drizzle-audit-events.repository.js';
 import { DrizzleInvitationsRepository } from './infrastructure/persistence/drizzle-invitations.repository.js';
 import { DrizzleMembershipsRepository } from './infrastructure/persistence/drizzle-memberships.repository.js';
@@ -57,6 +61,8 @@ export const IDENTITY_COMMAND_HANDLERS = [
   UpdateMemberRolesHandler,
   RemoveMemberHandler,
   LeaveTenantHandler,
+  CreateInvitationHandler,
+  AcceptInvitationHandler,
   StaffSwitchInHandler,
   StaffSwitchOutHandler,
   PurgeExpiredSessionsHandler,
@@ -91,7 +97,9 @@ const PERSISTENCE: Provider[] = [
  * (through `IdentityGrpcModule`). Expects the app-level global modules: `CqrsModule.forRoot()`,
  * `DatabaseModule.forRootAsync({ schema: identitySchema, migrations: [identityMigrations] })`
  * (Drizzle + transactional CLS plugin), `RedisModule` (denylist, locks), `AuthModule` (the
- * access-token denylist), `KafkaProducerModule` and — for the cron — `ScheduleModule.forRoot()`.
+ * access-token denylist), `KafkaProducerModule`, `AppMailerModule` (`MailService`: invitations are
+ * queued; only the processes that run `MailProcessor` deliver them) and — for the cron —
+ * `ScheduleModule.forRoot()`.
  */
 @Module({
   imports: [
@@ -102,6 +110,8 @@ const PERSISTENCE: Provider[] = [
     ConfigModule.forFeature(authConfig),
     ConfigModule.forFeature(refreshTokenConfig),
     ConfigModule.forFeature(staffSwitchInConfig),
+    // CreateInvitationHandler reads `appUrl` (MAIL_APP_URL) for the accept link.
+    ConfigModule.forFeature(mailConfig),
     JwtModule.register({}),
   ],
   providers: [
@@ -112,6 +122,7 @@ const PERSISTENCE: Provider[] = [
     PasswordHasher,
     TokenIssuer,
     SessionTokensService,
+    { provide: InvitationMailer, useClass: QueuedInvitationMailer },
     PersonalWorkspaces,
     TenantSelection,
     TenantAuditLog,

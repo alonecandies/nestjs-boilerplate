@@ -23,6 +23,7 @@
     "@platform/common": "workspace:*",
     "@platform/config": "workspace:*",
     "@platform/contracts": "workspace:*",
+    "@domain/identity-contracts": "workspace:*",
     "@domain/notifications-contracts": "workspace:*",
     "@platform/mailer": "workspace:*",
     "@domain/notifications": "workspace:*",
@@ -49,7 +50,6 @@
   },
   "devDependencies": {
     "@platform/testing": "workspace:*",
-    "@domain/identity-contracts": "workspace:*",
     "@nestjs/testing": "catalog:"
   }
 }

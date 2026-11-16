@@ -95,3 +95,11 @@ describe('isPermanentMailError', () => {
     expect(isPermanentMailError(undefined)).toBe(false);
   });
 });
+
+it('adds appUrl to the default context when configured (F34)', () => {
+  const now = new Date('2031-01-01T00:00:00Z');
+  expect(defaultMailContext('x@y.z', now, 'https://app.example.io')).toMatchObject({
+    appUrl: 'https://app.example.io',
+  });
+  expect(defaultMailContext('x@y.z', now)).not.toHaveProperty('appUrl');
+});

@@ -47,6 +47,8 @@ export const IdentityErrorCode = {
   STAFF_ONLY: 'STAFF_ONLY',
   LAST_OWNER: 'LAST_OWNER',
   OWNER_RANK_REQUIRED: 'OWNER_RANK_REQUIRED',
+  INVITATION_INVALID: 'INVITATION_INVALID',
+  INVITATION_EMAIL_MISMATCH: 'INVITATION_EMAIL_MISMATCH',
 } as const;
 export type IdentityErrorCode = (typeof IdentityErrorCode)[keyof typeof IdentityErrorCode];
 

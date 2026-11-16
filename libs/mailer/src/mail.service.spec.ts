@@ -91,6 +91,23 @@ describe('MailService.enqueue', () => {
     expect(queue.add.mock.calls[0]?.[2]).not.toHaveProperty('jobId');
     expect(result.jobId).toBe('auto-1');
   });
+
+  it('lets a caller shorten the retention of a job whose data is a secret (one-time codes)', async () => {
+    const queue = createQueue();
+    const service = new MailService(queue, createMailer(), cfg);
+
+    await service.enqueue(
+      { ...reminder, idempotencyKey: 'access-code-1' },
+      { removeOnComplete: true, removeOnFail: true },
+    );
+
+    expect(queue.add.mock.calls[0]?.[2]).toEqual({
+      ...MAIL_JOB_OPTIONS,
+      removeOnComplete: true,
+      removeOnFail: true,
+      jobId: 'access-code-1',
+    });
+  });
 });
 
 describe('MailService.sendNow', () => {
@@ -108,6 +125,22 @@ describe('MailService.sendNow', () => {
       template: 'reminder',
       context: { appName: 'Override', year: new Date().getUTCFullYear(), displayName: 'Jane' },
     });
+  });
+
+  it('passes the configured appUrl (MAIL_APP_URL) into the template context (F34)', async () => {
+    const mailer = createMailer();
+    const withUrl = mailConfig.parse({
+      MAIL_FROM: '"Acme" <no-reply@acme.test>',
+      MAIL_APP_URL: 'https://app.example.io',
+    });
+
+    await new MailService(createQueue(), mailer, withUrl).sendNow(reminder);
+
+    expect(mailer.sendMail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        context: expect.objectContaining({ appUrl: 'https://app.example.io' }),
+      }),
+    );
   });
 
   it('renders templates from every registered dir with the shared partials (JSON transport)', async () => {

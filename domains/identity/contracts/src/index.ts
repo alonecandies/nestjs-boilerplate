@@ -14,3 +14,4 @@ export type { Empty } from './generated/google/protobuf/empty.pb.js';
 export * from './generated/identity/v1/identity.pb.js';
 export * as identityV1 from './generated/identity/v1/identity.pb.js';
 export * from './grpc/identity.grpc-package.js';
+export * from './mail/identity-mail.js';

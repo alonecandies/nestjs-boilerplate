@@ -2,6 +2,7 @@ import {
   BusinessRuleViolationException,
   DomainConflictException,
   DomainValidationException,
+  EntityNotFoundException,
   PermissionDeniedException,
   UnauthenticatedException,
   type ValidationIssue,
@@ -165,6 +166,22 @@ export class OwnerRankRequiredException extends PermissionDeniedException {
   constructor() {
     super('Only an owner can change or remove an owner', {
       code: IdentityErrorCode.OWNER_RANK_REQUIRED,
+    });
+  }
+}
+
+/** 404 — unknown, expired or already accepted: one answer, so tokens cannot be probed. */
+export class InvitationInvalidException extends EntityNotFoundException {
+  constructor() {
+    super('Invitation', 'token', { code: IdentityErrorCode.INVITATION_INVALID });
+  }
+}
+
+/** 403 — the invitation was sent to another email address. */
+export class InvitationEmailMismatchException extends PermissionDeniedException {
+  constructor() {
+    super('This invitation was sent to another email address', {
+      code: IdentityErrorCode.INVITATION_EMAIL_MISMATCH,
     });
   }
 }

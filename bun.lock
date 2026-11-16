@@ -145,6 +145,7 @@
         "@platform/config": "workspace:*",
         "@platform/contracts": "workspace:*",
         "@platform/database": "workspace:*",
+        "@platform/mailer": "workspace:*",
         "@platform/observability": "workspace:*",
         "@platform/redis": "workspace:*",
         "@platform/transport": "workspace:*",
@@ -156,6 +157,7 @@
         "rxjs": "catalog:",
       },
       "devDependencies": {
+        "@nestjs/bullmq": "catalog:",
         "@nestjs/testing": "catalog:",
         "@platform/testing": "workspace:*",
         "drizzle-orm": "catalog:",
@@ -216,6 +218,7 @@
       "name": "@app/notifications-service",
       "version": "0.0.0",
       "dependencies": {
+        "@domain/identity-contracts": "workspace:*",
         "@domain/notifications": "workspace:*",
         "@domain/notifications-contracts": "workspace:*",
         "@fastify/static": "catalog:",
@@ -247,7 +250,6 @@
         "rxjs": "catalog:",
       },
       "devDependencies": {
-        "@domain/identity-contracts": "workspace:*",
         "@nestjs/testing": "catalog:",
         "@platform/testing": "workspace:*",
       },
@@ -363,6 +365,7 @@
         "@platform/contracts": "workspace:*",
         "@platform/database": "workspace:*",
         "@platform/graphql": "workspace:*",
+        "@platform/mailer": "workspace:*",
         "@platform/redis": "workspace:*",
         "@platform/transport": "workspace:*",
         "class-transformer": "catalog:",

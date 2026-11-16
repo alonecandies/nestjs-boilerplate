@@ -13,6 +13,10 @@
 
 // The edge surface (also `@domain/identity/api`).
 export * from './api/index.js';
+export { AcceptInvitationCommand } from './application/commands/accept-invitation/accept-invitation.command.js';
+export { AcceptInvitationHandler } from './application/commands/accept-invitation/accept-invitation.handler.js';
+export { CreateInvitationCommand } from './application/commands/create-invitation/create-invitation.command.js';
+export { CreateInvitationHandler } from './application/commands/create-invitation/create-invitation.handler.js';
 export { CreateTenantCommand } from './application/commands/create-tenant/create-tenant.command.js';
 export { CreateTenantHandler } from './application/commands/create-tenant/create-tenant.handler.js';
 export { LeaveTenantCommand } from './application/commands/leave-tenant/leave-tenant.command.js';
@@ -32,6 +36,7 @@ export { StaffSwitchOutCommand } from './application/commands/staff-switch-out/s
 export { SwitchTenantCommand } from './application/commands/switch-tenant/switch-tenant.command.js';
 export { UpdateMemberRolesCommand } from './application/commands/update-member-roles/update-member-roles.command.js';
 export { UpdateMemberRolesHandler } from './application/commands/update-member-roles/update-member-roles.handler.js';
+export { toInvitationContract } from './application/mappers/invitation.mapper.js';
 export { toMemberContract } from './application/mappers/member.mapper.js';
 export {
   normalizeTenantName,
@@ -70,6 +75,7 @@ export { TenantsRepository } from './application/persistence/tenants.repository.
 export { TransactionRunner } from './application/persistence/transaction-runner.js';
 export type { ListUsersCriteria, UserRecord } from './application/persistence/users.repository.js';
 export { UsersRepository } from './application/persistence/users.repository.js';
+export { InvitationMailer } from './application/ports/invitation-mailer.port.js';
 export { GetUserByIdQuery } from './application/queries/get-user-by-id/get-user-by-id.query.js';
 export { GetUsersByIdsQuery } from './application/queries/get-users-by-ids/get-users-by-ids.query.js';
 export { ListMembersHandler } from './application/queries/list-members/list-members.handler.js';
@@ -102,6 +108,8 @@ export {
   InvalidRefreshTokenException,
   InvalidRolesException,
   InvalidUserException,
+  InvitationEmailMismatchException,
+  InvitationInvalidException,
   LastOwnerException,
   MembershipAlreadyExistsException,
   MembershipRevokedException,
@@ -140,6 +148,10 @@ export {
   IdentityCoreModule,
 } from './identity-core.module.js';
 export { IdentityGrpcModule } from './identity-grpc.module.js';
+export {
+  INVITATION_MAIL_RETENTION,
+  QueuedInvitationMailer,
+} from './infrastructure/mail/queued-invitation.mailer.js';
 // Infrastructure: the Drizzle schema and the migration set for DatabaseModule / drizzle-kit.
 export { identityMigrations } from './infrastructure/persistence/identity.migrations.js';
 export {

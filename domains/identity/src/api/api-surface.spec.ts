@@ -13,6 +13,7 @@ const API_VALUES = [
   'IDENTITY_LIMITS',
   'IdentityApiModule',
   'IdentityErrorCode',
+  'InvitationsPort',
   'MembersPort',
   'TenantRoleEnum',
   'TenantsPort',
