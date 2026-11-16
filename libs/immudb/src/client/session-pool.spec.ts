@@ -53,6 +53,38 @@ describe('ImmudbSessionPool', () => {
     await pool.close();
   });
 
+  it('settles callers queued behind a session that failed to open, instead of leaving them hanging', async () => {
+    let attempts = 0;
+    let failFirst!: (error: Error) => void;
+    const open = (): Promise<FakeSession> => {
+      attempts++;
+      if (attempts === 1) {
+        return new Promise<FakeSession>((_, reject) => {
+          failFirst = reject;
+        });
+      }
+      return Promise.reject(new ImmudbError('unavailable', 'immudb is down'));
+    };
+    const pool = new ImmudbSessionPool(open, 1, 60_000);
+    const first = pool.use(async () => 1);
+    const second = pool.use(async () => 2);
+    const third = pool.use(async () => 3);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    failFirst(new ImmudbError('unavailable', 'immudb is down'));
+
+    const settled = await Promise.race([
+      Promise.allSettled([first, second, third]),
+      new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 500)),
+    ]);
+    expect(settled).not.toBe('hung');
+    expect((settled as PromiseSettledResult<number>[]).map((r) => r.status)).toEqual([
+      'rejected',
+      'rejected',
+      'rejected',
+    ]);
+    await pool.close();
+  });
+
   it('discards a session that failed with unavailable and opens a fresh one', async () => {
     const { open, made } = factory();
     const pool = new ImmudbSessionPool(open, 1, 60_000);
