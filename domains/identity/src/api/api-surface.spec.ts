@@ -14,6 +14,7 @@ const API_VALUES = [
   'IdentityApiModule',
   'IdentityErrorCode',
   'TenantRoleEnum',
+  'TenantsPort',
   'USERS_LOADER',
   'USER_CACHE_TTL_MS',
   'UserConnectionModel',

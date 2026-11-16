@@ -2,11 +2,13 @@ import { Module, type Provider } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { authConfig } from '@platform/config';
+import { CreateTenantHandler } from './application/commands/create-tenant/create-tenant.handler.js';
 import { LoginHandler } from './application/commands/login/login.handler.js';
 import { LogoutHandler } from './application/commands/logout/logout.handler.js';
 import { PurgeExpiredSessionsHandler } from './application/commands/purge-expired-sessions/purge-expired-sessions.handler.js';
 import { RefreshSessionHandler } from './application/commands/refresh-session/refresh-session.handler.js';
 import { RegisterUserHandler } from './application/commands/register-user/register-user.handler.js';
+import { RenameTenantHandler } from './application/commands/rename-tenant/rename-tenant.handler.js';
 import { StaffSwitchInHandler } from './application/commands/staff-switch-in/staff-switch-in.handler.js';
 import { StaffSwitchOutHandler } from './application/commands/staff-switch-out/staff-switch-out.handler.js';
 import { SwitchTenantHandler } from './application/commands/switch-tenant/switch-tenant.handler.js';
@@ -20,6 +22,7 @@ import { TransactionRunner } from './application/persistence/transaction-runner.
 import { UsersRepository } from './application/persistence/users.repository.js';
 import { GetUserByIdHandler } from './application/queries/get-user-by-id/get-user-by-id.handler.js';
 import { GetUsersByIdsHandler } from './application/queries/get-users-by-ids/get-users-by-ids.handler.js';
+import { ListMyTenantsHandler } from './application/queries/list-my-tenants/list-my-tenants.handler.js';
 import { ListUsersHandler } from './application/queries/list-users/list-users.handler.js';
 import { PersonalWorkspaces } from './application/services/personal-workspaces.service.js';
 import { SessionTokensService } from './application/services/session-tokens.service.js';
@@ -45,12 +48,19 @@ export const IDENTITY_COMMAND_HANDLERS = [
   RefreshSessionHandler,
   LogoutHandler,
   SwitchTenantHandler,
+  CreateTenantHandler,
+  RenameTenantHandler,
   StaffSwitchInHandler,
   StaffSwitchOutHandler,
   PurgeExpiredSessionsHandler,
 ];
 
-export const IDENTITY_QUERY_HANDLERS = [GetUserByIdHandler, GetUsersByIdsHandler, ListUsersHandler];
+export const IDENTITY_QUERY_HANDLERS = [
+  GetUserByIdHandler,
+  GetUsersByIdsHandler,
+  ListUsersHandler,
+  ListMyTenantsHandler,
+];
 
 export const IDENTITY_EVENT_HANDLERS = [UserRegisteredRelay];
 
