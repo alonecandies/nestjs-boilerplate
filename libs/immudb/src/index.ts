@@ -9,5 +9,8 @@ export const IMMUDB_SERVER_VERSION = '1.11.2';
 /** Image for integration specs and compose (`docker-compose.yml` pins the same tag). */
 export const IMMUDB_TEST_IMAGE = `codenotary/immudb:${IMMUDB_SERVER_VERSION}`;
 
+export * from './client/immudb.client.js';
 export * from './errors/immudb.error.js';
+export * from './health/immudb.health.js';
+export * from './immudb.module.js';
 export type * from './immudb.types.js';
