@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import drizzleConfig from '../../../drizzle.config.js';
 import { identityMigrations } from './identity.migrations.js';
 import {
+  auditEvents,
   identityPgSchema,
   invitations,
   memberships,
@@ -30,10 +31,10 @@ describe('identityMigrations', () => {
   it('keeps every identity table and enum in the identity Postgres schema', () => {
     expect(identityPgSchema.schemaName).toBe(identityMigrations.migrationsSchema);
     expect(
-      [users, sessions, tenants, memberships, invitations].map(
+      [users, sessions, tenants, memberships, invitations, auditEvents].map(
         (table) => getTableConfig(table).schema,
       ),
-    ).toEqual(Array(5).fill('identity'));
+    ).toEqual(Array(6).fill('identity'));
     expect(userRole.schema).toBe('identity');
     expect(tenantRole.schema).toBe('identity');
   });

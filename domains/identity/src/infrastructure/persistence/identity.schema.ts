@@ -3,6 +3,7 @@ import {
   boolean,
   check,
   index,
+  jsonb,
   pgSchema,
   primaryKey,
   text,
@@ -169,6 +170,28 @@ export const invitations = identityPgSchema.table(
   ],
 );
 
+// citus: tenant. Append-only: no code path updates or deletes a row (audit-events.append-only.spec.ts); B3's
+// policies allow only SELECT and INSERT (spec §8.2). No trigger: Citus will not distribute a table with triggers.
+export const auditEvents = identityPgSchema.table(
+  'audit_events',
+  {
+    tenantId: uuid()
+      .notNull()
+      .references(() => tenants.id, { onDelete: 'cascade' }),
+    id: uuid().notNull().default(sql`uuidv7()`),
+    /** The user who acted; no FK: the history outlives users. `null` for system actions. */
+    actorId: uuid(),
+    /** `AUDIT_EVENT_TYPES` value (`<subject>.<verb>`). */
+    type: text().notNull(),
+    data: jsonb().$type<Record<string, unknown>>().notNull().default(sql`'{}'::jsonb`),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'audit_events_tenant_id_id_pk', columns: [t.tenantId, t.id] }),
+    index('audit_events_tenant_id_created_at_idx').on(t.tenantId, t.createdAt.desc()),
+  ],
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
 }));
@@ -189,6 +212,7 @@ export const identitySchema = {
   tenants,
   memberships,
   invitations,
+  auditEvents,
   usersRelations,
   sessionsRelations,
 };
@@ -201,3 +225,4 @@ export type NewSessionRow = typeof sessions.$inferInsert;
 export type TenantRow = typeof tenants.$inferSelect;
 export type MembershipRow = typeof memberships.$inferSelect;
 export type InvitationRow = typeof invitations.$inferSelect;
+export type AuditEventRow = typeof auditEvents.$inferSelect;

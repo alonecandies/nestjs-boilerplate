@@ -21,6 +21,15 @@ export { RefreshSessionCommand } from './application/commands/refresh-session/re
 export { RegisterUserCommand } from './application/commands/register-user/register-user.command.js';
 export { UpdateUserRolesCommand } from './application/commands/update-user-roles/update-user-roles.command.js';
 export type {
+  AuditEventRecord,
+  AuditEventType,
+  NewAuditEvent,
+} from './application/persistence/audit-events.repository.js';
+export {
+  AUDIT_EVENT_TYPES,
+  AuditEventsRepository,
+} from './application/persistence/audit-events.repository.js';
+export type {
   InvitationRecord,
   NewInvitation,
 } from './application/persistence/invitations.repository.js';
@@ -45,6 +54,10 @@ export { UsersRepository } from './application/persistence/users.repository.js';
 export { GetUserByIdQuery } from './application/queries/get-user-by-id/get-user-by-id.query.js';
 export { GetUsersByIdsQuery } from './application/queries/get-users-by-ids/get-users-by-ids.query.js';
 export { ListUsersQuery } from './application/queries/list-users/list-users.query.js';
+export {
+  type TenantAuditEntry,
+  TenantAuditLog,
+} from './application/services/tenant-audit-log.service.js';
 // Domain.
 export { normalizeEmail } from './domain/email.js';
 export { UserRegisteredEvent } from './domain/events/user-registered.event.js';
@@ -88,6 +101,7 @@ export { IdentityGrpcModule } from './identity-grpc.module.js';
 // Infrastructure: the Drizzle schema and the migration set for DatabaseModule / drizzle-kit.
 export { identityMigrations } from './infrastructure/persistence/identity.migrations.js';
 export {
+  auditEvents,
   type IdentitySchema,
   identitySchema,
   invitations,

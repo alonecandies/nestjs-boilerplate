@@ -29,6 +29,13 @@
       "when": 1794809293473,
       "tag": "0003_invitations",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794809507488,
+      "tag": "0004_audit_events",
+      "breakpoints": true
     }
   ]
 }

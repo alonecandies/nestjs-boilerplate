@@ -12,6 +12,7 @@ import {
   hashInvitationToken,
   INVITATION_TTL_MS,
 } from '../../domain/invitation-token.js';
+import { DrizzleAuditEventsRepository } from './drizzle-audit-events.repository.js';
 import { DrizzleInvitationsRepository } from './drizzle-invitations.repository.js';
 import { DrizzleMembershipsRepository } from './drizzle-memberships.repository.js';
 import { DrizzleTenantsRepository } from './drizzle-tenants.repository.js';
@@ -33,6 +34,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     let tenants: DrizzleTenantsRepository;
     let memberships: DrizzleMembershipsRepository;
     let invitations: DrizzleInvitationsRepository;
+    let auditEvents: DrizzleAuditEventsRepository;
     const run = generateId().slice(-8);
     const slug = (name: string): string => `${name}-${run}`;
 
@@ -41,10 +43,12 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         DrizzleTenantsRepository,
         DrizzleMembershipsRepository,
         DrizzleInvitationsRepository,
+        DrizzleAuditEventsRepository,
       ]);
       tenants = database.app.get(DrizzleTenantsRepository);
       memberships = database.app.get(DrizzleMembershipsRepository);
       invitations = database.app.get(DrizzleInvitationsRepository);
+      auditEvents = database.app.get(DrizzleAuditEventsRepository);
     });
 
     afterAll(async () => {
@@ -282,6 +286,57 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           join pg_attribute a on a.attrelid = c.conrelid and a.attnum = k.attnum
           where c.conname = 'invitations_tenant_id_id_pk'`);
         expect(pk?.columns).toBe('tenant_id,id');
+      });
+    });
+
+    describe('audit_events (append-only, tenant-distributed)', () => {
+      it('appends and pages newest first within one tenant only', async () => {
+        const tenantId = await newTenant('a-page');
+        const otherTenant = await newTenant('a-other');
+        const ids: string[] = [];
+        for (const type of ['member.left', 'member.removed', 'staff.switch_in'] as const) {
+          const id = generateId();
+          ids.push(id);
+          await auditEvents.append({
+            tenantId,
+            id,
+            actorId: null,
+            type,
+            data: { n: ids.length },
+            createdAt: new Date(),
+          });
+        }
+        await auditEvents.append({
+          tenantId: otherTenant,
+          id: generateId(),
+          actorId: null,
+          type: 'member.left',
+          data: {},
+          createdAt: new Date(),
+        });
+        const first = await auditEvents.listForTenant(tenantId, { limit: 2 });
+        expect(first.items.map((event) => event.id)).toEqual([ids[2], ids[1]]);
+        expect(first.items[0]).toMatchObject({
+          tenantId,
+          type: 'staff.switch_in',
+          data: { n: 3 },
+          actorId: null,
+        });
+        expect(first.nextCursor).not.toBeNull();
+        const second = await auditEvents.listForTenant(tenantId, {
+          limit: 2,
+          cursor: first.nextCursor ?? undefined,
+        });
+        expect(second.items.map((event) => event.id)).toEqual([ids[0]]);
+        expect(second.nextCursor).toBeNull();
+      });
+
+      it('keeps actor_id without a foreign key (history outlives users) and defaults data to {}', async () => {
+        const tenantId = await newTenant('a-actor');
+        const [row] = await (database as IdentityDatabase).db.execute<{ data: unknown }>(sql`
+          insert into identity.audit_events (tenant_id, actor_id, type)
+          values (${tenantId}, ${generateId()}, 'member.left') returning data`);
+        expect(row?.data).toEqual({});
       });
     });
   },
