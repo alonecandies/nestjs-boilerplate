@@ -1,6 +1,7 @@
 import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
-import { type AuthUser, CurrentUser, Permission, RequirePermissions } from '@platform/auth';
+import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
 import { BillingPort } from '../../application/ports/billing.port.js';
+import { BillingPermission } from '../../billing.permissions.js';
 import { resolvePaymentsOwner } from '../payments-scope.js';
 import { PaymentsArgs } from './args/payments.args.js';
 import { CreateCheckoutSessionInput } from './inputs/create-checkout-session.input.js';
@@ -42,7 +43,7 @@ export class BillingResolver {
   @Mutation(() => CheckoutSessionModel, {
     description: 'Starts a hosted Stripe Checkout and records a pending payment',
   })
-  @RequirePermissions(Permission.BillingCheckout)
+  @RequirePermissions(BillingPermission.Checkout)
   createCheckoutSession(
     @Args('input') input: CreateCheckoutSessionInput,
     @CurrentUser() user: AuthUser,

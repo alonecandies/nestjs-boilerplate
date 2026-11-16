@@ -1,6 +1,6 @@
 /**
  * Coarse-grained roles carried in the access token. Authorization decisions should prefer
- * permissions (`@RequirePermissions`) — roles only group them (see `ROLE_PERMISSIONS`).
+ * permissions (`@RequirePermissions`) — roles only group them (see `RbacRegistry`).
  * String values are persisted (Postgres `user_role` enum) and sent over gRPC: never rename them.
  */
 export enum Role {

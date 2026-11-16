@@ -32,7 +32,8 @@ import {
   AuthModule,
   type AuthUser,
   CurrentUser,
-  Permission,
+  defineRbacFeature,
+  RbacModule,
   RequirePermissions,
   Role,
   TokenService,
@@ -74,6 +75,13 @@ const maintenance = { on: false };
 
 const echoSchema = z.object({ name: z.string().min(1).max(40) });
 
+/** The smoke app's own RBAC vocabulary (libs name no domain). */
+const SMOKE_RBAC = defineRbacFeature({
+  name: 'smoke',
+  permissions: ['orders:approve'],
+  grants: { admin: ['orders:approve'] },
+});
+
 @Controller('smoke')
 class SmokeController {
   constructor(private readonly context: RequestContextService) {}
@@ -90,7 +98,7 @@ class SmokeController {
   }
 
   @Get('admin')
-  @RequirePermissions(Permission.UsersManageRoles)
+  @RequirePermissions('orders:approve')
   admin(): { ok: true } {
     return { ok: true };
   }
@@ -124,6 +132,7 @@ class SmokeController {
     RedisModule.forRootAsync(),
     // Before the throttler: global guards run in registration order (per-user tracking).
     AuthModule.forRootAsync({ globalGuards: true }),
+    RbacModule.forFeature(SMOKE_RBAC),
     AppThrottlerModule.forRootAsync(),
     RateLimitModule.forFeature({
       useFactory: () => [

@@ -5,11 +5,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createJwtModuleOptions } from '../auth.module.js';
 import { Role } from '../rbac/role.enum.js';
 import { TokenService } from '../tokens/token.service.js';
+import { createTestRbacRegistry } from './rbac-test.utils.js';
 import { signTestAccessToken } from './sign-test-access-token.js';
 
 const config = authConfig.parse({ NODE_ENV: 'test', JWT_ACCESS_TTL_SEC: '600' });
 const verifierFor = (settings: AuthConfig): TokenService =>
-  new TokenService(new JwtService(createJwtModuleOptions(settings)), settings);
+  new TokenService(
+    new JwtService(createJwtModuleOptions(settings)),
+    settings,
+    createTestRbacRegistry(),
+  );
 const subject = {
   id: '0190f3b2-0000-7000-8000-000000000001',
   email: 'a@b.c',

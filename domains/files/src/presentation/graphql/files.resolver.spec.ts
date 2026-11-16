@@ -3,7 +3,7 @@ import { ExecutionContextHost } from '@nestjs/core/helpers/execution-context-hos
 import { GraphQLSchemaBuilderModule, GraphQLSchemaFactory, Query, Resolver } from '@nestjs/graphql';
 import { Test } from '@nestjs/testing';
 import { PERMISSIONS_KEY, PermissionsGuard, Role } from '@platform/auth';
-import { makeAuthUser } from '@platform/auth/testing';
+import { createTestRbacRegistry, makeAuthUser } from '@platform/auth/testing';
 import { PermissionDeniedException } from '@platform/common';
 import { InMemoryStorageService } from '@platform/storage/testing';
 import { validate } from 'class-validator';
@@ -13,6 +13,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { FilesService } from '../../application/files.service.js';
 import { FileTooLargeException } from '../../domain/files.errors.js';
 import { filesConfig } from '../../files.config.js';
+import { FILES_RBAC } from '../../files.permissions.js';
 import { CreateUploadUrlInput } from './create-upload-url.input.js';
 import { FilesResolver } from './files.resolver.js';
 
@@ -39,6 +40,8 @@ function fieldsOf(schema: GraphQLSchema, typeName: string): Record<string, strin
   if (type === undefined || !('getFields' in type)) throw new Error(`no fields on ${typeName}`);
   return mapValues(type.getFields(), (field) => String(field.type));
 }
+
+const rbac = createTestRbacRegistry(FILES_RBAC);
 
 describe('FilesResolver', () => {
   describe('code-first schema', () => {
@@ -82,7 +85,7 @@ describe('FilesResolver', () => {
   });
 
   describe('createUploadUrl', () => {
-    const user = makeAuthUser({ roles: [Role.User] });
+    const user = makeAuthUser({ roles: [Role.User] }, rbac);
     const config = filesConfig.parse({ STORAGE_MAX_UPLOAD_BYTES: '1024' });
     const resolver = new FilesResolver(new FilesService(new InMemoryStorageService(), config));
 
@@ -147,8 +150,10 @@ describe('FilesResolver', () => {
     });
 
     it('lets users through and rejects a user without files:write (403)', () => {
-      expect(guard.canActivate(graphqlContext(makeAuthUser({ roles: [Role.User] })))).toBe(true);
-      expect(() => guard.canActivate(graphqlContext(makeAuthUser({ roles: [] })))).toThrow(
+      expect(guard.canActivate(graphqlContext(makeAuthUser({ roles: [Role.User] }, rbac)))).toBe(
+        true,
+      );
+      expect(() => guard.canActivate(graphqlContext(makeAuthUser({ roles: [] }, rbac)))).toThrow(
         PermissionDeniedException,
       );
     });

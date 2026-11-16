@@ -1,11 +1,12 @@
 import { Global, type INestApplication, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { AuthModule, type Role } from '@platform/auth';
+import { AuthModule, RbacModule, type Role } from '@platform/auth';
 import { signTestAccessToken } from '@platform/auth/testing';
 import { generateId } from '@platform/common';
 import { AppConfigModule, type AuthConfig, authConfig, redisConfig } from '@platform/config';
 import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
+import { IDENTITY_RBAC } from '../src/identity.permissions.js';
 
 /** Stands in for the global RedisModule (denylist + keys) — no connection. */
 @Global()
@@ -18,13 +19,14 @@ export class FakeRedisModule {}
 
 /**
  * The real auth stack of an edge app: config, JWT verification (dev secrets), the
- * denylist on an in-memory Redis and the GLOBAL guards (JwtAuthGuard → RolesGuard →
+ * denylist on an in-memory Redis, the identity RBAC vocabulary and the GLOBAL guards (JwtAuthGuard → RolesGuard →
  * PermissionsGuard). Requests in tests carry genuine signed tokens.
  */
 export const AUTH_TEST_IMPORTS = [
   AppConfigModule.forRoot(),
   FakeRedisModule,
   AuthModule.forRootAsync(),
+  RbacModule.forFeature(IDENTITY_RBAC),
 ];
 
 export interface TestPrincipal {

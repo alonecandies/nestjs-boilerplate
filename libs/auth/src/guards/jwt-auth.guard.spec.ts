@@ -1,14 +1,18 @@
 import { Reflector } from '@nestjs/core';
+import { JwtService } from '@nestjs/jwt';
 import { Public, UnauthenticatedException } from '@platform/common';
 import { authConfig, redisConfig } from '@platform/config';
 import { RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createJwtModuleOptions } from '../auth.module.js';
 import { Role } from '../rbac/role.enum.js';
 import { JwtStrategy } from '../strategies/jwt.strategy.js';
 import { makeAuthUser } from '../testing/auth-test.utils.js';
+import { createTestRbacRegistry } from '../testing/rbac-test.utils.js';
 import { signTestAccessToken } from '../testing/sign-test-access-token.js';
 import { AccessTokenDenylist } from '../tokens/access-token-denylist.service.js';
+import { TokenService } from '../tokens/token.service.js';
 import { executionContext, type Transport } from './execution-context.test.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
 
@@ -20,7 +24,12 @@ const denylist = new AccessTokenDenylist(
   config,
 );
 // Constructing the strategy registers it with passport under 'jwt' (what the guard runs).
-const strategy = new JwtStrategy(config, denylist);
+const tokenService = new TokenService(
+  new JwtService(createJwtModuleOptions(config)),
+  config,
+  createTestRbacRegistry(),
+);
+const strategy = new JwtStrategy(config, denylist, tokenService);
 const guard = new JwtAuthGuard(new Reflector());
 
 class Controller {
@@ -76,7 +85,7 @@ describe('JwtAuthGuard', () => {
     // Every root field of one operation runs the global guards against the same ctx.req.
     const req: Record<string, unknown> = { headers: { authorization: `Bearer ${token}` } };
     try {
-      for (const _field of ['me', 'payments', 'notifications']) {
+      for (const _field of ['me', 'orders', 'alerts']) {
         await expect(guard.canActivate(executionContext('graphql', target(), req))).resolves.toBe(
           true,
         );

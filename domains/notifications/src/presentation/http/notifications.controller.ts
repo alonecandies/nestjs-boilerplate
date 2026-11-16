@@ -22,8 +22,9 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { CurrentUser, Permission, RequirePermissions } from '@platform/auth';
+import { CurrentUser, RequirePermissions } from '@platform/auth';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
+import { NotificationsPermission } from '../../notifications.permissions.js';
 import {
   type ListNotificationsQueryParams,
   listNotificationsQuerySchema,
@@ -51,7 +52,7 @@ export class NotificationsController {
   constructor(private readonly notifications: NotificationsPort) {}
 
   @Get()
-  @RequirePermissions(Permission.NotificationsRead)
+  @RequirePermissions(NotificationsPermission.Read)
   @ApiOperation({
     summary: 'List my notifications',
     description:
@@ -74,7 +75,7 @@ export class NotificationsController {
 
   @Post(':id/read')
   @HttpCode(HttpStatus.NO_CONTENT)
-  @RequirePermissions(Permission.NotificationsRead)
+  @RequirePermissions(NotificationsPermission.Read)
   @ApiOperation({ summary: 'Mark one of my notifications read', description: 'Idempotent.' })
   @ApiParam({ name: 'id', format: 'uuid', description: 'Notification id.' })
   @ApiNoContentResponse({ description: 'Marked read (or already read).' })

@@ -5,3 +5,4 @@
  */
 export { type FilesConfig, filesConfig, filesEnvSchema } from '../files.config.js';
 export { FilesModule } from '../files.module.js';
+export { FILES_RBAC, FilesPermission } from '../files.permissions.js';

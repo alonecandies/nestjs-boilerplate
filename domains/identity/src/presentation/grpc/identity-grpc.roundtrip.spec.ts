@@ -3,6 +3,7 @@ import { Global, type INestMicroservice, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { CommandBus, QueryBus } from '@nestjs/cqrs';
 import { Test, type TestingModule } from '@nestjs/testing';
+import { RbacModule } from '@platform/auth';
 import {
   DomainConflictException,
   DomainValidationException,
@@ -84,7 +85,12 @@ describe('identity over gRPC (forRemote adapters ↔ gRPC controllers)', () => {
     await server.listen();
 
     gateway = await Test.createTestingModule({
-      imports: [AppConfigModule.forRoot(), FakeCacheModule, IdentityApiModule.forRemote()],
+      imports: [
+        AppConfigModule.forRoot(),
+        FakeCacheModule,
+        RbacModule.forRoot(),
+        IdentityApiModule.forRemote(),
+      ],
     }).compile();
     gateway.useLogger(false);
     await gateway.init();

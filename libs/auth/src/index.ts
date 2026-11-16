@@ -27,14 +27,17 @@ export { JwtAuthGuard } from './guards/jwt-auth.guard.js';
 export { LocalAuthGuard } from './guards/local-auth.guard.js';
 export { PermissionsGuard } from './guards/permissions.guard.js';
 export { RolesGuard } from './guards/roles.guard.js';
-export { isPermission, PERMISSION_VALUES, Permission } from './rbac/permission.enum.js';
-export { isRole, ROLE_VALUES, Role } from './rbac/role.enum.js';
+export { hasPermissions, type PermissionMatchMode } from './rbac/permission-match.js';
+export { RbacModule } from './rbac/rbac.module.js';
+export { RbacRegistry } from './rbac/rbac.registry.js';
 export {
-  hasPermissions,
-  type PermissionMatchMode,
-  ROLE_PERMISSIONS,
-  resolvePermissions,
-} from './rbac/role-permissions.js';
+  defineRbacFeature,
+  isPermissionName,
+  PERMISSION_PATTERN,
+  type RbacFeature,
+} from './rbac/rbac-feature.js';
+export { RbacVocabularyCheck } from './rbac/rbac-vocabulary.check.js';
+export { isRole, ROLE_VALUES, Role } from './rbac/role.enum.js';
 export { JwtStrategy } from './strategies/jwt.strategy.js';
 export { AccessTokenDenylist } from './tokens/access-token-denylist.service.js';
 export {

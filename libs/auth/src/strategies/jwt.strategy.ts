@@ -10,7 +10,8 @@ import {
   JWT_STRATEGY,
 } from '../auth.constants.js';
 import { AccessTokenDenylist } from '../tokens/access-token-denylist.service.js';
-import { parseAccessTokenClaims, toAuthUser } from '../tokens/token-claims.js';
+import { TokenService } from '../tokens/token.service.js';
+import { parseAccessTokenClaims } from '../tokens/token-claims.js';
 import type { AuthUser } from '../types/auth-user.js';
 
 /**
@@ -23,6 +24,7 @@ export class JwtStrategy extends PassportStrategy(Strategy, JWT_STRATEGY) {
   constructor(
     @Inject(authConfig.KEY) config: AuthConfig,
     private readonly denylist: AccessTokenDenylist,
+    private readonly tokens: TokenService,
   ) {
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
@@ -42,6 +44,6 @@ export class JwtStrategy extends PassportStrategy(Strategy, JWT_STRATEGY) {
         code: AuthErrorCode.TOKEN_REVOKED,
       });
     }
-    return toAuthUser(claims);
+    return this.tokens.toAuthUser(claims);
   }
 }

@@ -1,5 +1,6 @@
-import { type AuthUser, hasPermissions, Permission } from '@platform/auth';
+import { type AuthUser, hasPermissions } from '@platform/auth';
 import { PermissionDeniedException } from '@platform/common';
+import { BillingPermission } from '../billing.permissions.js';
 
 /**
  * Whose payments a listing returns: the caller's own, or — with `all` — everyone's, which needs
@@ -11,9 +12,9 @@ import { PermissionDeniedException } from '@platform/common';
  */
 export function resolvePaymentsOwner(user: AuthUser, all: boolean): string | undefined {
   if (!all) return user.id;
-  if (!hasPermissions(user.permissions, [Permission.BillingReadAll])) {
+  if (!hasPermissions(user.permissions, [BillingPermission.ReadAll])) {
     throw new PermissionDeniedException('Listing all payments requires billing:read-all', {
-      details: { required: [Permission.BillingReadAll] },
+      details: { required: [BillingPermission.ReadAll] },
     });
   }
   return undefined;

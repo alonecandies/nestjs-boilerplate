@@ -12,6 +12,7 @@ export {
   IDEMPOTENCY_KEY_PATTERN,
   STRIPE_SIGNATURE_HEADER,
 } from '../billing.constants.js';
+export { BILLING_RBAC, BillingPermission } from '../billing.permissions.js';
 export { BillingApiModule } from '../billing-api.module.js';
 export { BILLING_LOG_REDACT_PATHS } from '../billing-log-redaction.js';
 export { isPaymentStatus, PAYMENT_STATUSES, PaymentStatus } from '../domain/payment-status.enum.js';

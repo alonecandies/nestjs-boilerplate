@@ -21,8 +21,9 @@ import {
   ApiUnauthorizedResponse,
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
-import { type AuthUser, CurrentUser, Permission, RequirePermissions } from '@platform/auth';
+import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
 import { UsersPort } from '../../application/ports/users.port.js';
+import { IdentityPermission } from '../../identity.permissions.js';
 import { assertCanReadUser } from '../shared/user-access.policy.js';
 import { UserReadCache } from '../shared/user-read.cache.js';
 import { ListUsersQueryDto } from './dto/list-users-query.dto.js';
@@ -46,7 +47,7 @@ export class UsersController {
   ) {}
 
   @Get()
-  @RequirePermissions(Permission.UsersRead)
+  @RequirePermissions(IdentityPermission.UsersRead)
   @ApiOperation({ summary: 'List users (keyset pagination, newest first)' })
   @ApiOkResponse({ type: UserPageResponse })
   @ApiBadRequestResponse({ type: ProblemResponse })
@@ -77,7 +78,7 @@ export class UsersController {
   }
 
   @Patch(':id/roles')
-  @RequirePermissions(Permission.UsersManageRoles)
+  @RequirePermissions(IdentityPermission.UsersManageRoles)
   @ApiOperation({
     summary: "Replace a user's roles",
     description:

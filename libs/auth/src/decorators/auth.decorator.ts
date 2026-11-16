@@ -1,5 +1,4 @@
 import type { CustomDecorator } from '@nestjs/common';
-import type { Permission } from '../rbac/permission.enum.js';
 import { RequirePermissions } from './require-permissions.decorator.js';
 
 /**
@@ -7,5 +6,5 @@ import { RequirePermissions } from './require-permissions.decorator.js';
  * global (`JwtAuthGuard`), so this only adds the permission requirement. `@nestjs/swagger` is not a
  * dependency of @platform/auth: add `@ApiBearerAuth()` in the presentation layer.
  */
-export const Auth = (...permissions: Permission[]): CustomDecorator<string> =>
+export const Auth = (...permissions: string[]): CustomDecorator<string> =>
   RequirePermissions(...permissions);

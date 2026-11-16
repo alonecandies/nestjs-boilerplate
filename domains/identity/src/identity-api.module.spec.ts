@@ -182,7 +182,7 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
   });
 
   it('GET /v1/users/:id reads through QueryBus → repository for users:read holders', async () => {
-    const moderator = await principal(app, [Role.Moderator]);
+    const moderator = await principal(app, [Role.Admin]);
     const res = await app.inject({
       method: 'GET',
       url: '/v1/users/01994f6c-1c3a-7b4e-9f00-5d1e2a3b4c5d',

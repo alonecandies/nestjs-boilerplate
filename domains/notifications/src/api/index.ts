@@ -23,6 +23,7 @@ export {
   PAGE_STATE_PATTERN,
   userRoom,
 } from '../notifications.constants.js';
+export { NOTIFICATIONS_RBAC, NotificationsPermission } from '../notifications.permissions.js';
 export { NotificationsApiModule } from '../notifications-api.module.js';
 export {
   NotificationConnectionModel,

@@ -1,9 +1,11 @@
 import { IDENTITY_GRPC_PACKAGE } from '@domain/identity-contracts';
 import { type DynamicModule, Module, type Provider } from '@nestjs/common';
+import { RbacModule } from '@platform/auth';
 import { GraphqlLoadersModule } from '@platform/graphql';
 import { GrpcClientsModule, type GrpcClientsModuleOptions } from '@platform/transport';
 import { AuthPort } from './application/ports/auth.port.js';
 import { UsersPort } from './application/ports/users.port.js';
+import { IDENTITY_RBAC } from './identity.permissions.js';
 import { AuthGrpcAdapter } from './infrastructure/adapters/grpc/auth-grpc.adapter.js';
 import { IdentityGrpcCaller } from './infrastructure/adapters/grpc/identity-grpc.caller.js';
 import { identityGrpcClientConfig } from './infrastructure/adapters/grpc/identity-grpc-client.config.js';
@@ -49,7 +51,11 @@ export class IdentityApiModule {
   static forLocal(): DynamicModule {
     return {
       module: IdentityApiModule,
-      imports: [GraphqlLoadersModule, IdentityRateLimitModule],
+      imports: [
+        GraphqlLoadersModule,
+        IdentityRateLimitModule,
+        RbacModule.forFeature(IDENTITY_RBAC),
+      ],
       controllers: CONTROLLERS,
       providers: [
         ...PRESENTATION,
@@ -72,6 +78,7 @@ export class IdentityApiModule {
         GrpcClientsModule.register(target, options),
         GraphqlLoadersModule,
         IdentityRateLimitModule,
+        RbacModule.forFeature(IDENTITY_RBAC),
       ],
       controllers: CONTROLLERS,
       providers: [

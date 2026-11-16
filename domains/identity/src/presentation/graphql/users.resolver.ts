@@ -1,7 +1,8 @@
 import { Args, Mutation, Query, Resolver } from '@nestjs/graphql';
-import { type AuthUser, CurrentUser, Permission, RequirePermissions } from '@platform/auth';
+import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
 import { GraphQLUUID } from '@platform/graphql';
 import { UsersPort } from '../../application/ports/users.port.js';
+import { IdentityPermission } from '../../identity.permissions.js';
 import { assertCanReadUser } from '../shared/user-access.policy.js';
 import { UserReadCache } from '../shared/user-read.cache.js';
 import { UsersArgs } from './args/users.args.js';
@@ -40,7 +41,7 @@ export class UsersResolver {
     // A page fans out to up to MAX_PAGE_LIMIT users: cost it above a single lookup.
     complexity: 10,
   })
-  @RequirePermissions(Permission.UsersRead)
+  @RequirePermissions(IdentityPermission.UsersRead)
   async users(@Args() args: UsersArgs): Promise<UserConnectionModel> {
     const page = await this.usersPort.listUsers({
       limit: args.limit,
@@ -53,7 +54,7 @@ export class UsersResolver {
   @Mutation(() => UserModel, {
     description: "Replace a user's roles (requires `users:manage-roles`)",
   })
-  @RequirePermissions(Permission.UsersManageRoles)
+  @RequirePermissions(IdentityPermission.UsersManageRoles)
   async updateUserRoles(
     @Args('input') input: UpdateUserRolesInput,
     @CurrentUser('id') actorId: string,

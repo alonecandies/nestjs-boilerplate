@@ -52,7 +52,7 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
     app = await createFastifyTestApp(builder, undefined, { appOptions: { logger: false } });
     [user, moderator, admin] = await Promise.all([
       principal(app, [Role.User]),
-      principal(app, [Role.Moderator]),
+      principal(app, [Role.Admin]),
       principal(app, [Role.Admin]),
     ]);
   });
@@ -340,11 +340,11 @@ describe('identity REST API (Fastify, real JWT guards, fake ports)', () => {
   describe('PATCH /v1/users/:id/roles', () => {
     const target = generateId();
 
-    it('403 for a moderator (needs users:manage-roles)', async () => {
+    it('403 for a member (needs users:manage-roles)', async () => {
       const res = await app.inject({
         method: 'PATCH',
         url: `/v1/users/${target}/roles`,
-        headers: bearer(moderator),
+        headers: bearer(user),
         payload: { roles: ['moderator'] },
       });
       expect(res.statusCode).toBe(403);

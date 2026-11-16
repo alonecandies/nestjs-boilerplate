@@ -1,7 +1,7 @@
 import { Readable } from 'node:stream';
 import { Logger } from '@nestjs/common';
 import { Role } from '@platform/auth';
-import { makeAuthUser } from '@platform/auth/testing';
+import { createTestRbacRegistry, makeAuthUser } from '@platform/auth/testing';
 import { DomainValidationException, generateId } from '@platform/common';
 import type { StorageService, StoredObject } from '@platform/storage';
 import { InMemoryStorageService } from '@platform/storage/testing';
@@ -15,14 +15,16 @@ import {
   UploadCapacityExceededException,
 } from '../domain/files.errors.js';
 import { type FilesConfig, filesConfig } from '../files.config.js';
+import { FILES_RBAC } from '../files.permissions.js';
 import { FilesService, UPLOADED_BY_METADATA_KEY } from './files.service.js';
 
 const config: FilesConfig = filesConfig.parse({ STORAGE_MAX_UPLOAD_BYTES: '1000' });
 
 describe('FilesService', () => {
-  const alice = makeAuthUser({ roles: [Role.User] });
-  const bob = makeAuthUser({ roles: [Role.User] });
-  const admin = makeAuthUser({ roles: [Role.Admin] });
+  const rbac = createTestRbacRegistry(FILES_RBAC);
+  const alice = makeAuthUser({ roles: [Role.User] }, rbac);
+  const bob = makeAuthUser({ roles: [Role.User] }, rbac);
+  const admin = makeAuthUser({ roles: [Role.Admin] }, rbac);
   let storage: InMemoryStorageService;
   let service: FilesService;
 

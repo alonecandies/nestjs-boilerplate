@@ -3,7 +3,7 @@ import { Reflector } from '@nestjs/core';
 import { getContextType, PermissionDeniedException } from '@platform/common';
 import { PERMISSIONS_KEY } from '../auth.constants.js';
 import type { PermissionRequirement } from '../decorators/require-permissions.decorator.js';
-import { hasPermissions } from '../rbac/role-permissions.js';
+import { hasPermissions } from '../rbac/permission-match.js';
 import { requireAuthUser } from './current-auth-user.js';
 
 /**

@@ -1,10 +1,11 @@
 import type { NotificationCreatedPayload, NotificationPage } from '@domain/notifications-contracts';
 import { Args, Mutation, Query, Resolver, Subscription } from '@nestjs/graphql';
-import { CurrentUser, Permission, RequirePermissions } from '@platform/auth';
+import { CurrentUser, RequirePermissions } from '@platform/auth';
 import { type GqlContext, type GraphqlPubSub, InjectPubSub } from '@platform/graphql';
 import { notificationFromCreatedPayload } from '../../application/mappers/notification.mapper.js';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
 import { notificationCreatedTrigger } from '../../notifications.constants.js';
+import { NotificationsPermission } from '../../notifications.permissions.js';
 import { toNotificationView } from '../notification-view.js';
 import { ListNotificationsArgs } from './list-notifications.args.js';
 import { MarkNotificationReadInput } from './mark-notification-read.input.js';
@@ -52,7 +53,7 @@ export class NotificationsResolver {
     description: 'My notifications, newest first.',
     complexity: 5,
   })
-  @RequirePermissions(Permission.NotificationsRead)
+  @RequirePermissions(NotificationsPermission.Read)
   async notifications(
     @Args() args: ListNotificationsArgs,
     @CurrentUser('id') userId: string,
@@ -69,7 +70,7 @@ export class NotificationsResolver {
     name: 'markNotificationRead',
     description: 'Marks one of my notifications read (idempotent). NOT_FOUND outside my inbox.',
   })
-  @RequirePermissions(Permission.NotificationsRead)
+  @RequirePermissions(NotificationsPermission.Read)
   async markNotificationRead(
     @Args('input') input: MarkNotificationReadInput,
     @CurrentUser('id') userId: string,
@@ -84,7 +85,7 @@ export class NotificationsResolver {
     filter: isOwnNotification,
     resolve: toCreatedNotificationModel,
   })
-  @RequirePermissions(Permission.NotificationsRead)
+  @RequirePermissions(NotificationsPermission.Read)
   notificationCreated(
     @CurrentUser('id') userId: string,
   ): AsyncIterableIterator<NotificationCreatedPayload> {
