@@ -127,5 +127,5 @@ export {
   type ThrottlerName,
 } from './throttler/throttle.constants.js';
 export { createThrottleSkipIf, isThrottleExemptPath } from './throttler/throttle-exempt.util.js';
-export { throttleTracker } from './throttler/throttle-tracker.util.js';
+export { authenticatedTenantId, throttleTracker } from './throttler/throttle-tracker.util.js';
 export { WsThrottlerGuard } from './throttler/ws-throttler.guard.js';

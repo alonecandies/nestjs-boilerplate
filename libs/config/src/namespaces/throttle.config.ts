@@ -9,6 +9,8 @@ export const throttleEnvSchema = z
     THROTTLE_LIMIT: zInt(300, { min: 1 }),
     THROTTLE_IP_TTL_MS: zInt(60_000, { min: 1 }),
     THROTTLE_IP_LIMIT: zInt(600, { min: 1 }),
+    THROTTLE_TENANT_TTL_MS: zInt(60_000, { min: 1 }),
+    THROTTLE_TENANT_LIMIT: zInt(3_000, { min: 1 }),
     THROTTLE_REDIS_TIMEOUT_MS: zInt(250, { min: 10 }),
   })
   .transform((env) => ({
@@ -18,6 +20,9 @@ export const throttleEnvSchema = z
     /** Pre-auth flood cap per client IP (all routes), counted before JWT verification. */
     ipTtlMs: env.THROTTLE_IP_TTL_MS,
     ipLimit: env.THROTTLE_IP_LIMIT,
+    /** Aggregate budget of the active tenant (spec §11): one noisy tenant can't starve others. */
+    tenantTtlMs: env.THROTTLE_TENANT_TTL_MS,
+    tenantLimit: env.THROTTLE_TENANT_LIMIT,
     /** Bound for one throttle command; past it, budgets fail open and auth fails closed. */
     redisTimeoutMs: env.THROTTLE_REDIS_TIMEOUT_MS,
   }));

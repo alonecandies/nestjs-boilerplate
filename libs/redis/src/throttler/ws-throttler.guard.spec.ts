@@ -46,6 +46,7 @@ async function createGuard() {
     {
       throttlers: [
         { name: THROTTLER.USER, ttl: 60_000, limit: 100 },
+        { name: THROTTLER.TENANT, ttl: 60_000, limit: 3_000 },
         { name: THROTTLER.ROUTE, ttl: 60_000, limit: 100 },
       ],
     },
@@ -73,6 +74,18 @@ describe('WsThrottlerGuard', () => {
         [rateLimitKey('user', 'global', 'user:u-1'), 60_000, 100, 60_000, 'user'],
         [rateLimitKey('route', 'chat.send', 'user:u-1'), 10_000, 5, 10_000, 'route'],
       ]),
+    );
+  });
+
+  it('charges the socket user tenant per message', async () => {
+    const { guard, increment } = await createGuard();
+    await guard.canActivate(wsContext({ data: { user: { id: 'u-1', tenantId: 't-9' } } }));
+    expect(increment).toHaveBeenCalledWith(
+      rateLimitKey('tenant', 'global', 'tenant:t-9'),
+      60_000,
+      3_000,
+      60_000,
+      'tenant',
     );
   });
 

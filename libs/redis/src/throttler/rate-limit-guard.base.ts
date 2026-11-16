@@ -9,7 +9,7 @@ import {
 import { rateLimitKey } from './rate-limit-key.util.js';
 import { type RateLimitPolicy, RateLimitPolicyRegistry } from './rate-limit-policy.js';
 import { GLOBAL_SCOPE, RATE_LIMIT_POLICY_KEY, THROTTLER } from './throttle.constants.js';
-import { authenticatedUserId } from './throttle-tracker.util.js';
+import { authenticatedTenantId, authenticatedUserId } from './throttle-tracker.util.js';
 
 /** Who a request or message is charged to. `user` is read structurally (`{ id }`). */
 export interface RateLimitSubject {
@@ -86,6 +86,10 @@ export abstract class RateLimitGuardBase extends ThrottlerGuard {
         return { ...global, tracker: this.ipTracker(subject.ip) };
       case THROTTLER.USER:
         return { ...global, tracker: this.userTracker(subject) };
+      case THROTTLER.TENANT: {
+        const tenantId = authenticatedTenantId(subject.user);
+        return tenantId === undefined ? undefined : { ...global, tracker: `tenant:${tenantId}` };
+      }
       case THROTTLER.ROUTE: {
         const policy = this.policyFor(request.context);
         if (policy === undefined || policy.key === 'credentials') return undefined;

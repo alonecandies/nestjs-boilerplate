@@ -18,3 +18,10 @@ export function throttleTracker(user: unknown, ip: unknown, ipv6SubnetPrefix: nu
   if (userId) return `user:${userId}`;
   return isNonEmptyString(ip) ? `ip:${normalizeIp(ip, ipv6SubnetPrefix)}` : 'ip:unknown';
 }
+
+/** The active tenant of an authenticated principal (`user.tenantId`, spec §5.3 `tid`), read structurally. */
+export function authenticatedTenantId(user: unknown): string | undefined {
+  if (typeof user !== 'object' || user === null) return undefined;
+  const tenantId: unknown = Reflect.get(user, 'tenantId');
+  return isNonEmptyString(tenantId) ? tenantId : undefined;
+}

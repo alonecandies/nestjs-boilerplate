@@ -85,6 +85,7 @@ async function createGuard(options: Partial<Exclude<ThrottlerModuleOptions, unkn
     {
       throttlers: [
         { name: THROTTLER.USER, ttl: 60_000, limit: 100 },
+        { name: THROTTLER.TENANT, ttl: 60_000, limit: 3_000 },
         { name: THROTTLER.ROUTE, ttl: 60_000, limit: 100 },
         { name: THROTTLER.AUTH, ttl: 60_000, limit: 100 },
       ],
@@ -123,6 +124,48 @@ describe('AppThrottlerGuard', () => {
     expect(userCalls).toHaveLength(2);
     expect(userCalls[0]?.[0]).toBe(rateLimitKey('user', 'global', 'user:u-1'));
     expect(userCalls[1]?.[0]).toBe(userCalls[0]?.[0]);
+  });
+
+  it('charges one tenant budget shared by every member of the tenant', async () => {
+    const { guard, increment } = await createGuard();
+    await guard.canActivate(
+      http(Controller.prototype.list, { headers: {}, user: { id: 'u-1', tenantId: 't-1' } }),
+    );
+    await guard.canActivate(
+      http(Controller.prototype.other, { headers: {}, user: { id: 'u-2', tenantId: 't-1' } }),
+    );
+    await guard.canActivate(
+      http(Controller.prototype.list, { headers: {}, user: { id: 'u-3', tenantId: 't-2' } }),
+    );
+    const tenantKeys = increment.mock.calls.filter(([, , , , n]) => n === 'tenant').map(([k]) => k);
+    expect(tenantKeys).toEqual([
+      rateLimitKey('tenant', 'global', 'tenant:t-1'),
+      rateLimitKey('tenant', 'global', 'tenant:t-1'),
+      rateLimitKey('tenant', 'global', 'tenant:t-2'),
+    ]);
+  });
+
+  it('does not charge a tenant for anonymous requests', async () => {
+    const { guard, increment } = await createGuard();
+    await guard.canActivate(http(Controller.prototype.list));
+    expect(increment.mock.calls.map(([, , , , n]) => n)).not.toContain('tenant');
+  });
+
+  it('lists the tenant budget in the IETF headers', async () => {
+    const { guard } = await createGuard();
+    const res = { header: vi.fn() };
+    await guard.canActivate(
+      context(
+        'http',
+        { headers: {}, user: { id: 'u-1', tenantId: 't-1' } },
+        Controller.prototype.list,
+        res,
+      ),
+    );
+    expect(res.header).toHaveBeenCalledWith(
+      'RateLimit-Policy',
+      '"user";q=100;w=60, "tenant";q=3000;w=60',
+    );
   });
 
   it('falls back to the (normalised) client IP for anonymous requests', async () => {
