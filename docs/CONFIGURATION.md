@@ -24,8 +24,7 @@ flowchart LR
   (`libs/config/src/namespaces/*.config.ts`, registered in `CONFIG_NAMESPACES` in
   [all-config.ts](../libs/config/src/all-config.ts)), the namespaces each domain owns
   (`domains/<x>/src/**/*.config.ts`: billing's `stripe`, identity's `password`, `refreshToken` and
-  `staffSwitchIn`,
-  the gRPC client URLs, files' limits) plus two app-local ones
+  `staffSwitchIn`, the gRPC client URLs, files' limits) plus two app-local ones
   (`apps/gateway/src/gateway.config.ts`, `apps/monolith/src/monolith.config.ts`). Each is a zod
   schema keyed by the env var names, transformed into a typed camelCase object.
 - **Lazy, per-process validation.** Only `app` and `observability` are loaded globally. Every other

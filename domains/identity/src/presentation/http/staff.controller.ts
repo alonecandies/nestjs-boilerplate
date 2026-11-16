@@ -24,6 +24,7 @@ import {
 import { type AuthUser, CurrentUser } from '@platform/auth';
 import type { RequestLike } from '@platform/common';
 import { AuthPort } from '../../application/ports/auth.port.js';
+import { StaffTokenNotAllowedException } from '../../domain/identity.errors.js';
 import { clientInfoOf } from '../shared/client-info.util.js';
 import { StaffSwitchInDto } from './dto/staff-switch-in.dto.js';
 import { ProblemResponse } from './responses/problem.response.js';
@@ -44,12 +45,16 @@ export class StaffController {
     summary: 'Enter a tenant as platform staff',
     description:
       'Needs `users.is_platform_staff` (re-read on every call). Returns a short-lived access token ' +
-      '(admin + staff, `STAFF_SWITCH_IN_TTL_SEC`), no refresh token. Audited in the tenant.',
+      '(admin + staff, `STAFF_SWITCH_IN_TTL_SEC`), no refresh token. Audited in the tenant. ' +
+      'The caller must use its own login token: a switch-in token cannot mint another one.',
   })
   @ApiParam({ name: 'tenantId', format: 'uuid' })
   @ApiCreatedResponse({ type: StaffAccessTokenResponse })
   @ApiBadRequestResponse({ type: ProblemResponse })
-  @ApiForbiddenResponse({ type: ProblemResponse, description: '`STAFF_ONLY`' })
+  @ApiForbiddenResponse({
+    type: ProblemResponse,
+    description: '`STAFF_ONLY`, `STAFF_TOKEN_NOT_ALLOWED`',
+  })
   @ApiNotFoundResponse({ type: ProblemResponse })
   async switchIn(
     @Param('tenantId', new ParseUUIDPipe()) tenantId: string,
@@ -57,6 +62,9 @@ export class StaffController {
     @CurrentUser() user: AuthUser,
     @Req() request: RequestLike,
   ): Promise<StaffAccessTokenResponse> {
+    // A switch-in token must not mint its successor (or a token for another tenant): that would
+    // outlive its TTL and session revocation (spec §5.2 "short-lived, no refresh").
+    if (user.staff) throw new StaffTokenNotAllowedException();
     const token = await this.auth.staffSwitchIn({
       staffUserId: user.id,
       tenantId,

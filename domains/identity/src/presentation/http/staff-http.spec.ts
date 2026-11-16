@@ -110,6 +110,19 @@ describe('staff REST API (Fastify, real JWT guards, fake port)', () => {
     expect(missing.statusCode).toBe(404);
   });
 
+  it('403 STAFF_TOKEN_NOT_ALLOWED for a switch-in token (no self-renewal, no hop); the port is never called', async () => {
+    const switchedIn = await principal(app, ['admin'], undefined, TENANT, true);
+    const res = await app.inject({
+      method: 'POST',
+      url: url('0190f3b2-0000-7000-8000-0000000000bb'),
+      headers: bearer(switchedIn),
+      payload: { reason: 'r' },
+    });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toMatchObject({ code: 'STAFF_TOKEN_NOT_ALLOWED' });
+    expect(authPort.staffSwitchIn).not.toHaveBeenCalled();
+  });
+
   it('401 anonymous', async () => {
     const anonymous = await app.inject({
       method: 'POST',

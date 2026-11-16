@@ -168,8 +168,8 @@ Staff are users with `identity.users.is_platform_staff` (granted only by `staff:
 tenant with `roles: ["admin"]`, `staff: true` and a lifetime of `STAFF_SWITCH_IN_TTL_SEC` (default 900 s). There is
 no refresh token and no session. Every switch-in writes a `staff.switch_in` row to the tenant's `audit_events`
 (reason, token id, expiry, client) and an `IdentityAudit` log line. Staff never get `tenant:manage` (an owner
-grant). A switch-in token cannot switch tenants (`STAFF_TOKEN_NOT_ALLOWED`); the flag is re-read on every
-switch-in, so a revocation stops new switch-ins at once.
+grant). A switch-in token can neither switch tenants nor switch in again (`STAFF_TOKEN_NOT_ALLOWED`), so
+it cannot outlive its TTL; the flag is re-read on every switch-in, so a revocation stops new switch-ins at once.
 
 ### The first admin
 

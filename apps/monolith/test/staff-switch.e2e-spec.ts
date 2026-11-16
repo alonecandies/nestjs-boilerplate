@@ -105,6 +105,20 @@ describe('staff switch-in (monolith)', () => {
     });
     expect(sw.statusCode).toBe(403);
     expect(sw.json<{ code: string }>().code).toBe('STAFF_TOKEN_NOT_ALLOWED');
+
+    // A switch-in token cannot mint its successor, here or in another tenant (spec §5.2).
+    const auditRows = e2e.identity.store.auditEvents.length;
+    for (const tenantId of [owner.tenantId, support.tenantId]) {
+      const again = await inject({
+        method: 'POST',
+        url: `/v1/staff/tenants/${tenantId}/switch-in`,
+        headers: bearer(body.accessToken),
+        payload: { reason: 'renew' },
+      });
+      expect(again.statusCode).toBe(403);
+      expect(again.json<{ code: string }>().code).toBe('STAFF_TOKEN_NOT_ALLOWED');
+    }
+    expect(e2e.identity.store.auditEvents).toHaveLength(auditRows);
   });
 
   it('403 STAFF_ONLY for a non-staff user and for a flag revoked after login; 404 for the nil tenant', async () => {
