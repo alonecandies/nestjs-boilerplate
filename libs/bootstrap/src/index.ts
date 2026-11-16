@@ -3,6 +3,7 @@
  * application (`createHttpApp` / `createServiceApp`), `listen`, OpenAPI + Scalar docs, node:cluster
  * supervision and process-level safety nets.
  */
+export { startClusterPrimaryMetrics } from './cluster/primary-metrics.js';
 export {
   type ClusterLike,
   ClusterSupervisor,
@@ -30,6 +31,7 @@ export {
   type MultipartLimits,
 } from './http/create-http-app.js';
 export { type ListenOptions, listen } from './http/listen.js';
+export { listenMetrics } from './http/listen-metrics.js';
 export { createServiceApp } from './http/microservice-app.js';
 export { DOCS_CONTENT_SECURITY_POLICY, defaultHelmetOptions } from './http/security.js';
 export {

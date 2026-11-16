@@ -15,7 +15,7 @@ import { DATABASE_MIGRATIONS } from './database.migrations.js';
  * billing-service: `billing.v1.BillingService` over gRPC (served by `connectGrpcServer` in
  * main.ts) — Stripe Checkout sessions, signature-verified idempotent webhooks (the gateway forwards
  * the raw bytes + `Stripe-Signature`), the payments ledger in Postgres — producing
- * `billing.payment-succeeded.v1`. The HTTP port only serves `/health/*` and `/metrics`.
+ * `billing.payment-succeeded.v1`. The HTTP port only serves `/health/*` (`/metrics` is on `METRICS_PORT`).
  */
 @Module({
   imports: [

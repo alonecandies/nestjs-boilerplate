@@ -21,6 +21,7 @@ describe('billing-service .env.example', () => {
   it('pins the service identity, ports and boot-time migrations', () => {
     const config = validateAllEnv(env, [stripeConfig]);
     expect(config.app).toMatchObject({ serviceName: 'billing-service', port: 3003 });
+    expect(config.observability.metricsPort).toBe(9467);
     expect(config.grpc.url).toBe('0.0.0.0:50053');
     expect(config.kafka.groupId).toBe('billing-service');
     expect(config.database.runMigrations).toBe(true);

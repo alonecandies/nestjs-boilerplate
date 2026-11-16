@@ -12,7 +12,7 @@ import { HealthContributor } from './health/health-contributor.js';
 import { HealthContributorRegistry } from './health/health-contributor.registry.js';
 import { LOG_REDACT_PATHS } from './logging/logger-params.js';
 import { HTTP_REQUEST_DURATION_SECONDS } from './metrics/metrics.constants.js';
-import { MetricsController } from './metrics/metrics.controller.js';
+import { MetricsListener } from './metrics/metrics-listener.js';
 import { ObservabilityModule } from './observability.module.js';
 import { ObserveModule } from './observe/observe.js';
 import { TelemetryFlushService } from './shutdown/telemetry-flush.service.js';
@@ -79,7 +79,7 @@ describe('ObservabilityModule', () => {
   });
 
   it('registers the metrics controller, the latency histogram and default metrics', async () => {
-    expect(app.get(MetricsController, { strict: false })).toBeInstanceOf(MetricsController);
+    expect(app.get(MetricsListener, { strict: false })).toBeInstanceOf(MetricsListener);
     expect(register.getSingleMetric(HTTP_REQUEST_DURATION_SECONDS)).toBeDefined();
     expect(await register.metrics()).toContain('nodejs_eventloop_lag_p99_seconds');
   });

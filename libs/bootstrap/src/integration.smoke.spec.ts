@@ -51,7 +51,11 @@ import {
   provideCommonEnhancersAsync,
 } from '@platform/common';
 import { type AppConfig, AppConfigModule, appConfig } from '@platform/config';
-import { ObservabilityModule, RequestContextService } from '@platform/observability';
+import {
+  MetricsListener,
+  ObservabilityModule,
+  RequestContextService,
+} from '@platform/observability';
 import {
   AppThrottlerModule,
   RateLimit,
@@ -219,13 +223,13 @@ describe('infrastructure libs compose into one Fastify app (no infrastructure)',
       expect(response.json()).toMatchObject({ status: 'ok', info: { redis: { status: 'up' } } });
     });
 
-    it('GET /metrics → 200 with http_request_duration_seconds, incl. guard rejections', async () => {
+    it('metrics listener → 200 with http_request_duration_seconds, incl. guard rejections', async () => {
       await app.inject({ method: 'GET', url: '/v1/smoke/me' }); // 401 (no token)
       const { authorization } = await bearer();
       await app.inject({ method: 'GET', url: '/v1/smoke/me', headers: { authorization } });
 
-      const response = await app.inject({ method: 'GET', url: '/metrics' });
-      expect(response.statusCode).toBe(200);
+      const response = await app.get(MetricsListener, { strict: false }).scrape();
+      expect(response.status).toBe(200);
       expect(response.body).toContain('# TYPE http_request_duration_seconds histogram');
       expect(response.body).toMatch(
         /http_request_duration_seconds_count\{method="GET",route="\/v1\/smoke\/me",status_code="401"\} [1-9]/,
@@ -398,7 +402,7 @@ describe('infrastructure libs compose into one Fastify app (no infrastructure)',
         expectProblem(blocked, 503, 'SERVICE_UNAVAILABLE');
         expect(blocked.headers[HTTP_HEADERS.RETRY_AFTER]).toBe('120');
         expect((await app.inject({ method: 'GET', url: '/health/live' })).statusCode).toBe(200);
-        expect((await app.inject({ method: 'GET', url: '/metrics' })).statusCode).toBe(200);
+        expect((await app.get(MetricsListener, { strict: false }).scrape()).status).toBe(200);
       } finally {
         maintenance.on = false;
       }

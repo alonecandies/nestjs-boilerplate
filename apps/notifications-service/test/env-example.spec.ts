@@ -21,6 +21,7 @@ describe('notifications-service .env.example', () => {
   it('pins the service identity, ports and consumer group', () => {
     const config = validateAllEnv(env);
     expect(config.app).toMatchObject({ serviceName: 'notifications-service', port: 3002 });
+    expect(config.observability.metricsPort).toBe(9466);
     expect(config.grpc.url).toBe('0.0.0.0:50052');
     expect(config.kafka.groupId).toBe(NOTIFICATIONS_CONSUMER_GROUP);
     expect(config.cassandra.runMigrations).toBe(true);

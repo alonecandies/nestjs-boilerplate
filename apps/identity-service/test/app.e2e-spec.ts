@@ -16,6 +16,7 @@ import {
 } from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
 import { DRIZZLE } from '@platform/database';
+import { MetricsListener } from '@platform/observability';
 import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import {
@@ -129,12 +130,17 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
       expect(response.headers['x-request-id']).toEqual(expect.any(String));
     });
 
-    it('GET /metrics → Prometheus text (Node default metrics + HTTP latency histogram)', async () => {
-      const response = await app.inject({ method: 'GET', url: '/metrics' });
-      expect(response.statusCode).toBe(200);
-      expect(response.headers['content-type']).toContain('text/plain');
-      expect(response.body).toContain('process_cpu_user_seconds_total');
-      expect(response.body).toContain('# TYPE http_request_duration_seconds histogram');
+    it('GET /metrics is not served on the HTTP port (METRICS_PORT has its own listener)', async () => {
+      expect((await app.inject({ method: 'GET', url: '/metrics' })).statusCode).toBe(404);
+    });
+
+    it('the metrics listener answers with Node default metrics and the HTTP latency histogram', async () => {
+      await app.inject({ method: 'GET', url: '/health/live' });
+      const scrape = await app.get(MetricsListener, { strict: false }).scrape();
+      expect(scrape.status).toBe(200);
+      expect(scrape.contentType).toMatch(/^text\/plain/);
+      expect(scrape.body).toContain('process_cpu_user_seconds_total');
+      expect(scrape.body).toContain('# TYPE http_request_duration_seconds histogram');
     });
 
     it('GET /health/ready → 200 on postgres + redis alone: an unreachable Kafka never un-readies the service', async () => {

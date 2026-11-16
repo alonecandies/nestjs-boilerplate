@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { NOTIFICATIONS_GRPC_PACKAGE } from '@domain/notifications-contracts';
 import { Logger } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
-import { createServiceApp, listen } from '@platform/bootstrap';
+import { createServiceApp, listen, listenMetrics } from '@platform/bootstrap';
 import { withTimeout } from '@platform/common';
 import { flushLogs } from '@platform/observability';
 import { connectGrpcServer, connectKafkaConsumer } from '@platform/transport';
@@ -16,7 +16,7 @@ const logger = new Logger('Bootstrap');
 let app: NestFastifyApplication | undefined;
 
 try {
-  // HTTP (PORT, default 3002 via .env) serves only /health/* and /metrics. createServiceApp also
+  // HTTP (PORT, default 3002 via .env) serves only /health/* (/metrics: METRICS_PORT). createServiceApp also
   // installs the process safety nets and SIGTERM/SIGINT → graceful shutdown: gRPC health
   // NOT_SERVING → HTTP + gRPC drain, the Kafka consumer finishes its in-flight messages and
   // leaves the group → Cassandra/Redis/Kafka producer closed → exit 0, bounded by
@@ -28,6 +28,7 @@ try {
   connectKafkaConsumer(app, { groupId: NOTIFICATIONS_CONSUMER_GROUP });
   await app.startAllMicroservices();
   // Last: the HTTP port (readiness probes) only opens once gRPC and the consumer are up.
+  await listenMetrics(app);
   await listen(app);
 } catch (error) {
   // Fail fast: a service that cannot reach its dependencies must not look healthy. The

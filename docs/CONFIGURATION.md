@@ -157,18 +157,19 @@ several namespaces with the same rules; they are listed once, under `app`.
 [`observability.config.ts`](../libs/config/src/namespaces/observability.config.ts) · every app ·
 details in [OBSERVABILITY.md](OBSERVABILITY.md)
 
-| Variable                             | Default                        | Description                                                                                               |
-| ------------------------------------ | ------------------------------ | --------------------------------------------------------------------------------------------------------- |
-| `LOG_LEVEL`                          | `info`                         | `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace` \| `silent` (pino).                          |
-| `LOG_PRETTY`                         | on when `NODE_ENV=development` | pino-pretty output (~5x slower).                                                                          |
-| `METRICS_ENABLED`                    | `true`                         | `GET /metrics` (prom-client).                                                                             |
-| `METRICS_BEARER_TOKEN`               | —                              | Min 16 chars. When set, `/metrics` answers `404` unless the scrape sends `Authorization: Bearer <token>`. |
-| `OTEL_SDK_DISABLED`                  | —                              | Explicit value wins; when unset, tracing is on only if an OTLP endpoint is set.                           |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`        | —                              | OTLP base URL (local Jaeger: `http://localhost:4318`, OTLP/HTTP).                                         |
-| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | —                              | Traces-specific endpoint; takes precedence over the base endpoint.                                        |
-| `OBSERVE_APP_KEY`                    | —                              | `@nestjs/observe` is wired only when **both** key and secret are set.                                     |
-| `OBSERVE_APP_SECRET`                 | —                              | See above.                                                                                                |
-| `OBSERVE_SERVICE_ID`                 | `SERVICE_NAME`                 | Service id reported to `@nestjs/observe`.                                                                 |
+| Variable                             | Default                        | Description                                                                                                                                                                        |
+| ------------------------------------ | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LOG_LEVEL`                          | `info`                         | `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace` \| `silent` (pino).                                                                                                   |
+| `LOG_PRETTY`                         | on when `NODE_ENV=development` | pino-pretty output (~5x slower).                                                                                                                                                   |
+| `METRICS_ENABLED`                    | `true`                         | `GET /metrics` (prom-client).                                                                                                                                                      |
+| `METRICS_BEARER_TOKEN`               | —                              | Min 16 chars. When set, `/metrics` answers `404` unless the scrape sends `Authorization: Bearer <token>`.                                                                          |
+| `METRICS_PORT`                       | `9464`                         | Port of the separate `/metrics` listener (host dev: 9464 monolith and gateway, 9465 identity, 9466 notifications, 9467 billing). Must differ from `PORT`; `0` = OS-picked (tests). |
+| `OTEL_SDK_DISABLED`                  | —                              | Explicit value wins; when unset, tracing is on only if an OTLP endpoint is set.                                                                                                    |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`        | —                              | OTLP base URL (local Jaeger: `http://localhost:4318`, OTLP/HTTP).                                                                                                                  |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | —                              | Traces-specific endpoint; takes precedence over the base endpoint.                                                                                                                 |
+| `OBSERVE_APP_KEY`                    | —                              | `@nestjs/observe` is wired only when **both** key and secret are set.                                                                                                              |
+| `OBSERVE_APP_SECRET`                 | —                              | See above.                                                                                                                                                                         |
+| `OBSERVE_SERVICE_ID`                 | `SERVICE_NAME`                 | Service id reported to `@nestjs/observe`.                                                                                                                                          |
 
 ### `database` — PostgreSQL 18 (postgres.js + Drizzle)
 
