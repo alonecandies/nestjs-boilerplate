@@ -32,6 +32,10 @@ export const BillingErrorCode = {
   PAYMENT_PROVIDER_RATE_LIMITED: 'PAYMENT_PROVIDER_RATE_LIMITED',
   /** Any other Stripe failure (authentication, API, connection). */
   PAYMENT_PROVIDER_ERROR: 'PAYMENT_PROVIDER_ERROR',
+  /** A ledger draft violates the double-entry rules (programming error; never retried). */
+  LEDGER_ENTRY_INVALID: 'LEDGER_ENTRY_INVALID',
+  /** A ledger row failed proof verification against the trusted state. */
+  LEDGER_VERIFICATION_FAILED: 'LEDGER_VERIFICATION_FAILED',
 } as const;
 export type BillingErrorCode = (typeof BillingErrorCode)[keyof typeof BillingErrorCode];
 

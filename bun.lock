@@ -281,6 +281,7 @@
         "nestjs-cls": "catalog:",
         "rxjs": "catalog:",
         "stripe": "catalog:",
+        "uuid": "catalog:",
         "zod": "catalog:",
       },
       "devDependencies": {

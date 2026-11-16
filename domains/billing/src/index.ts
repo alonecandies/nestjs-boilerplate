@@ -31,6 +31,11 @@ export * from './billing-grpc.module.js';
 // Domain
 export * from './domain/billing.errors.js';
 export * from './domain/events/payment-succeeded.event.js';
+// Ledger (model)
+export * from './domain/ledger/ledger.errors.js';
+export * from './domain/ledger/ledger.ids.js';
+export * from './domain/ledger/ledger.invariant.js';
+export * from './domain/ledger/ledger.types.js';
 export * from './domain/payment.aggregate.js';
 // Infrastructure
 export { billingMigrations } from './infrastructure/persistence/billing.migrations.js';
