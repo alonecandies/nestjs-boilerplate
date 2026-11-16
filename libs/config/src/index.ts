@@ -18,6 +18,7 @@ export * from './namespaces/cassandra.config.js';
 export * from './namespaces/database.config.js';
 export * from './namespaces/graphql.config.js';
 export * from './namespaces/grpc.config.js';
+export * from './namespaces/immudb.config.js';
 export * from './namespaces/kafka.config.js';
 export * from './namespaces/mail.config.js';
 export * from './namespaces/observability.config.js';

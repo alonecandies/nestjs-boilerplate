@@ -7,6 +7,7 @@ import { type CassandraConfig, cassandraConfig } from './namespaces/cassandra.co
 import { type DatabaseConfig, databaseConfig } from './namespaces/database.config.js';
 import { type GraphqlConfig, graphqlConfig } from './namespaces/graphql.config.js';
 import { type GrpcConfig, grpcConfig } from './namespaces/grpc.config.js';
+import { type ImmudbConfig, immudbConfig } from './namespaces/immudb.config.js';
 import { type KafkaConfig, kafkaConfig } from './namespaces/kafka.config.js';
 import { type MailConfig, mailConfig } from './namespaces/mail.config.js';
 import {
@@ -26,6 +27,7 @@ export const CONFIG_NAMESPACES = {
   observability: observabilityConfig,
   database: databaseConfig,
   cassandra: cassandraConfig,
+  immudb: immudbConfig,
   redis: redisConfig,
   kafka: kafkaConfig,
   grpc: grpcConfig,
@@ -47,6 +49,7 @@ export interface AllConfig {
   observability: ObservabilityConfig;
   database: DatabaseConfig;
   cassandra: CassandraConfig;
+  immudb: ImmudbConfig;
   redis: RedisConfig;
   kafka: KafkaConfig;
   grpc: GrpcConfig;
