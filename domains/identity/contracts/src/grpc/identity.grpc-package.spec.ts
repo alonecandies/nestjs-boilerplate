@@ -12,6 +12,7 @@ import {
   IDENTITY_GRPC_PACKAGE,
   type ListUsersRequest,
   type LogoutRequest,
+  TenantsServiceControllerMethods,
   type User,
   type UserPage,
   UsersServiceControllerMethods,
@@ -31,7 +32,11 @@ describe('IDENTITY_GRPC_PACKAGE', () => {
 
   it('declares the protobuf package and services the proto defines', () => {
     expect(root.lookup('identity.v1')).toBeDefined();
-    expect(IDENTITY_GRPC_PACKAGE.services).toEqual(['AuthService', 'UsersService']);
+    expect(IDENTITY_GRPC_PACKAGE.services).toEqual([
+      'AuthService',
+      'UsersService',
+      'TenantsService',
+    ]);
     for (const service of IDENTITY_GRPC_PACKAGE.services) {
       expect(root.lookupService(`identity.v1.${service}`).name).toBe(service);
     }
@@ -43,11 +48,17 @@ describe('IDENTITY_GRPC_PACKAGE', () => {
     expect(retried).toEqual(['GetUser', 'GetUsersByIds', 'ListUsers']);
     for (const method of retried) expect(users.methods[method], method).toBeDefined();
     expect(IDENTITY_GRPC_PACKAGE.idempotentMethods['AuthService']).toBeUndefined();
+
+    const tenants = root.lookupService('identity.v1.TenantsService');
+    const retriedTenants = IDENTITY_GRPC_PACKAGE.idempotentMethods['TenantsService'] ?? [];
+    expect(retriedTenants).toEqual(['ListMyTenants', 'ListMembers']);
+    for (const method of retriedTenants) expect(tenants.methods[method], method).toBeDefined();
   });
 
   it.each([
     ['AuthService', AuthServiceControllerMethods],
     ['UsersService', UsersServiceControllerMethods],
+    ['TenantsService', TenantsServiceControllerMethods],
   ] as const)('generated %s decorator binds every rpc of the proto', (name, decorator) => {
     const service = root.lookupService(`identity.v1.${name}`);
     expect(boundRpcPatterns(decorator, service)).toEqual(

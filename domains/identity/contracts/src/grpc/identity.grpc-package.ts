@@ -4,16 +4,28 @@ import type { GrpcPackageSpec } from '@platform/contracts';
 // google.protobuf.Timestamp <-> Date wrapper on the shared protobufjs instance. Every process that
 // builds gRPC options for this package loads this file, so Timestamps can never silently decode
 // as `{ seconds, nanos }` because a service only imported contract *types*.
-import { AUTH_SERVICE_NAME, USERS_SERVICE_NAME } from '../generated/identity/v1/identity.pb.js';
+import {
+  AUTH_SERVICE_NAME,
+  TENANTS_SERVICE_NAME,
+  USERS_SERVICE_NAME,
+} from '../generated/identity/v1/identity.pb.js';
 
-/** `identity.v1`: AuthService (credential flows) and UsersService (user queries and admin). */
+/**
+ * `identity.v1`: AuthService (credential flows), UsersService (user queries and admin) and
+ * TenantsService: tenants, members, invitations (B2-17).
+ */
 export const IDENTITY_GRPC_PACKAGE: GrpcPackageSpec = {
   package: 'identity.v1',
   // `src/grpc` and `dist/grpc` sit at the same depth and swc `copyFiles` mirrors `src/proto/**`.
   protoDir: join(import.meta.dirname, '..', 'proto'),
   protoPath: ['identity/v1/identity.proto'],
-  services: [AUTH_SERVICE_NAME, USERS_SERVICE_NAME],
+  services: [AUTH_SERVICE_NAME, USERS_SERVICE_NAME, TENANTS_SERVICE_NAME],
   clientToken: 'IDENTITY_GRPC_CLIENT',
-  // AuthService (Register, Login, RefreshTokens, Logout) is deliberately absent.
-  idempotentMethods: { [USERS_SERVICE_NAME]: ['GetUser', 'GetUsersByIds', 'ListUsers'] },
+  // AuthService (Register, Login, RefreshTokens, Logout, SwitchTenant) is deliberately absent:
+  // none of its calls is idempotent (SwitchTenant rotates the session; it is never retried). Of
+  // TenantsService only the two reads are retried; every tenant, member and invitation write is not.
+  idempotentMethods: {
+    [USERS_SERVICE_NAME]: ['GetUser', 'GetUsersByIds', 'ListUsers'],
+    [TENANTS_SERVICE_NAME]: ['ListMyTenants', 'ListMembers'],
+  },
 };

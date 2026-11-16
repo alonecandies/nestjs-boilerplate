@@ -12,6 +12,9 @@ import { IDENTITY_RBAC } from './identity.permissions.js';
 import { AuthGrpcAdapter } from './infrastructure/adapters/grpc/auth-grpc.adapter.js';
 import { IdentityGrpcCaller } from './infrastructure/adapters/grpc/identity-grpc.caller.js';
 import { identityGrpcClientConfig } from './infrastructure/adapters/grpc/identity-grpc-client.config.js';
+import { InvitationsGrpcAdapter } from './infrastructure/adapters/grpc/invitations-grpc.adapter.js';
+import { MembersGrpcAdapter } from './infrastructure/adapters/grpc/members-grpc.adapter.js';
+import { TenantsGrpcAdapter } from './infrastructure/adapters/grpc/tenants-grpc.adapter.js';
 import { UsersGrpcAdapter } from './infrastructure/adapters/grpc/users-grpc.adapter.js';
 import { AuthLocalAdapter } from './infrastructure/adapters/local/auth-local.adapter.js';
 import { InvitationsLocalAdapter } from './infrastructure/adapters/local/invitations-local.adapter.js';
@@ -34,24 +37,30 @@ import { IdentityRateLimitModule } from './presentation/rate-limit/identity-rate
 import { UserReadCache } from './presentation/shared/user-read.cache.js';
 
 /** Topology-independent presentation: the same classes in the monolith and the gateway. */
-const CONTROLLERS = [AuthController, UsersController, StaffController];
+const CONTROLLERS = [
+  AuthController,
+  UsersController,
+  StaffController,
+  TenantsController,
+  MembersController,
+  InvitationsController,
+];
 const PRESENTATION: Provider[] = [
   LocalStrategy,
   UserReadCache,
   UsersResolver,
   AuthResolver,
   UsersLoaderRegistrar,
+  TenancyResolver,
+  MeTenantResolver,
 ];
-const PORT_EXPORTS = [AuthPort, UsersPort];
-/** Tenancy endpoints: local-only until the gRPC adapter exists (`forRemote()` gains them in Task 11). */
-const TENANCY_CONTROLLERS = [TenantsController, MembersController, InvitationsController];
-/** Tenancy GraphQL: local-only like the controllers (the gateway gains them with Task 11). */
-const TENANCY_PROVIDERS: Provider[] = [TenancyResolver, MeTenantResolver];
+const PORT_EXPORTS = [AuthPort, UsersPort, TenantsPort, MembersPort, InvitationsPort];
 
 /**
- * Edge API of the identity context: REST (`/v1/auth`, `/v1/users`), GraphQL (me, user, users,
- * register, login, refreshTokens), the passport-local strategy and the `users`
- * DataLoader. Presentation depends only on `AuthPort` / `UsersPort`; the binding decides the
+ * Edge API of the identity context: REST (`/v1/auth`, `/v1/users`, `/v1/tenant*`), GraphQL (me, user,
+ * users, register, login, refreshTokens, the tenancy queries and mutations), the passport-local
+ * strategy and the `users` DataLoader. Presentation depends only on the ports (`AuthPort`,
+ * `UsersPort`, `TenantsPort`, `MembersPort`, `InvitationsPort`); the binding decides the
  * topology:
  * - `forLocal()` (monolith): ports → CommandBus/QueryBus. The app imports `IdentityCoreModule` itself
  *   (from `@domain/identity`): this module is part of `@domain/identity/api`, which never reaches core code.
@@ -72,17 +81,16 @@ export class IdentityApiModule {
         IdentityRateLimitModule,
         RbacModule.forFeature(IDENTITY_RBAC),
       ],
-      controllers: [...CONTROLLERS, ...TENANCY_CONTROLLERS],
+      controllers: CONTROLLERS,
       providers: [
         ...PRESENTATION,
-        ...TENANCY_PROVIDERS,
         { provide: AuthPort, useClass: AuthLocalAdapter },
         { provide: UsersPort, useClass: UsersLocalAdapter },
         { provide: TenantsPort, useClass: TenantsLocalAdapter },
         { provide: MembersPort, useClass: MembersLocalAdapter },
         { provide: InvitationsPort, useClass: InvitationsLocalAdapter },
       ],
-      exports: [...PORT_EXPORTS, TenantsPort, MembersPort, InvitationsPort],
+      exports: PORT_EXPORTS,
     };
   }
 
@@ -106,6 +114,9 @@ export class IdentityApiModule {
         IdentityGrpcCaller,
         { provide: AuthPort, useClass: AuthGrpcAdapter },
         { provide: UsersPort, useClass: UsersGrpcAdapter },
+        { provide: TenantsPort, useClass: TenantsGrpcAdapter },
+        { provide: MembersPort, useClass: MembersGrpcAdapter },
+        { provide: InvitationsPort, useClass: InvitationsGrpcAdapter },
       ],
       exports: PORT_EXPORTS,
     };

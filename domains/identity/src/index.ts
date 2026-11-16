@@ -178,3 +178,16 @@ export {
   type StaffSwitchInConfig,
   staffSwitchInConfig,
 } from './infrastructure/security/staff-switch-in.config.js';
+export {
+  acceptInvitationRequestSchema,
+  createInvitationRequestSchema,
+  createTenantRequestSchema,
+  leaveTenantRequestSchema,
+  listMembersRequestSchema,
+  listMyTenantsRequestSchema,
+  removeMemberRequestSchema,
+  renameTenantRequestSchema,
+  updateMemberRolesRequestSchema,
+} from './presentation/grpc/tenancy-rpc.payloads.js';
+// gRPC presentation of identity-service (TenantsService; Auth and Users controllers stay internal).
+export { TenantsGrpcController } from './presentation/grpc/tenants-grpc.controller.js';
