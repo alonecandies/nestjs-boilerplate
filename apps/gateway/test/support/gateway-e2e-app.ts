@@ -1,8 +1,13 @@
 import { BillingPort } from '@domain/billing';
 import { AuthPort, refreshTokenConfig, UsersPort } from '@domain/identity';
+import { InvitationsPort, MembersPort, TenantsPort } from '@domain/identity/api';
 import {
   FakeAuthPort,
   FakeIdentityState,
+  FakeInvitationsPort,
+  FakeMembersPort,
+  FakeTenancyState,
+  FakeTenantsPort,
   FakeUsersPort,
   TokenIssuer,
 } from '@domain/identity/testing';
@@ -37,6 +42,7 @@ export type GatewayE2e = Awaited<ReturnType<typeof createGatewayE2eApp>>;
  * |-----------------------------------|--------------------------------------------------------|
  * | `REDIS_CLIENT` (denylist, throttler) | `InMemoryRedis`                                     |
  * | `AuthPort`, `UsersPort`           | fake identity-service (`FakeAuthPort`/`FakeUsersPort`) |
+ * | `TenantsPort`, `MembersPort`, `InvitationsPort` | fake identity-service (`FakeTenancyState`) |
  * | `NotificationsPort`               | fake notifications-service inbox                       |
  * | `BillingPort`                     | the real gRPC adapter → a dead upstream; or `options.billing` |
  * | `CACHE_MANAGER`                   | real L1 tier only (L2 is node-redis)                   |
@@ -54,6 +60,7 @@ export async function createGatewayE2eApp(options: GatewayE2eOptions = {}) {
   const config = appConfig.parse();
   const redis = new InMemoryRedis();
   const identity = new FakeIdentityState();
+  const tenancy = new FakeTenancyState(identity);
   const notifications = new FakeNotificationsPort();
   const storage = new InMemoryStorageService();
   // identity-service's signer, built from the env the gateway's AuthModule verifies with.
@@ -69,6 +76,12 @@ export async function createGatewayE2eApp(options: GatewayE2eOptions = {}) {
     })
     .overrideProvider(UsersPort)
     .useValue(new FakeUsersPort(identity))
+    .overrideProvider(TenantsPort)
+    .useValue(new FakeTenantsPort(tenancy))
+    .overrideProvider(MembersPort)
+    .useValue(new FakeMembersPort(tenancy))
+    .overrideProvider(InvitationsPort)
+    .useValue(new FakeInvitationsPort(tenancy))
     .overrideProvider(NotificationsPort)
     .useValue(notifications)
     .overrideProvider(CACHE_MANAGER)
@@ -93,5 +106,5 @@ export async function createGatewayE2eApp(options: GatewayE2eOptions = {}) {
     },
   );
 
-  return { app, redis, identity, notifications, storage };
+  return { app, redis, identity, tenancy, notifications, storage };
 }
