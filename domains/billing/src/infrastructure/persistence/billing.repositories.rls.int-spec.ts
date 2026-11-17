@@ -313,6 +313,34 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         );
         await expect(inSystem(() => system.deleteProcessedBefore(cutoff))).resolves.toBe(0);
       });
+
+      it('deleteProcessedBefore drains a backlog spread over many 15-minute slices in one run', async () => {
+        const cutoff = new Date('2026-10-01T00:00:00.000Z');
+        const before = (minutes: number): string =>
+          new Date(cutoff.getTime() - minutes * 60_000).toISOString();
+        // 12 old events 30 minutes apart over three tenants (the platform one too), one exactly at
+        // the cutoff (kept: `<`) and one after it.
+        const tenants = [
+          [TENANT_A, A1],
+          [TENANT_B, B1],
+          [PLATFORM_TENANT_ID, null],
+        ] as const;
+        for (let i = 0; i < 12; i += 1) {
+          const [tenant, user] = tenants[i % 3] ?? tenants[0];
+          await db().superuser.execute(sql`
+            insert into billing.stripe_events (tenant_id, id, user_id, type, processed_at)
+            values (${tenant}, ${`evt_backlog_${i}`}, ${user}, 't', ${before((i + 1) * 30)})`);
+        }
+        await db().superuser.execute(sql`
+          insert into billing.stripe_events (tenant_id, id, user_id, type, processed_at) values
+            (${TENANT_A}, 'evt_at_cutoff', ${A1}, 't', ${cutoff.toISOString()}),
+            (${TENANT_B}, 'evt_after', ${B1}, 't', ${'2026-10-01T00:00:01.000Z'})`);
+
+        await expect(inSystem(() => system.deleteProcessedBefore(cutoff))).resolves.toBe(12);
+        expect(await eventRows()).toEqual(
+          [`${TENANT_A}/evt_at_cutoff/${A1}`, `${TENANT_B}/evt_after/${B1}`].toSorted(),
+        );
+      });
     });
   },
 );

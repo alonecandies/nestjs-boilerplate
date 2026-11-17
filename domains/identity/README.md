@@ -131,9 +131,11 @@ revoked_at IS NULL AND expires_at > now RETURNING id` (compare-and-set: concurre
 - **Logout**: denylist the access `jti` in Redis for its remaining lifetime, then revoke the
   session of `refreshToken`, or every session when it is omitted ("sign out everywhere").
 - **Purge**: hourly `PurgeExpiredSessionsCron` (`@WithLock('identity:purge-sessions', 60 s)`)
-  deletes every expired session with one multi-shard `DELETE … WHERE expires_at <= $now` (no
-  `LIMIT`ed batches: Citus cannot push one down on the user-distributed `sessions`), bounded by the
-  role's `statement_timeout`. Revoked-but-unexpired sessions are kept on purpose: they make reuse
+  deletes the expired sessions (`expires_at <= $now`) in 15-minute time slices, oldest first: read
+  `min(expires_at)`, one multi-shard `DELETE` up to it + 15 minutes, repeat, at most 96 per run (no
+  `LIMIT`ed batches: Citus cannot push one down on the user-distributed `sessions`). Each slice stays
+  far below the role's `statement_timeout` (a timed-out one is retried at half the span), so a
+  backlog drains over a few runs instead of timing out every hour. Revoked-but-unexpired sessions are kept on purpose: they make reuse
   detectable until the token itself expires.
 
 ## REST (URI version `v1`, problem+json errors)

@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
-import { InjectSystemDatabase, SystemDatabase } from '@platform/database';
-import { lt } from 'drizzle-orm';
+import { InjectSystemDatabase, purgeInTimeSlices, SystemDatabase } from '@platform/database';
+import { and, lt, lte, min } from 'drizzle-orm';
 import type { StripeEventReceipt } from '../../application/repositories/stripe-events.repository.js';
 import type { StripeEventsSystemRepository } from '../../application/repositories/stripe-events.system-repository.js';
 import { type BillingSchema, stripeEvents } from './billing.schema.js';
@@ -19,11 +19,31 @@ export class DrizzleStripeEventsSystemRepository implements StripeEventsSystemRe
   constructor(@InjectSystemDatabase() private readonly system: SystemDatabase<BillingSchema>) {}
 
   deleteProcessedBefore(cutoff: Date): Promise<number> {
-    // One multi-shard DELETE, no FOR UPDATE (SH-6): Citus cannot push an `id IN (SELECT … LIMIT n)`
-    // batch down on a distributed table. Bounded by the role's statement_timeout (B3 ruling 6).
+    // Time slices oldest first (`purgeInTimeSlices`): min(processed_at) of the due rows, then one
+    // multi-shard DELETE up to min + 15 minutes (never reaching the cutoff: `<` it), at most 96 per
+    // run, each committing on its own. No FOR UPDATE and no `id IN (SELECT … LIMIT n)` batch (SH-6:
+    // Citus cannot push it down on a distributed table); each slice stays far below the role's
+    // statement_timeout, so a backlog drains over a few runs (B3 ruling 6, final review F3).
     return this.system.run(methods.deleteProcessedBefore, async (db) => {
-      const result = await db.delete(stripeEvents).where(lt(stripeEvents.processedAt, cutoff));
-      return result.count;
+      const { deleted } = await purgeInTimeSlices({
+        cutoff,
+        oldestDue: async () => {
+          const [row] = await db
+            .select({ oldest: min(stripeEvents.processedAt) })
+            .from(stripeEvents)
+            .where(lt(stripeEvents.processedAt, cutoff));
+          return row?.oldest ?? null;
+        },
+        deleteThrough: async (bound) =>
+          (
+            await db
+              .delete(stripeEvents)
+              .where(
+                and(lte(stripeEvents.processedAt, bound), lt(stripeEvents.processedAt, cutoff)),
+              )
+          ).count,
+      });
+      return deleted;
     });
   }
 

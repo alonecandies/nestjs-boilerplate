@@ -547,7 +547,7 @@ ruling below):
 | `users.findCredentialsByEmail`         | pre-auth | login (spec 1): the credentials row by email                                                |
 | `users.existsByEmail`                  | pre-auth | register pre-check (spec 2); the unique constraint still guards races                       |
 | `invitations.findByTokenHash`          | pre-auth | accept invitation (spec 3): a multi-shard read, one index probe per shard                   |
-| `sessions.deleteExpired`               | system   | the hourly purge, `identity.purge-expired-sessions` (spec 4): a multi-shard `DELETE`        |
+| `sessions.deleteExpired`               | system   | the hourly purge, `identity.purge-expired-sessions` (spec 4): multi-shard `DELETE` slices   |
 | `stripeEvents.deleteProcessedBefore`   | system   | the hourly purge, `billing.purge-stripe-events` (spec 5)                                    |
 | `stripeEvents.markProcessedAsPlatform` | system   | platform webhooks without a user, `billing.platform-webhook` (spec 8, `stripe_events` half) |
 | `users.findByIdInTenant`               | system   | `GET /v1/users/:id` and scoped `UsersPort` reads, `identity.user-directory`                 |

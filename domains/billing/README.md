@@ -265,9 +265,10 @@ processed again. Old receipts are purged: see **Retention** below.
 
 **Retention.** `PurgeStripeEventsCron` (hourly, `@WithLock('billing:purge-stripe-events')` so one replica runs
 it) deletes `stripe_events` older than `STRIPE_EVENTS_RETENTION_DAYS` (30; Stripe redelivers for ≤ 3 days) via
-`PurgeStripeEventsCommand`: one multi-shard `DELETE … WHERE processed_at < $cutoff` per run, in every tenant (the
-platform tenant included), without a `LIMIT` subquery, which Citus cannot push down on a distributed table. The
-role's `statement_timeout` bounds it; the hourly schedule keeps each run to about an hour of events. It runs in `SystemContext` on the `app_system` pool (`DATABASE_SYSTEM_URL`; a system
+`PurgeStripeEventsCommand`, in every tenant (the platform tenant included), in 15-minute time slices oldest first:
+read `min(processed_at)`, one multi-shard `DELETE` up to it + 15 minutes (never reaching the cutoff), repeat, at most 96
+per run, without a `LIMIT` subquery, which Citus cannot push down on a distributed table. Each slice stays far below
+the role's `statement_timeout` (a timed-out one is retried at half the span), so a backlog drains over a few runs. It runs in `SystemContext` on the `app_system` pool (`DATABASE_SYSTEM_URL`; a system
 method refuses outside the context). It needs `ScheduleModule.forRoot()` and `RedisModule` in the
 app (billing-service and the monolith import both).
 

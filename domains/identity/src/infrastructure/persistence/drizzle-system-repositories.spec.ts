@@ -5,6 +5,7 @@ import {
   affected,
   createFakePostgres,
   type FakeQueryHandler,
+  type FakeResult,
   SPEC_PRINCIPAL,
 } from '../../../test/fake-postgres.js';
 import { NOW } from '../../../test/fixtures.js';
@@ -222,14 +223,31 @@ describe('DrizzleInvitationsSystemRepository', () => {
 });
 
 describe('DrizzleSessionsSystemRepository', () => {
-  it('deleteExpired is ONE multi-shard DELETE on expires_at: no sub-select, no LIMIT, no row locks', async () => {
-    const { sessions, executed } = setup(() => affected(12));
-    await expect(inSystem(() => sessions.deleteExpired(NOW))).resolves.toBe(12);
-    expect(executed).toHaveLength(1);
-    expect(executed[0]?.sql).toBe(
-      'delete from "identity"."sessions" where "identity"."sessions"."expires_at" <= $1',
-    );
-    expect(executed[0]?.params).toEqual([NOW.toISOString()]);
+  it('deleteExpired: time slices oldest first, each a multi-shard DELETE (no LIMIT, no row lock)', async () => {
+    const oldest = new Date(NOW.getTime() - 3 * 3_600_000);
+    const later = new Date(NOW.getTime() - 60_000);
+    const answers: FakeResult[] = [
+      [{ min: oldest.toISOString() }],
+      affected(12),
+      [{ min: later.toISOString() }],
+      affected(3),
+      [{ min: null }],
+    ];
+    const { sessions, executed } = setup(() => answers.shift() ?? []);
+    await expect(inSystem(() => sessions.deleteExpired(NOW))).resolves.toBe(15);
+    const MIN =
+      'select min("expires_at") from "identity"."sessions" where "identity"."sessions"."expires_at" <= $1';
+    const DELETE =
+      'delete from "identity"."sessions" where "identity"."sessions"."expires_at" <= $1';
+    expect(executed.map((query) => query.sql)).toEqual([MIN, DELETE, MIN, DELETE, MIN]);
+    expect(executed.map((query) => query.params)).toEqual([
+      [NOW.toISOString()],
+      // min + 15 minutes, then the cutoff itself (never past it).
+      [new Date(oldest.getTime() + 15 * 60_000).toISOString()],
+      [NOW.toISOString()],
+      [NOW.toISOString()],
+      [NOW.toISOString()],
+    ]);
   });
 
   it('deleteExpired is refused outside SystemContext', async () => {

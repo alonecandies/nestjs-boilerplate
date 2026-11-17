@@ -8,10 +8,11 @@ import type { StripeEventReceipt } from './stripe-events.repository.js';
  */
 export abstract class StripeEventsSystemRepository {
   /**
-   * Deletes every event processed before `cutoff`, in every tenant (the platform tenant included),
-   * and returns how many rows went: one multi-shard statement (no `FOR UPDATE`), bounded by the
-   * role's `statement_timeout`, backed by the `processed_at` index on each shard. Run it once per
-   * purge.
+   * Deletes the events processed before `cutoff`, in every tenant (the platform tenant included),
+   * oldest first in 15-minute time slices (at most 96 per call, each one multi-shard DELETE without
+   * `FOR UPDATE`, backed by the `processed_at` index on each shard, far below the role's
+   * `statement_timeout`), and returns how many rows went. A larger backlog is left for the next
+   * call.
    */
   abstract deleteProcessedBefore(cutoff: Date): Promise<number>;
 

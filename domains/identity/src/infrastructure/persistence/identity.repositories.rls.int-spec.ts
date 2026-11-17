@@ -1,4 +1,10 @@
-import { createPrincipal, type Principal, runWithPrincipal, SystemContext } from '@platform/common';
+import {
+  createPrincipal,
+  generateId,
+  type Principal,
+  runWithPrincipal,
+  SystemContext,
+} from '@platform/common';
 import { RowCountMismatchError } from '@platform/database';
 import type { Sql } from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -216,6 +222,45 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           ),
         ).resolves.toBe(1);
         expect(await exists('sessions', 'id', SESSION_EXPIRED)).toBe(false);
+        expect(await exists('sessions', 'id', SESSION_B1)).toBe(true);
+      });
+
+      it('system: deleteExpired drains a backlog spread over many 15-minute slices in one run', async () => {
+        // 12 expired sessions 40 minutes apart (one slice each, the gaps skipped), one expiring
+        // exactly now (due: `<=`), one an hour ahead (kept); users on different shards.
+        const backlog = Array.from({ length: 12 }, (_, i) => ({
+          id: generateId(),
+          userId: [A1, A2, B1, C1][i % 4] ?? A1,
+          tenantId: i % 4 < 2 ? TENANT_A : TENANT_B,
+          expiresAt: new Date(now.getTime() - (i + 1) * 40 * 60_000),
+        }));
+        const atCutoff = generateId();
+        const ahead = generateId();
+        for (const row of [
+          ...backlog,
+          { id: atCutoff, userId: A1, tenantId: TENANT_A, expiresAt: now },
+          {
+            id: ahead,
+            userId: B1,
+            tenantId: TENANT_B,
+            expiresAt: new Date(now.getTime() + 3_600_000),
+          },
+        ]) {
+          await admin`insert into identity.sessions
+              (id, user_id, tenant_id, refresh_token_hash, expires_at)
+            values (${row.id}, ${row.userId}, ${row.tenantId}, ${HASH}, ${row.expiresAt})`;
+        }
+
+        await expect(
+          SystemContext.run('identity.purge-expired-sessions', () =>
+            sessionsSystem.deleteExpired(now),
+          ),
+        ).resolves.toBe(13);
+        const due = await admin<{ n: number }[]>`
+          select count(*)::int as n from identity.sessions where expires_at <= ${now}`;
+        expect(due).toEqual([{ n: 0 }]);
+        expect(await exists('sessions', 'id', atCutoff)).toBe(false);
+        expect(await exists('sessions', 'id', ahead)).toBe(true);
         expect(await exists('sessions', 'id', SESSION_B1)).toBe(true);
       });
 

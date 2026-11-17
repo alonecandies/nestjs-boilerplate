@@ -76,3 +76,11 @@ export {
   type SystemMethod,
   type SystemMethodScope,
 } from './system/system-method.js';
+export {
+  DEFAULT_PURGE_MAX_SLICES,
+  DEFAULT_PURGE_SLICE_MS,
+  MIN_PURGE_SLICE_MS,
+  purgeInTimeSlices,
+  type TimeSlicedPurgeOptions,
+  type TimeSlicedPurgeResult,
+} from './system/time-sliced-purge.js';

@@ -298,21 +298,33 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
     const inSystem = <T>(fn: () => Promise<T>): Promise<T> =>
       SystemContext.run('billing.repository-spec', fn);
 
-    it('purge: one multi-shard DELETE of rows processed before the cutoff, no transaction', async () => {
+    it('purge: time slices oldest first, each a multi-shard DELETE without LIMIT, no transaction', async () => {
       const cutoff = new Date('2026-09-05T00:00:00.000Z');
+      const oldest = new Date('2026-09-04T23:00:00.000Z');
+      const next = new Date('2026-09-04T23:50:00.000Z');
       // postgres.js result of a DELETE without RETURNING: no rows, `count` = affected rows.
-      const deleteResult: unknown[][] = Object.assign([], { count: 2 });
-      answers.push(deleteResult);
+      const deleted = (count: number): unknown[][] => Object.assign([], { count });
+      answers.push([[oldest.toISOString()]], deleted(2), [[next.toISOString()]], deleted(1), [
+        [null],
+      ]);
 
-      await expect(inSystem(() => system.deleteProcessedBefore(cutoff))).resolves.toBe(2);
+      await expect(inSystem(() => system.deleteProcessedBefore(cutoff))).resolves.toBe(3);
 
-      // No subquery and no LIMIT (Citus cannot push either down on a distributed table), no row lock.
-      expect(queries).toHaveLength(1);
-      expect(lastSql()).toBe(
-        'delete from "billing"."stripe_events" where "billing"."stripe_events"."processed_at" < $1',
-      );
-      expect(queries.at(-1)?.params).toEqual([cutoff.toISOString()]);
-      expect(transcript).toEqual([lastSql()]); // no BEGIN, no RLS context
+      // No subquery and no LIMIT (Citus cannot push either down on a distributed table), no row
+      // lock: min, then a DELETE up to min + 15 minutes, never past the cutoff (`<` it).
+      const MIN =
+        'select min("processed_at") from "billing"."stripe_events" where "billing"."stripe_events"."processed_at" < $1';
+      const DELETE =
+        'delete from "billing"."stripe_events" where ("billing"."stripe_events"."processed_at" <= $1 and "billing"."stripe_events"."processed_at" < $2)';
+      expect(queries.map((query) => query.sql)).toEqual([MIN, DELETE, MIN, DELETE, MIN]);
+      expect(queries.map((query) => query.params)).toEqual([
+        [cutoff.toISOString()],
+        ['2026-09-04T23:15:00.000Z', cutoff.toISOString()],
+        [cutoff.toISOString()],
+        [cutoff.toISOString(), cutoff.toISOString()],
+        [cutoff.toISOString()],
+      ]);
+      expect(transcript).toEqual(queries.map((query) => query.sql)); // no BEGIN, no RLS context
     });
 
     it('markProcessedAsPlatform: ON CONFLICT DO NOTHING RETURNING, true once then false', async () => {

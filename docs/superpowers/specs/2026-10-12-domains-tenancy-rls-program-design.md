@@ -427,7 +427,8 @@ added by the ledger design):
 1. `users.findCredentialsByEmail` (login lookup)
 2. `users.existsByEmail` (register pre-check; the unique constraint still guards races)
 3. `invitations.findByTokenHash` (accept lookup; a multi-shard read on Citus, one index probe per shard)
-4. `sessions.deleteExpired` (hourly cron; a multi-shard `DELETE` without row locks)
+4. `sessions.deleteExpired` (hourly cron; multi-shard `DELETE`s without row locks, in time slices oldest first: B3 final
+   review F3)
 5. `stripeEvents.deleteProcessedBefore` (cleanup cron; same)
 6. the outbox relay's poll and mark-published (G). Under Citus there is no claim with `FOR UPDATE SKIP LOCKED`
    (unsupported across shards): see section 12.
