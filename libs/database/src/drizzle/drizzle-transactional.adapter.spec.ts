@@ -3,6 +3,7 @@ import {
   createPrincipal,
   type Principal,
   runWithPrincipal,
+  SystemContext,
   setPrincipal,
 } from '@platform/common';
 import { sql as drizzleSql } from 'drizzle-orm';
@@ -146,13 +147,10 @@ describe('DrizzlePostgresTransactionalAdapter', () => {
       await expect(cls.run(() => transaction(options, {}).run)).rejects.toMatchObject({
         code: 'RLS_NO_PRINCIPAL',
       });
-      // A child context that clears the principal (what SystemContext.run does) is no principal.
+      // SystemContext clears the principal (also under a parent that has one): no runtime work.
       await expect(
         runWithPrincipal(member, () =>
-          cls.run({ ifNested: 'inherit' }, () => {
-            cls.set(CLS_PRINCIPAL, undefined);
-            return transaction(options, {}).run;
-          }),
+          SystemContext.run('fixture.job', () => transaction(options, {}).run),
         ),
       ).rejects.toMatchObject({ code: 'RLS_NO_PRINCIPAL' });
       expect(sql.begin).not.toHaveBeenCalled();

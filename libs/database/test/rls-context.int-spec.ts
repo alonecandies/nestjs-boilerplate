@@ -1,13 +1,13 @@
 import { type INestApplicationContext, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { TransactionHost } from '@nestjs-cls/transactional';
-import { CLS_PRINCIPAL, createPrincipal, type Principal, runWithPrincipal } from '@platform/common';
+import { createPrincipal, type Principal, runWithPrincipal, SystemContext } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { type RlsTestPostgres, startRlsTestPostgres } from '@platform/testing/postgres';
 import { asc, sql } from 'drizzle-orm';
 import { integer, pgSchema, uuid } from 'drizzle-orm/pg-core';
 import { noop } from 'lodash-es';
-import { ClsModule, ClsServiceManager } from 'nestjs-cls';
+import { ClsModule } from 'nestjs-cls';
 import postgres, { type Sql } from 'postgres';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
@@ -50,8 +50,6 @@ const ROWS_OF_A = [
   { tenantId: TENANT_A, id: 2 },
 ];
 const ROWS_OF_B = [{ tenantId: TENANT_B, id: 3 }];
-
-const cls = ClsServiceManager.getClsService();
 
 interface ErrorChain {
   code?: string;
@@ -182,14 +180,10 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         await expect(inUnitOfWork(txHost, work)).rejects.toMatchObject({
           code: 'RLS_NO_PRINCIPAL',
         });
-        // SystemContext.run (Task 7) is a child CLS context with CLS_PRINCIPAL cleared: the same
-        // state is built here by hand, under a parent that has a principal.
+        // SystemContext on the runtime pool, under a parent that has a principal: still refused.
         await expect(
           runWithPrincipal(memberOfA, () =>
-            cls.run({ ifNested: 'inherit' }, () => {
-              cls.set(CLS_PRINCIPAL, undefined);
-              return inUnitOfWork(txHost, work);
-            }),
+            SystemContext.run('fixture.sweep', () => inUnitOfWork(txHost, work)),
           ),
         ).rejects.toMatchObject({ code: 'RLS_NO_PRINCIPAL' });
         expect(work).not.toHaveBeenCalled();

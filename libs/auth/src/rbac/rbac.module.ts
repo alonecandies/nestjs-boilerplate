@@ -1,5 +1,7 @@
 import { type DynamicModule, Module } from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
+import { type Principal, PrincipalPermissions } from '@platform/common';
+import { principalPermissions } from './principal-permissions.js';
 import { RbacRegistry } from './rbac.registry.js';
 import type { RbacFeature } from './rbac-feature.js';
 import { RbacVocabularyCheck } from './rbac-vocabulary.check.js';
@@ -12,9 +14,21 @@ const registerFeature = (registry: RbacRegistry, feature: RbacFeature): RbacFeat
   return feature;
 };
 
+/** `PrincipalPermissions` (from `@platform/common`) over the registry: what `RlsElevation` asks. */
+class RegistryPrincipalPermissions extends PrincipalPermissions {
+  constructor(private readonly registry: RbacRegistry) {
+    super();
+  }
+
+  of(principal: Principal): readonly string[] {
+    return principalPermissions(this.registry, principal);
+  }
+}
+
 /**
  * Open RBAC vocabulary (spec §6). `forRoot()` (global; `AuthModule.forRootAsync()` imports it) holds
- * the registry and the boot-time vocabulary check; each domain's Api module imports
+ * the registry, the boot-time vocabulary check and the `PrincipalPermissions` binding (read by
+ * `@platform/database`'s `RlsElevation`); each domain's Api module imports
  * `forFeature(<X>_RBAC)`. The feature itself is a `useValue` provider so that two features never
  * share a module id, whatever Nest's module-id algorithm (deep hash or reference).
  */
@@ -25,8 +39,17 @@ export class RbacModule {
       module: RbacModule,
       global: true,
       imports: [DiscoveryModule],
-      providers: [RbacRegistry, RbacVocabularyCheck],
-      exports: [RbacRegistry],
+      providers: [
+        RbacRegistry,
+        RbacVocabularyCheck,
+        {
+          provide: PrincipalPermissions,
+          inject: [RbacRegistry],
+          useFactory: (registry: RbacRegistry): PrincipalPermissions =>
+            new RegistryPrincipalPermissions(registry),
+        },
+      ],
+      exports: [RbacRegistry, PrincipalPermissions],
     };
   }
 
