@@ -364,13 +364,21 @@ identity-service (loaded by `IdentityCoreModule`)
 
 [`throttle.config.ts`](../libs/config/src/namespaces/throttle.config.ts) · gateway, monolith
 
-| Variable                    | Default | Description                                                                                                                                                                                    |
-| --------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `THROTTLE_TTL_MS`           | `60000` | Window of the per-user budget (**milliseconds**).                                                                                                                                              |
-| `THROTTLE_LIMIT`            | `300`   | Requests per window per user (authenticated) or client IP, across all routes (HTTP, GraphQL, Socket.IO messages). One shared budget replaces the former per-route buckets, hence 300, not 100. |
-| `THROTTLE_IP_TTL_MS`        | `60000` | Window of the pre-auth per-IP cap.                                                                                                                                                             |
-| `THROTTLE_IP_LIMIT`         | `600`   | Requests per window per client IP, counted before the token is checked (401/403 floods count).                                                                                                 |
-| `THROTTLE_REDIS_TIMEOUT_MS` | `250`   | Bound for one rate-limit Redis command. On timeout or outage, budgets fail open (`rate_limit_fail_open_total`) and credential endpoints fail closed with 503.                                  |
+| Variable                       | Default   | Description                                                                                                                                                                                    |
+| ------------------------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `THROTTLE_TTL_MS`              | `60000`   | Window of the per-user budget (**milliseconds**).                                                                                                                                              |
+| `THROTTLE_LIMIT`               | `300`     | Requests per window per user (authenticated) or client IP, across all routes (HTTP, GraphQL, Socket.IO messages). One shared budget replaces the former per-route buckets, hence 300, not 100. |
+| `THROTTLE_IP_TTL_MS`           | `60000`   | Window of the pre-auth per-IP cap.                                                                                                                                                             |
+| `THROTTLE_IP_LIMIT`            | `600`     | Requests per window per client IP, counted before the token is checked (401/403 floods count).                                                                                                 |
+| `THROTTLE_TENANT_TTL_MS`       | `60000`   | Window of the aggregate per-tenant budget.                                                                                                                                                     |
+| `THROTTLE_TENANT_LIMIT`        | `3000`    | Requests per window for all members of one active tenant together (authenticated HTTP, GraphQL and Socket.IO messages).                                                                        |
+| `THROTTLE_GRAPHQL_TTL_MS`      | `60000`   | Window of the GraphQL cost budget.                                                                                                                                                             |
+| `THROTTLE_GRAPHQL_COST_LIMIT`  | `20000`   | Complexity points per window per user (else client IP). Each GraphQL operation is charged once, weighted by its complexity score (minimum 1); introspection-only operations are exempt.        |
+| `THROTTLE_WS_HANDSHAKE_LIMIT`  | `30`      | WebSocket handshakes (Socket.IO and graphql-ws) per window per client IP.                                                                                                                      |
+| `THROTTLE_WS_HANDSHAKE_TTL_MS` | `60000`   | Window of the per-IP handshake budget.                                                                                                                                                         |
+| `THROTTLE_WS_SOCKETS_PER_USER` | `10`      | Concurrent WebSocket connections per user (Socket.IO and graphql-ws together).                                                                                                                 |
+| `THROTTLE_WS_SOCKET_TTL_MS`    | `3600000` | Safety TTL of the per-user socket counter; bounds leaks from crashed replicas.                                                                                                                 |
+| `THROTTLE_REDIS_TIMEOUT_MS`    | `250`     | Bound for one rate-limit Redis command. On timeout or outage, budgets fail open (`rate_limit_fail_open_total`) and credential endpoints fail closed with 503.                                  |
 
 **Renamed (no aliases).** `THROTTLE_AUTH_LIMIT` and `THROTTLE_AUTH_TTL_MS` were removed: set
 `IDENTITY_CREDENTIALS_LIMIT` / `IDENTITY_CREDENTIALS_TTL_MS` instead. In code, `@AuthThrottle()` became

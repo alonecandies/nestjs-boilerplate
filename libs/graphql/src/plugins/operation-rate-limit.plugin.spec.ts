@@ -1,5 +1,5 @@
 import type { GraphQLSchemaHost } from '@nestjs/graphql';
-import type { AccessTokenDenylist, TokenService } from '@platform/auth';
+import { type AccessTokenDenylist, type TokenService, takeVerifiedUser } from '@platform/auth';
 import { throttleConfig } from '@platform/config';
 import { RateLimitCharger } from '@platform/redis';
 import { buildSchema, GraphQLError, parse } from 'graphql';
@@ -140,6 +140,16 @@ describe('OperationRateLimitPlugin', () => {
     await run(plugin, '{ a }', from('token-bob'));
     expect(trackerOf(charge, 0)).toBe('user:alice');
     expect(trackerOf(charge, 1)).toBe('user:bob');
+  });
+
+  it('remembers the verified bearer user on the request so JwtAuthGuard does not verify twice', async () => {
+    const { plugin } = setup();
+    const req = { ip: '1.2.3.4', headers: { authorization: 'Bearer token-alice' } };
+    await run(plugin, '{ a }', { req });
+    expect(takeVerifiedUser(req)).toEqual({ id: 'alice' });
+    const forged = { ip: '1.2.3.4', headers: { authorization: 'Bearer forged' } };
+    await run(plugin, '{ a }', { req: forged });
+    expect(takeVerifiedUser(forged)).toBeUndefined();
   });
 
   it('charges the IP when the bearer token is invalid or revoked', async () => {

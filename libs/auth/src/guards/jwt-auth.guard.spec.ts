@@ -22,6 +22,7 @@ import { AccessTokenDenylist } from '../tokens/access-token-denylist.service.js'
 import { TokenService } from '../tokens/token.service.js';
 import { executionContext, type Transport } from './execution-context.test.js';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
+import { rememberVerifiedUser } from './verified-request-user.js';
 
 const config = authConfig.parse({ NODE_ENV: 'test' });
 const userId = generateId();
@@ -114,6 +115,52 @@ describe('JwtAuthGuard', () => {
     } finally {
       isDenied.mockRestore();
     }
+  });
+
+  it('reuses a user an earlier hook verified for this very request (no second verify)', async () => {
+    const { token } = await bearer(['admin']);
+    const claims = await tokenService.verifyAccessToken(token);
+    const user = tokenService.toAuthUser(claims);
+    const req: Record<string, unknown> = { headers: { authorization: `Bearer ${token}` } };
+    rememberVerifiedUser(req, user);
+    const isDenied = vi.spyOn(denylist, 'isDenied');
+    try {
+      const seen = await ClsServiceManager.getClsService().run(async () => {
+        await expect(guard.canActivate(executionContext('graphql', target(), req))).resolves.toBe(
+          true,
+        );
+        return getPrincipal();
+      });
+      expect(isDenied).not.toHaveBeenCalled();
+      expect(req.user).toBe(user);
+      // The CLS principal is still written, as after a passport verification.
+      expect(seen).toEqual({ userId, tenantId: TEST_TENANT_ID, roles: ['admin'], staff: false });
+      // Later root fields reuse it through the usual path.
+      await guard.canActivate(executionContext('graphql', target(), req));
+      expect(isDenied).not.toHaveBeenCalled();
+    } finally {
+      isDenied.mockRestore();
+    }
+  });
+
+  it('does not reuse a remembered user for another request, an expired one, or over http', async () => {
+    const { token } = await bearer();
+    const user = tokenService.toAuthUser(await tokenService.verifyAccessToken(token));
+    const remembered: Record<string, unknown> = { headers: {} };
+    rememberVerifiedUser(remembered, user);
+    const other: Record<string, unknown> = { headers: {} };
+    await expect(
+      failureCode(guard.canActivate(executionContext('graphql', target(), other))),
+    ).resolves.toBe('MISSING_TOKEN');
+    const http: Record<string, unknown> = { headers: {} };
+    rememberVerifiedUser(http, user);
+    await expect(
+      failureCode(guard.canActivate(executionContext('http', target(), http))),
+    ).resolves.toBe('MISSING_TOKEN');
+    rememberVerifiedUser(remembered, makeAuthUser({ exp: Math.floor(Date.now() / 1_000) - 1 }));
+    await expect(
+      failureCode(guard.canActivate(executionContext('graphql', target(), remembered))),
+    ).resolves.toBe('MISSING_TOKEN');
   });
 
   it('does not trust a GraphQL req.user it did not authenticate itself', async () => {

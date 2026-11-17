@@ -36,6 +36,8 @@ The ioredis 6 infrastructure every service shares:
 | `IpThrottlerModule`                                                                                                              | module              | Pre-auth `ip` guard: import it BEFORE `AuthModule`.                                                                                                                                                                                                                                                                        |
 | `RateLimitPolicyRegistry`                                                                                                        | service             | `register`, `get`, `require`, `names`; unknown policy names fail at boot.                                                                                                                                                                                                                                                  |
 | `SkipThrottle`, `Throttle`                                                                                                       | re-exports          | From `@nestjs/throttler`; prefer `SkipRateLimit`/`RateLimit`, which know every throttler name.                                                                                                                                                                                                                             |
+| `RateLimitCharger`                                                                                                               | service             | `charge(bucket, weight?)`: one weighted charge outside the guards (GraphQL cost, graphql-ws, handshakes); returns the record and the `RateLimitDecision`. `trackerFor(principal, ip)` builds `user:`/`ip:` trackers.                                                                                                       |
+| `ConnectionCaps`, `TOO_MANY_CONNECTIONS`                                                                                         | service             | `admitHandshake(ip)` (per-IP `ws-handshake` budget), `acquireSocket(userId)` / `releaseSocket(userId)` (per-user concurrent sockets, Lua counter with a safety TTL). Both fail open without Redis.                                                                                                                         |
 | `RedisThrottlerStorage`, `THROTTLE_SCRIPT`, `THROTTLE_COMMAND`                                                                   | storage             | One `EVALSHA` per request: fixed window plus a block key.                                                                                                                                                                                                                                                                  |
 | `AppQueueModule.forRootAsync({ prefix?, defaultJobOptions? })`, `createQueueOptions`, `DEFAULT_JOB_OPTIONS`                      | module              | BullMQ 6 root config: `maxRetriesPerRequest: null`, prefix `bull`, 5 attempts with exponential backoff, bounded retention.                                                                                                                                                                                                 |
 | `RedisIoAdapter`, `createRedisIoAdapter(app, opts?)`, `DEFAULT_IO_SERVER_OPTIONS`                                                | socket.io           | Fans broadcasts out through Redis pub/sub. Websocket-only transport by default.                                                                                                                                                                                                                                            |
@@ -44,13 +46,16 @@ The ioredis 6 infrastructure every service shares:
 
 ### Throttlers
 
-| Throttler | Key                   | Scope                         |
-| --------- | --------------------- | ----------------------------- |
-| `ip`      | client IP             | `global`                      |
-| `user`    | user id, else IP      | `global`                      |
-| `route`   | user or IP per policy | policy name                   |
-| `auth`    | sha256(email)+IP      | policy name                   |
-| `lockout` | sha256(email)         | policy name, never advertised |
+| Throttler      | Key                   | Scope                           |
+| -------------- | --------------------- | ------------------------------- |
+| `ip`           | client IP             | `global`                        |
+| `user`         | user id, else IP      | `global`                        |
+| `route`        | user or IP per policy | policy name                     |
+| `auth`         | sha256(email)+IP      | policy name                     |
+| `lockout`      | sha256(email)         | policy name, never advertised   |
+| `tenant`       | active tenant id      | `global`                        |
+| `graphql`      | user id, else IP      | `cost` (weighted per operation) |
+| `ws-handshake` | client IP             | `global`                        |
 
 ## Usage
 
@@ -94,6 +99,10 @@ These variables come from the `redis`, `cache` and `throttle` namespaces of `@pl
 - `THROTTLE_TTL_MS` and `THROTTLE_LIMIT`: default 60000 and 300.
 - `THROTTLE_IP_TTL_MS` and `THROTTLE_IP_LIMIT`: default 60000 and 600.
 - `THROTTLE_REDIS_TIMEOUT_MS`: default 250.
+- `THROTTLE_TENANT_TTL_MS` and `THROTTLE_TENANT_LIMIT`: default 60000 and 3000.
+- `THROTTLE_GRAPHQL_TTL_MS` and `THROTTLE_GRAPHQL_COST_LIMIT`: default 60000 and 20000.
+- `THROTTLE_WS_HANDSHAKE_LIMIT` and `THROTTLE_WS_HANDSHAKE_TTL_MS`: default 30 and 60000.
+- `THROTTLE_WS_SOCKETS_PER_USER` and `THROTTLE_WS_SOCKET_TTL_MS`: default 10 and 3600000.
 
 `SERVICE_NAME` from app config is used as the connection name when it is available.
 
@@ -102,6 +111,7 @@ These variables come from the `redis`, `cache` and `throttle` namespaces of `@pl
 - `{prefix}:auth:denylist:{jti}`
 - `{prefix}:lock:{resource}`
 - `{prefix}:throttle:{name:sha256}:hits|block`
+- `{prefix}:wsconn:{userId}` (concurrent sockets of one user; only `ConnectionCaps` writes it)
 - `{prefix}:cache:{key}`; tenant-scoped data `{prefix}:cache:{scope}:{tenantId}:{part}…` (build `{key}` with
   `tenantCacheKey`, never by hand: a tenant-scoped value under a key without the tenant can be served to another
   tenant)
