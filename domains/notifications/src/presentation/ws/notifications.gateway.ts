@@ -86,6 +86,8 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
  *   charged to the client IP (`TRUST_PROXY` rules) before the token is read, and the user may hold
  *   `THROTTLE_WS_SOCKETS_PER_USER` sockets at once. Both refuse with `connect_error` whose `data`
  *   is a 429 problem (`RATE_LIMITED` / `TOO_MANY_CONNECTIONS`); both fail open without Redis.
+ *   A client that drops while the handshake awaits gets its slot back at once (socket.io then
+ *   emits neither connect nor disconnect), like graphql-ws's `closed` guard.
  * - Connection: the socket joins exactly one room, `t:<tenantId>:u:<userId>` (`tenantUserRoom`),
  *   both from the token it authenticated with. It never changes room: another tenant needs a new
  *   connection with that tenant's token. No message handler joins or leaves a room.
@@ -172,6 +174,12 @@ export class NotificationsGateway
       if (this.caps !== undefined) {
         if (!(await this.caps.acquireSocket(socket.data.user.id))) {
           return this.refuse(TOO_MANY_CONNECTIONS, 'Too many open connections for this user.');
+        }
+        if (socket.conn.readyState !== 'open') {
+          // The client dropped during the handshake: socket.io discards the socket without a
+          // connect or disconnect event, so `handleDisconnect` would never free this slot.
+          void this.caps.releaseSocket(socket.data.user.id);
+          return new Error('Client disconnected during the handshake');
         }
         socket.data.capAcquired = true;
       }

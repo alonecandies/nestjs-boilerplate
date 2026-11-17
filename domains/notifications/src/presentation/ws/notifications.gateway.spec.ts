@@ -38,6 +38,7 @@ function fakeSocket(handshake: {
     id: `socket-${socketSeq}`,
     data: {},
     handshake: { auth: {}, headers: {}, ...handshake },
+    conn: { readyState: 'open' },
     join: vi.fn(async () => undefined),
     emit: vi.fn(),
     disconnect: vi.fn(),
@@ -370,6 +371,8 @@ const capsSocket = () => ({
   data: {} as Record<string, unknown>,
   handshake: { auth: { token: 't' }, headers: {}, address: '1.2.3.4' },
   request: { socket: { remoteAddress: '1.2.3.4' }, headers: {} },
+  /** The engine.io connection (`socket.conn`); `closed` once the client drops. */
+  conn: { readyState: 'open' },
   join: vi.fn(),
 });
 
@@ -422,6 +425,28 @@ describe('NotificationsGateway connection caps', () => {
     expect(caps.acquireSocket).toHaveBeenCalledWith('u-1');
     gateway.handleDisconnect(socket as never);
     expect(caps.releaseSocket).toHaveBeenCalledWith('u-1');
+  });
+
+  it('releases the slot at once when the client drops while the slot is taken (no disconnect event)', async () => {
+    const socket = capsSocket();
+    const caps = {
+      admitHandshake: vi.fn(async () => ({ ok: true as const })),
+      acquireSocket: vi.fn(async () => {
+        // The client goes away mid-handshake: socket.io drops the socket without connect/disconnect.
+        socket.conn.readyState = 'closed';
+        return true;
+      }),
+      releaseSocket: vi.fn(async () => undefined),
+    };
+    const gateway = gatewayWith(caps);
+    await expect(gateway.authenticate(socket as never)).resolves.toBeInstanceOf(Error);
+    expect(caps.acquireSocket).toHaveBeenCalledTimes(1);
+    expect(caps.releaseSocket).toHaveBeenCalledTimes(1);
+    expect(caps.releaseSocket).toHaveBeenCalledWith('u-1');
+    expect(socket.data['capAcquired']).not.toBe(true);
+    // Even if a disconnect were delivered later, the slot is not released twice.
+    gateway.handleDisconnect(socket as never);
+    expect(caps.releaseSocket).toHaveBeenCalledTimes(1);
   });
 
   it('does not release a slot for a socket that never acquired one', () => {
