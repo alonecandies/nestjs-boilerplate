@@ -13,6 +13,7 @@ Related: [Architecture](ARCHITECTURE.md) · [Development](DEVELOPMENT.md) · [Do
 - [HTTP hardening: proxies, CORS, helmet, limits](#http-hardening-proxies-cors-helmet-limits)
 - [Internal gRPC](#internal-grpc-mtls-reflection)
 - [Webhooks and uploads](#webhooks-and-uploads)
+- [Database roles](#database-roles)
 - [Secrets, configuration guards and logs](#secrets-configuration-guards-and-logs)
 - [Ops endpoints](#ops-endpoints-metrics-docs-health)
 - [Production checklist](#production-checklist)
@@ -361,6 +362,90 @@ are sanitised before they reach the client.
 - Presigned PUTs sign the content type and the exact `contentLength`; presigned URLs live
   `STORAGE_SIGNED_URL_TTL_SEC` (900 s).
 
+## Database roles
+
+Three Postgres roles separate what a connection may do (program spec section 4). In compose, CI and
+the Testcontainers specs they come from one script, run as the superuser:
+[`docker/postgres/init/02-roles.sql`](../docker/postgres/init/02-roles.sql) (the roles and their
+settings) and [`03-pgbouncer-auth.sql`](../docker/postgres/init/03-pgbouncer-auth.sql) (PgBouncer's
+password lookup). Compose runs both once on an empty volume; `startRlsTestPostgres()`
+(`@platform/testing/postgres`) runs them in every spec that asserts isolation. Both are idempotent.
+Dev passwords equal the role names and appear only in those files and the test helper.
+
+| Role             | Attributes                                                             | Used by                                                            | Server settings (`ALTER ROLE … SET`)                                                                                                                 |
+| ---------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app_owner`      | `LOGIN NOSUPERUSER NOCREATEROLE NOBYPASSRLS`, `CREATE` on the database | migrations, drizzle-kit, operator CLIs (direct to the coordinator) | `search_path = pg_catalog, public` only (the migrator sets Citus' sequential mode itself)                                                            |
+| `app_runtime`    | `LOGIN NOSUPERUSER NOBYPASSRLS`                                        | every request (through PgBouncer)                                  | `search_path = pg_catalog, public`, `citus.propagate_set_commands = 'local'`, `statement_timeout = 15s`, `idle_in_transaction_session_timeout = 60s` |
+| `app_system`     | `LOGIN NOSUPERUSER BYPASSRLS`                                          | the named system methods only (through PgBouncer, pool of 5)       | same as `app_runtime`                                                                                                                                |
+| `pgbouncer_auth` | `LOGIN NOSUPERUSER`                                                    | PgBouncer's `auth_user`                                            | `search_path = pg_catalog`                                                                                                                           |
+
+- **Why the settings live on the roles.** PgBouncer rejects both timeouts as startup parameters, so the
+  server applies them per role. `citus.propagate_set_commands = 'local'` makes Citus prepend the
+  transaction's `SET LOCAL` RLS context to every remote `BEGIN`; without it, every query that reaches a
+  shard over a connection fails with `app.user_id is not set` (closed, but in every request).
+- **Explicit `search_path`.** Each role has its own, so nothing resolves through a schema that happens to
+  share a role's name (`"$user"`). Application SQL is schema-qualified.
+- **Only `app_owner` creates schemas.** `PUBLIC` never gets `CREATE` on the database; `app_owner` owns
+  every schema and table and distributes them (`create_reference_table` as `app_owner` is covered by
+  `libs/testing/src/postgres/roles.int-spec.ts`). Table privileges for the two app roles are explicit per-table grants in each
+  domain's migrations: a new table is unreachable until its migration grants it.
+- **`pg_trgm`** is created by the superuser in the role script, so the platform set's
+  `CREATE EXTENSION IF NOT EXISTS pg_trgm` is a no-op for `app_owner` (which has no `CREATE` on `public`).
+
+**Production SQL** (as a superuser or the managed service's admin role, on the coordinator; Citus
+propagates the roles to the workers, and `citus_check_cluster_node_health()` plus
+`SELECT rolconfig FROM pg_roles` on each worker confirm the settings arrived). Replace each `<…>` with a secret from your secret
+store; never reuse the dev passwords.
+
+```sql
+CREATE ROLE app_owner      LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '<owner-password>';
+CREATE ROLE app_runtime    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '<runtime-password>';
+CREATE ROLE app_system     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS   PASSWORD '<system-password>';
+CREATE ROLE pgbouncer_auth LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '<auth-password>';
+
+GRANT CONNECT, CREATE ON DATABASE <database> TO app_owner;
+GRANT CONNECT ON DATABASE <database> TO app_runtime, app_system;
+
+ALTER ROLE app_owner   SET search_path = pg_catalog, public;
+ALTER ROLE app_runtime SET search_path = pg_catalog, public;
+ALTER ROLE app_system  SET search_path = pg_catalog, public;
+ALTER ROLE app_runtime SET citus.propagate_set_commands = 'local';
+ALTER ROLE app_runtime SET statement_timeout = '15s';
+ALTER ROLE app_runtime SET idle_in_transaction_session_timeout = '60s';
+ALTER ROLE app_system  SET citus.propagate_set_commands = 'local';
+ALTER ROLE app_system  SET statement_timeout = '15s';
+ALTER ROLE app_system  SET idle_in_transaction_session_timeout = '60s';
+
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
+```
+
+Then run `03-pgbouncer-auth.sql` without its `PASSWORD` clause (set `pgbouncer_auth`'s password as
+above). PgBouncer uses `auth_type = scram-sha-256`, `auth_user = pgbouncer_auth` and
+`auth_query = SELECT usename, passwd FROM pgbouncer.get_auth($1)`: a `SECURITY DEFINER` function with
+a pinned `search_path`, executable by `pgbouncer_auth` only, that returns the SCRAM verifier of
+`app_runtime` and `app_system` and nothing for any other name (never `app_owner`, which connects
+directly, nor a superuser). No secret file holds the verifiers. The coordinator's `pg_hba.conf` allows
+`scram-sha-256` from PgBouncer's address only.
+
+**Worker authentication** (a multi-node Citus cluster only). The coordinator opens connections to the
+workers as the current user (`app_runtime`, `app_system`, `app_owner`), so each worker must
+authenticate all three. The choice, from the Citus docs ("Cluster management", "pg_dist_authinfo"):
+
+- **TLS for every node connection** through `citus.node_conninfo` (its default is `sslmode=require`).
+  Set `verify-full` with your CA, then reload:
+  `ALTER SYSTEM SET citus.node_conninfo = 'sslrootcert=<ca.crt> sslmode=verify-full'; SELECT pg_reload_conf();`
+  It applies to new connections only.
+- **SCRAM passwords per role** in `pg_dist_authinfo` (superuser-only; in Citus Community since 11.0),
+  `nodeid = 0` meaning every node; a row for a specific node takes precedence:
+  `INSERT INTO pg_dist_authinfo (nodeid, rolename, authinfo) VALUES (0, 'app_runtime', 'password=<runtime-password>');`
+  and the same for `app_system` and `app_owner`. Rows are not secret-free: restrict superuser access.
+  A `.pgpass` in the postgres user's home on every node is the alternative where this table is not
+  wanted. Workers' `pg_hba.conf` require `hostssl … scram-sha-256` from the other nodes.
+- Client certificates (`authinfo = 'sslcert=… sslkey=…'`) can replace the passwords later.
+
+A single node needs none of this. Compose's optional worker profile and the test topology use `trust`
+between nodes on a private Docker network, which is local-only.
+
 ## Secrets, configuration guards and logs
 
 ### Where configuration comes from
@@ -437,6 +522,8 @@ Prometheus scrape the pods directly. A separate metrics listener is a [known gap
       password or ACL user, `KAFKA_SSL` + SASL, `CASSANDRA_SSL` with `CASSANDRA_TLS_CA_PATH` and
       `CASSANDRA_REPLICATION_DATACENTERS`, SMTP with STARTTLS (`SMTP_REQUIRE_TLS`); S3/GCS credentials
       scoped to the bucket (`GCS_KEY_FILE` must be a `service_account` key, or use workload identity).
+- [ ] Database roles created from the production SQL in [Database roles](#database-roles), with
+      secret-store passwords; on a multi-node cluster, TLS (`verify-full`) and SCRAM between nodes.
 - [ ] `DATABASE_RUN_MIGRATIONS=false` and migrations run as a release job (see [DOCKER.md](DOCKER.md#bootstrap-jobs--migrations)).
 - [ ] `UV_THREADPOOL_SIZE` ≤ container CPU limit; `CLUSTER_WORKERS=1` under Kubernetes.
 - [ ] Proxy-level limit on WebSocket frame size (graphql-ws, Socket.IO).

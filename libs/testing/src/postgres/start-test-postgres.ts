@@ -32,7 +32,7 @@ export interface TestPostgresOptions {
   /**
    * `false` sets `citus.enable_local_execution=off`: even on one node, shard queries then go through
    * remote connections, so a setting that does not propagate to workers fails as it would on a
-   * cluster (RLS specs). Default `true`, Citus' default. Not applied with `INTEGRATION_DATABASE_URL`.
+   * cluster (RLS specs). Default `true`, Citus' default. Not applied to `INTEGRATION_DATABASE_URL`.
    */
   localExecution?: boolean;
   /**
@@ -40,7 +40,11 @@ export interface TestPostgresOptions {
    * B3's shared role script). An entry may hold several statements (simple protocol).
    */
   initSql?: readonly string[];
-  /** Use `INTEGRATION_DATABASE_URL`, when set and not empty, instead of a container. Default `true`. */
+  /**
+   * `true` uses `INTEGRATION_DATABASE_URL`, when set and not empty, instead of a container. Default
+   * `false`: a spec gets its own server unless it opts in, so a shared database never decides what
+   * a spec sees (and a spec that asserts isolation never opts in).
+   */
   allowExternalUrl?: boolean;
 }
 
@@ -49,7 +53,7 @@ export interface TestPostgres {
   readonly url: string;
   /** `url` with another login, percent-encoded, for the roles that `initSql` creates. */
   urlFor(role: string, password: string): string;
-  /** Stops the container; a no-op for `INTEGRATION_DATABASE_URL`. Safe to call twice. */
+  /** Stops the container; a no-op for an external database. Safe to call twice. */
   stop(): Promise<void>;
 }
 
@@ -125,13 +129,14 @@ async function prepareDatabase(
 
 /**
  * A Postgres for one int spec: a fresh single-node Citus container (database, user and password
- * `app`), or the database at `INTEGRATION_DATABASE_URL` when that is set. The container's
+ * `app`), or, with `allowExternalUrl: true`, the database at `INTEGRATION_DATABASE_URL` when that is
+ * set. The container's
  * healthcheck probes TCP, which the init-time server does not listen on, so it is ready only after
  * the image's init script created the extension (design P-14 note).
  */
 export async function startTestPostgres(options: TestPostgresOptions = {}): Promise<TestPostgres> {
   const external =
-    options.allowExternalUrl === false ? undefined : process.env['INTEGRATION_DATABASE_URL'];
+    options.allowExternalUrl === true ? process.env['INTEGRATION_DATABASE_URL'] : undefined;
   let container: StartedPostgreSqlContainer | undefined;
   let url: string;
   if (external !== undefined && external !== '') {

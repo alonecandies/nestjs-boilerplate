@@ -102,9 +102,10 @@ describe('@platform/testing/postgres', () => {
     );
   });
 
-  it('uses INTEGRATION_DATABASE_URL without a container and runs initSql there, in order', async () => {
+  it('with allowExternalUrl: true, uses INTEGRATION_DATABASE_URL without a container and runs initSql there, in order', async () => {
     vi.stubEnv('INTEGRATION_DATABASE_URL', EXTERNAL);
     const pg = await startTestPostgres({
+      allowExternalUrl: true,
       localExecution: false,
       initSql: ['create role a', 'create role b; create role c'],
     });
@@ -120,8 +121,22 @@ describe('@platform/testing/postgres', () => {
 
   it('does not connect at all for INTEGRATION_DATABASE_URL without initSql', async () => {
     vi.stubEnv('INTEGRATION_DATABASE_URL', EXTERNAL);
-    await expect(startTestPostgres()).resolves.toMatchObject({ url: EXTERNAL });
+    await expect(startTestPostgres({ allowExternalUrl: true })).resolves.toMatchObject({
+      url: EXTERNAL,
+    });
     expect(fake.urls).toEqual([]);
+  });
+
+  it('ignores INTEGRATION_DATABASE_URL by default: a container, never the shared database', async () => {
+    vi.stubEnv('INTEGRATION_DATABASE_URL', EXTERNAL);
+    await expect(startTestPostgres()).rejects.toThrow(
+      'unit specs never start a container (citusdata/citus:14.2.0)',
+    );
+    await expect(startTestPostgres({ initSql: ['create role a'] })).rejects.toThrow(
+      'unit specs never start a container',
+    );
+    expect(fake.urls).toEqual([]);
+    expect(fake.executed).toEqual([]);
   });
 
   it('starts a container when allowExternalUrl is false, or when the variable is empty', async () => {
@@ -130,6 +145,9 @@ describe('@platform/testing/postgres', () => {
       'unit specs never start a container (citusdata/citus:14.2.0)',
     );
     vi.stubEnv('INTEGRATION_DATABASE_URL', '');
-    await expect(startTestPostgres()).rejects.toThrow('unit specs never start a container');
+    await expect(startTestPostgres({ allowExternalUrl: true })).rejects.toThrow(
+      'unit specs never start a container',
+    );
+    expect(fake.urls).toEqual([]);
   });
 });
