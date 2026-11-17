@@ -1,4 +1,5 @@
-import { billingSchema } from '@domain/billing';
+import { billingSchema, StripeEventsSystemRepository } from '@domain/billing';
+import { InMemoryStripeEventsSystemRepository } from '@domain/billing/testing';
 import {
   AuditEventsRepository,
   InvitationsRepository,
@@ -51,6 +52,7 @@ export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
  * | `DRIZZLE`                                  | real drizzle over a fake postgres.js client (rows: `options.postgresRows`) |
  * | identity repositories + TransactionRunner  | in-memory (the handlers above them are real) |
  * | identity tenancy repositories                | in-memory (same store as users and sessions) |
+ * | `StripeEventsSystemRepository`             | in-memory (no app_system pool)               |
  * | `CASSANDRA_CLIENT`                         | empty result sets                            |
  * | BullMQ `mail` queue / `MailProcessor`      | recording queue / no worker                  |
  * | `CACHE_MANAGER`                            | real L1 tier only (L2 is node-redis)         |
@@ -111,7 +113,9 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     .overrideProvider(GRAPHQL_PUB_SUB)
     .useValue(new PubSub())
     .overrideProvider(StorageService)
-    .useValue(storage);
+    .useValue(storage)
+    .overrideProvider(StripeEventsSystemRepository)
+    .useValue(new InMemoryStripeEventsSystemRepository());
 
   const app: NestFastifyApplication = await createFastifyTestApp(
     builder,

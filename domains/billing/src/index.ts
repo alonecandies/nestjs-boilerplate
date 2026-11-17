@@ -21,6 +21,9 @@ export * from './application/ledger/posting-rules.js';
 export * from './application/mappers/payment.mapper.js';
 export * from './application/ports/ledger.port.js';
 export * from './application/queries/list-payments/list-payments.query.js';
+// The system port (app e2e harnesses override it with `@domain/billing/testing`'s in-memory one).
+export type { StripeEventReceipt } from './application/repositories/stripe-events.repository.js';
+export { StripeEventsSystemRepository } from './application/repositories/stripe-events.system-repository.js';
 // Modules and core constants
 export {
   PAID_WITHOUT_AMOUNT_METRIC,
@@ -53,6 +56,7 @@ export {
   type StripeEventRow,
   stripeEvents,
 } from './infrastructure/persistence/billing.schema.js';
+export { BILLING_SYSTEM_METHODS } from './infrastructure/persistence/billing.system-methods.js';
 // Stripe adapter (imported by BillingCoreModule; public for custom wiring / tests)
 export * from './infrastructure/stripe/stripe.config.js';
 export * from './infrastructure/stripe/stripe.constants.js';

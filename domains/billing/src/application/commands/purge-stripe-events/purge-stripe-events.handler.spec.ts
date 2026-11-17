@@ -1,6 +1,6 @@
 import { createMock } from '@platform/testing';
 import { describe, expect, it } from 'vitest';
-import type { StripeEventsRepository } from '../../repositories/stripe-events.repository.js';
+import type { StripeEventsSystemRepository } from '../../repositories/stripe-events.system-repository.js';
 import { PurgeStripeEventsCommand } from './purge-stripe-events.command.js';
 import { PurgeStripeEventsHandler } from './purge-stripe-events.handler.js';
 
@@ -8,7 +8,7 @@ describe('PurgeStripeEventsHandler', () => {
   const cutoff = new Date('2026-09-05T12:00:00.000Z');
 
   it('deletes every event processed before the cutoff in one call, and returns the count', async () => {
-    const events = createMock<StripeEventsRepository>();
+    const events = createMock<StripeEventsSystemRepository>();
     events.deleteProcessedBefore.mockResolvedValue(12_345);
 
     const total = await new PurgeStripeEventsHandler(events).execute(
@@ -21,7 +21,7 @@ describe('PurgeStripeEventsHandler', () => {
   });
 
   it('calls the repository once even when nothing is left to delete', async () => {
-    const events = createMock<StripeEventsRepository>();
+    const events = createMock<StripeEventsSystemRepository>();
     events.deleteProcessedBefore.mockResolvedValue(0);
 
     await expect(

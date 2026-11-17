@@ -5,11 +5,11 @@ import { RbacModule } from '@platform/auth';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { createPrincipal, generateId, runWithPrincipal } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
-import { DRIZZLE, TransactionHost } from '@platform/database';
+import { DRIZZLE, SYSTEM_DATABASE, SystemDatabase, TransactionHost } from '@platform/database';
 import { KafkaProducer } from '@platform/transport';
 import { FakeKafkaProducer } from '@platform/transport/testing';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createRecordingDrizzle, installTestTransactionHost } from '../test/billing-test.utils.js';
+import { createRecordingDrizzle, installRlsTransactionHost } from '../test/billing-test.utils.js';
 import { BillingPort } from './application/ports/billing.port.js';
 import { ListPaymentsQuery } from './application/queries/list-payments/list-payments.query.js';
 import { PaymentsRepository } from './application/repositories/payments.repository.js';
@@ -22,22 +22,24 @@ import { StripeService } from './infrastructure/stripe/stripe.service.js';
 import { BillingGrpcController } from './presentation/grpc/billing-grpc.controller.js';
 
 /**
- * What the apps' global infrastructure modules provide, faked (no Postgres, no Kafka). No Stripe:
+ * What the apps' global infrastructure modules provide, faked (no Postgres, no Kafka): the real
+ * RLS transaction host over a recording client, and a system database without a pool. No Stripe:
  * BillingCoreModule brings its own adapter (a real client from the dev placeholder key, which
  * opens no connection until a call).
  */
 function fakeInfrastructure() {
   const recording = createRecordingDrizzle();
-  const { host } = installTestTransactionHost(undefined, recording.db);
+  const host = installRlsTransactionHost(recording.db);
 
   @Global()
   @Module({
     providers: [
       { provide: DRIZZLE, useValue: recording.db },
       { provide: TransactionHost, useValue: host },
+      { provide: SYSTEM_DATABASE, useValue: new SystemDatabase(null) },
       { provide: KafkaProducer, useValue: new FakeKafkaProducer() },
     ],
-    exports: [DRIZZLE, TransactionHost, KafkaProducer],
+    exports: [DRIZZLE, TransactionHost, SYSTEM_DATABASE, KafkaProducer],
   })
   class FakeInfrastructureModule {}
 
