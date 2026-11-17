@@ -31,7 +31,7 @@ async function bootstrap(): Promise<void> {
   // signature over them. multipart: bounded @fastify/multipart for the streaming file upload.
   const app = await createHttpApp(AppModule, { rawBody: true, multipart: true });
   try {
-    // Socket.IO over the Redis adapter: an emit to `user:{id}` reaches every replica.
+    // Socket.IO over the Redis adapter: an emit to `t:{tid}:u:{uid}` reaches every replica.
     app.useWebSocketAdapter(await createRedisIoAdapter(app));
     // notification-created → WebSocket room + GraphQL subscription. `inheritAppConfig` makes the
     // global enhancers (cls, pipes, filter) apply to the consumer too.

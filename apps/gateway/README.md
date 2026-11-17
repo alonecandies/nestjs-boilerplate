@@ -13,7 +13,7 @@ client ─► HTTP :3000 (Fastify) REST /v1 · GraphQL /graphql · Socket.IO /no
              ├── gRPC ─► notifications-service :50052  (NotificationsService)
              └── gRPC ─► billing-service       :50053  (BillingService)
 Kafka notifications.notification-created.v1 (group `gateway-push`)
-             └─► Socket.IO room user:{id} (Redis adapter) + GraphQL subscription (Redis PubSub)
+             └─► Socket.IO room t:{tid}:u:{uid} (Redis adapter) + GraphQL subscription (Redis PubSub)
 ```
 
 Access tokens are verified locally (identity-service signs them with the shared

@@ -17,7 +17,7 @@ notifications core ── Cassandra + BullMQ mail worker (SMTP)
         │ integration events (Kafka, consumer group `monolith`)
         └─► identity.user-registered.v1 → welcome notification + mail
             billing.payment-succeeded.v1 → receipt notification + mail
-            notifications.notification-created.v1 → Socket.IO room user:{id} + GraphQL subscription
+            notifications.notification-created.v1 → Socket.IO room t:{tid}:u:{uid} + GraphQL subscription
 ```
 
 ## Run it

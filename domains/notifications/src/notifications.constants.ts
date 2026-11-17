@@ -19,8 +19,13 @@ export const NOTIFICATIONS_WS_EVENTS = {
   EXCEPTION: 'exception',
 } as const;
 
-/** Every socket joins its user's room, so a push reaches all of that user's tabs/devices. */
-export const userRoom = (userId: string): string => `user:${userId}`;
+/**
+ * The one Socket.IO room of a socket: `t:<tenantId>:u:<userId>`, both taken from the access token
+ * it authenticated with at the handshake. A push for `(tenant, user)` reaches every tab and device
+ * of that user signed in to that tenant, and none signed in to another tenant.
+ */
+export const tenantUserRoom = (tenantId: string, userId: string): string =>
+  `t:${tenantId}:u:${userId}`;
 
 /** Prefix of the GraphQL PubSub triggers of the `notificationCreated` subscription. */
 export const NOTIFICATION_CREATED_TRIGGER = 'notificationCreated';

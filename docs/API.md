@@ -621,12 +621,18 @@ accepted, so no message can arrive before authentication. Pass the token in `aut
 `Bearer <jwt>`. Server-to-server clients can send an `Authorization: Bearer` header instead. Tokens in the query string
 are deliberately rejected, because they end up in access logs. A refused client gets `connect_error`, and `err.data` is
 the problem document (`code` = `MISSING_TOKEN`, `INVALID_TOKEN`, `TOKEN_EXPIRED` or `TOKEN_REVOKED`). Once connected,
-the socket joins the room `user:<id>`.
+the socket joins exactly one room, `t:<tenantId>:u:<userId>`, both taken from its token. A push for a notification
+reaches only the sockets of that user signed in to that notification's tenant: a socket connected with tenant A's
+token never receives tenant B's notifications, the user's own included. A socket never changes room; to follow
+another tenant, connect again with that tenant's token.
 
 **Session lifetime.** Tokens are short-lived but sockets are not:
 
 - When the token expires, the server emits `exception` (`TOKEN_EXPIRED`) and disconnects the socket.
-- Every 30 s, each replica disconnects its sockets whose token was revoked by a logout (`exception`, `TOKEN_REVOKED`).
+- Every `WS_REVOCATION_SWEEP_INTERVAL_MS` (default 30 s), each replica disconnects its sockets whose token was revoked
+  (`exception`, `TOKEN_REVOKED`). Logout and `POST /v1/auth/switch-tenant` both revoke the access token they were
+  called with, so after a tenant switch the old token's sockets close within one interval. Sockets opened with another
+  token of the same user stay connected.
 
 The client must reconnect with a fresh token. Socket.IO does not reconnect on its own after a server-side disconnect.
 
@@ -798,13 +804,13 @@ in the producer's `@domain/<context>-contracts`. A breaking payload change ships
 changes stay on the same topic, because readers ignore fields they do not know: zod strips unknown keys instead of
 rejecting them.
 
-| Topic                                   | Producer                                            | Key      | Payload (zod)                                                                                       | Consumers                                                                                     |
-| --------------------------------------- | --------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `identity.user-registered.v1`           | identity (`UserRegisteredRelay`)                    | `userId` | `userId`, `email`, `displayName`, `registeredAt`                                                    | notifications (`IdentityEventsConsumer`): welcome notification + mail                         |
-| `identity.membership-created.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `email`, `displayName`, `createdAt`                                                       | notifications (`IdentityEventsConsumer`): upsert the `(tenant, user)` mail recipient          |
-| `identity.membership-removed.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `removedAt`                                                                               | notifications (`IdentityEventsConsumer`): remove the `(tenant, user)` mail recipient          |
-| `billing.payment-succeeded.v1`          | billing (`PaymentSucceededRelay`)                   | `userId` | `paymentId`, `userId`, `stripeCheckoutSessionId`, `amountTotal` (minor units), `currency`, `paidAt` | notifications (`BillingEventsConsumer`): payment receipt, mailed in the payment's tenant      |
-| `notifications.notification-created.v1` | notifications (`PublishNotificationCreatedHandler`) | `userId` | `notificationId`, `userId`, `type`, `title`, `body`, `data`, `createdAt`                            | edge (`NotificationPushConsumer`): Socket.IO room `user:<id>` + GraphQL `notificationCreated` |
+| Topic                                   | Producer                                            | Key      | Payload (zod)                                                                                       | Consumers                                                                                           |
+| --------------------------------------- | --------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `identity.user-registered.v1`           | identity (`UserRegisteredRelay`)                    | `userId` | `userId`, `email`, `displayName`, `registeredAt`                                                    | notifications (`IdentityEventsConsumer`): welcome notification + mail                               |
+| `identity.membership-created.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `email`, `displayName`, `createdAt`                                                       | notifications (`IdentityEventsConsumer`): upsert the `(tenant, user)` mail recipient                |
+| `identity.membership-removed.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `removedAt`                                                                               | notifications (`IdentityEventsConsumer`): remove the `(tenant, user)` mail recipient                |
+| `billing.payment-succeeded.v1`          | billing (`PaymentSucceededRelay`)                   | `userId` | `paymentId`, `userId`, `stripeCheckoutSessionId`, `amountTotal` (minor units), `currency`, `paidAt` | notifications (`BillingEventsConsumer`): payment receipt, mailed in the payment's tenant            |
+| `notifications.notification-created.v1` | notifications (`PublishNotificationCreatedHandler`) | `userId` | `notificationId`, `userId`, `type`, `title`, `body`, `data`, `createdAt`                            | edge (`NotificationPushConsumer`): Socket.IO room `t:<tid>:u:<uid>` + GraphQL `notificationCreated` |
 
 Each topic has a dead-letter topic, `<topic>.dlq`. The record key is always `userId`, so all events of one user land on
 the same partition and are consumed in order.

@@ -1,6 +1,8 @@
 import { NOTIFICATIONS_GRPC_PACKAGE } from '@domain/notifications-contracts';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { RbacModule } from '@platform/auth';
+import { authConfig } from '@platform/config';
 import { GrpcClientsModule } from '@platform/transport';
 import { NotificationsPort } from './application/ports/notifications.port.js';
 import { NotificationsGrpcAdapter } from './infrastructure/adapters/grpc/notifications-grpc.adapter.js';
@@ -37,7 +39,12 @@ export class NotificationsApiModule {
   static forLocal(): DynamicModule {
     return {
       module: NotificationsApiModule,
-      imports: [NotificationsRateLimitModule, RbacModule.forFeature(NOTIFICATIONS_RBAC)],
+      imports: [
+        // The gateway's revocation sweep interval (WS_REVOCATION_SWEEP_INTERVAL_MS).
+        ConfigModule.forFeature(authConfig),
+        NotificationsRateLimitModule,
+        RbacModule.forFeature(NOTIFICATIONS_RBAC),
+      ],
       controllers: CONTROLLERS,
       providers: [
         ...PROVIDERS,
@@ -57,6 +64,7 @@ export class NotificationsApiModule {
       module: NotificationsApiModule,
       imports: [
         GrpcClientsModule.register(target),
+        ConfigModule.forFeature(authConfig),
         NotificationsRateLimitModule,
         RbacModule.forFeature(NOTIFICATIONS_RBAC),
       ],

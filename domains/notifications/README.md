@@ -19,8 +19,8 @@ billing.payment-succeeded.v1 ──┤   → WelcomeUser /      ├─► MailSe
                               │                                 └─► PublishNotificationCreatedCommand
                               │                                      └─► notifications.notification-created.v1
 edge (gateway / monolith) ◄───┴── NotificationPushConsumer ◄──────────────┘
-   ├─► socket.io room user:{id} ('notification.created')   — fanned out by the Redis adapter
-   └─► GRAPHQL_PUB_SUB 'notificationCreated:{userId}'      — RedisPubSub, one channel per user
+   ├─► socket.io room t:{tid}:u:{uid} ('notification.created') — fanned out by the Redis adapter
+   └─► GRAPHQL_PUB_SUB 'notificationCreated:{userId}'          — RedisPubSub, one channel per user
 ```
 
 ## Modules
@@ -157,17 +157,25 @@ Connect with `io('<host>/notifications', { auth: { token: '<access jwt>' } })` (
 
 The handshake is authenticated by a namespace middleware (`authenticateSocket`, including the
 denylist) before the connection is accepted, so no message can race authentication. Each socket
-joins room `user:{id}`. Per-message guards: `JwtAuthGuard` (token not expired), RBAC,
-`WsSessionGuard` (denylist: a token revoked by logout gets `TOKEN_REVOKED`, like HTTP) and
-`WsThrottlerGuard` (`markRead`: 30 per 10 s).
+joins exactly one room, `t:{tenantId}:u:{userId}` (`tenantUserRoom`), both from the token it
+authenticated with, and never changes room: another tenant needs a new connection with that
+tenant's token. `NotificationPushConsumer` takes the tenant from the envelope
+(`requireEventTenant`, before the dedupe claim) and calls `pushToUser(tenantId, userId, …)`, so a
+user connected in tenant A never receives tenant B's notifications, their own included. An
+envelope without a tenant is dead-lettered and pushes nothing. Per-message guards: `JwtAuthGuard`
+(token not expired), RBAC, `WsSessionGuard` (denylist: a token revoked by logout or a tenant switch
+gets `TOKEN_REVOKED`, like HTTP) and `WsThrottlerGuard` (`markRead`: 30 per 10 s).
 
 Sockets do not outlive their session. When the access token expires the socket receives an
 `exception` event (`TOKEN_EXPIRED`) and is disconnected (like graphql-ws's 4401 close). Every
-30 s (`WS_REVOCATION_SWEEP_INTERVAL_MS`) each replica disconnects its sockets whose token was put
-on the denylist (logout), after an `exception` event (`TOKEN_REVOKED`). This works in every
-topology (logout may run in identity-service) at the cost of one auto-pipelined EXISTS per
-distinct token per sweep. A server-side disconnect is not retried by socket.io clients: reconnect
-with a fresh token.
+`WS_REVOCATION_SWEEP_INTERVAL_MS` (auth config, default 30 s) each replica's `RevocationSweeper`
+(`@platform/auth`, named `socket.io`) disconnects its sockets whose token was put on the denylist,
+after an `exception` event (`TOKEN_REVOKED`). Logout and `POST /v1/auth/switch-tenant` both
+denylist the access token, so a switched-away token's sockets close within one interval; the
+user's other sessions keep theirs (there is no room-wide close). This works in every topology
+(logout may run in identity-service) at the cost of one auto-pipelined EXISTS per distinct token
+per sweep; if the denylist cannot answer, sockets are kept until the next sweep. A server-side
+disconnect is not retried by socket.io clients: reconnect with a fresh token.
 
 ### gRPC (`notifications.v1.NotificationsService`, service side)
 

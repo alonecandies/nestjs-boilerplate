@@ -31,7 +31,7 @@ async function bootstrap(): Promise<void> {
   // multipart: bounded @fastify/multipart for the streaming file upload.
   const app = await createHttpApp(AppModule, { rawBody: true, multipart: true });
   try {
-    // Socket.IO over the Redis adapter: `user:{id}` rooms span every replica.
+    // Socket.IO over the Redis adapter: `t:{tid}:u:{uid}` rooms span every replica.
     app.useWebSocketAdapter(await createRedisIoAdapter(app));
     // Identity/billing events → notifications, notification-created → push. `inheritAppConfig`
     // makes the global enhancers (cls, pipes, filter) apply to the consumers too.
