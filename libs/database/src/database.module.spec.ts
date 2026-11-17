@@ -163,9 +163,10 @@ describe('DatabaseModule', () => {
     });
 
     it('runs the platform set, then the given sets, BEFORE opening the pool', async () => {
+      vi.stubEnv('DATABASE_MIGRATION_URL', 'postgres://app_owner:o@localhost:5432/app');
       app = await boot({ schema, runMigrations: true, migrations: [itemsMigrations] });
       expect(runMigrations).toHaveBeenCalledWith(
-        'postgres://app:app@localhost:5432/app',
+        'postgres://app_owner:o@localhost:5432/app',
         expect.objectContaining({
           applicationName: 'app',
           migrations: [platformMigrations, itemsMigrations],
@@ -176,8 +177,17 @@ describe('DatabaseModule', () => {
       expect(migrateOrder).toBeLessThan(poolOrder ?? 0);
     });
 
+    it('refuses to migrate without DATABASE_MIGRATION_URL, before opening any connection', async () => {
+      // Never a fallback to DATABASE_URL (the runtime role cannot and must not run DDL).
+      vi.stubEnv('DATABASE_MIGRATION_URL', '');
+      await expect(boot({ schema, runMigrations: true })).rejects.toThrow(/DATABASE_MIGRATION_URL/);
+      expect(runMigrations).not.toHaveBeenCalled();
+      expect(postgres).not.toHaveBeenCalled();
+    });
+
     it('honours DATABASE_RUN_MIGRATIONS, and the option wins over it', async () => {
       vi.stubEnv('DATABASE_RUN_MIGRATIONS', 'true');
+      vi.stubEnv('DATABASE_MIGRATION_URL', 'postgres://app_owner:o@localhost:5432/app');
       vi.stubEnv('SERVICE_NAME', 'orders-service');
       app = await boot({ schema });
       // No domain sets: the platform set still runs.

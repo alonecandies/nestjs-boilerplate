@@ -27,8 +27,9 @@ const defaultDeps = (): StaffGrantDeps => ({
 
 /**
  * `bun run --filter @domain/identity staff:grant <email> [--revoke]` (spec §5.2, §9 method 7): the only
- * way to grant or revoke platform staff. Uses DATABASE_MIGRATION_URL (B3-3's owner role) when set,
- * else DATABASE_URL. Exit codes: 0 done, 1 unknown email or database failure, 2 usage/configuration.
+ * way to grant or revoke platform staff. Connects over DATABASE_MIGRATION_URL only (the app_owner
+ * role, direct to the coordinator), never DATABASE_URL. Exit codes: 0 done, 1 unknown email or
+ * database failure, 2 usage/configuration.
  */
 export async function runStaffGrantCli(
   args: readonly string[] = process.argv.slice(2),
@@ -42,9 +43,9 @@ export async function runStaffGrantCli(
     return 2;
   }
   const staff = !flags.includes('--revoke');
-  const url = deps.env.DATABASE_MIGRATION_URL || deps.env.DATABASE_URL;
+  const url = deps.env.DATABASE_MIGRATION_URL;
   if (!url) {
-    deps.err('Set DATABASE_MIGRATION_URL or DATABASE_URL.');
+    deps.err('Set DATABASE_MIGRATION_URL (the app_owner role, direct to the coordinator).');
     return 2;
   }
 

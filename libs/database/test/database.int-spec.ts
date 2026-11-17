@@ -183,7 +183,9 @@ describe('@platform/database against PostgreSQL 18', () => {
   });
 
   describe("runMigrationsCli() (the body of every app's migrate.ts)", () => {
-    const cli = (url: string, ...args: string[]) =>
+    /** A closed port: the migrate job must never connect to DATABASE_URL. */
+    const UNREACHABLE = 'postgres://app:app@127.0.0.1:1/app';
+    const cliWith = (env: Record<string, string>, ...args: string[]) =>
       execFileAsync(
         process.execPath,
         [
@@ -193,8 +195,15 @@ describe('@platform/database against PostgreSQL 18', () => {
           'test/fixtures/migrate.ts',
           ...args,
         ],
-        { cwd: PACKAGE_ROOT, env: { ...process.env, DATABASE_URL: url }, timeout: 90_000 },
+        {
+          cwd: PACKAGE_ROOT,
+          env: { ...process.env, DATABASE_URL: UNREACHABLE, ...env },
+          timeout: 90_000,
+        },
       );
+
+    const cli = (migrationUrl: string, ...args: string[]) =>
+      cliWith({ DATABASE_MIGRATION_URL: migrationUrl }, ...args);
 
     it('applies the platform set, then the given sets, and exits 0; a second run is a no-op', async () => {
       const url = await createDatabase('cli');
@@ -207,18 +216,32 @@ describe('@platform/database against PostgreSQL 18', () => {
     });
 
     it('exits 1 on an unknown flag (the removed --migrations-folder)', async () => {
-      await expect(
-        cli('postgres://app:app@127.0.0.1:1/app', '--migrations-folder', 'x'),
-      ).rejects.toMatchObject({
+      await expect(cli(UNREACHABLE, '--migrations-folder', 'x')).rejects.toMatchObject({
         code: 1,
         stderr: expect.stringContaining('--migrations-folder') as unknown,
       });
     });
 
     it('exits 1 with the config error for an invalid DATABASE_URL', async () => {
-      await expect(cli('mysql://nope')).rejects.toMatchObject({
+      await expect(
+        cliWith({ DATABASE_URL: 'mysql://nope', DATABASE_MIGRATION_URL: UNREACHABLE }),
+      ).rejects.toMatchObject({
         code: 1,
         stderr: expect.stringContaining('DATABASE_URL') as unknown,
+      });
+    });
+
+    it('exits 1 with the config error for an invalid DATABASE_MIGRATION_URL', async () => {
+      await expect(cli('mysql://nope')).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining('DATABASE_MIGRATION_URL') as unknown,
+      });
+    });
+
+    it('exits 1 naming DATABASE_MIGRATION_URL when it is empty (no DATABASE_URL fallback)', async () => {
+      await expect(cli('')).rejects.toMatchObject({
+        code: 1,
+        stderr: expect.stringContaining('DATABASE_MIGRATION_URL is not set') as unknown,
       });
     });
   });
@@ -230,7 +253,9 @@ describe('@platform/database against PostgreSQL 18', () => {
     let repo: WidgetsRepository;
 
     beforeAll(async () => {
-      vi.stubEnv('DATABASE_URL', await createDatabase('boot'));
+      const bootUrl = await createDatabase('boot');
+      vi.stubEnv('DATABASE_URL', bootUrl);
+      vi.stubEnv('DATABASE_MIGRATION_URL', bootUrl);
       vi.stubEnv('SERVICE_NAME', 'db-int');
 
       @Module({

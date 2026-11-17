@@ -5,6 +5,7 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres from 'postgres';
 import type { DatabaseModuleOptions } from '../database.types.js';
 import { withPlatformMigrations } from '../migrator/migration-sets.js';
+import { requireMigrationUrl } from '../migrator/migration-url.js';
 import { runMigrations } from '../migrator/run-migrations.js';
 import type { DrizzleDB, DrizzleSchema } from './drizzle.types.js';
 import { DrizzleQueryLogger } from './drizzle-query.logger.js';
@@ -22,8 +23,9 @@ const BOOT_PING_RETRIES = 4;
 /**
  * Builds the pool + Drizzle handle used by `DatabaseModule` (exported for scripts/tests that run
  * outside Nest). Order matters:
- * 1. migrations (own single-connection client + advisory lock) so the app never serves traffic
- *    against an outdated schema;
+ * 1. migrations (own single-connection client + advisory lock, on DATABASE_MIGRATION_URL: the
+ *    owner role, direct to the coordinator; missing → throws before any connection) so the app
+ *    never serves traffic against an outdated schema;
  * 2. pool + `select 1` with a short retry on transient connection errors → fail fast at boot
  *    (and warm one connection) instead of on the first request.
  */
@@ -36,7 +38,7 @@ export async function createDrizzleDatabase<TSchema extends DrizzleSchema>(
   const target = describePostgresUrl(cfg.url);
   if (options.runMigrations ?? cfg.runMigrations) {
     // The platform set first, then the app's domain sets in order, all under one advisory lock.
-    await runMigrations(cfg.url, {
+    await runMigrations(requireMigrationUrl(cfg), {
       migrations: withPlatformMigrations(options.migrations),
       logger,
       applicationName: app.serviceName,

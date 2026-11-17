@@ -21,7 +21,8 @@ describe('runMigrationsCli', () => {
   });
 
   it("applies the platform set, then the app's sets, and logs one JSON summary line", async () => {
-    vi.stubEnv('DATABASE_URL', 'postgres://app:app@db:5432/app');
+    vi.stubEnv('DATABASE_URL', 'postgres://app_runtime:r@pgbouncer:6432/app');
+    vi.stubEnv('DATABASE_MIGRATION_URL', 'postgres://app:app@db:5432/app');
     vi.stubEnv('SERVICE_NAME', 'orders-service');
     vi.stubEnv('LOG_PRETTY', 'false');
     const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
@@ -48,6 +49,19 @@ describe('runMigrationsCli', () => {
       message: 'Done: 3 applied, 3 total (platform, orders)',
     });
     expect(process.exitCode).toBeUndefined();
+  });
+
+  it('exits 1 naming DATABASE_MIGRATION_URL when it is missing, opening no connection', async () => {
+    vi.stubEnv('DATABASE_URL', 'postgres://app_runtime:r@pgbouncer:6432/app');
+    vi.stubEnv('DATABASE_MIGRATION_URL', '');
+    vi.stubEnv('LOG_PRETTY', 'false');
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    await runMigrationsCli([orders], []);
+    expect(runMigrations).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    const logged = err.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(logged).toContain('DATABASE_MIGRATION_URL');
+    expect(logged).not.toContain('pgbouncer:6432');
   });
 
   it('exits 1 on an unknown flag, before touching the database', async () => {

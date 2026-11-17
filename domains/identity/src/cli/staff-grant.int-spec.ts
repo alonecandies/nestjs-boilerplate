@@ -10,7 +10,7 @@ describe('staff:grant against Postgres', () => {
 
   beforeAll(async () => {
     database = await startIdentityDatabase([]);
-    url = process.env.DATABASE_URL ?? '';
+    url = process.env.DATABASE_MIGRATION_URL ?? '';
     await database.db.execute(
       sql`insert into identity.users (email, password_hash, display_name) values ('ops@example.com', 'x', 'Ops')`,
     );
@@ -29,7 +29,7 @@ describe('staff:grant against Postgres', () => {
 
   it('grants and revokes is_platform_staff by email; unknown emails exit 1', async () => {
     const deps = {
-      env: { DATABASE_URL: url },
+      env: { DATABASE_MIGRATION_URL: url },
       connect: createPostgresStaffStore,
       out: () => undefined,
       err: () => undefined,

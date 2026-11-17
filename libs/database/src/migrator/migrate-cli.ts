@@ -3,6 +3,7 @@ import { appConfig, databaseConfig, observabilityConfig } from '@platform/config
 import type { DatabaseMigrationSet } from '../database.types.js';
 import { createMigrateCliLogger } from './cli-logger.js';
 import { withPlatformMigrations } from './migration-sets.js';
+import { requireMigrationUrl } from './migration-url.js';
 import { runMigrations } from './run-migrations.js';
 
 /**
@@ -10,7 +11,8 @@ import { runMigrations } from './run-migrations.js';
  * (`node dist/migrate.js` in the app's image, a k8s Job / initContainer) and `bun run db:migrate`.
  * No Nest application: config is parsed with the same zod schemas the apps use, so a bad
  * DATABASE_URL fails with the same message. Applies `platformMigrations`, then `migrations` in
- * order, under the migrations advisory lock.
+ * order, under the migrations advisory lock, over DATABASE_MIGRATION_URL only (the owner role,
+ * direct to the coordinator): without it the job exits 1 before connecting.
  *
  * Takes no flags: an unknown one (such as the removed `--migrations-folder`) fails instead of being
  * ignored. Sets `process.exitCode` (0 = schema current, 1 = failure) instead of exiting, so the last
@@ -26,10 +28,11 @@ export async function runMigrationsCli(
   try {
     parseArgs({ args: [...args], options: {}, strict: true });
     if (observabilityConfig.parse().logPretty) logger = createMigrateCliLogger(true);
-    const { url } = databaseConfig.parse();
+    const sets = withPlatformMigrations(migrations);
+    const url = requireMigrationUrl(databaseConfig.parse());
     const { serviceName } = appConfig.parse();
     const summary = await runMigrations(url, {
-      migrations: withPlatformMigrations(migrations),
+      migrations: sets,
       logger,
       applicationName: serviceName,
     });
