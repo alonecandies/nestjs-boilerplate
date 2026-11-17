@@ -367,6 +367,11 @@ describe('NotificationsGateway', () => {
   });
 });
 
+const HELD = { admitted: true, held: true };
+const REFUSED = { admitted: false, held: false };
+/** Admitted while Redis was unusable: no slot was counted, so none may be released. */
+const FAILED_OPEN = { admitted: true, held: false };
+
 const capsSocket = () => ({
   data: {} as Record<string, unknown>,
   handshake: { auth: { token: 't' }, headers: {}, address: '1.2.3.4' },
@@ -406,7 +411,7 @@ describe('NotificationsGateway connection caps', () => {
   it('refuses the socket past the per-user cap with TOO_MANY_CONNECTIONS', async () => {
     const caps = {
       admitHandshake: vi.fn(async () => ({ ok: true as const })),
-      acquireSocket: vi.fn(async () => false),
+      acquireSocket: vi.fn(async () => REFUSED),
       releaseSocket: vi.fn(),
     };
     const error = await gatewayWith(caps).authenticate(capsSocket() as never);
@@ -416,7 +421,7 @@ describe('NotificationsGateway connection caps', () => {
   it('accepts under the caps and releases the slot once, on disconnect', async () => {
     const caps = {
       admitHandshake: vi.fn(async () => ({ ok: true as const })),
-      acquireSocket: vi.fn(async () => true),
+      acquireSocket: vi.fn(async () => HELD),
       releaseSocket: vi.fn(async () => undefined),
     };
     const gateway = gatewayWith(caps);
@@ -434,7 +439,7 @@ describe('NotificationsGateway connection caps', () => {
       acquireSocket: vi.fn(async () => {
         // The client goes away mid-handshake: socket.io drops the socket without connect/disconnect.
         socket.conn.readyState = 'closed';
-        return true;
+        return HELD;
       }),
       releaseSocket: vi.fn(async () => undefined),
     };
@@ -447,6 +452,33 @@ describe('NotificationsGateway connection caps', () => {
     // Even if a disconnect were delivered later, the slot is not released twice.
     gateway.handleDisconnect(socket as never);
     expect(caps.releaseSocket).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not release a slot admitted while Redis was down (nothing was counted, F2)', async () => {
+    const caps = {
+      admitHandshake: vi.fn(async () => ({ ok: true as const })),
+      acquireSocket: vi.fn(async () => FAILED_OPEN),
+      releaseSocket: vi.fn(async () => undefined),
+    };
+    const gateway = gatewayWith(caps);
+    const socket = capsSocket();
+    await expect(gateway.authenticate(socket as never)).resolves.toBeUndefined();
+    gateway.handleDisconnect(socket as never);
+    expect(caps.releaseSocket).not.toHaveBeenCalled();
+  });
+
+  it('does not release a failed-open slot when the client drops during the handshake', async () => {
+    const socket = capsSocket();
+    const caps = {
+      admitHandshake: vi.fn(async () => ({ ok: true as const })),
+      acquireSocket: vi.fn(async () => {
+        socket.conn.readyState = 'closed';
+        return FAILED_OPEN;
+      }),
+      releaseSocket: vi.fn(async () => undefined),
+    };
+    await expect(gatewayWith(caps).authenticate(socket as never)).resolves.toBeInstanceOf(Error);
+    expect(caps.releaseSocket).not.toHaveBeenCalled();
   });
 
   it('does not release a slot for a socket that never acquired one', () => {

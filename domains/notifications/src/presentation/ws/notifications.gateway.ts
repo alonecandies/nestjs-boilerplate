@@ -172,16 +172,18 @@ export class NotificationsGateway
         extractSocketToken(socket.handshake),
       );
       if (this.caps !== undefined) {
-        if (!(await this.caps.acquireSocket(socket.data.user.id))) {
+        const slot = await this.caps.acquireSocket(socket.data.user.id);
+        if (!slot.admitted) {
           return this.refuse(TOO_MANY_CONNECTIONS, 'Too many open connections for this user.');
         }
         if (socket.conn.readyState !== 'open') {
           // The client dropped during the handshake: socket.io discards the socket without a
           // connect or disconnect event, so `handleDisconnect` would never free this slot.
-          void this.caps.releaseSocket(socket.data.user.id);
+          if (slot.held) void this.caps.releaseSocket(socket.data.user.id);
           return new Error('Client disconnected during the handshake');
         }
-        socket.data.capAcquired = true;
+        // A slot admitted while Redis was unusable was never counted: nothing to release.
+        socket.data.capAcquired = slot.held;
       }
       return undefined;
     } catch (error) {
