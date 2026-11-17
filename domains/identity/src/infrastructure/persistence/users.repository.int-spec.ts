@@ -280,7 +280,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     ).resolves.toMatchObject({ items: [] });
   });
 
-  it('listInTenant and findByIdInTenant (system) see only the members of the asserted tenant', async () => {
+  it('listInTenant, findByIdInTenant and findByIdsInTenant (system) see only the members of the asserted tenant', async () => {
     const [tenantA] = await db.execute<{ id: string }>(
       sql`insert into identity.tenants (slug, name) values (${`dir-a-${run}`}, 'A') returning id`,
     );
@@ -304,6 +304,11 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     await expect(
       directory(() => usersSystem.findByIdInTenant(inB.id, tenantA?.id ?? '')),
     ).resolves.toBeNull();
+    const batch = await directory(() =>
+      usersSystem.findByIdsInTenant([inB.id, inA.id, generateId()], tenantA?.id ?? ''),
+    );
+    expect(batch.map((user) => user.id)).toEqual([inA.id]);
+    expect(batch[0]).not.toHaveProperty('passwordHash');
   });
 
   it('isPlatformStaff: false by default, true once flagged, false for an unknown id', async () => {

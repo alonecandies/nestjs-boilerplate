@@ -36,6 +36,8 @@ describe('identity system methods (the doors to the app_system pool)', () => {
         // Ruling b3-identity-policies (row-local policies): co-member and cross-tenant reads.
         ['users.findByIdInTenant', 'system'],
         ['users.listInTenant', 'system'],
+        // B3 final review F1: the GraphQL users DataLoader (Payment.user) over co-members.
+        ['users.findByIdsInTenant', 'system'],
         ['memberships.findMember', 'system'],
         ['memberships.listMembers', 'system'],
         ['memberships.listForUser', 'system'],

@@ -8,7 +8,7 @@ import {
   keysetWhere,
   SystemDatabase,
 } from '@platform/database';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import type {
   ListUsersCriteria,
   UserRecord,
@@ -57,6 +57,21 @@ export class DrizzleUsersSystemRepository implements UsersSystemRepository {
         .limit(1);
       return row ?? null;
     });
+  }
+
+  async findByIdsInTenant(ids: readonly string[], tenantId: string): Promise<UserRecord[]> {
+    if (ids.length === 0) return [];
+    // ONE array parameter, not `IN ($1…$n)`: the SQL text is the same for every batch size.
+    return this.system.run(METHODS.findByIdsInTenant, (db) =>
+      db
+        .select(publicUserColumns)
+        .from(users)
+        .innerJoin(
+          memberships,
+          and(eq(memberships.userId, users.id), eq(memberships.tenantId, tenantId)),
+        )
+        .where(sql`${users.id} = any(${sql.param([...ids])}::uuid[])`),
+    );
   }
 
   listInTenant(criteria: ListUsersCriteria): Promise<CursorPage<UserRecord>> {

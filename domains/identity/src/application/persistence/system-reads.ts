@@ -4,7 +4,7 @@
  * (the tenant it acts in, or itself) and the system method filters on it in SQL.
  */
 export const SYSTEM_READS = Object.freeze({
-  /** A user of the caller's tenant (`GetUser` with a tenant, `ListUsers`). */
+  /** Users of the caller's tenant (`GetUser` with a tenant, `ListUsers`, `GetUsersByIds`). */
   USER_DIRECTORY: 'identity.user-directory',
   /** The caller's tenant's members with profiles (`ListMembers`, the member after a role change). */
   MEMBER_DIRECTORY: 'identity.member-directory',

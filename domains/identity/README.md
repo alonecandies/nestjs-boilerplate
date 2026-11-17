@@ -323,11 +323,12 @@ or session) is generated before `BEGIN`. Both JWTs are signed before `BEGIN` too
   matches its arguments: `TenantBootstrap` (`tenant-bootstrap`: the owner membership of a tenant created in the same
   transaction), `InvitationAcceptance` (`verified-invitation`: the membership, the accepted flag and the audit row of a
   verified token) and `MembershipActivity` (`membership-activity`: the member's own `last_active_at` touch).
-- **System methods** (nine, pinned in `identity.system-methods.ts`; only the four `drizzle-*.system-repository.ts` files
+- **System methods** (ten, pinned in `identity.system-methods.ts`; only the four `drizzle-*.system-repository.ts` files
   name `SystemDatabase`). `pre-auth` (run anywhere): `users.findCredentialsByEmail`, `users.existsByEmail`,
   `invitations.findByTokenHash`. `system` (inside `SystemContext.run(reason, …)`): `sessions.deleteExpired`, and the reads
   the row-local policies leave out, with the reasons in `application/persistence/system-reads.ts`:
-  `users.findByIdInTenant` and `users.listInTenant` (`identity.user-directory`), `memberships.findMember` and
+  `users.findByIdInTenant`, `users.listInTenant` and `users.findByIdsInTenant` (the GraphQL users DataLoader behind
+  `Payment.user`; `identity.user-directory`), `memberships.findMember` and
   `memberships.listMembers` (`identity.member-directory`), `memberships.listForUser` (`identity.my-tenants`). The handler
   asserts the scope first (`requireActingIn(tenantId)`, or itself) and the SQL filters on it. Every process that runs the
   identity core needs `DATABASE_SYSTEM_URL`.

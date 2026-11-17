@@ -19,6 +19,12 @@ export abstract class UsersSystemRepository {
    */
   abstract findByIdInTenant(id: string, tenantId: string): Promise<UserRecord | null>;
 
+  /**
+   * `system`: those of `ids` who are members of `tenantId` (the caller's own tenant), in any order;
+   * the batched co-member read of the GraphQL users DataLoader (`GetUsersByIds`).
+   */
+  abstract findByIdsInTenant(ids: readonly string[], tenantId: string): Promise<UserRecord[]>;
+
   /** `system`: the members of `criteria.tenantId` (asserted by the caller); keyset page, newest first. */
   abstract listInTenant(criteria: ListUsersCriteria): Promise<CursorPage<UserRecord>>;
 }

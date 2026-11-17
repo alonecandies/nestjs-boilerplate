@@ -2,9 +2,10 @@
  * Payment.user in the monolith topology. Billing exposes a payment's owner as `Payment.userId`
  * only; the composition root adds `Payment.user` (`src/graphql/payment-user.resolver.ts`) and
  * resolves it through identity's `users` DataLoader → UsersLocalAdapter → QueryBus →
- * GetUsersByIds → UsersRepository, in ONE batched lookup per operation. Payments come from the
- * fake Postgres (rows answered by position, as postgres.js does), users from the in-memory
- * identity store, registered through the REST API.
+ * GetUsersByIds → UsersSystemRepository.findByIdsInTenant (the caller's tenant), in ONE batched
+ * lookup per operation. Payments come from the fake Postgres (rows answered by position, as
+ * postgres.js does), users from the in-memory identity store, registered through the REST API.
+ * Alan is made a member of Ada's tenant; Grace registers alone and stays outside it.
  */
 await vi.hoisted(async () => {
   const { MONOLITH_E2E_ENV } = await import('./support/e2e-env.js');
@@ -25,6 +26,7 @@ import { createMonolithE2eApp, type MonolithE2e } from './support/monolith-e2e-a
 
 interface AuthTokensBody {
   accessToken: string;
+  tenantId: string;
   user: { id: string; email: string; displayName: string };
 }
 
@@ -85,6 +87,7 @@ describe('Payment.user in the monolith (app-level resolver over the local ports)
   let paymentRows: FakeRows = [];
   let ada: AuthTokensBody;
   let alan: AuthTokensBody;
+  let grace: AuthTokensBody;
   let callerToken: string;
 
   const inject = (...args: Parameters<MonolithE2e['app']['inject']>) => e2e.app.inject(...args);
@@ -112,6 +115,14 @@ describe('Payment.user in the monolith (app-level resolver over the local ports)
     });
     ada = await register('ada@example.com', 'Ada');
     alan = await register('alan@example.com', 'Alan');
+    grace = await register('grace@example.com', 'Grace');
+    // Alan is Ada's co-member (Payment.user resolves co-members of the caller's tenant only).
+    await e2e.identity.memberships.insert({
+      tenantId: ada.tenantId,
+      userId: alan.user.id,
+      roles: ['member'],
+      lastActiveAt: null,
+    });
     callerToken = ada.accessToken;
   });
 
@@ -129,7 +140,7 @@ describe('Payment.user in the monolith (app-level resolver over the local ports)
 
   it('resolves Payment.user for a page of payments with ONE batched users lookup', async () => {
     paymentRows = [paymentRow(ada.user.id), paymentRow(alan.user.id), paymentRow(ada.user.id)];
-    const findByIds = vi.spyOn(e2e.identity.users, 'findByIds');
+    const findByIds = vi.spyOn(e2e.identity.usersSystem, 'findByIdsInTenant');
 
     const body = await queryPayments();
 
@@ -146,11 +157,25 @@ describe('Payment.user in the monolith (app-level resolver over the local ports)
       email: 'alan@example.com',
       displayName: 'Alan',
     });
-    // Three payments, two distinct owners: one GetUsersByIds query, one repository call.
+    // Three payments, two distinct owners: one GetUsersByIds query, one repository call, scoped
+    // to the caller's tenant.
     expect(findByIds).toHaveBeenCalledTimes(1);
     expect([...(findByIds.mock.calls[0]?.[0] ?? [])].sort()).toEqual(
       [ada.user.id, alan.user.id].sort(),
     );
+    expect(findByIds.mock.calls[0]?.[1]).toBe(ada.tenantId);
+  });
+
+  it("resolves user to null for an owner outside the caller's tenant", async () => {
+    paymentRows = [paymentRow(grace.user.id), paymentRow(alan.user.id)];
+
+    const body = await queryPayments();
+
+    expect(body.errors).toBeUndefined();
+    expect(body.data?.payments.items.map((payment) => payment.user?.email ?? null)).toEqual([
+      null,
+      'alan@example.com',
+    ]);
   });
 
   it('resolves user to null when the owner no longer exists', async () => {

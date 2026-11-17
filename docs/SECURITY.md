@@ -539,7 +539,7 @@ and a system method fails with `SYSTEM_DATABASE_UNAVAILABLE`; it never falls bac
   `stripe_events` only).
 - **Not a pool method:** `staff:grant` connects as `app_owner` on `DATABASE_MIGRATION_URL`.
 
-The pinned lists (11 methods when B3 shipped; program spec section 9 numbers the first group, the second is the B3
+The pinned lists (12 methods when B3 shipped; program spec section 9 numbers the first group, the second is the B3
 ruling below):
 
 | Method                                 | Scope    | Used by (reason)                                                                            |
@@ -552,6 +552,7 @@ ruling below):
 | `stripeEvents.markProcessedAsPlatform` | system   | platform webhooks without a user, `billing.platform-webhook` (spec 8, `stripe_events` half) |
 | `users.findByIdInTenant`               | system   | `GET /v1/users/:id` and scoped `UsersPort` reads, `identity.user-directory`                 |
 | `users.listInTenant`                   | system   | `ListUsers`, `identity.user-directory`                                                      |
+| `users.findByIdsInTenant`              | system   | `GetUsersByIds` (the GraphQL users DataLoader, `Payment.user`), `identity.user-directory`   |
 | `memberships.findMember`               | system   | the member and profile after a role change, `identity.member-directory`                     |
 | `memberships.listMembers`              | system   | `ListMembers` and GraphQL `tenantMembers`, `identity.member-directory`                      |
 | `memberships.listForUser`              | system   | `ListMyTenants`, `identity.my-tenants`: every membership of the caller, across tenants      |

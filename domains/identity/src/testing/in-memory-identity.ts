@@ -125,6 +125,15 @@ export class InMemoryUsersSystemRepository extends UsersSystemRepository {
     return toRecord(user);
   }
 
+  async findByIdsInTenant(ids: readonly string[], tenantId: string): Promise<UserRecord[]> {
+    return ids.flatMap((id) => {
+      const user = this.store.users.get(id);
+      return user && this.store.memberships.has(membershipKey(tenantId, id))
+        ? [toRecord(user)]
+        : [];
+    });
+  }
+
   async listInTenant(criteria: ListUsersCriteria): Promise<CursorPage<UserRecord>> {
     const after = criteria.cursor === undefined ? undefined : decodeIdCursor(criteria.cursor).id;
     const search = criteria.search?.toLowerCase();

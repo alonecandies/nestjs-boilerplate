@@ -126,6 +126,20 @@ describe('DrizzleUsersSystemRepository', () => {
     expect(executed[0]?.params).toEqual([tenantId, id, 1]);
   });
 
+  it('findByIdsInTenant: ONE uuid[] parameter, joined to memberships on the asserted tenant', async () => {
+    const [x, y, tenantId] = [generateId(), generateId(), generateId()];
+    const { users, executed } = setup(() => [row(y), row(x)]);
+    const found = await inSystem(() => users.findByIdsInTenant([x, y], tenantId));
+    expect(found.map((user) => user.id)).toEqual([y, x]);
+    expect(executed[0]?.sql).toBe(
+      'select "identity"."users"."id", "identity"."users"."email", "identity"."users"."display_name", "identity"."users"."is_platform_staff", "identity"."users"."created_at", "identity"."users"."updated_at" from "identity"."users" inner join "identity"."memberships" on ("identity"."memberships"."user_id" = "identity"."users"."id" and "identity"."memberships"."tenant_id" = $1) where "identity"."users"."id" = any($2::uuid[])',
+    );
+    expect(executed[0]?.params).toEqual([tenantId, [x, y]]);
+    // No ids, no query.
+    await expect(inSystem(() => users.findByIdsInTenant([], tenantId))).resolves.toEqual([]);
+    expect(executed).toHaveLength(1);
+  });
+
   it('the directory reads are `system` methods: refused outside SystemContext, even under a principal', async () => {
     const { users, executed } = setup(() => []);
     await expect(users.listInTenant({ tenantId: generateId(), limit: 1 })).rejects.toMatchObject({
@@ -133,6 +147,9 @@ describe('DrizzleUsersSystemRepository', () => {
     });
     await expect(
       runWithPrincipal(SPEC_PRINCIPAL, () => users.findByIdInTenant(generateId(), generateId())),
+    ).rejects.toMatchObject({ code: 'SYSTEM_CONTEXT_REQUIRED' });
+    await expect(
+      runWithPrincipal(SPEC_PRINCIPAL, () => users.findByIdsInTenant([generateId()], generateId())),
     ).rejects.toMatchObject({ code: 'SYSTEM_CONTEXT_REQUIRED' });
     expect(executed).toEqual([]);
   });

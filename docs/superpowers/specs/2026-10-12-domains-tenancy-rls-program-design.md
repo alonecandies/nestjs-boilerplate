@@ -444,8 +444,10 @@ added by the ledger design):
 co-member and cross-tenant reads are `system`-scope methods (inside `SystemContext.run(reason, …)`), each asserted by its
 caller and filtered in its SQL:
 
-12. `users.findByIdInTenant` (scoped `GET /v1/users/:id`, scoped `UsersPort` reads) and `users.listInTenant` (`ListUsers`):
-    `users JOIN memberships ON tenant_id = <the caller's tenant>`; reason `identity.user-directory`
+12. `users.findByIdInTenant` (scoped `GET /v1/users/:id`, scoped `UsersPort` reads), `users.listInTenant` (`ListUsers`)
+    and `users.findByIdsInTenant` (`GetUsersByIds`, the GraphQL users DataLoader behind `Payment.user`, scoped to the
+    principal's tenant; B3 final review F1): `users JOIN memberships ON tenant_id = <the caller's tenant>`; reason
+    `identity.user-directory`
 13. `memberships.findMember` (the member and profile after a role change) and `memberships.listMembers` (`ListMembers`,
     GraphQL `tenantMembers`): reason `identity.member-directory`
 14. `memberships.listForUser` (`ListMyTenants`): every membership of the caller, across tenants; reason

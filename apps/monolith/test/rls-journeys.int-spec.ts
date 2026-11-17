@@ -24,7 +24,7 @@ import { buildRlsContextSql, DRIZZLE, type DrizzleDB } from '@platform/database'
 import { type RlsTestPostgres, startRlsTestPostgres } from '@platform/testing/postgres';
 import type { TransactionSql } from 'postgres';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { bearer, expectProblem } from './support/http.js';
+import { bearer, expectProblem, graphql } from './support/http.js';
 import { type RlsApp, startRlsApp } from './support/rls-app.js';
 
 interface Tokens {
@@ -314,6 +314,54 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('cross-domain RLS journeys (
       const audit = await rls.admin<{ type: string }[]>`
         select type from identity.audit_events where tenant_id = ${ada.tenantId} order by id`;
       expect(audit.map((a) => a.type)).toContain('invitation.accepted');
+    });
+
+    it('GraphQL Payment.user resolves co-members for an admin, and null for a former member', async () => {
+      const ada = await register('ada.pu');
+      const bob = await register('bob.pu');
+      const carol = await register('carol.pu');
+      const bobInAda = await joinTenant(ada, bob, ['admin']);
+      const carolInAda = await joinTenant(ada, carol, ['member']);
+      const adaPayment = await checkout(ada.accessToken);
+      const bobPayment = await checkout(bobInAda.accessToken);
+      const carolPayment = await checkout(carolInAda.accessToken);
+      // Carol leaves: her payment stays in Ada's tenant, she stays a member of her own tenant only.
+      const left = await send('POST', '/v1/tenant/leave', carolInAda.accessToken);
+      expect(left.statusCode, left.body).toBe(204);
+
+      // Bob (admin, billing:read-all) lists the tenant's payments; the users DataLoader batches the
+      // owners into one GetUsersByIds, a system read of the caller's tenant (users.findByIdsInTenant).
+      const res = await rls.app.inject(
+        graphql(
+          /* GraphQL */ `
+            query {
+              payments(all: true, limit: 50) {
+                items { id userId user { id email } }
+              }
+            }
+          `,
+          undefined,
+          bearer(bobInAda.accessToken),
+        ),
+      );
+      expect(res.statusCode, res.body).toBe(200);
+      const body = res.json<{
+        data?: {
+          payments: {
+            items: { id: string; userId: string; user: { id: string; email: string } | null }[];
+          };
+        };
+        errors?: unknown[];
+      }>();
+      expect(body.errors, res.body).toBeUndefined();
+      const owners = Object.fromEntries(
+        (body.data?.payments.items ?? []).map((payment) => [payment.id, payment.user]),
+      );
+      expect(owners).toEqual({
+        [adaPayment]: { id: ada.user.id, email: ada.user.email },
+        [bobPayment]: { id: bob.user.id, email: bob.user.email },
+        [carolPayment]: null,
+      });
     });
 
     it('a payment created in tenant A is invisible after switching to tenant B', async () => {

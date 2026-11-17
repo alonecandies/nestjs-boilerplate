@@ -199,6 +199,7 @@ describe('the B3 spec delta (ruling b3-identity-policies, 2026-11-17)', () => {
     for (const name of [
       'users.findByIdInTenant',
       'users.listInTenant',
+      'users.findByIdsInTenant',
       'memberships.findMember',
       'memberships.listMembers',
       'memberships.listForUser',

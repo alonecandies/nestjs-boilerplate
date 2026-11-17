@@ -19,6 +19,7 @@ export const IDENTITY_SYSTEM_METHODS = Object.freeze({
     existsByEmail: defineSystemMethod('users.existsByEmail', 'pre-auth'),
     findByIdInTenant: defineSystemMethod('users.findByIdInTenant', 'system'),
     listInTenant: defineSystemMethod('users.listInTenant', 'system'),
+    findByIdsInTenant: defineSystemMethod('users.findByIdsInTenant', 'system'),
   }),
   invitations: Object.freeze({
     findByTokenHash: defineSystemMethod('invitations.findByTokenHash', 'pre-auth'),
