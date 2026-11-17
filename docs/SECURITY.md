@@ -589,8 +589,10 @@ check whose statement errors, or answers in another shape than expected, is a fi
 | `system.owns-no-table`                 | the system role owns a relation of those schemas                                                     |
 | `system.citus-propagate-set-commands`  | the same Citus setting, for the system connection                                                    |
 | `system.distinct-user`                 | the system and runtime connections log in as the same user                                           |
+| `system.configured`                    | `enforce` only: there is no system connection (`DATABASE_SYSTEM_URL` is not set)                     |
 
-The `system.*` checks run only when `DATABASE_SYSTEM_URL` is set. `DATABASE_BOOT_GUARD` picks the mode:
+The other `system.*` checks run only when `DATABASE_SYSTEM_URL` is set. Production config requires it too: login,
+register, accepting an invitation and the purges run on the system pool. `DATABASE_BOOT_GUARD` picks the mode:
 
 - `enforce` (the default in production, and the only value production accepts): any finding throws
   `DatabaseBootGuardError` with every finding, and the app does not start. Compose sets it.

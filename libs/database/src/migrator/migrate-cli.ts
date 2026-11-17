@@ -1,5 +1,11 @@
 import { parseArgs } from 'node:util';
-import { appConfig, databaseConfig, observabilityConfig } from '@platform/config';
+import {
+  appConfig,
+  databaseConfig,
+  databaseMigrationEnvSchema,
+  observabilityConfig,
+  parseEnv,
+} from '@platform/config';
 import type { DatabaseMigrationSet } from '../database.types.js';
 import { createMigrateCliLogger } from './cli-logger.js';
 import { withPlatformMigrations } from './migration-sets.js';
@@ -29,7 +35,10 @@ export async function runMigrationsCli(
     parseArgs({ args: [...args], options: {}, strict: true });
     if (observabilityConfig.parse().logPretty) logger = createMigrateCliLogger(true);
     const sets = withPlatformMigrations(migrations);
-    const url = requireMigrationUrl(databaseConfig.parse());
+    // The app's database rules, minus the system pool this job never opens (no DATABASE_SYSTEM_URL).
+    const url = requireMigrationUrl(
+      parseEnv(databaseConfig.namespace, databaseMigrationEnvSchema, process.env),
+    );
     const { serviceName } = appConfig.parse();
     const summary = await runMigrations(url, {
       migrations: sets,

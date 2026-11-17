@@ -297,6 +297,40 @@ describe('runBootGuard', () => {
     ).rejects.toBeInstanceOf(DatabaseBootGuardError);
   });
 
+  it('enforce: refuses without a system connection (DATABASE_SYSTEM_URL unset)', async () => {
+    const error = await runBootGuard(
+      'enforce',
+      { runtime: connection(GOOD_RUNTIME), system: null, sets: SETS },
+      silentLogger(),
+    ).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(DatabaseBootGuardError);
+    expect((error as DatabaseBootGuardError).findings).toEqual([
+      {
+        check: 'system.configured',
+        detail: expect.stringContaining('DATABASE_SYSTEM_URL') as unknown,
+      },
+    ]);
+    // Next to the runtime findings, never instead of them.
+    const both = await runBootGuard(
+      'enforce',
+      { runtime: connection(badRuntime), system: null, sets: SETS },
+      silentLogger(),
+    ).catch((caught: unknown) => caught);
+    expect(checksOf((both as DatabaseBootGuardError).findings)).toEqual([
+      'runtime.not-superuser',
+      'runtime.rls-forced',
+      'system.configured',
+    ]);
+  });
+
+  it('warn: a missing system connection is no finding (development and tests may omit it)', async () => {
+    const logger = silentLogger();
+    await expect(
+      runBootGuard('warn', { runtime: connection(GOOD_RUNTIME), system: null, sets: SETS }, logger),
+    ).resolves.toEqual([]);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   it('enforce: resolves with no finding', async () => {
     const logger = silentLogger();
     await expect(

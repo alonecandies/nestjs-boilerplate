@@ -114,6 +114,10 @@ describe('grpc', () => {
 
 describe('database', () => {
   const url = (query: string): string => `postgres://u:p@db.internal:5432/app?${query}`;
+  /** Production requires the system pool (login, register, invitations, the purges need it). */
+  const SYSTEM = {
+    DATABASE_SYSTEM_URL: 'postgres://app_system:p@db.internal:5432/app?sslmode=verify-full',
+  } as const;
 
   it('requires the TLS mode postgres.js will actually use to encrypt, unless opted out', () => {
     const error = errorOf(() => databaseConfig.parse(PROD));
@@ -129,9 +133,10 @@ describe('database', () => {
       // postgres.js reads the LAST value of a repeated parameter
       'sslmode=disable&sslmode=verify-full',
     ]) {
-      expect(databaseConfig.parse({ ...PROD, DATABASE_URL: url(query) }).url, query).toBe(
-        url(query),
-      );
+      expect(
+        databaseConfig.parse({ ...PROD, ...SYSTEM, DATABASE_URL: url(query) }).url,
+        query,
+      ).toBe(url(query));
     }
     for (const query of [
       'sslmode=disable',
@@ -141,13 +146,32 @@ describe('database', () => {
       'sslmode=verify-full&sslmode=disable',
       'sslrootcert=system&sslrootcert=/etc/ca.pem',
     ]) {
-      expect(() => databaseConfig.parse({ ...PROD, DATABASE_URL: url(query) }), query).toThrow(
-        EnvValidationError,
+      expect(
+        () => databaseConfig.parse({ ...PROD, ...SYSTEM, DATABASE_URL: url(query) }),
+        query,
+      ).toThrow(EnvValidationError);
+    }
+    expect(
+      databaseConfig.parse({ ...PROD, ...SYSTEM, DATABASE_ALLOW_INSECURE: 'true' }).url,
+    ).toContain('localhost');
+  });
+
+  it('requires DATABASE_SYSTEM_URL in production only (no system pool: login and the purges fail)', () => {
+    for (const env of [
+      { ...PROD, DATABASE_URL: url('sslmode=verify-full') },
+      { ...PROD, DATABASE_ALLOW_INSECURE: 'true' },
+    ]) {
+      const error = errorOf(() => databaseConfig.parse(env));
+      expect(error.message).toContain('→ at DATABASE_SYSTEM_URL');
+      expect(error.message).toContain('app_system');
+      expect(databaseConfig.parse({ ...env, ...SYSTEM }).systemUrl).toBe(
+        SYSTEM.DATABASE_SYSTEM_URL,
       );
     }
-    expect(databaseConfig.parse({ ...PROD, DATABASE_ALLOW_INSECURE: 'true' }).url).toContain(
-      'localhost',
-    );
+    // Development and tests still boot without it (no system pool; each system call is refused).
+    for (const NODE_ENV of ['development', 'test']) {
+      expect(databaseConfig.parse({ NODE_ENV }).systemUrl).toBeUndefined();
+    }
   });
 
   it('never echoes the URL (it carries the password) in the error', () => {

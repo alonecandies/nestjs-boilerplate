@@ -218,7 +218,8 @@ one-off job.
 
 ## Environment (`database` namespace, plus `SERVICE_NAME` from `app`)
 
-`DATABASE_URL` (`app_runtime`), `DATABASE_SYSTEM_URL` (`app_system`; unset = no system pool),
+`DATABASE_URL` (`app_runtime`), `DATABASE_SYSTEM_URL` (`app_system`; unset = no system pool, refused in production by config and by the `enforce` boot
+guard, `system.configured`),
 `DATABASE_MIGRATION_URL` (`app_owner`, direct to the coordinator; required where migrations or CLIs run; no URL ever
 falls back to `DATABASE_URL`), `DATABASE_POOL_MAX` (20), `DATABASE_SYSTEM_POOL_MAX` (5, at most 5), `DATABASE_POOLER`
 (`none`; `pgbouncer` stops sending the two timeouts as startup parameters, the roles carry them),

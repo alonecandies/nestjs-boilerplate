@@ -51,6 +51,42 @@ describe('runMigrationsCli', () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it('a production release job needs no DATABASE_SYSTEM_URL (it never opens the system pool)', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', 'postgres://app_runtime:r@pgbouncer:6432/app?sslmode=verify-full');
+    vi.stubEnv('DATABASE_SYSTEM_URL', '');
+    vi.stubEnv('DATABASE_MIGRATION_URL', 'postgres://app_owner:o@db:5432/app?sslmode=verify-full');
+    vi.stubEnv('JWT_ACCESS_SECRET', 'a-production-access-secret-of-at-least-32-chars');
+    vi.stubEnv('LOG_PRETTY', 'false');
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    vi.mocked(runMigrations).mockResolvedValue({ sets: [], total: 0, applied: 0 });
+
+    await runMigrationsCli([orders], []);
+
+    expect(err.mock.calls.map((call) => String(call[0])).join('\n')).toBe('');
+    expect(runMigrations).toHaveBeenCalledWith(
+      'postgres://app_owner:o@db:5432/app?sslmode=verify-full',
+      expect.anything(),
+    );
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it('a production release job still refuses a migration URL without TLS', async () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('DATABASE_URL', 'postgres://app_runtime:r@pgbouncer:6432/app?sslmode=verify-full');
+    vi.stubEnv('DATABASE_SYSTEM_URL', '');
+    vi.stubEnv('DATABASE_MIGRATION_URL', 'postgres://app_owner:o@db:5432/app');
+    vi.stubEnv('LOG_PRETTY', 'false');
+    const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+    await runMigrationsCli([orders], []);
+    expect(runMigrations).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    const logged = err.mock.calls.map((call) => String(call[0])).join('\n');
+    expect(logged).toContain('DATABASE_MIGRATION_URL');
+    expect(logged).not.toContain('DATABASE_SYSTEM_URL');
+  });
+
   it('exits 1 naming DATABASE_MIGRATION_URL when it is missing, opening no connection', async () => {
     vi.stubEnv('DATABASE_URL', 'postgres://app_runtime:r@pgbouncer:6432/app');
     vi.stubEnv('DATABASE_MIGRATION_URL', '');

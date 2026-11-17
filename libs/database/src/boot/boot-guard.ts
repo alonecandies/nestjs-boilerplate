@@ -11,7 +11,8 @@ import { platformMigrations } from '../platform/platform.migrations.js';
  *   forced, except the internal tables below; no privilege on an internal table; on Citus,
  *   `citus.propagate_set_commands = 'local'` (without it the RLS context never reaches a shard);
  * - system connection, when configured: not a superuser; has BYPASSRLS; owns no relation there; the
- *   same Citus setting; another user than the runtime connection.
+ *   same Citus setting; another user than the runtime connection. In `enforce` mode a missing one
+ *   (no DATABASE_SYSTEM_URL) is itself a finding: login, register, invitations and the purges need it.
  *
  * Internal tables carry no RLS and are granted to no app role: each set's bookkeeping table and the
  * platform set's colocation anchor `app.tenant_colocation` (0001; always empty, never queried).
@@ -52,7 +53,7 @@ export interface BootGuardClient {
 
 export interface BootGuardTarget {
   readonly runtime: BootGuardClient;
-  /** `null` without DATABASE_SYSTEM_URL: the system checks are skipped. */
+  /** `null` without DATABASE_SYSTEM_URL: the system checks are skipped (`enforce` refuses it). */
   readonly system: BootGuardClient | null;
   /** Every set this process migrates, the platform set included (`withPlatformMigrations`). */
   readonly sets: readonly DatabaseMigrationSet[];
@@ -288,9 +289,18 @@ export async function inspectDatabase(
   return findings;
 }
 
+/** The `enforce` finding for a process without a system pool. */
+const MISSING_SYSTEM_POOL: BootGuardFinding = Object.freeze({
+  check: 'system.configured',
+  detail:
+    'no system connection (DATABASE_SYSTEM_URL is not set): login, register, accepting an invitation and the purge jobs need the app_system pool',
+});
+
 /**
  * `off`: sends nothing (fake databases only; production config rejects it). `warn`: logs each
- * finding and resolves with them. `enforce`: throws `DatabaseBootGuardError` with every finding.
+ * finding and resolves with them (a missing system pool is not one: development and tests may run
+ * without it). `enforce`: throws `DatabaseBootGuardError` with every finding, a missing system
+ * pool included.
  */
 export async function runBootGuard(
   mode: BootGuardMode,
@@ -303,7 +313,10 @@ export async function runBootGuard(
     );
     return [];
   }
-  const findings = await inspectDatabase(target);
+  const findings = [
+    ...(await inspectDatabase(target)),
+    ...(mode === 'enforce' && target.system === null ? [MISSING_SYSTEM_POOL] : []),
+  ];
   if (findings.length === 0) {
     logger.log(`Database boot guard (${mode}): roles, RLS and grants as required`);
     return findings;

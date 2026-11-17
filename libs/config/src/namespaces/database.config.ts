@@ -49,113 +49,145 @@ function addressOf(databaseUrl: string): string | undefined {
   return `${parsed.hostname.toLowerCase().replace(/\.$/, '')}:${parsed.port || '5432'}`;
 }
 
-export const databaseEnvSchema = z
-  .object({
-    NODE_ENV: zNodeEnv(),
-    // app_runtime (NOBYPASSRLS); through PgBouncer when DATABASE_POOLER=pgbouncer.
-    DATABASE_URL: zUrl('postgres://app:app@localhost:5432/app', POSTGRES_PROTOCOL),
-    // app_system (BYPASSRLS), the named system methods only. Without it there is no system pool.
-    DATABASE_SYSTEM_URL: zUrl(undefined, POSTGRES_PROTOCOL),
-    // app_owner, directly to the coordinator: the migrator, drizzle-kit and the operator CLIs.
-    // Never replaced by DATABASE_URL: a missing value fails where it is needed.
-    DATABASE_MIGRATION_URL: zUrl(undefined, POSTGRES_PROTOCOL),
-    DATABASE_POOL_MAX: zInt(20, { min: 1, max: 1000 }),
-    DATABASE_SYSTEM_POOL_MAX: zInt(5, { min: 1, max: 5 }),
-    DATABASE_POOLER: zEnum(DATABASE_POOLERS, 'none'),
-    DATABASE_BOOT_GUARD: zEnum(DATABASE_BOOT_GUARD_MODES),
-    DATABASE_IDLE_TIMEOUT_SEC: zInt(30, { min: 0 }),
-    DATABASE_MAX_LIFETIME_SEC: zInt(1800, { min: 0 }),
-    DATABASE_CONNECT_TIMEOUT_SEC: zInt(10, { min: 1 }),
-    DATABASE_STATEMENT_TIMEOUT_MS: zInt(15_000, { min: 0 }),
-    DATABASE_PREPARE: zBool(true),
-    DATABASE_LOG_QUERIES: zBool(false),
-    DATABASE_RUN_MIGRATIONS: zBool(false),
-    // Production refuses an unencrypted connection unless this explicit opt-out is set (a sidecar
-    // such as the Cloud SQL Auth Proxy, or the network layer, already encrypts it).
-    DATABASE_ALLOW_INSECURE: zBool(false),
-  })
-  .superRefine((env, ctx) => {
-    if (env.NODE_ENV !== 'production') return;
-    // Error messages name keys and roles only, never a URL: URLs carry passwords.
-    const fail = (key: string, message: string): void => {
-      ctx.addIssue({ code: 'custom', path: [key], message });
-    };
+const databaseEnvObject = z.object({
+  NODE_ENV: zNodeEnv(),
+  // app_runtime (NOBYPASSRLS); through PgBouncer when DATABASE_POOLER=pgbouncer.
+  DATABASE_URL: zUrl('postgres://app:app@localhost:5432/app', POSTGRES_PROTOCOL),
+  // app_system (BYPASSRLS), the named system methods only. Without it there is no system pool
+  // (development and tests only: production requires it, see below).
+  DATABASE_SYSTEM_URL: zUrl(undefined, POSTGRES_PROTOCOL),
+  // app_owner, directly to the coordinator: the migrator, drizzle-kit and the operator CLIs.
+  // Never replaced by DATABASE_URL: a missing value fails where it is needed.
+  DATABASE_MIGRATION_URL: zUrl(undefined, POSTGRES_PROTOCOL),
+  DATABASE_POOL_MAX: zInt(20, { min: 1, max: 1000 }),
+  DATABASE_SYSTEM_POOL_MAX: zInt(5, { min: 1, max: 5 }),
+  DATABASE_POOLER: zEnum(DATABASE_POOLERS, 'none'),
+  DATABASE_BOOT_GUARD: zEnum(DATABASE_BOOT_GUARD_MODES),
+  DATABASE_IDLE_TIMEOUT_SEC: zInt(30, { min: 0 }),
+  DATABASE_MAX_LIFETIME_SEC: zInt(1800, { min: 0 }),
+  DATABASE_CONNECT_TIMEOUT_SEC: zInt(10, { min: 1 }),
+  DATABASE_STATEMENT_TIMEOUT_MS: zInt(15_000, { min: 0 }),
+  DATABASE_PREPARE: zBool(true),
+  DATABASE_LOG_QUERIES: zBool(false),
+  DATABASE_RUN_MIGRATIONS: zBool(false),
+  // Production refuses an unencrypted connection unless this explicit opt-out is set (a sidecar
+  // such as the Cloud SQL Auth Proxy, or the network layer, already encrypts it).
+  DATABASE_ALLOW_INSECURE: zBool(false),
+});
 
-    if (env.DATABASE_BOOT_GUARD !== undefined && env.DATABASE_BOOT_GUARD !== 'enforce') {
-      fail(
-        'DATABASE_BOOT_GUARD',
-        'DATABASE_BOOT_GUARD must be enforce in production (warn and off are for development and tests)',
-      );
-    }
-    if (env.DATABASE_RUN_MIGRATIONS && env.DATABASE_MIGRATION_URL === undefined) {
-      fail(
-        'DATABASE_MIGRATION_URL',
-        'DATABASE_RUN_MIGRATIONS=true needs DATABASE_MIGRATION_URL in production (the app_owner role, directly to the coordinator); migrations never use DATABASE_URL',
-      );
-    }
-    const runtimeUser = userOf(env.DATABASE_URL);
-    for (const key of ['DATABASE_SYSTEM_URL', 'DATABASE_MIGRATION_URL'] as const) {
-      const value = env[key];
-      if (value !== undefined && userOf(value) === runtimeUser) {
-        fail(
-          key,
-          `${key} must log in as another user than DATABASE_URL (app_runtime; app_system for the system pool, app_owner for migrations)`,
-        );
-      }
-    }
-    if (
-      env.DATABASE_POOLER === 'pgbouncer' &&
-      env.DATABASE_MIGRATION_URL !== undefined &&
-      addressOf(env.DATABASE_MIGRATION_URL) === addressOf(env.DATABASE_URL)
-    ) {
-      fail(
-        'DATABASE_MIGRATION_URL',
-        'DATABASE_MIGRATION_URL must connect directly to the coordinator, not through PgBouncer: with DATABASE_POOLER=pgbouncer it cannot use the host and port of DATABASE_URL (the migrator holds a session advisory lock)',
-      );
-    }
+type DatabaseEnv = z.infer<typeof databaseEnvObject>;
 
-    if (env.DATABASE_ALLOW_INSECURE) return;
-    for (const key of URL_KEYS) {
-      const value = env[key];
-      if (value !== undefined && !ENCRYPTING_SSL_MODES.has(effectiveSslMode(value) ?? '')) {
-        fail(
-          key,
-          `${key} must enable TLS in production: add ?sslmode=verify-full (or require / verify-ca, ssl=true, or sslrootcert=system; prefer and allow can fall back to plaintext), or set DATABASE_ALLOW_INSECURE=true when a sidecar proxy or the network layer encrypts the connection`,
-        );
-      }
+/**
+ * The production rules. `requireSystemUrl`: an app process opens the system pool (login, register,
+ * accepting an invitation and the purge jobs run on it), so production refuses to start without
+ * it; the migrate job (`databaseMigrationEnvSchema`) never opens it.
+ */
+function refineProduction(
+  env: DatabaseEnv,
+  ctx: z.RefinementCtx,
+  { requireSystemUrl }: { requireSystemUrl: boolean },
+): void {
+  if (env.NODE_ENV !== 'production') return;
+  // Error messages name keys and roles only, never a URL: URLs carry passwords.
+  const fail = (key: string, message: string): void => {
+    ctx.addIssue({ code: 'custom', path: [key], message });
+  };
+
+  if (env.DATABASE_BOOT_GUARD !== undefined && env.DATABASE_BOOT_GUARD !== 'enforce') {
+    fail(
+      'DATABASE_BOOT_GUARD',
+      'DATABASE_BOOT_GUARD must be enforce in production (warn and off are for development and tests)',
+    );
+  }
+  if (requireSystemUrl && env.DATABASE_SYSTEM_URL === undefined) {
+    fail(
+      'DATABASE_SYSTEM_URL',
+      'DATABASE_SYSTEM_URL is required in production (the app_system role): login, register, accepting an invitation and the purge jobs run on the system pool',
+    );
+  }
+  if (env.DATABASE_RUN_MIGRATIONS && env.DATABASE_MIGRATION_URL === undefined) {
+    fail(
+      'DATABASE_MIGRATION_URL',
+      'DATABASE_RUN_MIGRATIONS=true needs DATABASE_MIGRATION_URL in production (the app_owner role, directly to the coordinator); migrations never use DATABASE_URL',
+    );
+  }
+  const runtimeUser = userOf(env.DATABASE_URL);
+  for (const key of ['DATABASE_SYSTEM_URL', 'DATABASE_MIGRATION_URL'] as const) {
+    const value = env[key];
+    if (value !== undefined && userOf(value) === runtimeUser) {
+      fail(
+        key,
+        `${key} must log in as another user than DATABASE_URL (app_runtime; app_system for the system pool, app_owner for migrations)`,
+      );
     }
-  })
-  .transform((env) => ({
-    /** app_runtime: every request. */
-    url: env.DATABASE_URL,
-    /** app_system: the named system methods; `undefined` = no system pool. */
-    systemUrl: env.DATABASE_SYSTEM_URL,
-    /** app_owner, direct to the coordinator; required wherever migrations or CLIs run. */
-    migrationUrl: env.DATABASE_MIGRATION_URL,
-    poolMax: env.DATABASE_POOL_MAX,
-    systemPoolMax: env.DATABASE_SYSTEM_POOL_MAX,
-    /**
-     * `pgbouncer`: the client stops sending `statement_timeout` and
-     * `idle_in_transaction_session_timeout` as startup parameters (PgBouncer rejects them); the
-     * roles carry the same values (`ALTER ROLE … SET`).
-     */
-    pooler: env.DATABASE_POOLER,
-    /** What the boot guard does with its findings: enforce in production, warn elsewhere. */
-    bootGuard: env.DATABASE_BOOT_GUARD ?? (env.NODE_ENV === 'production' ? 'enforce' : 'warn'),
-    /** postgres.js time options are SECONDS… */
-    idleTimeoutSec: env.DATABASE_IDLE_TIMEOUT_SEC,
-    maxLifetimeSec: env.DATABASE_MAX_LIFETIME_SEC,
-    connectTimeoutSec: env.DATABASE_CONNECT_TIMEOUT_SEC,
-    /** …while Postgres GUCs such as statement_timeout are MILLISECONDS. */
-    statementTimeoutMs: env.DATABASE_STATEMENT_TIMEOUT_MS,
-    /**
-     * Server-side prepared statements. Stays `true` behind PgBouncer 1.26 (it tracks them,
-     * `max_prepared_statements`); `false` is the escape hatch for poolers that do not (RDS Proxy).
-     */
-    prepare: env.DATABASE_PREPARE,
-    logQueries: env.DATABASE_LOG_QUERIES,
-    runMigrations: env.DATABASE_RUN_MIGRATIONS,
-  }));
+  }
+  if (
+    env.DATABASE_POOLER === 'pgbouncer' &&
+    env.DATABASE_MIGRATION_URL !== undefined &&
+    addressOf(env.DATABASE_MIGRATION_URL) === addressOf(env.DATABASE_URL)
+  ) {
+    fail(
+      'DATABASE_MIGRATION_URL',
+      'DATABASE_MIGRATION_URL must connect directly to the coordinator, not through PgBouncer: with DATABASE_POOLER=pgbouncer it cannot use the host and port of DATABASE_URL (the migrator holds a session advisory lock)',
+    );
+  }
+
+  if (env.DATABASE_ALLOW_INSECURE) return;
+  for (const key of URL_KEYS) {
+    const value = env[key];
+    if (value !== undefined && !ENCRYPTING_SSL_MODES.has(effectiveSslMode(value) ?? '')) {
+      fail(
+        key,
+        `${key} must enable TLS in production: add ?sslmode=verify-full (or require / verify-ca, ssl=true, or sslrootcert=system; prefer and allow can fall back to plaintext), or set DATABASE_ALLOW_INSECURE=true when a sidecar proxy or the network layer encrypts the connection`,
+      );
+    }
+  }
+}
+
+const toDatabaseConfig = (env: DatabaseEnv) => ({
+  /** app_runtime: every request. */
+  url: env.DATABASE_URL,
+  /** app_system: the named system methods; `undefined` = no system pool (never in production). */
+  systemUrl: env.DATABASE_SYSTEM_URL,
+  /** app_owner, direct to the coordinator; required wherever migrations or CLIs run. */
+  migrationUrl: env.DATABASE_MIGRATION_URL,
+  poolMax: env.DATABASE_POOL_MAX,
+  systemPoolMax: env.DATABASE_SYSTEM_POOL_MAX,
+  /**
+   * `pgbouncer`: the client stops sending `statement_timeout` and
+   * `idle_in_transaction_session_timeout` as startup parameters (PgBouncer rejects them); the
+   * roles carry the same values (`ALTER ROLE … SET`).
+   */
+  pooler: env.DATABASE_POOLER,
+  /** What the boot guard does with its findings: enforce in production, warn elsewhere. */
+  bootGuard: env.DATABASE_BOOT_GUARD ?? (env.NODE_ENV === 'production' ? 'enforce' : 'warn'),
+  /** postgres.js time options are SECONDS… */
+  idleTimeoutSec: env.DATABASE_IDLE_TIMEOUT_SEC,
+  maxLifetimeSec: env.DATABASE_MAX_LIFETIME_SEC,
+  connectTimeoutSec: env.DATABASE_CONNECT_TIMEOUT_SEC,
+  /** …while Postgres GUCs such as statement_timeout are MILLISECONDS. */
+  statementTimeoutMs: env.DATABASE_STATEMENT_TIMEOUT_MS,
+  /**
+   * Server-side prepared statements. Stays `true` behind PgBouncer 1.26 (it tracks them,
+   * `max_prepared_statements`); `false` is the escape hatch for poolers that do not (RDS Proxy).
+   */
+  prepare: env.DATABASE_PREPARE,
+  logQueries: env.DATABASE_LOG_QUERIES,
+  runMigrations: env.DATABASE_RUN_MIGRATIONS,
+});
+
+/** The app processes' schema: every production rule, DATABASE_SYSTEM_URL required. */
+export const databaseEnvSchema = databaseEnvObject
+  .superRefine((env, ctx) => refineProduction(env, ctx, { requireSystemUrl: true }))
+  .transform(toDatabaseConfig);
+
+/**
+ * The migrate job's schema (`runMigrationsCli`, the `database` namespace too): the same rules and
+ * messages, but it never opens the system pool, so production does not require DATABASE_SYSTEM_URL.
+ */
+export const databaseMigrationEnvSchema = databaseEnvObject
+  .superRefine((env, ctx) => refineProduction(env, ctx, { requireSystemUrl: false }))
+  .transform(toDatabaseConfig);
 
 /** PostgreSQL (postgres.js + Drizzle) connection pool. */
 export const databaseConfig = defineConfigNamespace('database', databaseEnvSchema);
