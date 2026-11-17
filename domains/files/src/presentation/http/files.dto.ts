@@ -54,7 +54,9 @@ export const FileKeyQuerySchema = z.strictObject({
     .min(1, { abort: true })
     .max(MAX_STORAGE_KEY_BYTES, { abort: true })
     .refine(isValidFileKey, { error: 'is not a valid file key' })
-    .describe('Object key returned by an upload (users/{userId}/{id}-{filename})'),
+    .describe(
+      'Object key returned by an upload (tenants/{tenantId}/users/{userId}/{id}/{filename})',
+    ),
 });
 
 export type FileKeyQuery = z.output<typeof FileKeyQuerySchema>;

@@ -10,6 +10,9 @@ export type FilesPermission = (typeof FilesPermission)[keyof typeof FilesPermiss
 export const FILES_RBAC = defineRbacFeature({
   name: 'files',
   permissions: Object.values(FilesPermission),
-  // files:manage is declared but granted to nobody until B4-3 moves keys under tenants/<tid>/ (I-5).
-  grants: { member: [FilesPermission.Read, FilesPermission.Write] },
+  // files:manage = any file of the caller's active tenant: keys live under tenants/<tid>/ (B4-3).
+  grants: {
+    member: [FilesPermission.Read, FilesPermission.Write],
+    admin: [FilesPermission.Manage],
+  },
 });

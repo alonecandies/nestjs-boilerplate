@@ -1,8 +1,12 @@
 import { Readable } from 'node:stream';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { generateId, isUuidV7 } from '@platform/common';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { UPLOADED_BY_METADATA_KEY } from '../../application/files.service.js';
+import {
+  TENANT_ID_METADATA_KEY,
+  UPLOADED_BY_METADATA_KEY,
+} from '../../application/files.service.js';
 import { createFilesTestApp, type FilesTestApp } from '../../testing/files-test-app.test.js';
 
 const MAX_UPLOAD_BYTES = 4096;
@@ -28,18 +32,27 @@ const bearer = (token: string): Record<string, string> => ({ authorization: `Bea
 
 describe('FilesController (Fastify e2e, in-memory storage)', () => {
   let t: FilesTestApp;
+  const tenantA = TEST_TENANT_ID;
+  const tenantB = generateId();
   const aliceId = generateId();
   const bobId = generateId();
   let alice: string;
   let bob: string;
+  /** An admin of tenant A (holds files:manage there). */
   let admin: string;
+  /** An admin of tenant B (holds files:manage there, not in A). */
+  let adminOfB: string;
+  /** Bob's token after a switch to tenant B. */
+  let bobInB: string;
   let nobody: string;
 
   beforeAll(async () => {
     t = await createFilesTestApp({ maxUploadBytes: MAX_UPLOAD_BYTES });
-    alice = await t.tokenFor(['member'], aliceId);
-    bob = await t.tokenFor(['member'], bobId);
-    admin = await t.tokenFor(['admin']);
+    alice = await t.tokenFor(['member'], aliceId, tenantA);
+    bob = await t.tokenFor(['member'], bobId, tenantA);
+    admin = await t.tokenFor(['admin'], generateId(), tenantA);
+    adminOfB = await t.tokenFor(['admin'], generateId(), tenantB);
+    bobInB = await t.tokenFor(['admin'], bobId, tenantB);
     // A valid token whose roles grant nothing (e.g. an unknown role dropped at verification).
     nobody = await t.tokenFor([]);
   });
@@ -50,14 +63,18 @@ describe('FilesController (Fastify e2e, in-memory storage)', () => {
   const upload = (token: string, form: FormData) =>
     t.app.inject({ method: 'POST', url: '/v1/files', headers: bearer(token), payload: form });
 
-  async function storedFileOf(userId: string, content = 'hello'): Promise<string> {
-    const key = `users/${userId}/${generateId()}-notes.txt`;
+  async function storedFileOf(
+    userId: string,
+    content = 'hello',
+    tenantId = tenantA,
+  ): Promise<string> {
+    const key = `tenants/${tenantId}/users/${userId}/${generateId()}/notes.txt`;
     await t.storage.upload({ key, body: Buffer.from(content), contentType: 'text/plain' });
     return key;
   }
 
   describe('POST /v1/files (streaming multipart upload)', () => {
-    it('streams the file part to storage under users/{userId}/{uuidv7}-{safeFilename}', async () => {
+    it('streams the file part to storage under tenants/{tid}/users/{uid}/{uuidv7}/{safeFilename}', async () => {
       const uploadSpy = vi.spyOn(t.storage, 'upload');
       const res = await upload(alice, fileForm('hello, world'));
 
@@ -65,7 +82,7 @@ describe('FilesController (Fastify e2e, in-memory storage)', () => {
       const body = res.json<Record<string, unknown>>();
       expect(body).toEqual({
         key: expect.stringMatching(
-          new RegExp(`^users/${aliceId}/[0-9a-f-]{36}-hello-world\\.txt$`),
+          new RegExp(`^tenants/${tenantA}/users/${aliceId}/[0-9a-f-]{36}/hello-world\\.txt$`),
         ),
         filename: 'hello-world.txt',
         contentType: 'text/plain',
@@ -73,13 +90,16 @@ describe('FilesController (Fastify e2e, in-memory storage)', () => {
         etag: expect.any(String),
       });
       const key = String(body['key']);
-      expect(isUuidV7(key.split('/')[2]?.slice(0, 36))).toBe(true);
+      expect(isUuidV7(key.split('/')[4])).toBe(true);
 
       // Never buffered by the API: storage received the multipart stream itself.
       expect(uploadSpy.mock.calls[0]?.[0].body).toBeInstanceOf(Readable);
       const stored = t.storage.getObject(key);
       expect(stored?.body.toString()).toBe('hello, world');
-      expect(stored?.metadata).toEqual({ [UPLOADED_BY_METADATA_KEY]: aliceId });
+      expect(stored?.metadata).toEqual({
+        [UPLOADED_BY_METADATA_KEY]: aliceId,
+        [TENANT_ID_METADATA_KEY]: tenantA,
+      });
     });
 
     it('accepts a file of exactly STORAGE_MAX_UPLOAD_BYTES', async () => {
@@ -241,7 +261,7 @@ describe('FilesController (Fastify e2e, in-memory storage)', () => {
       const body = res.json<Record<string, unknown>>();
       expect(body).toEqual({
         key: expect.stringMatching(
-          new RegExp(`^users/${aliceId}/[0-9a-f-]{36}-quarterly-report\\.pdf$`),
+          new RegExp(`^tenants/${tenantA}/users/${aliceId}/[0-9a-f-]{36}/quarterly-report\\.pdf$`),
         ),
         filename: 'quarterly-report.pdf',
         url: expect.stringContaining('method=PUT'),
@@ -367,15 +387,37 @@ describe('FilesController (Fastify e2e, in-memory storage)', () => {
       expect((await downloadUrl(alice, key)).statusCode).toBe(403);
     });
 
-    it("an admin cannot presign another user's file: files:manage is withheld until B4-3", async () => {
+    it("an admin of A presigns another member's file in A (files:manage)", async () => {
       const key = await storedFileOf(bobId);
       const res = await downloadUrl(admin, key);
-      expect(res.statusCode).toBe(403);
-      expect(res.json<ProblemBody>()).toMatchObject({ code: 'FILE_ACCESS_DENIED' });
+      expect(res.statusCode, res.body).toBe(200);
+      expect(res.json()).toMatchObject({ key, filename: 'notes.txt' });
+    });
+
+    it('an admin of B gets 403 on that key, and so does its owner acting in B', async () => {
+      const key = await storedFileOf(bobId);
+      for (const token of [adminOfB, bobInB]) {
+        const res = await downloadUrl(token, key);
+        expect(res.statusCode).toBe(403);
+        expect(res.json<ProblemBody>()).toMatchObject({ code: 'FILE_ACCESS_DENIED' });
+      }
+    });
+
+    it('403s on a legacy users/{id}/ key, for its uploader and for an admin', async () => {
+      const key = `users/${aliceId}/${generateId()}-notes.txt`;
+      await t.storage.upload({ key, body: Buffer.from('old'), contentType: 'text/plain' });
+      for (const token of [alice, admin]) {
+        const res = await downloadUrl(token, key);
+        expect(res.statusCode).toBe(403);
+        expect(res.json<ProblemBody>()).toMatchObject({ code: 'FILE_ACCESS_DENIED' });
+      }
     });
 
     it('404s for a missing own key', async () => {
-      const res = await downloadUrl(alice, `users/${aliceId}/${generateId()}-gone.txt`);
+      const res = await downloadUrl(
+        alice,
+        `tenants/${tenantA}/users/${aliceId}/${generateId()}/gone.txt`,
+      );
       expect(res.statusCode).toBe(404);
       expect(res.json<ProblemBody>()).toMatchObject({ code: 'FILE_NOT_FOUND' });
     });
@@ -418,7 +460,10 @@ describe('FilesController (Fastify e2e, in-memory storage)', () => {
     });
 
     it('is idempotent for an own key that no longer exists', async () => {
-      const res = await remove(alice, `users/${aliceId}/${generateId()}-gone.txt`);
+      const res = await remove(
+        alice,
+        `tenants/${tenantA}/users/${aliceId}/${generateId()}/gone.txt`,
+      );
       expect(res.statusCode).toBe(204);
     });
 
@@ -431,9 +476,19 @@ describe('FilesController (Fastify e2e, in-memory storage)', () => {
       expect(t.storage.getObject(key)).toBeDefined();
     });
 
-    it("an admin cannot delete another user's file: files:manage is withheld until B4-3", async () => {
+    it("an admin of A deletes another member's file in A (files:manage)", async () => {
       const key = await storedFileOf(bobId);
-      expect((await remove(admin, key)).statusCode).toBe(403);
+      expect((await remove(admin, key)).statusCode).toBe(204);
+      expect(t.storage.getObject(key)).toBeUndefined();
+    });
+
+    it('an admin of B gets 403 on that key and the file stays', async () => {
+      const key = await storedFileOf(bobId);
+      for (const token of [adminOfB, bobInB]) {
+        const res = await remove(token, key);
+        expect(res.statusCode).toBe(403);
+        expect(res.json<ProblemBody>()).toMatchObject({ code: 'FILE_ACCESS_DENIED' });
+      }
       expect(t.storage.getObject(key)).toBeDefined();
     });
 
@@ -443,7 +498,8 @@ describe('FilesController (Fastify e2e, in-memory storage)', () => {
     });
 
     it('400s on a traversal key', async () => {
-      expect((await remove(alice, `users/${aliceId}/../${bobId}/a.txt`)).statusCode).toBe(400);
+      const traversal = `tenants/${tenantA}/users/${aliceId}/../${bobId}/a.txt`;
+      expect((await remove(alice, traversal)).statusCode).toBe(400);
     });
   });
 

@@ -159,12 +159,12 @@ them at verification. Grants are cumulative: owner ⊇ admin ⊇ member (✓ = e
 | notifications | `notifications:write` |          |    ✓    |    ✓    | reserved                                                                                                                        |
 | files         | `files:read`          |    ✓     |    ✓    |    ✓    | `GET /v1/files/download-url` (own files)                                                                                        |
 | files         | `files:write`         |    ✓     |    ✓    |    ✓    | upload, presign, delete (own files)                                                                                             |
-| files         | `files:manage`        |          |         |         | download/delete any user's file: declared, granted to nobody until the data is tenant-scoped (B4-3)                             |
+| files         | `files:manage`        |          |    ✓    |    ✓    | download/delete any file of the active tenant only (keys `tenants/<tid>/…`; never another tenant's)                             |
 
 Ownership rules that are **not** permissions, enforced by the handlers:
 
 - A user can always read their own profile (`GET /v1/users/:id`, `user(id)`).
-- Files are scoped to the key prefix `users/{userId}/`; access is checked before existence (403 before 404) so keys of other users cannot be probed.
+- Files are scoped to the key prefix `tenants/{tenantId}/users/{userId}/`, the tenant taken from the token; the tenant prefix is checked first (another tenant's key and a legacy `users/…` key are 403 for everyone, `files:manage` included), and access is checked before existence (403 before 404) so keys of other users and tenants cannot be probed.
 - Notifications and payments always use the user id and tenant from the token, never from the request.
 - Owner rank: only an owner can grant, revoke, invite or remove the `owner` role, and a tenant always keeps one owner (`LAST_OWNER`); both are checked in the handlers, in every transport.
 
@@ -355,9 +355,10 @@ are sanitised before they reach the client.
   `fileFilter` before a byte is read.
 - The declared type is checked, the content is not sniffed, so downloads are always presigned with
   `Content-Disposition: attachment`.
-- Keys are `users/{userId}/{uuidv7}-{safeFilename}`: unguessable, never overwritten. `assertStorageKey`
-  rejects `..`, empty segments, leading `/`, control characters and backslashes; ownership uses a
-  segment-aware prefix test (`users/u1` never matches `users/u10`).
+- Keys are `tenants/{tenantId}/users/{userId}/{uuidv7}/{safeFilename}`: unguessable, never
+  overwritten, and built only by `buildUserFileKey` from the token's tenant. `assertStorageKey`
+  rejects `..`, empty segments, leading `/`, control characters and backslashes before any prefix
+  test; the tenant and owner tests are segment-aware (`users/u1` never matches `users/u10`).
 - Presigned PUTs sign the content type and the exact `contentLength`; presigned URLs live
   `STORAGE_SIGNED_URL_TTL_SEC` (900 s).
 

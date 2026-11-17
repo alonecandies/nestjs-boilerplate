@@ -80,8 +80,10 @@ interface HeaderWritableReply {
 }
 
 /**
- * `/v1/files` — per-user object storage. Keys are `users/{userId}/{uuidv7}-{safeFilename}`; a user
- * may only touch keys under their own prefix unless they hold `files:manage`.
+ * `/v1/files` — per-user object storage in the caller's active tenant. Keys are
+ * `tenants/{tenantId}/users/{userId}/{uuidv7}/{safeFilename}`; a user may only touch keys under their
+ * own prefix, or, with `files:manage`, any key of their active tenant. Another tenant's key and a
+ * legacy `users/…` key are 403 for everyone.
  *
  * Responses are serialized through their zod schemas (`StandardSchemaSerializerInterceptor`,
  * HTTP-only by construction since it sits on this controller).
@@ -183,12 +185,14 @@ export class FilesController {
   @ApiOperation({
     summary: 'Create a presigned download URL',
     description:
-      'Own files only, unless the caller holds files:manage. The URL forces a download ' +
+      'Own files only, or any file of the active tenant with files:manage. The URL forces a download ' +
       '(Content-Disposition: attachment).',
   })
   @ApiOkResponse({ description: 'Presigned GET', standardSchema: DownloadUrlResponseSchema })
   @ApiBadRequestResponse({ description: `Missing or malformed key (${PROBLEM})` })
-  @ApiForbiddenResponse({ description: `FILE_ACCESS_DENIED: not your file (${PROBLEM})` })
+  @ApiForbiddenResponse({
+    description: `FILE_ACCESS_DENIED: not your file, or not in your active tenant (${PROBLEM})`,
+  })
   @ApiNotFoundResponse({ description: `FILE_NOT_FOUND (${PROBLEM})` })
   async createDownloadUrl(
     @CurrentUser() user: AuthUser,
@@ -202,11 +206,13 @@ export class FilesController {
   @RequireAnyPermission(FilesPermission.Write, FilesPermission.Manage)
   @ApiOperation({
     summary: 'Delete a file',
-    description: 'Own files only, unless the caller holds files:manage. Idempotent.',
+    description: 'Own files only, or any file of the active tenant with files:manage. Idempotent.',
   })
   @ApiNoContentResponse({ description: 'Deleted (or already absent)' })
   @ApiBadRequestResponse({ description: `Missing or malformed key (${PROBLEM})` })
-  @ApiForbiddenResponse({ description: `FILE_ACCESS_DENIED: not your file (${PROBLEM})` })
+  @ApiForbiddenResponse({
+    description: `FILE_ACCESS_DENIED: not your file, or not in your active tenant (${PROBLEM})`,
+  })
   async deleteFile(
     @CurrentUser() user: AuthUser,
     @Query({ schema: FileKeyQuerySchema }) query: FileKeyQuery,

@@ -23,7 +23,8 @@ export const FilesErrorCode = {
 export type FilesErrorCode = (typeof FilesErrorCode)[keyof typeof FilesErrorCode];
 
 /**
- * 403 — the key lies outside the caller's `users/{id}/` prefix and the caller lacks `files:manage`.
+ * 403 — the key lies outside the caller's active tenant, or outside their
+ * `tenants/{tid}/users/{id}/` prefix while they lack `files:manage`.
  * The key is deliberately not echoed back in `details`.
  */
 export class FileAccessDeniedException extends PermissionDeniedException {

@@ -1,8 +1,8 @@
 import type { Readable } from 'node:stream';
 import type { AuthUser } from '@platform/auth';
 
-/** Who acts on a file: the authenticated user (only what the policies need). */
-export type FileActor = Pick<AuthUser, 'id' | 'permissions'>;
+/** Who acts on a file: the authenticated user in their active tenant (only what the policies need). */
+export type FileActor = Pick<AuthUser, 'id' | 'tenantId' | 'permissions'>;
 
 export interface UploadFileParams {
   /** Client-supplied name; sanitized into the key. */

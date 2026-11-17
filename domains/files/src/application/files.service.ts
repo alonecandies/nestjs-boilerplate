@@ -24,12 +24,16 @@ import type {
 /** User metadata stored with every object (`x-amz-meta-uploaded-by` / GCS custom metadata). */
 export const UPLOADED_BY_METADATA_KEY = 'uploaded-by';
 
+/** The uploader's active tenant, stored beside `uploaded-by` (`x-amz-meta-tenant-id`). */
+export const TENANT_ID_METADATA_KEY = 'tenant-id';
+
 /**
  * Use cases of the files context (edge-only: no service/topology split, so there is no port pair
  * here — the hexagonal seam is the `StorageService` port, bound to S3, GCS or memory).
  *
- * Every key operation goes through `resolveFileAccess` (validated key → owner prefix or
- * `files:manage`). Uploads always get a fresh key; nothing can be overwritten.
+ * Every key operation goes through `resolveFileAccess` (validated key → the caller's tenant prefix →
+ * owner prefix or `files:manage`). Uploads always get a fresh key under the caller's tenant and user
+ * prefix; nothing can be overwritten.
  */
 @Injectable()
 export class FilesService {
@@ -48,21 +52,24 @@ export class FilesService {
   }
 
   /**
-   * Streams `params.body` to `users/{actor}/{uuidv7}-{safeFilename}`. Never one whole-file buffer,
-   * but the storage driver holds bounded chunks (S3: up to ~15 MiB per upload), so at most
-   * `STORAGE_MAX_CONCURRENT_UPLOADS` run at once per process: one more fails fast with a 503
-   * `UploadCapacityExceededException` before its body is read (the slot is freed whatever the
+   * Streams `params.body` to `tenants/{tenant}/users/{actor}/{uuidv7}/{safeFilename}`. Never one
+   * whole-file buffer, but the storage driver holds bounded chunks (S3: up to ~15 MiB per upload),
+   * so at most `STORAGE_MAX_CONCURRENT_UPLOADS` run at once per process: one more fails fast with a
+   * 503 `UploadCapacityExceededException` before its body is read (the slot is freed whatever the
    * outcome). Presigned uploads are not counted — their bytes never reach the API.
    */
   async upload(actor: FileActor, params: UploadFileParams): Promise<UploadedFile> {
     const contentType = assertAllowedContentType(params.contentType);
-    const key = buildUserFileKey(actor.id, params.filename);
+    const key = buildUserFileKey(actor.tenantId, actor.id, params.filename);
     const stored = await this.withUploadSlot(() =>
       this.storage.upload({
         key,
         body: params.body,
         contentType,
-        metadata: { [UPLOADED_BY_METADATA_KEY]: actor.id },
+        metadata: {
+          [UPLOADED_BY_METADATA_KEY]: actor.id,
+          [TENANT_ID_METADATA_KEY]: actor.tenantId,
+        },
       }),
     );
     this.logger.debug(`Stored ${stored.key} (${stored.size ?? '?'} bytes)`);
@@ -82,7 +89,7 @@ export class FilesService {
   async createUploadUrl(actor: FileActor, params: UploadUrlParams): Promise<FileUploadUrl> {
     const contentType = assertAllowedContentType(params.contentType);
     this.assertUploadSize(params.contentLength);
-    const key = buildUserFileKey(actor.id, params.filename);
+    const key = buildUserFileKey(actor.tenantId, actor.id, params.filename);
     const presigned = await this.storage.createPresignedUpload(key, {
       contentType,
       contentLength: params.contentLength,
@@ -99,7 +106,8 @@ export class FilesService {
 
   /**
    * Presigned `GET` that always downloads as an attachment (never rendered inline by the
-   * browser). Access is checked before existence, so other users' keys cannot be probed.
+   * browser). Access is checked before existence, so other users' and other tenants' keys cannot
+   * be probed.
    */
   async createDownloadUrl(actor: FileActor, key: string): Promise<FileDownloadUrl> {
     this.authorize(actor, key, 'download');
@@ -141,7 +149,11 @@ export class FilesService {
     const access = resolveFileAccess(actor, key);
     if (access === 'denied') throw new FileAccessDeniedException();
     // Audit trail for the admin bypass (owners acting on their own files are not worth a line).
-    if (access === 'manager') this.logger.log(`files:manage ${action} of ${key} by ${actor.id}`);
+    if (access === 'manager') {
+      this.logger.log(
+        `files:manage ${action} of ${key} by ${actor.id} in tenant ${actor.tenantId}`,
+      );
+    }
   }
 
   private assertUploadSize(contentLength: number): void {

@@ -444,7 +444,10 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
         payload: upload.payload,
       });
       expect(response.statusCode, response.body).toBe(201);
-      const keys = e2e.storage.listKeys(`users/${tokens.user.id}/`);
+      // Keys live under the token's active tenant (B4-3): tenants/<tid>/users/<uid>/.
+      const [, claims = ''] = tokens.accessToken.split('.');
+      const { tid } = JSON.parse(Buffer.from(claims, 'base64url').toString()) as { tid: string };
+      const keys = e2e.storage.listKeys(`tenants/${tid}/users/${tokens.user.id}/`);
       expect(keys).toHaveLength(1);
       expect(keys[0]).toMatch(/hello\.txt$/);
     });

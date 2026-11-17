@@ -5,7 +5,17 @@ import { DomainValidationException, generateId } from '@platform/common';
 import type { StorageService, StoredObject } from '@platform/storage';
 import { InMemoryStorageService } from '@platform/storage/testing';
 import { createMock } from '@platform/testing';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from 'vitest';
 import {
   FileAccessDeniedException,
   FileNotFoundException,
@@ -14,16 +24,20 @@ import {
   UploadCapacityExceededException,
 } from '../domain/files.errors.js';
 import { type FilesConfig, filesConfig } from '../files.config.js';
-import { FILES_RBAC, FilesPermission } from '../files.permissions.js';
-import { FilesService, UPLOADED_BY_METADATA_KEY } from './files.service.js';
+import { FILES_RBAC } from '../files.permissions.js';
+import { FilesService, TENANT_ID_METADATA_KEY, UPLOADED_BY_METADATA_KEY } from './files.service.js';
 
 const config: FilesConfig = filesConfig.parse({ STORAGE_MAX_UPLOAD_BYTES: '1000' });
 
 describe('FilesService', () => {
   const rbac = createTestRbacRegistry(FILES_RBAC);
-  const alice = makeAuthUser({ roles: ['member'] }, rbac);
-  const bob = makeAuthUser({ roles: ['member'] }, rbac);
-  const admin = makeAuthUser({ roles: ['admin'], permissions: [FilesPermission.Manage] });
+  const tenantId = generateId();
+  const otherTenantId = generateId();
+  const alice = makeAuthUser({ tenantId, roles: ['member'] }, rbac);
+  const bob = makeAuthUser({ tenantId, roles: ['member'] }, rbac);
+  const admin = makeAuthUser({ tenantId, roles: ['admin'] }, rbac);
+  // The same people acting in another tenant: B's admin, and Bob after a switch.
+  const otherAdmin = makeAuthUser({ tenantId: otherTenantId, roles: ['admin'] }, rbac);
   let storage: InMemoryStorageService;
   let service: FilesService;
 
@@ -36,8 +50,12 @@ describe('FilesService', () => {
     service = new FilesService(storage, config);
   });
 
-  const put = async (ownerId: string, name = 'a.txt'): Promise<string> => {
-    const key = `users/${ownerId}/${generateId()}-${name}`;
+  /** `tenants/<tid>/users/<uid>/` of an actor, as a regex source. */
+  const prefixOf = (actor: { tenantId: string; id: string }): string =>
+    `^tenants/${actor.tenantId}/users/${actor.id}/`;
+
+  const put = async (ownerId: string, name = 'a.txt', owner = tenantId): Promise<string> => {
+    const key = `tenants/${owner}/users/${ownerId}/${generateId()}/${name}`;
     await storage.upload({ key, body: Buffer.from('data'), contentType: 'text/plain' });
     return key;
   };
@@ -47,7 +65,7 @@ describe('FilesService', () => {
   });
 
   describe('upload', () => {
-    it('streams to a fresh key under the actor prefix with normalized type and owner metadata', async () => {
+    it('streams to a fresh key under the actor tenant and user prefix, with tenant and owner metadata', async () => {
       const result = await service.upload(alice, {
         filename: 'My Photo.PNG',
         contentType: 'IMAGE/PNG',
@@ -55,7 +73,7 @@ describe('FilesService', () => {
       });
 
       expect(result).toEqual({
-        key: expect.stringMatching(new RegExp(`^users/${alice.id}/[0-9a-f-]{36}-my-photo\\.png$`)),
+        key: expect.stringMatching(new RegExp(`${prefixOf(alice)}[0-9a-f-]{36}/my-photo\\.png$`)),
         filename: 'my-photo.png',
         contentType: 'image/png',
         size: 8,
@@ -63,7 +81,23 @@ describe('FilesService', () => {
       });
       expect(storage.getObject(result.key)).toMatchObject({
         contentType: 'image/png',
-        metadata: { [UPLOADED_BY_METADATA_KEY]: alice.id },
+        metadata: { [UPLOADED_BY_METADATA_KEY]: alice.id, [TENANT_ID_METADATA_KEY]: tenantId },
+      });
+    });
+
+    it('keys the same user by the tenant they act in', async () => {
+      const inOther = makeAuthUser(
+        { id: alice.id, tenantId: otherTenantId, roles: ['member'] },
+        rbac,
+      );
+      const result = await service.upload(inOther, {
+        filename: 'a.txt',
+        contentType: 'text/plain',
+        body: Readable.from(['x']),
+      });
+      expect(result.key).toMatch(new RegExp(`${prefixOf(inOther)}[0-9a-f-]{36}/a\\.txt$`));
+      expect(storage.getObject(result.key)?.metadata).toMatchObject({
+        [TENANT_ID_METADATA_KEY]: otherTenantId,
       });
     });
 
@@ -219,7 +253,7 @@ describe('FilesService', () => {
       });
 
       expect(port.createPresignedUpload).toHaveBeenCalledWith(
-        expect.stringMatching(new RegExp(`^users/${alice.id}/[0-9a-f-]{36}-report\\.pdf$`)),
+        expect.stringMatching(new RegExp(`${prefixOf(alice)}[0-9a-f-]{36}/report\\.pdf$`)),
         { contentType: 'application/pdf', contentLength: 1000 },
       );
       expect(result).toMatchObject({
@@ -283,7 +317,7 @@ describe('FilesService', () => {
 
     it("denies another user's file before checking it exists", async () => {
       const port = createMock<StorageService>();
-      const key = `users/${bob.id}/${generateId()}-a.txt`;
+      const key = `tenants/${tenantId}/users/${bob.id}/${generateId()}/a.txt`;
 
       await expect(
         new FilesService(port, config).createDownloadUrl(alice, key),
@@ -291,20 +325,55 @@ describe('FilesService', () => {
       expect(port.head).not.toHaveBeenCalled();
     });
 
-    it("lets files:manage reach any user's file", async () => {
+    it("denies another tenant's existing file before storage.head, also to its admin", async () => {
+      const key = await put(bob.id);
+      const port = createMock<StorageService>();
+      const files = new FilesService(port, config);
+
+      await expect(files.createDownloadUrl(otherAdmin, key)).rejects.toBeInstanceOf(
+        FileAccessDeniedException,
+      );
+      // Bob himself, acting in the other tenant, does not reach his file in this one either.
+      const bobElsewhere = makeAuthUser({ id: bob.id, tenantId: otherTenantId }, rbac);
+      await expect(files.createDownloadUrl(bobElsewhere, key)).rejects.toBeInstanceOf(
+        FileAccessDeniedException,
+      );
+      expect(port.head).not.toHaveBeenCalled();
+    });
+
+    it('denies a legacy users/<id>/ key to its uploader and to a manager', async () => {
+      const port = createMock<StorageService>();
+      const files = new FilesService(port, config);
+      const legacy = `users/${alice.id}/${generateId()}-a.txt`;
+
+      for (const actor of [alice, admin]) {
+        await expect(files.createDownloadUrl(actor, legacy)).rejects.toBeInstanceOf(
+          FileAccessDeniedException,
+        );
+      }
+      expect(port.head).not.toHaveBeenCalled();
+    });
+
+    it("lets files:manage reach any user's file of the active tenant", async () => {
       const key = await put(bob.id);
       await expect(service.createDownloadUrl(admin, key)).resolves.toMatchObject({ key });
     });
 
     it('404s for a missing authorized key', async () => {
       await expect(
-        service.createDownloadUrl(alice, `users/${alice.id}/${generateId()}-gone.txt`),
+        service.createDownloadUrl(
+          alice,
+          `tenants/${tenantId}/users/${alice.id}/${generateId()}/gone.txt`,
+        ),
       ).rejects.toBeInstanceOf(FileNotFoundException);
     });
 
     it('422s on malformed keys (traversal cannot dodge the prefix check)', async () => {
       await expect(
-        service.createDownloadUrl(alice, `users/${alice.id}/../${bob.id}/a.txt`),
+        service.createDownloadUrl(
+          alice,
+          `tenants/${tenantId}/users/${alice.id}/../${bob.id}/a.txt`,
+        ),
       ).rejects.toMatchObject({ code: 'INVALID_STORAGE_KEY' });
     });
   });
@@ -325,10 +394,47 @@ describe('FilesService', () => {
       expect(storage.getObject(key)).toBeDefined();
     });
 
-    it("lets files:manage delete any user's file", async () => {
+    it("lets files:manage delete any user's file of the active tenant", async () => {
       const key = await put(bob.id);
       await service.deleteFile(admin, key);
       expect(storage.getObject(key)).toBeUndefined();
+    });
+
+    it("denies another tenant's existing file before storage.delete, also to its admin", async () => {
+      const key = await put(bob.id);
+      const port = createMock<StorageService>();
+
+      await expect(
+        new FilesService(port, config).deleteFile(otherAdmin, key),
+      ).rejects.toBeInstanceOf(FileAccessDeniedException);
+      expect(port.delete).not.toHaveBeenCalled();
+      expect(storage.getObject(key)).toBeDefined();
+    });
+  });
+
+  describe('files:manage audit line', () => {
+    let logged: MockInstance<Logger['log']>;
+    beforeEach(() => {
+      logged = vi.spyOn(Logger.prototype, 'log');
+    });
+    afterEach(() => logged.mockRestore());
+
+    it('names the action, the key, the actor and the tenant', async () => {
+      const key = await put(bob.id);
+      await service.createDownloadUrl(admin, key);
+      await service.deleteFile(admin, key);
+
+      const lines = logged.mock.calls.map(([message]) => String(message));
+      expect(lines).toEqual([
+        `files:manage download of ${key} by ${admin.id} in tenant ${tenantId}`,
+        `files:manage delete of ${key} by ${admin.id} in tenant ${tenantId}`,
+      ]);
+    });
+
+    it('logs nothing for an owner acting on their own file', async () => {
+      const key = await put(alice.id);
+      await service.deleteFile(alice, key);
+      expect(logged).not.toHaveBeenCalled();
     });
   });
 });
