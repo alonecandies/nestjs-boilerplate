@@ -107,9 +107,10 @@ export class MembershipAlreadyExistsException extends DomainConflictException {
  * tenant" and the platform tenant, so tenant ids cannot be probed.
  */
 export class TenantAccessDeniedException extends PermissionDeniedException {
-  constructor() {
+  constructor(options?: { cause?: unknown }) {
     super('You are not a member of this workspace', {
       code: IdentityErrorCode.TENANT_ACCESS_DENIED,
+      cause: options?.cause,
     });
   }
 }

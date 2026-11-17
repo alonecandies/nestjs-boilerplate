@@ -1,5 +1,5 @@
 import { createPrincipal, runWithPrincipal } from '@platform/common';
-import type { RlsElevation } from '@platform/database';
+import { type RlsElevation, RowCountMismatchError } from '@platform/database';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { mockOf } from '../../../test/mocks.js';
 import { TenantAccessDeniedException } from '../../domain/identity.errors.js';
@@ -61,5 +61,26 @@ describe('MembershipActivity (justified: membership-activity)', () => {
     await expect(persistence.memberships.find(TENANT, USER)).resolves.toMatchObject({
       lastActiveAt: null,
     });
+  });
+
+  it('a membership removed since it was read is TENANT_ACCESS_DENIED (403), not a row-count 500', async () => {
+    await persistence.memberships.delete(TENANT, USER);
+    const error = await runWithPrincipal(
+      createPrincipal({ userId: USER, tenantId: TENANT, roles: ['member'] }),
+      () => activity.touch(TENANT, USER, NOW),
+    ).catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(TenantAccessDeniedException);
+    expect(error).toMatchObject({ httpStatus: 403, code: 'TENANT_ACCESS_DENIED' });
+    expect((error as Error).cause).toBeInstanceOf(RowCountMismatchError);
+  });
+
+  it('any other failure of the touch passes through unchanged', async () => {
+    const boom = new Error('connection reset');
+    elevation.justified.mockRejectedValueOnce(boom);
+    await expect(
+      runWithPrincipal(createPrincipal({ userId: USER, tenantId: TENANT, roles: ['member'] }), () =>
+        activity.touch(TENANT, USER, NOW),
+      ),
+    ).rejects.toBe(boom);
   });
 });

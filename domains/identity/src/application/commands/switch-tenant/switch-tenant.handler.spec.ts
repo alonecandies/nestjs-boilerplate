@@ -7,6 +7,7 @@ import {
   sha256Hex,
   UnauthenticatedException,
 } from '@platform/common';
+import type { RlsElevation } from '@platform/database';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { makeAuthTokens, makeUserRecord } from '../../../../test/fixtures.js';
 import { mockOf } from '../../../../test/mocks.js';
@@ -17,10 +18,11 @@ import {
   TenantAccessDeniedException,
 } from '../../../domain/identity.errors.js';
 import type { TokenIssuer } from '../../../infrastructure/security/token-issuer.service.js';
+import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
 import type { MembershipsRepository } from '../../persistence/memberships.repository.js';
 import type { SessionRecord, SessionsRepository } from '../../persistence/sessions.repository.js';
 import type { UsersRepository } from '../../persistence/users.repository.js';
-import type { MembershipActivity } from '../../services/membership-activity.elevated.js';
+import { MembershipActivity } from '../../services/membership-activity.elevated.js';
 import {
   type OpenSessionInput,
   type SessionTokensService,
@@ -213,5 +215,32 @@ describe('SwitchTenantHandler', () => {
     expect(activity.touch).not.toHaveBeenCalled();
     expect(log).toEqual(['deny', 'begin', 'commit', 'revoke-all']);
     expect(principals.summary().at(-1)).toEqual(['sessions.revokeAllForUser', user.id, FROM]);
+  });
+
+  it('a target membership removed between the read and the touch is 403 TENANT_ACCESS_DENIED', async () => {
+    // The real MembershipActivity over an in-memory store: the membership read above is gone.
+    const persistence = createInMemoryIdentityPersistence();
+    const real = new MembershipActivity(
+      persistence.memberships,
+      mockOf<RlsElevation>({
+        justified: async (_reason: string, work: () => Promise<unknown>) => work(),
+      }),
+    );
+    handler = new SwitchTenantHandler(
+      issuer,
+      users,
+      sessions,
+      memberships,
+      sessionTokens,
+      real,
+      denylist,
+    );
+    await expect(run(command())).rejects.toMatchObject({
+      constructor: TenantAccessDeniedException,
+      httpStatus: 403,
+      code: 'TENANT_ACCESS_DENIED',
+    });
+    // The unit of work never reached the session insert.
+    expect(log).toEqual(['deny', 'begin', 'rotate']);
   });
 });

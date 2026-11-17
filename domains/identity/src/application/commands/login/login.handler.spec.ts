@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import { getPrincipal, runWithPrincipal } from '@platform/common';
+import type { RlsElevation } from '@platform/database';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeAuthTokens, makeUserSnapshot } from '../../../../test/fixtures.js';
 import { mockOf } from '../../../../test/mocks.js';
@@ -9,11 +10,12 @@ import {
   TenantAccessDeniedException,
 } from '../../../domain/identity.errors.js';
 import type { PasswordHasher } from '../../../infrastructure/security/password-hasher.service.js';
+import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
 import type { MembershipRecord } from '../../persistence/memberships.repository.js';
 import type { NewTenant } from '../../persistence/tenants.repository.js';
 import type { UsersRepository } from '../../persistence/users.repository.js';
 import type { UsersSystemRepository } from '../../persistence/users.system-repository.js';
-import type { MembershipActivity } from '../../services/membership-activity.elevated.js';
+import { MembershipActivity } from '../../services/membership-activity.elevated.js';
 import type { PersonalWorkspaces } from '../../services/personal-workspaces.service.js';
 import {
   type OpenSessionInput,
@@ -192,5 +194,33 @@ describe('LoginHandler', () => {
     });
     await handler.execute(new LoginCommand('ada@example.com', 'pw'));
     expect(selection.forLogin).toHaveBeenCalled();
+  });
+
+  it('a membership removed between the tenant choice and the touch is 403 TENANT_ACCESS_DENIED', async () => {
+    // The real MembershipActivity over an in-memory store where the chosen membership is gone.
+    const persistence = createInMemoryIdentityPersistence();
+    const real = new MembershipActivity(
+      persistence.memberships,
+      mockOf<RlsElevation>({
+        justified: async (_reason: string, work: () => Promise<unknown>) => work(),
+      }),
+    );
+    handler = new LoginHandler(
+      users,
+      usersSystem,
+      hasher,
+      sessionTokens,
+      selection,
+      workspaces,
+      bootstrap,
+      real,
+    );
+    await expect(
+      handler.execute(new LoginCommand('ada@example.com', 'pw', undefined, TENANT)),
+    ).rejects.toMatchObject({
+      constructor: TenantAccessDeniedException,
+      httpStatus: 403,
+      code: 'TENANT_ACCESS_DENIED',
+    });
   });
 });
