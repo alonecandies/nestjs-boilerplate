@@ -796,11 +796,20 @@ rejecting them.
 | Topic                                   | Producer                                            | Key      | Payload (zod)                                                                                       | Consumers                                                                                     |
 | --------------------------------------- | --------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `identity.user-registered.v1`           | identity (`UserRegisteredRelay`)                    | `userId` | `userId`, `email`, `displayName`, `registeredAt`                                                    | notifications (`IdentityEventsConsumer`): welcome notification + mail                         |
+| `identity.membership-created.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `email`, `displayName`, `createdAt`                                                       | none yet (the notifications recipients projection, B4)                                        |
+| `identity.membership-removed.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `removedAt`                                                                               | none yet (the notifications recipients projection, B4)                                        |
 | `billing.payment-succeeded.v1`          | billing (`PaymentSucceededRelay`)                   | `userId` | `paymentId`, `userId`, `stripeCheckoutSessionId`, `amountTotal` (minor units), `currency`, `paidAt` | notifications (`BillingEventsConsumer`): payment receipt                                      |
 | `notifications.notification-created.v1` | notifications (`PublishNotificationCreatedHandler`) | `userId` | `notificationId`, `userId`, `type`, `title`, `body`, `data`, `createdAt`                            | edge (`NotificationPushConsumer`): Socket.IO room `user:<id>` + GraphQL `notificationCreated` |
 
 Each topic has a dead-letter topic, `<topic>.dlq`. The record key is always `userId`, so all events of one user land on
 the same partition and are consumed in order.
+
+The three identity topics are tenant-scoped. Their envelope `tenantId` is the tenant the event is about, set explicitly
+by the producer and never taken from the caller's principal: the new account's personal workspace for
+`user-registered`, and the membership's tenant for `membership-created` (register, a login that creates the personal
+workspace of an account without one, a new tenant, an accepted invitation) and `membership-removed` (a member removed,
+a member who left). `actorId` is the acting user: the member themself, or the admin who removed them. Each event is
+published once, after its transaction committed; a rejected command publishes nothing.
 
 Consumer groups (`KAFKA_GROUP_ID` overrides the monolith's default and the gateway's `gateway-push`; notifications-service pins `notifications-service` in code, `NOTIFICATIONS_CONSUMER_GROUP`, so it ignores `KAFKA_GROUP_ID`):
 

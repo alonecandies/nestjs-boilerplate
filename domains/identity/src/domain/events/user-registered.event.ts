@@ -2,7 +2,8 @@ import type { IEvent } from '@nestjs/cqrs';
 
 /**
  * A user account was created. `eventId` (uuidv7) becomes the Kafka envelope id, so a re-publish
- * of the same domain event is deduplicated by consumers.
+ * of the same domain event is deduplicated by consumers. `tenantId` is the account's personal
+ * workspace (the envelope tenant of `identity.user-registered.v1`).
  */
 export class UserRegisteredEvent implements IEvent {
   constructor(
@@ -12,5 +13,7 @@ export class UserRegisteredEvent implements IEvent {
     readonly email: string,
     readonly displayName: string,
     readonly occurredAt: Date,
+    /** The personal workspace created with the account. */
+    readonly tenantId: string,
   ) {}
 }

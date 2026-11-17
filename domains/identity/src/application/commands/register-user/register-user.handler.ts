@@ -1,7 +1,8 @@
 import type { AuthTokens } from '@domain/identity-contracts';
-import { CommandHandler, EventPublisher, type ICommandHandler } from '@nestjs/cqrs';
+import { CommandHandler, EventBus, EventPublisher, type ICommandHandler } from '@nestjs/cqrs';
 import { generateId } from '@platform/common';
 import { normalizeEmail } from '../../../domain/email.js';
+import { MembershipCreatedEvent } from '../../../domain/events/membership-created.event.js';
 import { EmailAlreadyTakenException } from '../../../domain/identity.errors.js';
 import { UserAggregate } from '../../../domain/user.aggregate.js';
 import { PasswordHasher } from '../../../infrastructure/security/password-hasher.service.js';
@@ -21,6 +22,7 @@ export class RegisterUserHandler implements ICommandHandler<RegisterUserCommand>
     private readonly transaction: TransactionRunner,
     private readonly publisher: EventPublisher,
     private readonly workspaces: PersonalWorkspaces,
+    private readonly events: EventBus,
   ) {}
 
   async execute(command: RegisterUserCommand): Promise<AuthTokens> {
@@ -31,6 +33,8 @@ export class RegisterUserHandler implements ICommandHandler<RegisterUserCommand>
 
     const passwordHash = await this.hasher.hash(command.password);
     const now = new Date();
+    // Chosen up front: UserRegisteredEvent names the personal workspace as its tenant.
+    const personalTenantId = generateId();
     const user = this.publisher.mergeObjectContext(
       UserAggregate.register({
         id: generateId(),
@@ -38,14 +42,15 @@ export class RegisterUserHandler implements ICommandHandler<RegisterUserCommand>
         displayName: command.displayName,
         passwordHash,
         now,
+        personalTenantId,
       }),
     );
 
     // User, personal workspace (tenant + owner membership) and first session: one transaction.
+    const snapshot = user.toSnapshot();
     const tokens = await this.transaction.run(async () => {
       await this.users.insert(user);
-      const snapshot = user.toSnapshot();
-      const membership = await this.workspaces.create(snapshot, now);
+      const membership = await this.workspaces.create(snapshot, now, personalTenantId);
       return this.sessionTokens.open({
         user: toUserRecord(snapshot),
         tenantId: membership.tenantId,
@@ -54,8 +59,19 @@ export class RegisterUserHandler implements ICommandHandler<RegisterUserCommand>
       });
     });
 
-    // Publish UserRegisteredEvent only once the row is committed (the relay then goes to Kafka).
+    // Publish only once the rows are committed (the relays then go to Kafka): the account, then its
+    // personal-workspace membership, both in that workspace.
     user.commit();
+    this.events.publish(
+      new MembershipCreatedEvent({
+        tenantId: personalTenantId,
+        userId: snapshot.id,
+        email: snapshot.email,
+        displayName: snapshot.displayName,
+        actorId: snapshot.id,
+        occurredAt: now,
+      }),
+    );
     return tokens;
   }
 }

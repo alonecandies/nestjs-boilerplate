@@ -17,7 +17,7 @@ const userRegistered = () =>
   createEventEnvelope(
     USER_REGISTERED_EVENT,
     { userId: USER_ID, email: 'ada@example.com', displayName: 'Ada', registeredAt },
-    { id: generateId(), source: 'identity-service' },
+    { id: generateId(), source: 'identity-service', tenantId: TENANT_ID },
   );
 
 const PAYMENT_ID = '01920000-0000-7000-8000-0000000000aa';

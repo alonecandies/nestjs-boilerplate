@@ -17,6 +17,7 @@ import { StaffSwitchInHandler } from './application/commands/staff-switch-in/sta
 import { StaffSwitchOutHandler } from './application/commands/staff-switch-out/staff-switch-out.handler.js';
 import { SwitchTenantHandler } from './application/commands/switch-tenant/switch-tenant.handler.js';
 import { UpdateMemberRolesHandler } from './application/commands/update-member-roles/update-member-roles.handler.js';
+import { MembershipEventsRelay } from './application/event-handlers/membership-events.relay.js';
 import { UserRegisteredRelay } from './application/event-handlers/user-registered.relay.js';
 import { AuditEventsRepository } from './application/persistence/audit-events.repository.js';
 import { InvitationsRepository } from './application/persistence/invitations.repository.js';
@@ -76,7 +77,7 @@ export const IDENTITY_QUERY_HANDLERS = [
   ListMembersHandler,
 ];
 
-export const IDENTITY_EVENT_HANDLERS = [UserRegisteredRelay];
+export const IDENTITY_EVENT_HANDLERS = [UserRegisteredRelay, MembershipEventsRelay];
 
 /** Persistence bindings (the only place that knows it is Drizzle/Postgres). */
 const PERSISTENCE: Provider[] = [

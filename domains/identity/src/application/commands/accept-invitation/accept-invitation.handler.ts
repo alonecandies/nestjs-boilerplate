@@ -1,7 +1,8 @@
 import type { MyTenant } from '@domain/identity-contracts';
-import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
+import { CommandHandler, EventBus, type ICommandHandler } from '@nestjs/cqrs';
 import { createPrincipal, requirePrincipal, runWithPrincipal } from '@platform/common';
 import { normalizeEmail } from '../../../domain/email.js';
+import { MembershipCreatedEvent } from '../../../domain/events/membership-created.event.js';
 import {
   InvitationEmailMismatchException,
   InvitationInvalidException,
@@ -28,6 +29,7 @@ export class AcceptInvitationHandler implements ICommandHandler<AcceptInvitation
     private readonly users: UsersRepository,
     private readonly transactions: TransactionRunner,
     private readonly audit: TenantAuditLog,
+    private readonly events: EventBus,
   ) {}
 
   async execute({ userId, token }: AcceptInvitationCommand): Promise<MyTenant> {
@@ -66,6 +68,17 @@ export class AcceptInvitationHandler implements ICommandHandler<AcceptInvitation
           data: { invitationId: invitation.id, roles: [...invitation.roles] },
           now,
         });
+      }),
+    );
+    // Committed: the invitee is a member of the invitation's tenant (not the caller's current one).
+    this.events.publish(
+      new MembershipCreatedEvent({
+        tenantId: invitation.tenantId,
+        userId,
+        email: user.email,
+        displayName: user.displayName,
+        actorId: userId,
+        occurredAt: now,
       }),
     );
     const joined = (await this.memberships.listForUser(userId)).find(

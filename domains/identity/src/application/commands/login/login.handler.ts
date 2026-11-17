@@ -1,8 +1,9 @@
 import type { AuthTokens } from '@domain/identity-contracts';
 import { Logger } from '@nestjs/common';
-import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
+import { CommandHandler, EventBus, type ICommandHandler } from '@nestjs/cqrs';
 import { createPrincipal, runWithPrincipal } from '@platform/common';
 import { normalizeEmail } from '../../../domain/email.js';
+import { MembershipCreatedEvent } from '../../../domain/events/membership-created.event.js';
 import { InvalidCredentialsException } from '../../../domain/identity.errors.js';
 import type { UserSnapshot } from '../../../domain/user.aggregate.js';
 import { PasswordHasher } from '../../../infrastructure/security/password-hasher.service.js';
@@ -23,6 +24,7 @@ export class LoginHandler implements ICommandHandler<LoginCommand> {
     private readonly sessionTokens: SessionTokensService,
     private readonly transaction: TransactionRunner,
     private readonly selection: TenantSelection,
+    private readonly events: EventBus,
   ) {}
 
   async execute(command: LoginCommand): Promise<AuthTokens> {
@@ -43,17 +45,34 @@ export class LoginHandler implements ICommandHandler<LoginCommand> {
     const now = new Date();
     // Tenant choice (and, for a pre-tenancy account, its personal workspace) + the session: one unit.
     // I-2: tenant selection is a user-scoped unit of work (no tenant yet).
-    return runWithPrincipal(createPrincipal({ userId: user.id, tenantId: null }), () =>
-      this.transaction.run(async () => {
-        const membership = await this.selection.forLogin(user, command.tenantId, now);
-        return this.sessionTokens.open({
-          user,
-          tenantId: membership.tenantId,
-          roles: membership.roles,
-          client: command.client,
-        });
-      }),
+    const { tokens, membership } = await runWithPrincipal(
+      createPrincipal({ userId: user.id, tenantId: null }),
+      () =>
+        this.transaction.run(async () => {
+          const membership = await this.selection.forLogin(user, command.tenantId, now);
+          const tokens = await this.sessionTokens.open({
+            user,
+            tenantId: membership.tenantId,
+            roles: membership.roles,
+            client: command.client,
+          });
+          return { tokens, membership };
+        }),
     );
+    // A workspace this login created is published once the unit of work committed.
+    if (membership.workspaceCreated === true) {
+      this.events.publish(
+        new MembershipCreatedEvent({
+          tenantId: membership.tenantId,
+          userId: user.id,
+          email: user.email,
+          displayName: user.displayName,
+          actorId: user.id,
+          occurredAt: now,
+        }),
+      );
+    }
+    return tokens;
   }
 
   /**

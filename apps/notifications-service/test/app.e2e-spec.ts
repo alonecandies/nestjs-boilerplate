@@ -286,7 +286,7 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
           displayName: 'Grace',
           registeredAt: '2026-09-29T09:00:00.000Z',
         },
-        { id: generateId(), source: 'identity-service' },
+        { id: generateId(), source: 'identity-service', tenantId: generateId() },
       );
 
       await kafka.deliver(USER_REGISTERED_EVENT.topic, envelope, userId);

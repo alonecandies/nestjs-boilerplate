@@ -105,14 +105,22 @@ user(@Parent() payment: PaymentModel, @Loader(USERS_LOADER) users: GraphqlLoader
 }
 ```
 
-No Kafka consumer group is needed: identity only **produces** `identity.user-registered.v1`.
+No Kafka consumer group is needed: identity only **produces** its three tenant-scoped events,
+`identity.user-registered.v1`, `identity.membership-created.v1` and `identity.membership-removed.v1`.
+Each is published after its unit of work committed, with the envelope `tenantId` passed explicitly
+(never the caller's CLS principal) and the user id as key. Every handler that writes a membership
+publishes `MembershipCreatedEvent` or `MembershipRemovedEvent` (`MembershipEventsRelay`): register
+and a login that creates a missing personal workspace, tenant creation, invitation acceptance,
+member removal and leave.
 
 ## Flows
 
 - **Register**: normalise email → pre-check `existsByEmail` (skips argon2 for duplicates) →
   argon2id hash → `UserAggregate.register()` → **one transaction** (`TransactionRunner` on
-  `TransactionHost`): insert user + first session → commit → `UserRegisteredEvent` →
-  `UserRegisteredRelay` → `KafkaProducer.publish(USER_REGISTERED_EVENT, …, { key: userId, eventId })`.
+  `TransactionHost`): insert user + personal workspace + first session → commit →
+  `UserRegisteredEvent` → `UserRegisteredRelay` →
+  `KafkaProducer.publish(USER_REGISTERED_EVENT, …, { key: userId, eventId, tenantId })` (the
+  workspace id is chosen before the transaction), then `MembershipCreatedEvent` for that workspace.
   The unique constraint still decides under races (`23505` → `EMAIL_TAKEN`).
 - **Login** (REST: `LoginRequestGuard` → `LocalAuthGuard` → `LocalStrategy` → `AuthPort.login`;
   GraphQL: `AuthPort.login`): unknown email burns `verifyDummy` (equal timing), wrong password and

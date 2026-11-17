@@ -10,7 +10,8 @@ import { TenantsRepository } from '../persistence/tenants.repository.js';
 /**
  * The personal workspace every account gets (spec §5.2): a `personal` tenant named
  * `"<display name>'s workspace"`, slugged from the email's local part, and an owner membership marked
- * active now. Runs in the caller's unit of work (register; login of a pre-tenancy account).
+ * active now. Runs in the caller's unit of work (register; login of a pre-tenancy account), so it
+ * publishes nothing: the caller publishes `MembershipCreatedEvent` once that unit of work committed.
  */
 @Injectable()
 export class PersonalWorkspaces {
@@ -19,11 +20,12 @@ export class PersonalWorkspaces {
     private readonly memberships: MembershipsRepository,
   ) {}
 
+  /** `tenantId`: the workspace id when the caller needs it up front (register); default a new uuidv7. */
   async create(
     user: { id: string; email: string; displayName: string },
     now: Date,
+    tenantId: string = generateId(),
   ): Promise<MembershipRecord> {
-    const tenantId = generateId();
     const localPart = user.email.split('@')[0] ?? '';
     await this.tenants.insert({
       id: tenantId,
