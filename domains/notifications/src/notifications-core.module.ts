@@ -2,8 +2,10 @@ import { Module, type Provider } from '@nestjs/common';
 import { CreateNotificationHandler } from './application/commands/create-notification/create-notification.handler.js';
 import { MarkNotificationReadHandler } from './application/commands/mark-notification-read/mark-notification-read.handler.js';
 import { PublishNotificationCreatedHandler } from './application/commands/publish-notification-created/publish-notification-created.handler.js';
+import { RemoveRecipientHandler } from './application/commands/remove-recipient/remove-recipient.handler.js';
 import { SendDailyDigestHandler } from './application/commands/send-daily-digest/send-daily-digest.handler.js';
 import { SendPaymentReceiptHandler } from './application/commands/send-payment-receipt/send-payment-receipt.handler.js';
+import { UpsertRecipientHandler } from './application/commands/upsert-recipient/upsert-recipient.handler.js';
 import { WelcomeUserHandler } from './application/commands/welcome-user/welcome-user.handler.js';
 import { NotificationRecipientsRepository } from './application/ports/notification-recipients.repository.js';
 import { NotificationsRepository } from './application/ports/notifications.repository.js';
@@ -17,8 +19,10 @@ export const NOTIFICATIONS_COMMAND_HANDLERS: Provider[] = [
   CreateNotificationHandler,
   MarkNotificationReadHandler,
   PublishNotificationCreatedHandler,
+  RemoveRecipientHandler,
   SendDailyDigestHandler,
   SendPaymentReceiptHandler,
+  UpsertRecipientHandler,
   WelcomeUserHandler,
 ];
 

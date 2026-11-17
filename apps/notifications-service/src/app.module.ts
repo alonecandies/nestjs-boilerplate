@@ -21,8 +21,9 @@ import { KafkaHealthIndicator, KafkaProducerModule } from '@platform/transport';
 /**
  * notifications-service: owns the Cassandra inbox.
  * - gRPC `notifications.v1.NotificationsService` (list / mark read) for the gateway;
- * - Kafka consumers: `identity.user-registered.v1` → welcome, `billing.payment-succeeded.v1` →
- *   receipt (group pinned in main.ts), producing `notifications.notification-created.v1`;
+ * - Kafka consumers: `identity.user-registered.v1` → welcome, `identity.membership-created.v1` /
+ *   `-removed.v1` → the (tenant, user) mail recipients, `billing.payment-succeeded.v1` → receipt
+ *   (group pinned in main.ts), producing `notifications.notification-created.v1`;
  * - BullMQ `mail` worker (SMTP) and the daily digest cron (`@WithLock`, one replica).
  * The HTTP port only serves `/health/*` (`/metrics` is on `METRICS_PORT`).
  */

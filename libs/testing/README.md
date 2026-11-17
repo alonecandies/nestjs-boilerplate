@@ -2,7 +2,7 @@
 
 Test-only helpers shared by every package's unit and e2e tests. It depends on **no other workspace
 package** (so any package can use it without dependency cycles) and pulls in `vitest` (and, through the
-`./postgres` subpath only, testcontainers and postgres.js) — import it only from `*.spec.ts`,
+`./postgres` and `./cassandra` subpaths only, testcontainers, postgres.js and cassandra-driver) — import it only from `*.spec.ts`,
 `*.int-spec.ts`, `*.e2e-spec.ts` and `test/**`.
 
 ## Public API
@@ -22,6 +22,29 @@ package** (so any package can use it without dependency cycles) and pulls in `vi
 | `TestPostgresOptions` | `{ localExecution?: boolean; initSql?: readonly string[]; allowExternalUrl?: boolean }` | `localExecution: false` forces remote shard execution; `initSql` runs as superuser              |
 | `TestPostgres`        | `{ readonly url: string; urlFor(role, password): string; stop(): Promise<void> }`       | superuser URL of database `app`; percent-encoded logins for other roles                         |
 | `TEST_POSTGRES_IMAGE` | `'citusdata/citus:14.2.0'`                                                              | the image compose runs too                                                                      |
+
+### @platform/testing/cassandra
+
+| Export                       | Signature                                                                                                                  | Purpose                                                                                                |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| `startTestCassandra`         | `(options?: { keyspace?: string }) => Promise<TestCassandra>`                                                              | a fresh single-node Cassandra container per int spec, with the keyspace created (SimpleStrategy, RF 1) |
+| `TestCassandra`              | `{ readonly contactPoints: string[]; readonly localDataCenter: string; readonly keyspace: string; stop(): Promise<void> }` | `contactPoints` are `host:port` of the mapped CQL port; `stop()` is safe to call twice                 |
+| `TEST_CASSANDRA_IMAGE`       | `'cassandra:5.0.9'`                                                                                                        | the image compose runs too (the int spec pins the two equal)                                           |
+| `TEST_CASSANDRA_DATA_CENTER` | `'datacenter1'`                                                                                                            | the container's data center, a client's `localDataCenter`                                              |
+
+```ts
+import { startTestCassandra } from '@platform/testing/cassandra';
+
+const node = await startTestCassandra(); // keyspace `test`
+const client = new cassandra.Client({
+  contactPoints: node.contactPoints,
+  localDataCenter: node.localDataCenter,
+  keyspace: node.keyspace,
+});
+// … run the context's CQL migrations (`CqlMigrator`), then the specs …
+await client.shutdown();
+await node.stop();
+```
 
 ## Usage
 
@@ -69,5 +92,8 @@ hook timeout 60 s above it.
   overriding are also `vi.fn()`s at runtime — pass them in `overrides`.
 - `createFastifyTestApp` doesn't bind a port: use `app.inject()` (or `supertest(app.getHttpServer())`).
 - The Nest `Logger` is process-static: `appOptions.logger` of one test app affects others in the same worker.
+- `startTestCassandra` waits for the node's "Starting listening for CQL clients" log line (up to 180 s): a
+  cold Cassandra 5 node needs 30-90 s. The `cassandra:5.0.9` image is multi-arch, so it runs natively on
+  Apple Silicon. Run Cassandra int projects one at a time: each starts its own 512 MB-heap node.
 - `citusdata/citus:14.2.0` is amd64-only: Docker Desktop emulates it on Apple Silicon, so pull it once
   before the first int run (`docker pull --platform linux/amd64 citusdata/citus:14.2.0`).

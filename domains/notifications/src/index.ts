@@ -13,8 +13,10 @@ export * from './api/index.js';
 export * from './application/commands/create-notification/create-notification.command.js';
 export * from './application/commands/mark-notification-read/mark-notification-read.command.js';
 export * from './application/commands/publish-notification-created/publish-notification-created.command.js';
+export * from './application/commands/remove-recipient/remove-recipient.command.js';
 export * from './application/commands/send-daily-digest/send-daily-digest.command.js';
 export * from './application/commands/send-payment-receipt/send-payment-receipt.command.js';
+export * from './application/commands/upsert-recipient/upsert-recipient.command.js';
 export * from './application/commands/welcome-user/welcome-user.command.js';
 export * from './application/mail/notifications-mail.js';
 export * from './application/mappers/notification.mapper.js';
@@ -42,3 +44,4 @@ export {
 export * from './notifications-core.module.js';
 export * from './notifications-grpc.module.js';
 export * from './notifications-messaging.module.js';
+export * from './presentation/messaging/event-tenant.js';

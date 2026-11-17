@@ -96,8 +96,11 @@ describe('notifications modules (composition, no infrastructure)', () => {
     );
 
     expect(notification).toMatchObject({ userId: USER_ID, type: 'welcome', read: false });
-    // recipient upsert + inbox insert hit Cassandra; the mail is queued.
-    expect(infra.cassandraClient.execute).toHaveBeenCalledTimes(2);
+    // Only the inbox insert hits Cassandra (recipients follow membership events); the mail is queued.
+    expect(infra.cassandraClient.execute).toHaveBeenCalledTimes(1);
+    expect(infra.cassandraClient.execute.mock.calls[0]?.[0]).toMatch(
+      /^INSERT INTO notifications_by_user /,
+    );
     expect(infra.mail.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({ template: 'welcome', idempotencyKey: `welcome-${USER_ID}` }),
     );

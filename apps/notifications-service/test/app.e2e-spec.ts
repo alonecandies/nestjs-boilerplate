@@ -1,4 +1,8 @@
-import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
+import {
+  MEMBERSHIP_CREATED_EVENT,
+  MEMBERSHIP_REMOVED_EVENT,
+  USER_REGISTERED_EVENT,
+} from '@domain/identity-contracts';
 import {
   NOTIFICATION_CREATED_EVENT,
   NOTIFICATIONS_GRPC_PACKAGE,
@@ -276,7 +280,7 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
       kafka.producer.send.mockClear();
     });
 
-    it('identity.user-registered.v1 → recipient + inbox rows, welcome mail queued, event published', async () => {
+    it('identity.user-registered.v1 → inbox row, welcome mail queued, event published', async () => {
       const userId = generateId();
       const envelope = createEventEnvelope(
         USER_REGISTERED_EVENT,
@@ -292,10 +296,8 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
       await kafka.deliver(USER_REGISTERED_EVENT.topic, envelope, userId);
 
       const writes = store.executed.filter(({ params }) => params[0] === userId).map((q) => q.cql);
-      expect(writes).toEqual([
-        expect.stringContaining('INSERT INTO notification_recipients'),
-        expect.stringContaining('INSERT INTO notifications_by_user'),
-      ]);
+      // Recipients follow memberships (identity.membership-created.v1), not registrations.
+      expect(writes).toEqual([expect.stringContaining('INSERT INTO notifications_by_user')]);
       expect(mailQueue.add).toHaveBeenCalledWith(
         'welcome',
         expect.objectContaining({ to: 'grace@example.com', template: 'welcome' }),
@@ -311,6 +313,95 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
       });
       expect(kafka.deadLetters()).toEqual([]);
     });
+
+    /** The recipient statements this test run executed for `userId`. */
+    const recipientWrites = (userId: string) =>
+      store.executed.filter(
+        ({ cql, params }) =>
+          cql.includes('notification_recipients_by_tenant') && params.includes(userId),
+      );
+
+    it('identity.membership-created.v1 → recipient INSERT bound to the envelope tenant', async () => {
+      const [tenantId, userId] = [generateId(), generateId()];
+      const envelope = createEventEnvelope(
+        MEMBERSHIP_CREATED_EVENT,
+        {
+          userId,
+          email: 'grace@example.com',
+          displayName: 'Grace',
+          createdAt: '2026-09-29T09:00:00.000Z',
+        },
+        { id: generateId(), source: 'identity-service', tenantId, actorId: userId },
+      );
+
+      await kafka.deliver(MEMBERSHIP_CREATED_EVENT.topic, envelope, userId);
+
+      const [insert, ...rest] = recipientWrites(userId);
+      expect(rest).toEqual([]);
+      expect(insert?.cql).toMatch(/^INSERT INTO notification_recipients_by_tenant /);
+      expect(insert?.params.slice(0, 4)).toEqual([tenantId, userId, 'grace@example.com', 'Grace']);
+      expect(kafka.deadLetters()).toEqual([]);
+    });
+
+    it('identity.membership-removed.v1 → recipient DELETE bound to the envelope tenant', async () => {
+      const [tenantId, userId] = [generateId(), generateId()];
+      const envelope = createEventEnvelope(
+        MEMBERSHIP_REMOVED_EVENT,
+        { userId, removedAt: '2026-09-29T10:00:00.000Z' },
+        { id: generateId(), source: 'identity-service', tenantId, actorId: userId },
+      );
+
+      await kafka.deliver(MEMBERSHIP_REMOVED_EVENT.topic, envelope, userId);
+
+      const [remove, ...rest] = recipientWrites(userId);
+      expect(rest).toEqual([]);
+      expect(remove?.cql).toMatch(/^DELETE FROM notification_recipients_by_tenant /);
+      expect(remove?.params.slice(1)).toEqual([tenantId, userId]);
+      expect(kafka.deadLetters()).toEqual([]);
+    });
+
+    /** A tenant-scoped envelope as a pre-B2-24 producer sent it: no `tenantId`. */
+    const legacy = <T extends { tenantId?: string | undefined }>(envelope: T) => {
+      const { tenantId: _tenantId, ...rest } = envelope;
+      return rest;
+    };
+    const meta = () => ({ id: generateId(), source: 'identity-service', tenantId: generateId() });
+
+    it.each([
+      [
+        MEMBERSHIP_CREATED_EVENT.topic,
+        (userId: string) =>
+          createEventEnvelope(
+            MEMBERSHIP_CREATED_EVENT,
+            {
+              userId,
+              email: 'x@example.com',
+              displayName: 'X',
+              createdAt: '2026-09-29T09:00:00.000Z',
+            },
+            meta(),
+          ),
+      ],
+      [
+        MEMBERSHIP_REMOVED_EVENT.topic,
+        (userId: string) =>
+          createEventEnvelope(
+            MEMBERSHIP_REMOVED_EVENT,
+            { userId, removedAt: '2026-09-29T10:00:00.000Z' },
+            meta(),
+          ),
+      ],
+    ])(
+      '%s without tenantId lands on the .dlq topic and touches no recipient row',
+      async (topic, build) => {
+        const userId = generateId();
+
+        await kafka.deliver(topic, legacy(build(userId)), userId);
+
+        expect(recipientWrites(userId)).toEqual([]);
+        expect(kafka.deadLetters()).toEqual([expect.objectContaining({ topic: `${topic}.dlq` })]);
+      },
+    );
 
     it('a malformed envelope is dead-lettered (offset commits; the consumer never throws)', async () => {
       await expect(

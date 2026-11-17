@@ -1,7 +1,13 @@
 import type { MailMessage, MailService } from '@platform/mailer';
 import { createMock } from '@platform/testing';
 import { describe, expect, it } from 'vitest';
-import { asClass, makeNotificationProps } from '../../../../test/support/fixtures.js';
+import {
+  asClass,
+  makeNotificationProps,
+  OTHER_TENANT_ID,
+  TENANT_ID,
+  USER_ID,
+} from '../../../../test/support/fixtures.js';
 import { DIGEST_ITEMS_PER_MAIL, DIGEST_SCAN_PER_USER } from '../../../notifications.constants.js';
 import type {
   NotificationRecipient,
@@ -14,6 +20,7 @@ import { SendDailyDigestHandler } from './send-daily-digest.handler.js';
 
 const NOW = new Date('2026-09-29T09:00:00.000Z');
 const recipient = (n: number): NotificationRecipient => ({
+  tenantId: TENANT_ID,
   userId: `01920000-0000-7000-8000-${String(n).padStart(12, '0')}`,
   email: `user${n}@example.com`,
   displayName: n === 1 ? '' : `User ${n}`,
@@ -63,11 +70,37 @@ describe('SendDailyDigestHandler', () => {
     expect(first).toMatchObject({
       template: 'daily-digest',
       subject: 'You have 12 unread notifications',
-      idempotencyKey: `digest-${r1.userId}-2026-09-29`,
+      idempotencyKey: `digest-${TENANT_ID}-${r1.userId}-2026-09-29`,
       context: { displayName: undefined, unreadCount: 12 },
     });
     expect(first?.context.items).toHaveLength(DIGEST_ITEMS_PER_MAIL);
     expect(mails.find((m) => m.to === r3.email)?.subject).toBe('You have 1 unread notification');
+  });
+
+  it('sends one digest per (tenant, user) pair, keyed by tenant, user and day', async () => {
+    const inTenant = (tenantId: string): NotificationRecipient => ({
+      tenantId,
+      userId: USER_ID,
+      email: 'ada@example.com',
+      displayName: 'Ada',
+      updatedAt: NOW,
+    });
+    const { mail, handler } = setup(
+      [{ items: [inTenant(TENANT_ID), inTenant(OTHER_TENANT_ID)], pageState: null }],
+      { [USER_ID]: 1 },
+    );
+
+    await expect(handler.execute(new SendDailyDigestCommand({ now: NOW }))).resolves.toEqual({
+      scanned: 2,
+      enqueued: 2,
+      failed: 0,
+    });
+    expect(mail.enqueue.mock.calls.map(([m]) => m.idempotencyKey).sort()).toEqual(
+      [
+        `digest-${TENANT_ID}-${USER_ID}-2026-09-29`,
+        `digest-${OTHER_TENANT_ID}-${USER_ID}-2026-09-29`,
+      ].sort(),
+    );
   });
 
   it('honours maxRecipients (bounded run) and never asks for more than the remaining budget', async () => {

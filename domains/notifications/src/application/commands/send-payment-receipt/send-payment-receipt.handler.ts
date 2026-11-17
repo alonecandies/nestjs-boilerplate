@@ -21,7 +21,7 @@ export class SendPaymentReceiptHandler implements ICommandHandler<SendPaymentRec
   ) {}
 
   async execute({ input }: SendPaymentReceiptCommand): Promise<Notification> {
-    const { paymentId, userId, amountTotal, currency, paidAt } = input;
+    const { tenantId, paymentId, userId, amountTotal, currency, paidAt } = input;
     const amount = formatMoney(amountTotal, currency);
 
     const [notification, recipient] = await Promise.all([
@@ -35,7 +35,7 @@ export class SendPaymentReceiptHandler implements ICommandHandler<SendPaymentRec
           idempotency: { key: `receipt:${paymentId}`, occurredAt: paidAt },
         }),
       ),
-      this.recipients.findById(userId),
+      this.recipients.find(tenantId, userId),
     ]);
 
     if (recipient) {
@@ -54,9 +54,12 @@ export class SendPaymentReceiptHandler implements ICommandHandler<SendPaymentRec
         }),
       );
     } else {
-      // The recipient projection is fed by user-registered events; a user created before this
-      // service existed has no row yet. The inbox entry is still there.
-      this.logger.warn(`No mail recipient for user ${userId}: receipt ${paymentId} not mailed`);
+      // The projection is fed by membership events: no row for this (tenant, user) means no
+      // membership event was seen yet (or it ended). There is no lookup in another tenant. The
+      // inbox entry is still there.
+      this.logger.warn(
+        `No mail recipient for user ${userId} in tenant ${tenantId}: receipt ${paymentId} not mailed`,
+      );
     }
     return notification;
   }

@@ -800,9 +800,9 @@ rejecting them.
 | Topic                                   | Producer                                            | Key      | Payload (zod)                                                                                       | Consumers                                                                                     |
 | --------------------------------------- | --------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
 | `identity.user-registered.v1`           | identity (`UserRegisteredRelay`)                    | `userId` | `userId`, `email`, `displayName`, `registeredAt`                                                    | notifications (`IdentityEventsConsumer`): welcome notification + mail                         |
-| `identity.membership-created.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `email`, `displayName`, `createdAt`                                                       | none yet (the notifications recipients projection, B4)                                        |
-| `identity.membership-removed.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `removedAt`                                                                               | none yet (the notifications recipients projection, B4)                                        |
-| `billing.payment-succeeded.v1`          | billing (`PaymentSucceededRelay`)                   | `userId` | `paymentId`, `userId`, `stripeCheckoutSessionId`, `amountTotal` (minor units), `currency`, `paidAt` | notifications (`BillingEventsConsumer`): payment receipt                                      |
+| `identity.membership-created.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `email`, `displayName`, `createdAt`                                                       | notifications (`IdentityEventsConsumer`): upsert the `(tenant, user)` mail recipient          |
+| `identity.membership-removed.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `removedAt`                                                                               | notifications (`IdentityEventsConsumer`): remove the `(tenant, user)` mail recipient          |
+| `billing.payment-succeeded.v1`          | billing (`PaymentSucceededRelay`)                   | `userId` | `paymentId`, `userId`, `stripeCheckoutSessionId`, `amountTotal` (minor units), `currency`, `paidAt` | notifications (`BillingEventsConsumer`): payment receipt, mailed in the payment's tenant      |
 | `notifications.notification-created.v1` | notifications (`PublishNotificationCreatedHandler`) | `userId` | `notificationId`, `userId`, `type`, `title`, `body`, `data`, `createdAt`                            | edge (`NotificationPushConsumer`): Socket.IO room `user:<id>` + GraphQL `notificationCreated` |
 
 Each topic has a dead-letter topic, `<topic>.dlq`. The record key is always `userId`, so all events of one user land on
@@ -815,13 +815,19 @@ workspace of an account without one, a new tenant, an accepted invitation) and `
 a member who left). `actorId` is the acting user: the member themself, or the admin who removed them. Each event is
 published once, after its transaction committed; a rejected command publishes nothing.
 
+Notifications keeps its mail recipients per `(tenant, user)` from the two membership topics, so receipts and digests
+follow memberships and stop when one ends. Its membership and payment consumers take the tenant only from the envelope
+and dead-letter an envelope without `tenantId` (or with the platform tenant) before any write or mail. Recipient writes
+are stamped with the event's time (`createdAt`, `removedAt`), so a replayed or reordered `membership-created` cannot
+bring back a removed member. The daily digest sends one mail per `(tenant, user)`, keyed `digest-<tid>-<uid>-<day>`.
+
 Consumer groups (`KAFKA_GROUP_ID` overrides the monolith's default and the gateway's `gateway-push`; notifications-service pins `notifications-service` in code, `NOTIFICATIONS_CONSUMER_GROUP`, so it ignores `KAFKA_GROUP_ID`):
 
-| Process                 | Default group           | Consumes                                                      |
-| ----------------------- | ----------------------- | ------------------------------------------------------------- |
-| `monolith`              | `monolith`              | All three topics                                              |
-| `notifications-service` | `notifications-service` | `identity.user-registered.v1`, `billing.payment-succeeded.v1` |
-| `gateway`               | `gateway-push`          | `notifications.notification-created.v1`                       |
+| Process                 | Default group           | Consumes                                                                                                                          |
+| ----------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `monolith`              | `monolith`              | Every topic above                                                                                                                 |
+| `notifications-service` | `notifications-service` | `identity.user-registered.v1`, `identity.membership-created.v1`, `identity.membership-removed.v1`, `billing.payment-succeeded.v1` |
+| `gateway`               | `gateway-push`          | `notifications.notification-created.v1`                                                                                           |
 
 All replicas of a process share one group, so each event is handled once per process type. The Redis Socket.IO adapter
 and Redis PubSub then fan a push out to whichever replica holds the user's connection.

@@ -16,7 +16,10 @@ export interface DailyDigestResult {
   failed: number;
 }
 
-/** Queues one digest mail per recipient that has unread notifications (at most once a day). */
+/**
+ * Queues one digest mail per recipient, a `(tenant, user)` pair, that has unread notifications (at
+ * most once a day per pair).
+ */
 export class SendDailyDigestCommand extends Command<DailyDigestResult> {
   constructor(readonly options: SendDailyDigestOptions = {}) {
     super();

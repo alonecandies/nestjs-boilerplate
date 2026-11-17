@@ -9,10 +9,12 @@ port to the CQRS buses and the gateway binds it to gRPC; the presentation classe
 in both.
 
 ```
-identity.user-registered.v1 ─┐                       ┌─► Cassandra notifications_by_user
-billing.payment-succeeded.v1 ─┼─► Messaging consumers ─┤   Cassandra notification_recipients
-                              │   → WelcomeUser /      ├─► MailService.enqueue (BullMQ, idempotent)
-                              │     SendPaymentReceipt └─► NotificationCreatedEvent
+identity.user-registered.v1 ──┐                       ┌─► Cassandra notifications_by_user
+identity.membership-created.v1 ┤                       │   Cassandra notification_recipients_by_tenant
+identity.membership-removed.v1 ┼─► Messaging consumers ─┤
+billing.payment-succeeded.v1 ──┤   → WelcomeUser /      ├─► MailService.enqueue (BullMQ, idempotent)
+                               │     Upsert/RemoveRecipient,
+                               │     SendPaymentReceipt └─► NotificationCreatedEvent
                               │                            └─► NotificationsSagas (@Saga)
                               │                                 └─► PublishNotificationCreatedCommand
                               │                                      └─► notifications.notification-created.v1
@@ -87,7 +89,8 @@ Global modules the lib expects:
 - Api: `AuthModule` (global guards, `TokenService`, `AccessTokenDenylist`), `AppThrottlerModule` (`WsThrottlerGuard` on the gateway), `AppGraphqlModule` + `GraphqlPubSubModule`, a socket.io adapter, and a connected Kafka consumer for the push. `forRemote()` also needs nestjs-cls (from `ObservabilityModule`) to propagate request ids.
 
 Kafka topics that must exist (auto-creation is off): `identity.user-registered.v1`,
-`billing.payment-succeeded.v1`, `notifications.notification-created.v1`, and their `.dlq` topics.
+`identity.membership-created.v1`, `identity.membership-removed.v1`, `billing.payment-succeeded.v1`,
+`notifications.notification-created.v1`, and their `.dlq` topics.
 
 ## Edge API
 
@@ -183,12 +186,20 @@ becomes `NOT_FOUND` with an `x-error-code: NOTIFICATION_NOT_FOUND` trailer. The 
 | Topic                                   | Role                                   | Handler                                                          |
 | --------------------------------------- | -------------------------------------- | ---------------------------------------------------------------- |
 | `identity.user-registered.v1`           | consumed (Messaging)                   | `WelcomeUserCommand`                                             |
+| `identity.membership-created.v1`        | consumed (Messaging)                   | `UpsertRecipientCommand`                                         |
+| `identity.membership-removed.v1`        | consumed (Messaging)                   | `RemoveRecipientCommand`                                         |
 | `billing.payment-succeeded.v1`          | consumed (Messaging)                   | `SendPaymentReceiptCommand`                                      |
 | `notifications.notification-created.v1` | produced (saga) · consumed (edge push) | `PublishNotificationCreatedCommand` · `NotificationPushConsumer` |
 
 Consumers use `@KafkaEventPattern` + `ParseEventEnvelopePipe` (typed, validated envelopes) with a
 controller-scoped dead-letter filter: any failure, including an invalid envelope, goes to
 `<topic>.dlq` and the offset commits.
+
+The tenant of a tenant-scoped event comes only from its envelope: `requireEventTenant(event)`
+(`presentation/messaging/event-tenant.ts`) returns the envelope `tenantId` and throws
+`DomainValidationException` `EVENT_TENANT_REQUIRED` when it is absent, malformed or the platform
+(nil) tenant. The membership and payment consumers call it before any command, so an envelope
+published before B2-24 is dead-lettered: no row, no mail.
 
 ## Commands and queries
 
@@ -197,9 +208,11 @@ controller-scoped dead-letter filter: any failure, including an invalid envelope
 | `CreateNotificationCommand`         | `NotificationEntity.create()` → insert → `NotificationCreatedEvent`. With `idempotency: { key, occurredAt }` the id is derived (upsert). |
 | `MarkNotificationReadCommand`       | `UPDATE … USING TTL <remaining> … IF EXISTS`; 404 `NOTIFICATION_NOT_FOUND` when not in the user's inbox (or past its 90 days)            |
 | `PublishNotificationCreatedCommand` | Kafka publish (key = user id, envelope id = notification id). Never throws; resolves `false` on failure                                  |
-| `WelcomeUserCommand`                | Upsert recipient, welcome notification (`welcome:{userId}`), welcome mail (`welcome-{userId}`)                                           |
-| `SendPaymentReceiptCommand`         | Receipt notification (`receipt:{paymentId}`), receipt mail (`receipt-{paymentId}`) when the recipient is known                           |
-| `SendDailyDigestCommand`            | Bounded scan of recipients, unread items per user, digest mail (`digest-{userId}-{yyyy-mm-dd}`)                                          |
+| `WelcomeUserCommand`                | Welcome notification (`welcome:{userId}`), welcome mail to the event's email (`welcome-{userId}`)                                        |
+| `UpsertRecipientCommand`            | Upsert the `(tenant, user)` recipient row, `USING TIMESTAMP` = the membership's `createdAt`                                              |
+| `RemoveRecipientCommand`            | Delete the `(tenant, user)` recipient row, `USING TIMESTAMP` = `removedAt`                                                               |
+| `SendPaymentReceiptCommand`         | Receipt notification (`receipt:{paymentId}`), receipt mail (`receipt-{paymentId}`) when the user is a recipient in the payment's tenant  |
+| `SendDailyDigestCommand`            | Bounded scan of `(tenant, user)` recipients, unread items, one digest mail per pair (`digest-{tenantId}-{userId}-{yyyy-mm-dd}`)          |
 | `ListNotificationsQuery`            | One inbox page (`executePage`, driver paging state)                                                                                      |
 
 `DailyDigestCron` runs at 09:00 UTC (`@Cron` + `@WithLock('notifications:daily-digest', 5 min)`,
@@ -215,7 +228,12 @@ Delivery is at-least-once, so every consumer path is idempotent:
   read notification unread.
 - Mails use business idempotency keys (BullMQ job ids, 24 h retention). Keys are derived from the
   user or payment id rather than the envelope id, so a re-published event with a fresh envelope id
-  is still deduplicated.
+  is still deduplicated. The digest key names the tenant too, so one user's digests in two tenants
+  are two mails.
+- Recipient writes carry `USING TIMESTAMP` = the membership event's time (microseconds). Cassandra
+  keeps the newest write and a delete shadows every write stamped at or before it, so replays and
+  reordered `created`/`removed` deliveries converge, and a replayed `created` cannot resurrect a
+  removed member.
 - The notification-created envelope id equals the notification id. Before pushing, the edge push
   consumer claims `<prefix>:notifications:push:dedupe:{envelope id}` (`SET NX EX 600`), so a
   re-published event does not show the same toast twice. If Redis is unavailable it pushes anyway
@@ -231,10 +249,18 @@ CREATE TABLE IF NOT EXISTS notifications_by_user (
   PRIMARY KEY ((user_id), notification_id)
 ) WITH CLUSTERING ORDER BY (notification_id DESC) AND default_time_to_live = 7776000;
 
--- 002: mail recipients, a projection of identity's user-registered events
+-- 002: user-keyed mail recipients (no longer read or written; a later migration drops it)
 CREATE TABLE IF NOT EXISTS notification_recipients (
   user_id uuid PRIMARY KEY, email text, display_name text, updated_at timestamp);
+
+-- 003: mail recipients per membership, a projection of identity's membership events
+CREATE TABLE IF NOT EXISTS notification_recipients_by_tenant (
+  tenant_id uuid, user_id uuid, email text, display_name text, updated_at timestamp,
+  PRIMARY KEY ((tenant_id, user_id)));
 ```
+
+There is no backfill from `notification_recipients`: a user-keyed row has no tenant. Recipients come
+back from new membership events; a dev stack resets its volumes (`docker compose down -v`).
 
 Rows expire with the table's default TTL, and that TTL applies to UPDATEs too: a plain
 `UPDATE … SET read = true` would give `read` a fresh 90 days and leave a "ghost" row (only `read`,
@@ -245,8 +271,8 @@ Listings also skip any row with neither `type` nor `created_at` (ghosts written 
 
 `notificationsCassandraMigrations = { dir }` points at that folder. SWC `copyFiles` ships the `.cql`
 files to `dist`. All statements are prepared constants that hit one partition (no
-`ALLOW FILTERING`). Only the digest scans `notification_recipients`, and it does so paged and
-capped.
+`ALLOW FILTERING`). Only the digest scans `notification_recipients_by_tenant`, and it does so
+paged and capped.
 
 ## Tests
 
@@ -256,13 +282,14 @@ capped.
 - Every command/query handler (`*.handler.spec.ts`) with mocked repositories, buses, mail and `FakeKafkaProducer`. The saga (`ofType` mapping).
 - Mail templates (`infrastructure/mail/notifications-mail-templates.spec.ts`): every declared template ships, has a context type and renders with the shared layout partials in strict mode, with HTML escaping.
 - Repositories against a mocked `cassandra-driver` client (CQL, prepare/idempotent flags, paging, LWT result). Migrations parsed with `@platform/cassandra`'s loader.
+- `test/recipients.int-spec.ts` (Docker; `INTEGRATION=1 bunx vitest run --project notifications:int`): the real migrations and recipients repository on `@platform/testing/cassandra`: per-pair rows, removal of one pair, write-timestamp ordering and the scan.
 - Local adapter (buses). gRPC adapter (null normalisation, NOT_FOUND trailers → `EntityNotFoundException`, sanitised 503). Cron (schedule metadata, lock won/lost, failure).
 - REST and GraphQL through a Fastify test app: real `AuthModule` (real tokens), common enhancers and Apollo, with a **fake port**. The specs cover 200/204, 400 validation (zod and class-validator), 401, 403 and 404 problem details, the schema SDL, and the subscription filter, resolve and iterator.
 - gRPC controller and Kafka consumers run through Nest's real RPC pipeline on in-memory transports (`test/support/in-memory-{grpc,kafka}.server.ts`): bus mapping, `INVALID_ARGUMENT`, NOT_FOUND trailers, and DLQ records for invalid envelopes and failing commands.
 - gRPC round trip (`presentation/grpc/notifications-grpc.roundtrip.spec.ts`): `NotificationsGrpcAdapter` ↔ `NotificationsGrpcController` over real loopback gRPC. The remote adapter returns the local mapper's exact shape (map data, Date, `nextPageState` absent on the last page) and keeps `NOTIFICATION_NOT_FOUND` across the hop.
 - WebSocket gateway: handshake middleware (valid, Bearer header, missing, revoked, forged), room join, disconnect at token expiry (and timer cleanup), the revocation sweep, `WsSessionGuard` (TOKEN_REVOKED), `markRead` ack, `ping`, room push.
 - Module composition for every topology: the Core welcome flow end to end (command → aggregate → saga → Kafka), `forLocal()`/`forRemote()` port binding, and the gRPC/Messaging controllers.
-- Test doubles for the apps: `@domain/notifications/testing` exports `FakeNotificationsPort` (an in-memory inbox behind the gateway's `NotificationsPort`).
+- Test doubles for the apps: `@domain/notifications/testing` exports `FakeNotificationsPort` (an in-memory inbox behind the gateway's `NotificationsPort`) and `InMemoryNotificationRecipientsRepository` (the recipients projection with the Cassandra adapter's last-write-wins rules).
 
 ## Gotchas
 
@@ -274,7 +301,8 @@ capped.
   between the two loses only the push; a transactional outbox would close that gap.
 - `executePage` can return a page state at the exact end of a partition. The next page is then
   empty with a `null` state, so clients must treat that as the end.
-- Recipients are only known after a `user-registered` event. Receipts for users created before
-  this service existed are stored in the inbox but not mailed (a warning is logged).
+- Recipients are only known after a `membership-created` event for that `(tenant, user)`. A receipt
+  for a pair without a row (a membership from before this service consumed the event, or one that
+  ended) is stored in the inbox but not mailed, with one warning; no other tenant is consulted.
 - The gateway namespace is websocket-only (the `RedisIoAdapter` defaults), so there are no sticky
   sessions or CORS preflights. Pushes reach every replica through the Redis adapter.
