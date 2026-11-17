@@ -139,8 +139,12 @@ revoked_at IS NULL AND expires_at > now RETURNING id` (compare-and-set: concurre
 - **Logout**: denylist the access `jti` in Redis for its remaining lifetime, then revoke the
   session of `refreshToken`, or every session when it is omitted ("sign out everywhere").
 - **Purge**: hourly `PurgeExpiredSessionsCron` (`@WithLock('identity:purge-sessions', 60 s)`)
-  deletes expired sessions in batches of 5 000. Revoked-but-unexpired sessions are kept on
-  purpose: they make reuse detectable until the token itself expires.
+  deletes the expired sessions (`expires_at <= $now`) in 15-minute time slices, oldest first: read
+  `min(expires_at)`, one multi-shard `DELETE` up to it + 15 minutes, repeat, at most 96 per run (no
+  `LIMIT`ed batches: Citus cannot push one down on the user-distributed `sessions`). Each slice stays
+  far below the role's `statement_timeout` (a timed-out one is retried at half the span), so a
+  backlog drains over a few runs instead of timing out every hour. Revoked-but-unexpired sessions are kept on purpose: they make reuse
+  detectable until the token itself expires.
 
 ## REST (URI version `v1`, problem+json errors)
 
@@ -278,6 +282,76 @@ drizzle-kit can load it. Identity owns its migration history: `drizzle.config.ts
 `src/infrastructure/persistence/migrations` (`bun run --filter @domain/identity db:generate`), bookkeeping in
 `identity.__drizzle_migrations`, and `identityMigrations` applies it after the platform set.
 
+**Citus distribution** (`0008_distribute`, SH-5; only `SELECT app.*` calls, no-ops without Citus):
+`users`, `tenants`, `memberships` are reference tables (parents first); `invitations` and
+`audit_events` are distributed by `tenant_id`, colocated with `app.tenant_colocation`; `sessions` is
+distributed by `user_id` in its own colocation group. The runner applies a fresh database's whole
+set in one transaction with local execution on for its own session, so the shards of tables created
+earlier in that transaction are created over the coordinator's own connection. A table added later
+carries its own `app.distribute_*` call right after its `CREATE TABLE`.
+
+**Row-level security** (`0009_rls`, B3; spec §8.2, row-local per the B3 ruling of 2026-11-17). RLS is enabled and
+forced on all six tables, so the owner is filtered too. Grants are explicit per table and role (deny by default, no
+default privileges); `identity.__drizzle_migrations` gets neither RLS nor a grant to an app role. Every policy uses
+only the row's own columns and `app.user_id()`, `app.tenant_id()`, `app.elevated()`, called directly. No policy
+holds a subquery, which Citus refuses (`CREATE POLICY` fails with `XX000 unexpected non-SELECT command in SubLink`).
+No policy calls a function that reads a table, which fails on a shard with local execution off. Policies `TO
+app_runtime`:
+
+| Table          | `app_runtime` grants | Read                                             | Write                                                                                                                                                |
+| -------------- | -------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`        | S, I, U (columns)    | `id = user_id()`                                 | insert `id = user_id() AND NOT is_platform_staff`; update `id = user_id()` on `email`, `password_hash`, `display_name`, `updated_at` only; no delete |
+| `tenants`      | S, I, U              | `id = tenant_id()`                               | insert `id = tenant_id()`; update `id = tenant_id() AND elevated()`; no delete                                                                       |
+| `memberships`  | S, I, U, D           | `user_id = user_id() OR tenant_id = tenant_id()` | insert and update `tenant_id = tenant_id() AND elevated()`; delete also your own row unelevated (leaving)                                            |
+| `invitations`  | S, I, U, D           | `tenant_id = tenant_id() AND elevated()`         | the same for every command                                                                                                                           |
+| `sessions`     | S, I, U              | `user_id = user_id()`                            | insert `user_id = user_id() AND tenant_id = tenant_id()`; update `user_id = user_id()`; no delete (the purge is `app_system`)                        |
+| `audit_events` | S, I                 | `tenant_id = tenant_id() AND elevated()`         | insert `tenant_id = tenant_id()`; append-only                                                                                                        |
+
+- **`is_platform_staff`.** `app_runtime` cannot set it. The insert check refuses `true`. INSERT is table-level,
+  because Citus names every defaulted column in the shard INSERT, so a column-list grant would refuse even register.
+  The UPDATE grant lists the other columns. Only `staff:grant` sets it, as `app_owner`, through `users_owner_select`
+  and `users_owner_update` (`USING (true)`).
+- **`app_system`** (BYPASSRLS, the system pool) gets `SELECT` on `users`, `tenants`, `memberships` and `invitations`,
+  and `SELECT, DELETE` on `sessions`.
+- **Reads the policies leave out.** A user reads only its own `users` row and only its session tenant. Two kinds of
+  read go through the system pool instead, with the tenant filter written in their SQL:
+  - co-member reads (the member directory: `users JOIN memberships ON tenant_id = <current tenant>`);
+  - the caller's tenants outside the session tenant (its own memberships first, then those tenant ids).
+
+  The application verifies these, not the database policy. This is the same trust model as the session context.
+
+**Which principal each flow runs as** (B3 Task 12). The principal is final before a unit of work opens: `runWithPrincipal`
+wraps `TransactionRunner.run`, never the other way round, and every id a flow needs for its principal (a new user, tenant
+or session) is generated before `BEGIN`. Both JWTs are signed before `BEGIN` too.
+
+| Flow                 | System lookup                  | Units of work and principals                                                                                                                                  |
+| -------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Login                | `users.findCredentialsByEmail` | argon2 outside; as `{ user, null }`: best-effort re-hash and the membership choice; as `{ user, tenant, roles }`: the activity touch and the session          |
+| Login, no membership | none                           | the personal workspace is planned first; as `{ user, newTenant, owner }`: `TenantBootstrap` and the session                                                   |
+| Register             | `users.existsByEmail`          | hash outside; ONE unit of work as `{ newUser, newTenant, owner }`: user, tenant, owner membership (`tenant-bootstrap`), session                               |
+| Refresh              | none                           | as `{ sub, null }`: user, session, membership; ONE unit of work as `{ sub, session tenant, roles }`: rotate and open the successor; reuse revokes all         |
+| Switch tenant        | none                           | as the caller: target membership and own row; ONE unit of work as `{ user, target, roles }`: rotate, touch, new session                                       |
+| Create tenant        | none                           | ONE unit of work as `{ user, newTenant, owner }`: `TenantBootstrap` and the read-back                                                                         |
+| Accept invitation    | `invitations.findByTokenHash`  | as the caller: own row, email match; ONE unit of work as `{ user, invitation tenant, invitation roles }`: `InvitationAcceptance`                              |
+| Staff switch-in      | none                           | as the caller: the staff flag and own row; as `{ staff, tenant, admin, staff }`: tenant read, token, audit row                                                |
+| Members, invitations | none                           | the request principal; `elevate(members:manage)` first in `CreateInvitation`, `UpdateMemberRoles`, `RemoveMember`; `elevate(tenant:manage)` in `RenameTenant` |
+| Purge cron           | `sessions.deleteExpired`       | `SystemContext.run('identity.purge-expired-sessions', …)`                                                                                                     |
+| `staff:grant`        | none                           | `app_owner` on `DATABASE_MIGRATION_URL`, through `users_owner_select` and `users_owner_update`                                                                |
+
+- **Justified elevation** lives in three `*.elevated.ts` services, one reason each, each asserting that the CLS principal
+  matches its arguments: `TenantBootstrap` (`tenant-bootstrap`: the owner membership of a tenant created in the same
+  transaction), `InvitationAcceptance` (`verified-invitation`: the membership, the accepted flag and the audit row of a
+  verified token) and `MembershipActivity` (`membership-activity`: the member's own `last_active_at` touch).
+- **System methods** (ten, pinned in `identity.system-methods.ts`; only the four `drizzle-*.system-repository.ts` files
+  name `SystemDatabase`). `pre-auth` (run anywhere): `users.findCredentialsByEmail`, `users.existsByEmail`,
+  `invitations.findByTokenHash`. `system` (inside `SystemContext.run(reason, …)`): `sessions.deleteExpired`, and the reads
+  the row-local policies leave out, with the reasons in `application/persistence/system-reads.ts`:
+  `users.findByIdInTenant`, `users.listInTenant` and `users.findByIdsInTenant` (the GraphQL users DataLoader behind
+  `Payment.user`; `identity.user-directory`), `memberships.findMember` and
+  `memberships.listMembers` (`identity.member-directory`), `memberships.listForUser` (`identity.my-tenants`). The handler
+  asserts the scope first (`requireActingIn(tenantId)`, or itself) and the SQL filters on it. Every process that runs the
+  identity core needs `DATABASE_SYSTEM_URL`.
+
 ## Configuration
 
 Identity's own namespaces, loaded by `IdentityCoreModule` (`infrastructure/security/`): `password` (`ARGON2_MEMORY_COST`, `ARGON2_TIME_COST`, `ARGON2_PARALLELISM`) and `refreshToken` (`JWT_REFRESH_SECRET`, `JWT_REFRESH_TTL_SEC`; it reads `JWT_ACCESS_SECRET` only for the production must-differ check). Also its own, for the gateway: `identityGrpcClient` (`IDENTITY_GRPC_URL`, `infrastructure/adapters/grpc/`), read by `IdentityApiModule.forRemote()`. From `@platform/config`: `auth` (`JWT_ACCESS_*`, `JWT_ISSUER`/`JWT_AUDIENCE`, `AUTH_DENYLIST_ENABLED`),
@@ -309,15 +383,35 @@ locks, denylist and cache).
   `apps/gateway/test/payment-user.e2e-spec.ts` compose this lib with billing in one GraphQL schema
   (`Payment.user` through the `users` loader).
 
-Integration (Docker): `INTEGRATION=1 bunx vitest run --project identity:int` runs
-`infrastructure/persistence/users.repository.int-spec.ts` on PostgreSQL 18 (testcontainers, or an
-existing throwaway database via `INTEGRATION_DATABASE_URL`). It boots the real `DatabaseModule`, which
-applies the platform set and identity's own history (schema `identity`), then covers the repositories: the hash-free
-projection, `users_email_unique` → `EMAIL_TAKEN`, `findByIds`, keyset + literal ILIKE search,
-the `isPlatformStaff` fresh read, DB defaults, the session FK cascade and compare-and-set rotation,
-server-side prepared
-statements (`pg_prepared_statements`, one statement for every `findByIds` batch size) and the
-trigram search index (`EXPLAIN` → `Bitmap Index Scan on users_search_trgm_idx`).
+Integration (Docker): `INTEGRATION=1 bunx vitest run --project identity:int` (one spec file at a time on a loaded
+machine). Every spec starts a fresh Citus 14.2 container through `startRlsTestPostgres()` (the three roles,
+`citus.enable_local_execution=off`; `INTEGRATION_DATABASE_URL` is not used). The harness `test/identity-database.ts`
+(`startIdentityDatabase`) boots the real `DatabaseModule` with the roles of production: migrations as `app_owner` on
+`DATABASE_MIGRATION_URL`, the app as `app_runtime` on `DATABASE_URL`, the system pool as `app_system` on
+`DATABASE_SYSTEM_URL`; `admin` is the superuser, for seeding and "what is really there" checks only.
+
+- `infrastructure/persistence/users.repository.int-spec.ts` covers the user repositories: the hash-free projection,
+  `users_email_unique` → `EMAIL_TAKEN`, `findByIds`, keyset + literal ILIKE search, the `isPlatformStaff` fresh read, DB
+  defaults, the session FK cascade and compare-and-set rotation, and the trigram search index (`EXPLAIN` → `Bitmap Index
+Scan on users_search_trgm_idx`).
+- `infrastructure/persistence/identity.distribution.int-spec.ts` checks `0008_distribute`: kind, colocation group and shard
+  count of every table, then the repositories and the purge on the distributed tables.
+- `infrastructure/persistence/identity.rls.int-spec.ts` checks `0009_rls`. It runs raw postgres.js as `app_runtime`,
+  `app_system` and `app_owner`, one transaction per case opened with `buildRlsContextSql`, against two tenants, and checks
+  both paths of every policy with exact rows. A forbidden write leaves the superuser's snapshot unchanged. It also covers
+  the grants, the no-context refusals and FORCE RLS on all six tables.
+- `infrastructure/persistence/identity.repositories.rls.int-spec.ts` calls every public method of every runtime port
+  standalone as the right principal (a typed table: a new port method without a case does not compile) and once with no
+  principal, and the system repositories by their pinned methods.
+- `infrastructure/persistence/tenancy.repositories.int-spec.ts` runs the tenancy repositories under the 0009 policies,
+  the cross-tenant reads through the system repositories.
+- `test/identity-flows.rls.int-spec.ts` (17 cases) runs the real identity core on the three URLs, with the real RBAC and
+  commands through the `CommandBus`: register, login (with and without a membership), refresh and reuse, switch tenant,
+  create tenant, invitations (elevation, accept, the replayed and the mismatched account), members, staff switch-in,
+  the purge cron and the `staff:grant` CLI. A spy on `SystemDatabase.run` pins each flow's system methods.
+- The e2e harnesses of the apps use in-memory identity persistence and never reach Postgres. The 409 `EMAIL_TAKEN`
+  mapping and the cross-tenant `UPDATE … WITH CHECK` refusals are proven through a real distributed database in
+  `apps/monolith/test/rls-journeys.int-spec.ts` (the `monolith:int` project, both domains together).
 
 Test doubles for the apps: `@domain/identity/testing` exports `createInMemoryIdentityPersistence`
 (in-memory `UsersRepository`/`SessionsRepository` and an inline `TransactionRunner`, used by the

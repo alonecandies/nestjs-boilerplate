@@ -6,47 +6,29 @@ import {
   MembershipsRepository,
 } from '../persistence/memberships.repository.js';
 import type { UserRecord } from '../persistence/users.repository.js';
-import { PersonalWorkspaces } from './personal-workspaces.service.js';
 
-/** The membership a login opens its session in. */
-export interface LoginMembership extends MembershipRecord {
-  /** Set when this login created the personal workspace: the caller publishes the membership. */
-  readonly workspaceCreated?: true;
-}
-
-/** Which tenant a login opens its session in (spec §5.2). Runs in the login's unit of work. */
+/**
+ * Which membership a login opens its session in (spec §5.2). Reads only: it runs as
+ * `{ user, null }` (the memberships policy shows the user's own rows in every tenant); the login
+ * then touches the chosen membership, or bootstraps a workspace, as the chosen tenant.
+ */
 @Injectable()
 export class TenantSelection {
-  constructor(
-    private readonly memberships: MembershipsRepository,
-    private readonly workspaces: PersonalWorkspaces,
-  ) {}
+  constructor(private readonly memberships: MembershipsRepository) {}
 
   /**
    * `tenantId` given: that membership, else 403 (also for unknown, malformed and platform ids).
-   * Absent: the most recently active membership; an account without any (created before B2) gets its
-   * personal workspace (`workspaceCreated: true`). The chosen membership's `last_active_at` becomes `now`.
+   * Absent: the most recently active membership, or null for an account without any (created
+   * before B2), which then gets its personal workspace.
    * @throws TenantAccessDeniedException
    */
-  async forLogin(
-    user: UserRecord,
-    tenantId: string | undefined,
-    now: Date,
-  ): Promise<LoginMembership> {
-    let membership: MembershipRecord | null;
-    if (tenantId !== undefined) {
-      membership =
-        isUuid(tenantId) && !isPlatformTenantId(tenantId)
-          ? await this.memberships.find(tenantId, user.id)
-          : null;
-      if (membership === null) throw new TenantAccessDeniedException();
-    } else {
-      membership = await this.memberships.findMostRecentForUser(user.id);
-      if (membership === null) {
-        return { ...(await this.workspaces.create(user, now)), workspaceCreated: true };
-      }
-    }
-    await this.memberships.touch(membership.tenantId, user.id, now);
-    return { ...membership, lastActiveAt: now };
+  async forLogin(user: UserRecord, tenantId: string | undefined): Promise<MembershipRecord | null> {
+    if (tenantId === undefined) return this.memberships.findMostRecentForUser(user.id);
+    const membership =
+      isUuid(tenantId) && !isPlatformTenantId(tenantId)
+        ? await this.memberships.find(tenantId, user.id)
+        : null;
+    if (membership === null) throw new TenantAccessDeniedException();
+    return membership;
   }
 }

@@ -5,6 +5,8 @@
 - **Date:** 2026-10-12
 - **Amended:** 2026-11-09 with Citus + PgBouncer sharding and the Stripe/immudb ledger; every change is listed in
   section 16.
+- **Amended:** 2026-11-17 (B3): identity policies are row-local and the directory reads moved to the system pool;
+  see sections 8.2 and 9 and the delta in section 16.
 
 This document fixes the decisions that cut across the remaining sub-projects, so each one can be planned and built
 without reopening them. The bounded sub-projects (H, D, F, E) get short designs in chat. B, C and G get an
@@ -117,8 +119,8 @@ libs/*            @platform/*             platform adapters + shared kernel, no 
 ## 4. Data ownership and migrations (amended 2026-11-09; see the sharding design sections 2, 4, 5 and 7.3)
 
 - **One Postgres schema per domain.** `identity.*` and `billing.*`. A platform schema, `app`, holds the RLS helper
-  functions and the Citus distribution helpers. A policy helper that names a domain table (for example
-  `identity.shares_current_tenant`) lives in that domain's schema and migration set. Tables leave `public`.
+  functions and the Citus distribution helpers. Tables leave `public`. (A policy helper that names a domain table was
+  planned here; B3 found it cannot work on Citus, so no policy calls one: see section 8.2.)
 - **Citus 14.2 everywhere** (compose, Testcontainers, CI); plain Postgres is an unsupported fallback, on which the
   distribution helpers are no-ops. Every table is exactly one **kind**:
 
@@ -323,9 +325,8 @@ app.tenant_id = '<uuid or empty>'; SET LOCAL app.elevated = 'on|off'` (sent with
   - Policies call each helper directly (`app.tenant_id()`, never `(select app.tenant_id())`). Citus rejects
     subqueries in policies. The helpers are `STABLE`, and `user_id()`/`tenant_id()` read
     `nullif(current_setting(…, true), '')`.
-- **Cross-table policy checks** go through `STABLE` helpers that read **reference tables only** (for example
-  `identity.shares_current_tenant(uuid)` over `identity.memberships`). A helper that names a domain table lives in
-  that domain's schema. A helper that reads a distributed table fails inside pushed-down queries.
+- **No cross-table policy checks** (amended 2026-11-17: B3 ruling `b3-identity-policies`). A helper that reads another
+  table fails on a shard under Citus, so every policy is row-local (section 8.2).
 - **Unit of work.**
   - Every repository call goes through `txHost.withTransaction(Propagation.Required)`. It joins the handler's
     transaction if there is one; otherwise it opens one per call.
@@ -345,35 +346,47 @@ All policies are `PERMISSIVE`, and any table without a policy for the runtime ro
 
 - **No subqueries in any policy expression** (Citus rejects them on distributed and reference tables): call
   `app.user_id()`, `app.tenant_id()` and `app.elevated()` directly; `user_id()` etc. below are those calls.
-- **Helper functions read reference tables only.** The two cross-table checks are identity-set helpers over the
-  reference table `identity.memberships`:
-  `identity.shares_current_tenant(u uuid)` = `EXISTS (SELECT 1 FROM identity.memberships m WHERE m.tenant_id =
-app.tenant_id() AND m.user_id = u)`, and `identity.is_member(t uuid)` = the same with `m.tenant_id = t AND
-m.user_id = app.user_id()`. Both are `LANGUAGE sql STABLE`.
+- **Policies are row-local** (amended 2026-11-17, B3 ruling `b3-identity-policies`; it replaces the 2026-11-09
+  cross-table helpers `identity.shares_current_tenant` and `identity.is_member`, which were never shipped). A policy
+  uses only the row's own columns and the session helpers `app.user_id()`, `app.tenant_id()` and `app.elevated()` (all
+  read `current_setting`). No policy, and no function a policy calls, reads a table. Reason: Citus 14.2 with
+  `citus.enable_local_execution=off` (cluster behaviour) fails any policy that calls a helper reading another distributed
+  table as `app_runtime`, with `XX000 cannot execute a distributed query from a query on a shard`. That covers
+  `identity.shares_current_tenant`, `identity.is_member` and `identity.staff_flag`, even though `memberships` is a
+  reference table. Not accepted as fixes: `citus.allow_nested_distributed_execution` ("possible incorrectness") and
+  running the policy specs with local execution on (it hides the cluster failure).
+- **Trust model.** What a policy can no longer say moves to application SQL. Co-member reads (the member directory,
+  scoped `GET /v1/users/:id`) and reads of the caller's tenants outside the session tenant run on the system pool
+  (section 9), with the scoping filter written in the SQL itself. They are verified in application SQL, not by the
+  database policy: the same trust model as the session context itself.
+- A column-level `INSERT` grant on `identity.users` also fails on Citus (the shard `INSERT` lists every defaulted column,
+  so `is_platform_staff` needs `INSERT` privilege). The `UPDATE` column list works. So `INSERT` is table-level and the
+  `WITH CHECK` refuses `is_platform_staff = true`.
 - Rows with `tenant_id = PLATFORM_TENANT_ID` never match a runtime policy (no runtime principal carries the nil UUID);
   only the system pool reads or writes them.
 
-| Table                                                                | Read                                                              | Write                                                                                                                                                                                                 |
-| -------------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `identity.users`                                                     | `id = user_id()` **or** `identity.shares_current_tenant(id)`      | update: `id = user_id()`, and column grants keep `is_platform_staff` out of the runtime role's reach (only `staff:grant` sets it); insert: `id = user_id()` (register inserts "itself")               |
-| `identity.tenants`                                                   | `id = tenant_id()` **or** `identity.is_member(id)`                | insert: `id = tenant_id()`; update: `id = tenant_id() and elevated()`                                                                                                                                 |
-| `identity.memberships`                                               | `user_id = user_id()` **or** `tenant_id = tenant_id()`            | insert and update: `tenant_id = tenant_id() and elevated()`; delete: `tenant_id = tenant_id() and (elevated() or user_id = user_id())` (leaving deletes my own row, but nobody edits their own roles) |
-| `identity.invitations`                                               | `tenant_id = tenant_id() and elevated()`                          | same                                                                                                                                                                                                  |
-| `identity.sessions`                                                  | `user_id = user_id()`                                             | same, plus `tenant_id = tenant_id()` on insert                                                                                                                                                        |
-| `identity.audit_events`                                              | `tenant_id = tenant_id() and elevated()`                          | insert: `tenant_id = tenant_id()`                                                                                                                                                                     |
-| `billing.payments`                                                   | `tenant_id = tenant_id() and (user_id = user_id() or elevated())` | insert and update: `tenant_id = tenant_id() and user_id = user_id()` (elevation reads, it never writes another member's payment)                                                                      |
-| `billing.stripe_events`                                              | `tenant_id = tenant_id() and user_id = user_id()`                 | insert: same (platform rows, `user_id` NULL, only through the system pool)                                                                                                                            |
-| `<schema>.outbox` (G)                                                | none for runtime                                                  | insert: `tenant_id = tenant_id()`                                                                                                                                                                     |
-| `billing.ledger_accounts` (L-10)                                     | `tenant_id = tenant_id() and elevated()`                          | insert: `tenant_id = tenant_id()`                                                                                                                                                                     |
-| `billing.ledger_entry_refs` (L-10)                                   | `tenant_id = tenant_id() and elevated()`                          | insert: `tenant_id = tenant_id()`; no update or delete                                                                                                                                                |
-| `billing.ledger_discrepancies` (L-10)                                | `tenant_id = tenant_id() and elevated()`                          | insert: `tenant_id = tenant_id()`; `UPDATE` and `DELETE` revoked                                                                                                                                      |
-| `billing.ledger_reconciliation_runs`, `billing.ledger_trusted_state` | none for runtime (system only)                                    | none for runtime                                                                                                                                                                                      |
+| Table                                                                | Read                                                              | Write                                                                                                                                                                                                                                                                                                                               |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `identity.users`                                                     | `id = user_id()`                                                  | insert: table-level `INSERT` grant, `WITH CHECK (id = user_id() AND NOT is_platform_staff)` (register inserts "itself"); update: `USING` and `WITH CHECK (id = user_id())`, column grants keep `is_platform_staff` out of the runtime role's reach (only `staff:grant` sets it, as `app_owner` through two `TO app_owner` policies) |
+| `identity.tenants`                                                   | `id = tenant_id()`                                                | insert: `id = tenant_id()`; update: `id = tenant_id() and elevated()`                                                                                                                                                                                                                                                               |
+| `identity.memberships`                                               | `user_id = user_id()` **or** `tenant_id = tenant_id()`            | insert and update: `tenant_id = tenant_id() and elevated()`; delete: `tenant_id = tenant_id() and (elevated() or user_id = user_id())` (leaving deletes my own row, but nobody edits their own roles)                                                                                                                               |
+| `identity.invitations`                                               | `tenant_id = tenant_id() and elevated()`                          | same                                                                                                                                                                                                                                                                                                                                |
+| `identity.sessions`                                                  | `user_id = user_id()`                                             | same, plus `tenant_id = tenant_id()` on insert                                                                                                                                                                                                                                                                                      |
+| `identity.audit_events`                                              | `tenant_id = tenant_id() and elevated()`                          | insert: `tenant_id = tenant_id()`                                                                                                                                                                                                                                                                                                   |
+| `billing.payments`                                                   | `tenant_id = tenant_id() and (user_id = user_id() or elevated())` | insert and update: `tenant_id = tenant_id() and user_id = user_id()` (elevation reads, it never writes another member's payment)                                                                                                                                                                                                    |
+| `billing.stripe_events`                                              | `tenant_id = tenant_id() and user_id = user_id()`                 | insert: same (platform rows, `user_id` NULL, only through the system pool)                                                                                                                                                                                                                                                          |
+| `<schema>.outbox` (G)                                                | none for runtime                                                  | insert: `tenant_id = tenant_id()`                                                                                                                                                                                                                                                                                                   |
+| `billing.ledger_accounts` (L-10)                                     | `tenant_id = tenant_id() and elevated()`                          | insert: `tenant_id = tenant_id()`                                                                                                                                                                                                                                                                                                   |
+| `billing.ledger_entry_refs` (L-10)                                   | `tenant_id = tenant_id() and elevated()`                          | insert: `tenant_id = tenant_id()`; no update or delete                                                                                                                                                                                                                                                                              |
+| `billing.ledger_discrepancies` (L-10)                                | `tenant_id = tenant_id() and elevated()`                          | insert: `tenant_id = tenant_id()`; `UPDATE` and `DELETE` revoked                                                                                                                                                                                                                                                                    |
+| `billing.ledger_reconciliation_runs`, `billing.ledger_trusted_state` | none for runtime (system only)                                    | none for runtime                                                                                                                                                                                                                                                                                                                    |
 
 ### 8.3 The two named risks (amended 2026-11-09; see the sharding design section 7.1)
 
 1. **Silently empty results.**
-   - The `users` policy checks `memberships`, which has its own policy. That is the one most likely to return `[]`
-     where it should return rows or a 403.
+   - A policy that returned `[]` where a flow expects rows is the failure to watch for (amended 2026-11-17: no policy
+     reads another table any more, so a policy no longer depends on another table's policy). The reads that need more
+     than the row's own columns are system methods, which return rows by their own SQL filter.
    - Mitigations:
      - Every policy gets an integration spec covering **both** paths: the allowed case asserts the expected rows, not
        just a non-empty list, and the forbidden case asserts none.
@@ -414,7 +427,8 @@ added by the ledger design):
 1. `users.findCredentialsByEmail` (login lookup)
 2. `users.existsByEmail` (register pre-check; the unique constraint still guards races)
 3. `invitations.findByTokenHash` (accept lookup; a multi-shard read on Citus, one index probe per shard)
-4. `sessions.deleteExpired` (hourly cron; a multi-shard `DELETE` without row locks)
+4. `sessions.deleteExpired` (hourly cron; multi-shard `DELETE`s without row locks, in time slices oldest first: B3 final
+   review F3)
 5. `stripeEvents.deleteProcessedBefore` (cleanup cron; same)
 6. the outbox relay's poll and mark-published (G). Under Citus there is no claim with `FOR UPDATE SKIP LOCKED`
    (unsupported across shards): see section 12.
@@ -426,6 +440,23 @@ added by the ledger design):
     `ledgerEntryRefs.recordAsSystem(rows)` (cross-tenant writes, and the ledger consumer's rows for platform or
     user-less postings)
 11. `ledgerTrustedState.read(database)` / `advance(database, from, to)` and `ledgerRuns.start/finish`
+
+**Added by B3 (ruling `b3-identity-policies`, 2026-11-17):** with the row-local identity policies (section 8.2), the
+co-member and cross-tenant reads are `system`-scope methods (inside `SystemContext.run(reason, …)`), each asserted by its
+caller and filtered in its SQL:
+
+12. `users.findByIdInTenant` (scoped `GET /v1/users/:id`, scoped `UsersPort` reads), `users.listInTenant` (`ListUsers`)
+    and `users.findByIdsInTenant` (`GetUsersByIds`, the GraphQL users DataLoader behind `Payment.user`, scoped to the
+    principal's tenant; B3 final review F1): `users JOIN memberships ON tenant_id = <the caller's tenant>`; reason
+    `identity.user-directory`
+13. `memberships.findMember` (the member and profile after a role change) and `memberships.listMembers` (`ListMembers`,
+    GraphQL `tenantMembers`): reason `identity.member-directory`
+14. `memberships.listForUser` (`ListMyTenants`): every membership of the caller, across tenants; reason
+    `identity.my-tenants`. Login tenant selection, switch tenant, refresh and accept invitation read the caller's own
+    membership rows on the runtime path instead, which the `memberships` policy allows (`user_id = user_id()`).
+
+Methods 1-3 are `pre-auth` scope (they run before any principal exists); 4, 5, 8, 12-14 are `system` scope. The pinned
+lists in `identity.system-methods.ts` and `billing.system-methods.ts` and the table in `docs/SECURITY.md` name them.
 
 The system pool goes through PgBouncer like the runtime pool (system methods use no session state). The sharding
 design adds no system method.
@@ -559,7 +590,7 @@ design adds no system method.
 | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | RLS returns empty results instead of errors                                    | Fail-loud `app.user_id()`; both-path integration specs; row-count checks                                                                                                                                                                                                                                                 |
 | Overhead per database call                                                     | Handler-level transactions; one `SET LOCAL` round trip; k6 gate at B3                                                                                                                                                                                                                                                    |
-| Citus policy restrictions                                                      | No subqueries in policies; helpers read reference tables only. A forgotten `(select …)` fails loudly at `CREATE POLICY`                                                                                                                                                                                                  |
+| Citus policy restrictions                                                      | No subqueries in policies, and row-local policies only: no function a policy calls reads a table (B3 ruling, 2026-11-17). A forgotten `(select …)` fails loudly at `CREATE POLICY`                                                                                                                                       |
 | Single-node local execution hides propagation bugs                             | RLS specs with `citus.enable_local_execution=off`; the `workers: 1` smoke spec                                                                                                                                                                                                                                           |
 | `SET LOCAL` is built from strings                                              | Strict UUID regex, nil UUID refused, unit spec with hostile input; values come from verified JWT claims only                                                                                                                                                                                                             |
 | amd64-only Citus images (`citusdata/citus:14.2*`)                              | Apple Silicon runs them under emulation (`platform: linux/amd64`); int-spec timeouts have headroom                                                                                                                                                                                                                       |
@@ -609,7 +640,7 @@ Changes, by section:
    metadata.
 4. **§8.1 Mechanism.** `SET LOCAL` replaces `set_config()` (SH §7.1); role settings via `ALTER ROLE … SET`; helpers
    called directly, never as `(select …)`; cross-table helpers read reference tables only.
-5. **§8.2 Policies.** No subqueries; `identity.shares_current_tenant` and `identity.is_member` replace the
+5. **§8.2 Policies.** (Cross-table helpers superseded 2026-11-17: see the B3 delta below.) No subqueries; `identity.shares_current_tenant` and `identity.is_member` replace the
    membership subqueries; platform-tenant rows are system-only; ledger table policies added.
 6. **§8.3.** The round-trip wording follows the `SET LOCAL` mechanism.
 7. **§9 System access.** Platform webhooks and the ledger consumer's principal rule; notes on methods 3-7 under
@@ -620,6 +651,18 @@ Changes, by section:
    spec; immudb int specs, contract spec and golden vectors.
 10. **§14 Risks.** Citus policy restrictions, local execution, string-built `SET LOCAL`, amd64-only images, fan-out,
     immudb erasure/SDK and operations.
+
+**B3 delta (2026-11-17), ruling `b3-identity-policies`.** Supersedes items 4 and 5 above where they name the
+cross-table helpers:
+
+- §8.2: identity policies are row-local. `identity.users` reads `id = user_id()` and `identity.tenants` reads
+  `id = tenant_id()`; the helpers `identity.shares_current_tenant`, `identity.is_member` and `identity.staff_flag` are not
+  created. Citus fails any policy whose helper reads another distributed table (`XX000`), also when that table is a
+  reference table.
+- §9: co-member and cross-tenant reads are system methods 12-14, asserted by the caller and filtered in SQL. This is the
+  same trust model as the session context, and `docs/SECURITY.md` ("Trust model") says so.
+- §4 and §8.1: no policy helper names a domain table; the cross-table bullet is dropped.
+- §14: the Citus policy risk row reads "row-local policies only".
 
 Rulings recorded in the design docs (SH §11, LG "Decisions (ruled 2026-11-09)"): Citus everywhere; users, tenants and
 memberships as reference tables; sessions by `user_id`; SH-5/SH-6 distribution migrations kept by the squash

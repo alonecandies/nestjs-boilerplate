@@ -243,7 +243,9 @@ failure marks the payment `failed`; a retry with the same key reopens it and get
      (a completed-but-`unpaid` session, i.e. a delayed payment method, stays `pending`);
    - `checkout.session.async_payment_failed` → `failed`; `checkout.session.expired` → `expired`;
    - any other signed event → acknowledged and ignored.
-3. The whole delivery runs as the `{ userId, tenantId }` signed into the session and PaymentIntent metadata (events without it are recorded for the platform tenant and run without a principal).
+3. The whole delivery runs as the `{ userId, tenantId }` signed into the session and PaymentIntent metadata, so it can touch
+   only that tenant's rows. An event without a usable owner (payouts, unattributed fees, pre-tenancy sessions) is recorded
+   for the platform tenant through the `markProcessedAsPlatform` system method and nothing else.
 4. After COMMIT the aggregate's events are published; `PaymentSucceededRelay` sends the Kafka event.
 
 Unknown payments and impossible transitions are acknowledged with a warning (a retry could never succeed).
@@ -262,8 +264,12 @@ processed again. Old receipts are purged: see **Retention** below.
 `payments_tenant_id_user_id_id_idx` (the whole-tenant listing uses the `(tenant_id, id)` primary key). Cursors are opaque; a forged one is a 422 `INVALID_CURSOR`, never SQL.
 
 **Retention.** `PurgeStripeEventsCron` (hourly, `@WithLock('billing:purge-stripe-events')` so one replica runs
-it) deletes `stripe_events` older than `STRIPE_EVENTS_RETENTION_DAYS` (30; Stripe redelivers for ≤ 3 days) in
-batches of 5,000 via `PurgeStripeEventsCommand`. It needs `ScheduleModule.forRoot()` and `RedisModule` in the
+it) deletes `stripe_events` older than `STRIPE_EVENTS_RETENTION_DAYS` (30; Stripe redelivers for ≤ 3 days) via
+`PurgeStripeEventsCommand`, in every tenant (the platform tenant included), in 15-minute time slices oldest first:
+read `min(processed_at)`, one multi-shard `DELETE` up to it + 15 minutes (never reaching the cutoff), repeat, at most 96
+per run, without a `LIMIT` subquery, which Citus cannot push down on a distributed table. Each slice stays far below
+the role's `statement_timeout` (a timed-out one is retried at half the span), so a backlog drains over a few runs. It runs in `SystemContext` on the `app_system` pool (`DATABASE_SYSTEM_URL`; a system
+method refuses outside the context). It needs `ScheduleModule.forRoot()` and `RedisModule` in the
 app (billing-service and the monolith import both).
 
 **Consistency.** The relay publishes after commit and only logs failures, so a crash between COMMIT and the Kafka
@@ -278,18 +284,57 @@ dedupe replays either way.
 | `payments`      | `tenant_id uuid` (no FK: service boundary), `id uuid` (app uuidv7, DB default `uuidv7()`), `user_id uuid` (no FK), `price_id`, `quantity int`, `amount_total int8` (minor units, NULL until priced), `currency`, `status payment_status`, `stripe_checkout_session_id`, `stripe_payment_intent_id`, `idempotency_key`, `request_hash` (sha256 of the normalized request, NULL before B2), `paid_at`, `version int`, `created_at`, `updated_at` | PK `payments_tenant_id_id_pk (tenant_id, id)`; `payments_tenant_id_user_id_id_idx (tenant_id, user_id, id)` for "my payments in this tenant, newest first"; unique `payments_tenant_id_user_id_idempotency_key_uq (tenant_id, user_id, idempotency_key)`; unique `payments_tenant_id_stripe_checkout_session_id_uq (tenant_id, stripe_checkout_session_id)` |
 | `stripe_events` | `tenant_id uuid`, `id text` (Stripe `evt_…`), `user_id uuid` (NULL for platform events), `type`, `processed_at`                                                                                                                                                                                                                                                                                                                                | PK `stripe_events_tenant_id_id_pk (tenant_id, id)` = the idempotency key; `stripe_events_processed_at_idx` for the retention purge                                                                                                                                                                                                                          |
 
-Both tables are Citus-ready (`// citus: tenant`: the primary key and every unique index start with `tenant_id`, no
-FK to another domain) but not distributed yet (SH-6). Rows created before B2 belong to the platform tenant (nil
+Both tables are distributed by `tenant_id` on Citus, colocated with `app.tenant_colocation` (and so with identity's
+tenant tables): `0002_distribute.sql` (SH-6). The primary key and every unique index start with `tenant_id`, and no
+FK reaches another domain, so a query by `(tenant_id, …)` goes to one shard. Rows created before B2 belong to the platform tenant (nil
 UUID): no tenant can list them.
+
+### Row-level security (`0003_rls.sql`, B3-5/B3-6, program spec §8.2)
+
+Both tables have RLS enabled and **forced** (the owner `app_owner` has no policy, so it reads and writes no row).
+Grants are explicit per table and role, deny by default; `billing.__drizzle_migrations` has no RLS and no grant to
+either app role. Policies are `TO app_runtime` and call `app.tenant_id()`, `app.user_id()` and `app.elevated()`
+directly (no subquery, no helper or FK into identity); "–" means no policy, so denied:
+
+| Table (grants to `app_runtime`) | SELECT `USING`                                                                | INSERT `WITH CHECK`                                       | UPDATE `USING` / `WITH CHECK` | DELETE |
+| ------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------- | ------ |
+| `payments` (S, I, U)            | `tenant_id = app.tenant_id() AND (user_id = app.user_id() OR app.elevated())` | `tenant_id = app.tenant_id() AND user_id = app.user_id()` | same as INSERT (both)         | –      |
+| `stripe_events` (S, I)          | `tenant_id = app.tenant_id() AND user_id = app.user_id()`                     | same as SELECT                                            | –                             | –      |
+
+- Elevation (`billing:read-all`) widens the payments read to the tenant; it never writes another member's payment,
+  and a `SELECT … FOR UPDATE` of another member's payment returns nothing even when elevated.
+- `app_system` (BYPASSRLS) gets `SELECT, INSERT, DELETE` on `stripe_events` only (the Stripe-event system methods)
+  and nothing on `payments`. Rows with `tenant_id = PLATFORM_TENANT_ID` match no runtime policy: only `app_system`
+  reads or writes them.
+- **Which principal each flow runs as** (no transaction spans the Stripe call, and each flow settles its principal before
+  its unit of work opens):
+
+  | Flow                                 | Runs as                                                                                                                                                |
+  | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+  | Webhook, owner with tenant and user  | `runWithPrincipal({ userId, tenantId, roles: [] })` from the signed metadata, around one `@Transactional()` unit (`markProcessed`, payment lock, save) |
+  | Webhook, platform or user-less owner | `SystemContext.run('billing.platform-webhook')` and `stripeEvents.markProcessedAsPlatform` only: no runtime transaction, no payment looked up          |
+  | Create checkout session              | the request principal; each repository call is its own unit of work, and no transaction spans the Stripe call                                          |
+  | List payments                        | the request principal; the `billing:read-all` check is in TypeScript first, then `elevate(billing:read-all)` for the whole-tenant listing only         |
+  | Purge Stripe events (hourly cron)    | `SystemContext.run('billing.purge-stripe-events')` and `stripeEvents.deleteProcessedBefore`                                                            |
+
+- **System methods** (two, both `system` scope, pinned in `billing.system-methods.ts`):
+  `stripeEvents.deleteProcessedBefore` and `stripeEvents.markProcessedAsPlatform`. Only
+  `drizzle-stripe-events.system-repository.ts` names `SystemDatabase`. Every process that runs the billing core needs
+  `DATABASE_SYSTEM_URL`; without it a platform webhook fails with `SYSTEM_DATABASE_UNAVAILABLE` and Stripe retries.
+  The ledger phase adds its methods to the same list, with their grants.
 
 `payment_status` enum: `pending`, `succeeded`, `failed`, `expired`, `refunded`, `partially_refunded`, `disputed`.
 Constraint and index names are explicit snake_case (`payments_tenant_id_id_pk`). The tables and the enum live in the `billing` Postgres schema
 (`billingPgSchema`); raw SQL qualifies them (`billing.payments`). Billing owns its migration history:
 `drizzle.config.ts` generates `src/infrastructure/persistence/migrations` (`0000_init.sql` holds the original tables and
-indexes; `0001_tenant_columns.sql` adds the tenant columns, the tenant-leading keys and the three ledger statuses), bookkeeping in `billing.__drizzle_migrations`, and
+indexes; `0001_tenant_columns.sql` adds the tenant columns, the tenant-leading keys and the three ledger statuses;
+`0002_distribute.sql` is hand-written and only calls `app.distribute_by_tenant` on both tables; a table added later
+calls it right after its `CREATE TABLE`), bookkeeping in `billing.__drizzle_migrations`, and
 `billingMigrations` applies it after the platform set (the schema file imports only `drizzle-orm` and a
-dependency-free enum file, so drizzle-kit can load it). Every query carries `tenant_id` (`findById(tenantId, id)`, `findForCheckoutSession({ tenantId, … })`, `list({ tenantId, … })`). Reads (`findById`, `list`) use prepared statements on the pool; writes and row locks go
-through `TransactionHost` and join the active transaction.
+dependency-free enum file, so drizzle-kit can load it). Every query carries `tenant_id` (`findById(tenantId, id)`, `findForCheckoutSession({ tenantId, … })`, `list({ tenantId, … })`).
+Every repository method runs in `inUnitOfWork` (`@platform/database`): it joins the active transaction or opens one that starts
+with the principal's `SET LOCAL` context. There is no pool handle and no prepared statement, because a statement outside a
+transaction would carry no RLS context.
 
 ## Configuration
 
@@ -311,8 +356,10 @@ through `TransactionHost` and join the active transaction.
 - Drizzle repositories: real Drizzle SQL generation on a recording postgres.js fake (ON CONFLICT targets,
   `FOR UPDATE`, optimistic lock, prepared list statements).
 - `billing.migrations.spec.ts` — the migration set: its folder and `billing.__drizzle_migrations` bookkeeping,
-  every table and enum in the `billing` schema, the match with `drizzle.config.ts`, and the baseline's
-  `CREATE SCHEMA IF NOT EXISTS "billing";` first statement.
+  every table and enum in the `billing` schema, the match with `drizzle.config.ts`, the baseline's
+  `CREATE SCHEMA IF NOT EXISTS "billing";` first statement, `0002_distribute` holding only the two
+  `app.distribute_by_tenant` calls, and `0003_rls` holding exactly the forced RLS, the five policies (no subquery)
+  and one grant per table and role.
 - `infrastructure/stripe/*.spec.ts` — the Stripe adapter: SDK error mapping, signature verification (valid, forged, stale, re-serialised, missing, not JSON), Checkout params and idempotency key, module wiring and the invalid-key boot failure.
 - `billing.controller.spec.ts` — Fastify app with the real `AuthModule` guards (tokens from `signTestAccessToken`, `@platform/auth/testing`):
   401/403, 400 validation (body, query, `Idempotency-Key`), serialisation, raw-body webhook, OpenAPI document.
@@ -325,16 +372,39 @@ through `TransactionHost` and join the active transaction.
   over real loopback gRPC: the remote adapter returns the local mapper's exact shape (int64 string, Date, absent
   optionals), webhook bytes arrive untouched, domain codes survive the hop.
 
-Integration (Docker): `INTEGRATION=1 bunx vitest run --project billing:int` runs
-`infrastructure/persistence/billing.migrations.int-spec.ts` on PostgreSQL 18 (testcontainers, or an
-existing throwaway database via `INTEGRATION_DATABASE_URL`). It boots the real `DatabaseModule`, which
-applies the platform set and billing's own history (schema `billing`), then checks the result: billing's
-tables and enum in `billing` and none of identity's, nothing in `public`, one bookkeeping row per journal
-entry in each set's own table, every index of the former migrations, the DB defaults (uuidv7 id, `pending`
-status) and a second boot that applies nothing.
-`infrastructure/persistence/billing.repositories.int-spec.ts` runs the repositories on Citus 14.2 (`startBillingDatabase`
-in `test/billing-database.ts`, local execution off): tenant isolation of list, find and lock, Idempotency-Keys per
-(tenant, user), platform events with a NULL user, and migration `0001` applied to a database that already has rows.
+Integration (Docker): `INTEGRATION=1 bunx vitest run --project billing:int` runs every spec on a fresh Citus 14.2 container
+from `startRlsTestPostgres()` (the three roles, `citus.enable_local_execution=off`; `INTEGRATION_DATABASE_URL` is not
+used). The harness `test/billing-database.ts` (`startBillingDatabase`) boots the real `DatabaseModule` with the roles of
+production: migrations as `app_owner` on `DATABASE_MIGRATION_URL`, the app as `app_runtime` on `DATABASE_URL`, system
+methods as `app_system` on `DATABASE_SYSTEM_URL`, and the boot guard in `enforce`; seeding and assertions past RLS go
+through its `superuser` handle.
+`infrastructure/persistence/billing.migrations.int-spec.ts` applies the platform set and billing's own history (schema
+`billing`), then checks the result: billing's tables and enum in `billing` and none of identity's, nothing in `public`,
+one bookkeeping row per journal entry in each set's own table, every index of the former migrations, the DB defaults
+(uuidv7 id, `pending` status) and a second boot that applies nothing.
+`infrastructure/persistence/billing.repositories.int-spec.ts` runs the repositories as `app_runtime` (`startBillingDatabase`):
+tenant isolation of list, find and lock, Idempotency-Keys per (tenant, user), platform events with a NULL user, and
+migration `0001` applied to a database that already has rows.
+`test/billing-flows.rls.int-spec.ts` (13 cases) runs the real billing core on the three URLs and proves each flow of the
+table above: `current_user` is `app_runtime`; a signed webhook updates only its tenant's payment and a replay changes
+nothing; metadata naming another tenant's payment touches neither tenant; a malformed tenant id is recorded as a platform
+event through `markProcessedAsPlatform` with no runtime transaction; a failing save rolls the receipt back and the retry
+applies it; checkout calls Stripe with no applied RLS context; a member lists only their own payments, an admin lists the
+tenant's (elevated, ending with the transaction); the purge deletes the old events of every tenant and the platform
+tenant. Across the file the system methods used are exactly the two pinned ones.
+`infrastructure/persistence/billing.distribution.int-spec.ts` (`startRlsTestPostgres()`: local execution off, the
+history applied as `app_owner`): both tables distributed by `tenant_id` and colocated with `app.tenant_colocation`,
+`0002` re-applied without change, the purge removing exactly the old events of tenants on every shard and of the
+platform tenant, both `payments` uniques per tenant, and a `(tenant_id, id)` router query (data through the
+superuser, since forced RLS hides every row from the owner).
+`infrastructure/persistence/billing.rls.int-spec.ts` (`startRlsTestPostgres()`, migrated as `app_owner`, seeded as the
+superuser, every case as raw postgres.js `app_runtime` in a transaction opened with `buildRlsContextSql`): both
+paths of every policy with exact rows (own payments only; elevated reads the tenant's, never another tenant's, and
+never updates another member's payment; inserts and updates only for the current tenant and user; `FOR UPDATE`;
+own Stripe events only, UPDATE and DELETE `42501`), platform rows invisible to every runtime principal and readable
+by `app_system`, no context returning or changing nothing, forced RLS (the owner reads nothing), the exact grants and
+policies, and nothing on `billing.__drizzle_migrations`. A superuser snapshot after every case proves that no
+forbidden write changed a row.
 
 ## Ledger (immudb)
 

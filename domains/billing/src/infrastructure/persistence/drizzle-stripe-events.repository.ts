@@ -1,42 +1,34 @@
 import { Injectable } from '@nestjs/common';
-import { type DrizzleTransactionalAdapter, TransactionHost } from '@platform/database';
-import { inArray, lt } from 'drizzle-orm';
+import {
+  type DrizzleTransactionalAdapter,
+  inUnitOfWork,
+  TransactionHost,
+} from '@platform/database';
 import type {
   StripeEventReceipt,
   StripeEventsRepository,
 } from '../../application/repositories/stripe-events.repository.js';
+import type { BillingSchema } from './billing.schema.js';
 import { stripeEvents } from './billing.schema.js';
 
+/**
+ * `stripe_events` as the event's user, on the runtime pool under RLS: the call runs in the open
+ * unit of work (`inUnitOfWork`), or in its own one with the principal's context.
+ */
 @Injectable()
 export class DrizzleStripeEventsRepository implements StripeEventsRepository {
-  constructor(private readonly txHost: TransactionHost<DrizzleTransactionalAdapter>) {}
+  constructor(
+    private readonly txHost: TransactionHost<DrizzleTransactionalAdapter<BillingSchema>>,
+  ) {}
 
-  async markProcessed(event: StripeEventReceipt): Promise<boolean> {
-    const inserted = await this.txHost.tx
-      .insert(stripeEvents)
-      .values({ tenantId: event.tenantId, id: event.id, userId: event.userId, type: event.type })
-      .onConflictDoNothing({ target: [stripeEvents.tenantId, stripeEvents.id] })
-      .returning({ id: stripeEvents.id });
-    return inserted.length > 0;
-  }
-
-  async deleteProcessedBefore(cutoff: Date, limit: number): Promise<number> {
-    // System method 5 (spec §9): B3-11 moves it to a *.system-repository.ts; SH-6 rewrites the LIMIT
-    // subquery, which Citus cannot push down on a distributed table.
-    const tx = this.txHost.tx;
-    // DELETE has no LIMIT in Postgres: bound it through the id subquery (index range scan).
-    const result = await tx
-      .delete(stripeEvents)
-      .where(
-        inArray(
-          stripeEvents.id,
-          tx
-            .select({ id: stripeEvents.id })
-            .from(stripeEvents)
-            .where(lt(stripeEvents.processedAt, cutoff))
-            .limit(limit),
-        ),
-      );
-    return result.count;
+  markProcessed(event: StripeEventReceipt): Promise<boolean> {
+    return inUnitOfWork(this.txHost, async (tx) => {
+      const inserted = await tx
+        .insert(stripeEvents)
+        .values({ tenantId: event.tenantId, id: event.id, userId: event.userId, type: event.type })
+        .onConflictDoNothing({ target: [stripeEvents.tenantId, stripeEvents.id] })
+        .returning({ id: stripeEvents.id });
+      return inserted.length > 0;
+    });
   }
 }

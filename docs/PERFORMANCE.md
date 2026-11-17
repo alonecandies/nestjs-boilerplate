@@ -511,20 +511,21 @@ so the per-IP auth throttle models many clients instead of one k6 box.
 
 Compose maps the host variables on the left into the container; the rest are passed with `-e`.
 
-| Host variable (compose) | In the script       | Default                      | Meaning                                                                                                  |
-| ----------------------- | ------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `K6_BASE_URL`           | `BASE_URL`          | `http://api:3000`            | Target                                                                                                   |
-| `K6_RATE`               | `RATE`              | `5`                          | New-user journeys per second (5 requests, 2 Argon2id each)                                               |
-| `K6_READ_RATE`          | `READ_RATE`         | `0`                          | Extra `browse` iterations per second (3 reads each)                                                      |
-| `K6_DURATION`           | `DURATION`          | `1m`                         | Keep it below `JWT_ACCESS_TTL_SEC` (15 min) when `READ_RATE` > 0: pool tokens are not refreshed          |
-| `K6_P95_MS`             | `P95_MS`            | `250`                        | p95 budget (ms)                                                                                          |
-| `K6_MAX_ERROR_RATE`     | `MAX_ERROR_RATE`    | `0.01`                       | Allowed failed-request / failed-check ratio                                                              |
-| `K6_OUT`                | `K6_OUT`            | `experimental-prometheus-rw` | Results → Prometheus remote write. Set `K6_OUT=` (empty) when the `observability` profile is not running |
-| `K6_UID`, `K6_GID`      | container user      | `1000`                       | Linux: `K6_UID=$(id -u) K6_GID=$(id -g)` so the report directory is writable                             |
-| —                       | `MAX_DROPPED_RATIO` | `0.01`                       | Allowed dropped iterations, as a share of the planned ones                                               |
-| —                       | `THROTTLE_LIMIT`    | `300`                        | The app's per-user `THROTTLE_LIMIT`; sizes the browse pool so no user exceeds it                         |
-| —                       | `RUN_ID`            | current time, base 36        | Makes emails unique per run; reusing one against the same database fails the run (409)                   |
-| —                       | `PASSWORD`          | `k6-load-test-Passw0rd`      | Password of the generated users                                                                          |
+| Host variable (compose) | In the script       | Default                             | Meaning                                                                                                  |
+| ----------------------- | ------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `K6_BASE_URL`           | `BASE_URL`          | `http://api:3000`                   | Target                                                                                                   |
+| `K6_RATE`               | `RATE`              | `5`                                 | New-user journeys per second (5 requests, 2 Argon2id each)                                               |
+| `K6_READ_RATE`          | `READ_RATE`         | `0`                                 | Extra `browse` iterations per second (3 reads each)                                                      |
+| `K6_DURATION`           | `DURATION`          | `1m`                                | Keep it below `JWT_ACCESS_TTL_SEC` (15 min) when `READ_RATE` > 0: pool tokens are not refreshed          |
+| `K6_P95_MS`             | `P95_MS`            | `250`                               | p95 budget (ms)                                                                                          |
+| `K6_MAX_ERROR_RATE`     | `MAX_ERROR_RATE`    | `0.01`                              | Allowed failed-request / failed-check ratio                                                              |
+| `K6_OUT`                | `K6_OUT`            | `experimental-prometheus-rw`        | Results → Prometheus remote write. Set `K6_OUT=` (empty) when the `observability` profile is not running |
+| `K6_UID`, `K6_GID`      | container user      | `1000`                              | Linux: `K6_UID=$(id -u) K6_GID=$(id -g)` so the report directory is writable                             |
+| —                       | `MAX_DROPPED_RATIO` | `0.01`                              | Allowed dropped iterations, as a share of the planned ones                                               |
+| —                       | `THROTTLE_LIMIT`    | `300`                               | The app's per-user `THROTTLE_LIMIT`; sizes the browse pool so no user exceeds it                         |
+| —                       | `RUN_ID`            | current time, base 36               | Makes emails unique per run; reusing one against the same database fails the run (409)                   |
+| —                       | `PASSWORD`          | `k6-load-test-Passw0rd`             | Password of the generated users                                                                          |
+| —                       | `SUMMARY_PATH`      | `/reports/k6-summary-<RUN_ID>.json` | Where `handleSummary` writes the JSON summary (`/reports` is `docker/k6/reports`)                        |
 
 ```bash
 # Read-heavy run: 5 sign-ups/s + 20 read iterations/s for 3 minutes, p95 budget 200 ms
@@ -548,7 +549,15 @@ Only traffic tagged `phase:load` counts; `setup()` traffic is excluded.
 
 ### Results
 
-- The end-of-run summary prints `avg min med p(90) p(95) p(99) max` per metric.
+- The end-of-run summary (`handleSummary`, rendered by
+  [`docker/k6/summary.js`](../docker/k6/summary.js)) prints every threshold with ✓ or ✗, the p95
+  and sample count per scenario and endpoint, then `avg min med p(90) p(95) p(99) max` per metric.
+  The exit code still follows the thresholds.
+- A JSON summary of each run is written to `docker/k6/reports/k6-summary-<RUN_ID>.json` (override
+  with `-e SUMMARY_PATH=/reports/<file>`): the p95, median, p99 and count of every series, keyed by
+  scenario and endpoint tag (`journey` → `POST /v1/auth/register` …), plus the iteration and
+  dropped-iteration counts. A series with no samples is left out. The [RLS gate](#rls-gate) is
+  built from these files.
 - An HTML report of the last run is written to `docker/k6/reports/k6-report.html`.
 - The live k6 web dashboard listens on container port 5665, published as
   `127.0.0.1:${K6_DASHBOARD_HOST_PORT:-5665}`. `docker compose run` publishes ports only with
@@ -561,6 +570,93 @@ Only traffic tagged `phase:load` counts; `setup()` traffic is excluded.
 Measure with realistic limits: compose caps every container's CPU and memory (monolith 2 CPU /
 768 MiB), and Docker Desktop's VM size bounds the whole stack. Compare runs only on the same
 machine and stack.
+
+### RLS gate
+
+Phase B3 (row-level security, PgBouncer, Citus distribution) must not raise the p95 of any series
+(topology / scenario / endpoint) by more than 10%. The baseline is measured once before RLS, the
+candidate on the B3 build with the same settings, machine and Docker resources.
+
+- **Baseline commit:** `0dcfd18` (`feat/domains-tenancy` after B2 merged, before any B3 change).
+  The k6 summary and the scripts below landed on the B3 quality lane, which changes only
+  `docker/k6/`, `scripts/perf/` and docs; its application code is that of `0dcfd18`.
+- **Files (produced when the gate is run, not committed yet; see the status below):**
+  `docker/k6/baselines/b3-pre-rls.json` (before RLS) and
+  `docker/k6/baselines/b3-post-rls.json` (the B3 build). Each holds, per topology (`monolith`,
+  `microservices`), the three run summaries and the median p95 of each series.
+
+Three runs per topology, each with a distinct `RUN_ID`, no dropped iterations allowed and no
+Prometheus output (the `browse` series exist only with `READ_RATE` > 0):
+
+```bash
+bun run docker:monolith
+for n in 1 2 3; do
+  K6_OUT= K6_RATE=5 K6_READ_RATE=20 K6_DURATION=3m \
+    docker compose --profile loadtest run --rm -e RUN_ID=pre-rls-mono$n -e MAX_DROPPED_RATIO=0 k6
+done
+bun run docker:down
+
+bun run docker:microservices
+for n in 1 2 3; do
+  K6_OUT= K6_RATE=5 K6_READ_RATE=20 K6_DURATION=3m \
+    docker compose --profile loadtest run --rm -e RUN_ID=pre-rls-ms$n -e MAX_DROPPED_RATIO=0 k6
+done
+bun run docker:down
+
+# Median of the three runs per topology; refuses a run with dropped iterations
+node scripts/perf/k6-baseline.mjs --commit 0dcfd18 --out docker/k6/baselines/b3-pre-rls.json \
+  --run monolith=docker/k6/reports/k6-summary-pre-rls-mono1.json \
+  --run monolith=docker/k6/reports/k6-summary-pre-rls-mono2.json \
+  --run monolith=docker/k6/reports/k6-summary-pre-rls-mono3.json \
+  --run microservices=docker/k6/reports/k6-summary-pre-rls-ms1.json \
+  --run microservices=docker/k6/reports/k6-summary-pre-rls-ms2.json \
+  --run microservices=docker/k6/reports/k6-summary-pre-rls-ms3.json
+
+# The gate (after the same runs on the B3 build, with RUN_ID=post-rls-*)
+node scripts/perf/compare-k6.mjs docker/k6/baselines/b3-pre-rls.json \
+  docker/k6/baselines/b3-post-rls.json --max-p95-regression 0.10
+```
+
+`compare-k6.mjs` exits 0 when every candidate p95 is at most 1.10 × the baseline p95 (a faster
+series always passes), 1 listing each series over the bound, and 2 when a series or topology is
+missing from either file or a file is unreadable or malformed. A series over the bound blocks the
+B3 checkpoint until it is explained or fixed; the bound is not raised.
+
+#### Status: not measured, run on native amd64
+
+The gate was **not run** for B3, and no baseline files are committed
+(`docker/k6/baselines/b3-pre-rls.json` and `docker/k6/baselines/b3-post-rls.json` do not exist).
+Decision of the B3 owner: Citus ships amd64 images only, and on the Apple Silicon development
+machine they run under emulation, so any p95 measured there reflects the emulator, not RLS,
+PgBouncer or distribution. Numbers from it would be noise and are not recorded. This table is
+intentionally empty; `compare-k6.mjs` and `k6-baseline.mjs` are tested (`scripts/perf/*.spec.ts`)
+and ready.
+
+| Item                                 | Value                                                             |
+| ------------------------------------ | ----------------------------------------------------------------- |
+| Baseline commit                      | `0dcfd18` (before any B3)                                         |
+| Candidate commit                     | the B3 merge into `feat`                                          |
+| Machine, Docker CPU / memory         | not measured                                                      |
+| k6 settings to use                   | `K6_RATE=5 K6_READ_RATE=20 K6_DURATION=3m`, `MAX_DROPPED_RATIO=0` |
+| Median p95 per series, monolith      | not measured                                                      |
+| Median p95 per series, microservices | not measured                                                      |
+| Round trips per standalone call      | not measured                                                      |
+
+To close the gate, on a native amd64 host (a Linux runner or an Intel Mac, same machine and Docker
+resources for both sides):
+
+1. Check out `0dcfd18` (a separate worktree is fine) and run the three-run loops above with
+   `RUN_ID=pre-rls-*`; build `docker/k6/baselines/b3-pre-rls.json` with
+   `node scripts/perf/k6-baseline.mjs --commit 0dcfd18 ...`.
+2. Check out the B3 build, run `docker compose down -v` once (the three-role init SQL only runs on
+   an empty volume), then repeat the same loops with `RUN_ID=post-rls-*` through PgBouncer and
+   `DATABASE_BOOT_GUARD=enforce` (the compose setting), and build `docker/k6/baselines/b3-post-rls.json`
+   with `--commit <sha>` and the `post-rls` summaries.
+3. Run the gate command above. Exit 0 closes it; exit 1 names the series over the bound, which must
+   be explained or fixed before the B3 checkpoint, never by raising `--max-p95-regression`.
+
+Then replace this section with the measured tables (machine, resources, both medians, the delta
+per series and the explanation of any series over the bound).
 
 ## Reading the Grafana dashboard
 

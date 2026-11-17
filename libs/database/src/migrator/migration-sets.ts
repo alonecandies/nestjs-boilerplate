@@ -1,19 +1,32 @@
 import type { DatabaseMigrationSet } from '../database.types.js';
 import { platformMigrations } from '../platform/platform.migrations.js';
 
+/** The platform set itself, not a set that only shares its name. */
+const isPlatformSet = (set: DatabaseMigrationSet): boolean =>
+  set.name === platformMigrations.name &&
+  set.folder === platformMigrations.folder &&
+  set.migrationsSchema === platformMigrations.migrationsSchema &&
+  set.migrationsTable === platformMigrations.migrationsTable;
+
 /**
- * The sets one process applies, in order: `platformMigrations` first (it cannot be left out or
- * reordered), then `sets` in array order. Rejects a set listed twice and two sets sharing one
- * bookkeeping table: drizzle's migrator compares file timestamps only with the newest row of the
- * table it writes to, so the set with older timestamps would be skipped silently.
+ * What every migration run requires of its sets, checked without touching a database: the platform
+ * set comes first (the domain sets call its helpers and rely on its grants), no set is listed twice,
+ * and no two sets share a bookkeeping table: drizzle's migrator compares file timestamps only with
+ * the newest row of the table it writes to, so the set with older timestamps would be skipped
+ * silently. `withPlatformMigrations` and `runMigrations` both call it.
  */
-export function withPlatformMigrations(
-  sets: readonly DatabaseMigrationSet[],
-): readonly DatabaseMigrationSet[] {
-  const ordered = [platformMigrations, ...sets];
+export function assertMigrationSets(sets: readonly DatabaseMigrationSet[]): void {
+  const [first] = sets;
+  if (first === undefined || !isPlatformSet(first)) {
+    throw new Error(
+      `The platform migration set must run first (got ${
+        first === undefined ? 'no set' : `"${first.name}" from ${first.folder}`
+      }): pass withPlatformMigrations(sets)`,
+    );
+  }
   const names = new Set<string>();
   const tableOwners = new Map<string, string>();
-  for (const set of ordered) {
+  for (const set of sets) {
     if (names.has(set.name)) {
       throw new Error(
         `Migration set "${set.name}" is listed twice` +
@@ -32,5 +45,17 @@ export function withPlatformMigrations(
     }
     tableOwners.set(table, set.name);
   }
+}
+
+/**
+ * The sets one process applies, in order: `platformMigrations` first (it cannot be left out or
+ * reordered), then `sets` in array order. Rejects what `assertMigrationSets` rejects (a set listed
+ * twice, two sets sharing one bookkeeping table), here at module definition.
+ */
+export function withPlatformMigrations(
+  sets: readonly DatabaseMigrationSet[],
+): readonly DatabaseMigrationSet[] {
+  const ordered = [platformMigrations, ...sets];
+  assertMigrationSets(ordered);
   return ordered;
 }

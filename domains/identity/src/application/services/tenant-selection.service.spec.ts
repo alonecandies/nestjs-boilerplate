@@ -3,10 +3,8 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { makeUserRecord } from '../../../test/fixtures.js';
 import { TenantAccessDeniedException } from '../../domain/identity.errors.js';
 import { createInMemoryIdentityPersistence } from '../../testing/in-memory-identity.js';
-import { PersonalWorkspaces } from './personal-workspaces.service.js';
 import { TenantSelection } from './tenant-selection.service.js';
 
-const NOW = new Date('2026-11-09T10:00:00.000Z');
 const OTHER = '0190f3b2-0000-7000-8000-0000000000bb';
 
 describe('TenantSelection.forLogin', () => {
@@ -16,8 +14,7 @@ describe('TenantSelection.forLogin', () => {
 
   beforeEach(() => {
     persistence = createInMemoryIdentityPersistence();
-    const workspaces = new PersonalWorkspaces(persistence.tenants, persistence.memberships);
-    selection = new TenantSelection(persistence.memberships, workspaces);
+    selection = new TenantSelection(persistence.memberships);
   });
 
   const member = async (
@@ -34,30 +31,29 @@ describe('TenantSelection.forLogin', () => {
     await persistence.memberships.insert({ tenantId, userId: user.id, roles, lastActiveAt });
   };
 
-  it('without a tenantId: the most recently active membership, touched', async () => {
+  it('without a tenantId: the most recently active membership, read only (the login touches it)', async () => {
     await member('0190f3b2-0000-7000-8000-0000000000a1', new Date(1_000));
     await member('0190f3b2-0000-7000-8000-0000000000a2', new Date(2_000), ['admin']);
-    const picked = await selection.forLogin(user, undefined, NOW);
+    const picked = await selection.forLogin(user, undefined);
     expect(picked).toMatchObject({
       tenantId: '0190f3b2-0000-7000-8000-0000000000a2',
       roles: ['admin'],
-      lastActiveAt: NOW,
+      lastActiveAt: new Date(2_000),
     });
-    expect(picked.workspaceCreated).toBeUndefined();
-    await expect(persistence.memberships.find(picked.tenantId, user.id)).resolves.toMatchObject({
-      lastActiveAt: NOW,
-    });
+    await expect(
+      persistence.memberships.find('0190f3b2-0000-7000-8000-0000000000a2', user.id),
+    ).resolves.toMatchObject({ lastActiveAt: new Date(2_000) });
   });
 
-  it('with a tenantId the user belongs to: that membership, touched', async () => {
+  it('with a tenantId the user belongs to: that membership', async () => {
     await member('0190f3b2-0000-7000-8000-0000000000a1', new Date(1_000), ['owner']);
     await member('0190f3b2-0000-7000-8000-0000000000a2', new Date(2_000));
     await expect(
-      selection.forLogin(user, '0190f3b2-0000-7000-8000-0000000000a1', NOW),
+      selection.forLogin(user, '0190f3b2-0000-7000-8000-0000000000a1'),
     ).resolves.toMatchObject({
       tenantId: '0190f3b2-0000-7000-8000-0000000000a1',
       roles: ['owner'],
-      lastActiveAt: NOW,
+      lastActiveAt: new Date(1_000),
     });
   });
 
@@ -76,17 +72,14 @@ describe('TenantSelection.forLogin', () => {
         name: 'Other',
         personal: false,
       });
-      await expect(selection.forLogin(user, tenantId, NOW)).rejects.toBeInstanceOf(
+      await expect(selection.forLogin(user, tenantId)).rejects.toBeInstanceOf(
         TenantAccessDeniedException,
       );
     },
   );
 
-  it('a pre-tenancy account without any membership gets its personal workspace', async () => {
-    const picked = await selection.forLogin(user, undefined, NOW);
-    expect(picked).toMatchObject({ userId: user.id, roles: ['owner'], lastActiveAt: NOW });
-    expect(persistence.store.tenants.get(picked.tenantId)).toMatchObject({ personal: true });
-    // The login handler publishes this membership once its unit of work committed.
-    expect(picked.workspaceCreated).toBe(true);
+  it('a pre-tenancy account without any membership: null (the login bootstraps its workspace)', async () => {
+    await expect(selection.forLogin(user, undefined)).resolves.toBeNull();
+    expect(persistence.store.tenants.size).toBe(0);
   });
 });

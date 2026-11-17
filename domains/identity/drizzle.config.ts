@@ -27,7 +27,9 @@ export default defineConfig({
   out: fromCwd('./src/infrastructure/persistence/migrations'),
   // MUST equal the runtime `drizzle({ casing })` in @platform/database.
   casing: 'snake_case',
-  dbCredentials: { url: process.env['DATABASE_URL'] ?? 'postgres://app:app@localhost:5432/app' },
+  dbCredentials: {
+    url: process.env['DATABASE_MIGRATION_URL'] ?? 'postgres://app:app@localhost:5432/app',
+  },
   schemaFilter: ['identity'],
   migrations: { schema: 'identity', table: '__drizzle_migrations' },
   strict: true,

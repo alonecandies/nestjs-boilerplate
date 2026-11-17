@@ -13,6 +13,8 @@ Related: [Architecture](ARCHITECTURE.md) · [Development](DEVELOPMENT.md) · [Do
 - [HTTP hardening: proxies, CORS, helmet, limits](#http-hardening-proxies-cors-helmet-limits)
 - [Internal gRPC](#internal-grpc-mtls-reflection)
 - [Webhooks and uploads](#webhooks-and-uploads)
+- [Database roles](#database-roles)
+- [Row-level security](#row-level-security): [the `SET LOCAL` context](#the-rls-context-set-local), [elevation](#elevation), [the system pool](#the-system-pool), [trust model](#trust-model), [boot guard](#boot-guard), [PgBouncer authentication](#pgbouncer-authentication)
 - [Secrets, configuration guards and logs](#secrets-configuration-guards-and-logs)
 - [Ops endpoints](#ops-endpoints-metrics-docs-health)
 - [Production checklist](#production-checklist)
@@ -199,8 +201,9 @@ GraphQL and gRPC entry points take the tenant from the caller's principal; a req
 `TENANT_MISMATCH`. The Stripe webhook has no principal: the tenant and user come from the metadata checkout signed into
 the Stripe object, so only signed data decides the scope. An event with no or malformed tenant metadata (payouts,
 sessions created before tenancy) is acknowledged and recorded under the platform tenant with no user, and it never
-touches a tenant's payment; a nil-UUID user is treated as no user. Row-level security is not enforced yet (B3): the scope
-is the query, not the database.
+touches a tenant's payment; a nil-UUID user is treated as no user. The query is the first filter and
+[row-level security](#row-level-security) the second: a query that forgets its `tenant_id` predicate still sees only
+the principal's rows.
 
 ### Invitations
 
@@ -231,7 +234,7 @@ bun run --filter @domain/identity staff:grant you@example.com           # grant
 bun run --filter @domain/identity staff:grant you@example.com --revoke  # revoke
 ```
 
-It connects with `DATABASE_MIGRATION_URL` when set, else `DATABASE_URL`, and exits 1 when no user has that email.
+It connects with `DATABASE_MIGRATION_URL` only (never `DATABASE_URL`), and exits 1 when no user has that email.
 No API can grant staff. A revocation takes effect at the next switch-in (the flag is re-read every time).
 
 ## Rate limiting
@@ -365,6 +368,265 @@ are sanitised before they reach the client.
 - Presigned PUTs sign the content type and the exact `contentLength`; presigned URLs live
   `STORAGE_SIGNED_URL_TTL_SEC` (900 s).
 
+## Database roles
+
+Three Postgres roles separate what a connection may do (program spec section 4). In compose, CI and
+the Testcontainers specs they come from one script, run as the superuser:
+[`docker/postgres/init/02-roles.sql`](../docker/postgres/init/02-roles.sql) (the roles and their
+settings) and [`03-pgbouncer-auth.sql`](../docker/postgres/init/03-pgbouncer-auth.sql) (PgBouncer's
+password lookup). Compose runs both once on an empty volume; `startRlsTestPostgres()`
+(`@platform/testing/postgres`) runs them in every spec that asserts isolation. Both are idempotent.
+Dev passwords equal the role names and appear only in those files and the test helper.
+
+| Role             | Attributes                                                             | Used by                                                            | Server settings (`ALTER ROLE … SET`)                                                                                                                 |
+| ---------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app_owner`      | `LOGIN NOSUPERUSER NOCREATEROLE NOBYPASSRLS`, `CREATE` on the database | migrations, drizzle-kit, operator CLIs (direct to the coordinator) | `search_path = pg_catalog, public` only (the migrator sets Citus' sequential mode itself)                                                            |
+| `app_runtime`    | `LOGIN NOSUPERUSER NOBYPASSRLS`                                        | every request (through PgBouncer)                                  | `search_path = pg_catalog, public`, `citus.propagate_set_commands = 'local'`, `statement_timeout = 15s`, `idle_in_transaction_session_timeout = 60s` |
+| `app_system`     | `LOGIN NOSUPERUSER BYPASSRLS`                                          | the named system methods only (through PgBouncer, pool of 5)       | same as `app_runtime`                                                                                                                                |
+| `pgbouncer_auth` | `LOGIN NOSUPERUSER`                                                    | PgBouncer's `auth_user`                                            | `search_path = pg_catalog`                                                                                                                           |
+
+- **Why the settings live on the roles.** PgBouncer rejects both timeouts as startup parameters, so the
+  server applies them per role. `citus.propagate_set_commands = 'local'` makes Citus prepend the
+  transaction's `SET LOCAL` RLS context to every remote `BEGIN`; without it, every query that reaches a
+  shard over a connection fails with `app.user_id is not set` (closed, but in every request).
+- **Explicit `search_path`.** Each role has its own, so nothing resolves through a schema that happens to
+  share a role's name (`"$user"`). Application SQL is schema-qualified.
+- **Only `app_owner` creates schemas.** `PUBLIC` never gets `CREATE` on the database; `app_owner` owns
+  every schema and table and distributes them (`create_reference_table` as `app_owner` is covered by
+  `libs/testing/src/postgres/roles.int-spec.ts`). Table privileges for the two app roles are explicit per-table grants in each
+  domain's migrations: a new table is unreachable until its migration grants it.
+- **`pg_trgm`** is created by the superuser in the role script, so the platform set's
+  `CREATE EXTENSION IF NOT EXISTS pg_trgm` is a no-op for `app_owner` (which has no `CREATE` on `public`).
+
+**Production SQL** (as a superuser or the managed service's admin role, on the coordinator; Citus
+propagates the roles to the workers, and `citus_check_cluster_node_health()` plus
+`SELECT rolconfig FROM pg_roles` on each worker confirm the settings arrived). Replace each `<…>` with a secret from your secret
+store; never reuse the dev passwords.
+
+```sql
+CREATE ROLE app_owner      LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '<owner-password>';
+CREATE ROLE app_runtime    LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '<runtime-password>';
+CREATE ROLE app_system     LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION BYPASSRLS   PASSWORD '<system-password>';
+CREATE ROLE pgbouncer_auth LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '<auth-password>';
+
+GRANT CONNECT, CREATE ON DATABASE <database> TO app_owner;
+GRANT CONNECT ON DATABASE <database> TO app_runtime, app_system;
+
+ALTER ROLE app_owner   SET search_path = pg_catalog, public;
+ALTER ROLE app_runtime SET search_path = pg_catalog, public;
+ALTER ROLE app_system  SET search_path = pg_catalog, public;
+ALTER ROLE app_runtime SET citus.propagate_set_commands = 'local';
+ALTER ROLE app_runtime SET statement_timeout = '15s';
+ALTER ROLE app_runtime SET idle_in_transaction_session_timeout = '60s';
+ALTER ROLE app_system  SET citus.propagate_set_commands = 'local';
+ALTER ROLE app_system  SET statement_timeout = '15s';
+ALTER ROLE app_system  SET idle_in_transaction_session_timeout = '60s';
+
+CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;
+```
+
+Then run `03-pgbouncer-auth.sql` without its `PASSWORD` clause (set `pgbouncer_auth`'s password as
+above). PgBouncer uses `auth_type = scram-sha-256`, `auth_user = pgbouncer_auth` and
+`auth_query = SELECT usename, passwd FROM pgbouncer.get_auth($1)`: a `SECURITY DEFINER` function with
+a pinned `search_path`, executable by `pgbouncer_auth` only, that returns the SCRAM verifier of
+`app_runtime` and `app_system` and nothing for any other name (never `app_owner`, which connects
+directly, nor a superuser). No secret file holds the verifiers. The coordinator's `pg_hba.conf` allows
+`scram-sha-256` from PgBouncer's address only.
+
+**Worker authentication** (a multi-node Citus cluster only). The coordinator opens connections to the
+workers as the current user (`app_runtime`, `app_system`, `app_owner`), so each worker must
+authenticate all three. The choice, from the Citus docs ("Cluster management", "pg_dist_authinfo"):
+
+- **TLS for every node connection** through `citus.node_conninfo` (its default is `sslmode=require`).
+  Set `verify-full` with your CA, then reload:
+  `ALTER SYSTEM SET citus.node_conninfo = 'sslrootcert=<ca.crt> sslmode=verify-full'; SELECT pg_reload_conf();`
+  It applies to new connections only.
+- **SCRAM passwords per role** in `pg_dist_authinfo` (superuser-only; in Citus Community since 11.0),
+  `nodeid = 0` meaning every node; a row for a specific node takes precedence:
+  `INSERT INTO pg_dist_authinfo (nodeid, rolename, authinfo) VALUES (0, 'app_runtime', 'password=<runtime-password>');`
+  and the same for `app_system` and `app_owner`. Rows are not secret-free: restrict superuser access.
+  A `.pgpass` in the postgres user's home on every node is the alternative where this table is not
+  wanted. Workers' `pg_hba.conf` require `hostssl … scram-sha-256` from the other nodes.
+- Client certificates (`authinfo = 'sslcert=… sslkey=…'`) can replace the passwords later.
+
+A single node needs none of this. Compose's optional worker profile and the test topology use `trust`
+between nodes on a private Docker network, which is local-only.
+
+## Row-level security
+
+Every runtime query runs as `app_runtime` (`NOBYPASSRLS`) under `FORCE ROW LEVEL SECURITY`; the database, not
+only the query, decides which rows a request sees (program spec section 8, B3). The pieces:
+
+- **Forced RLS on every domain table.** `ENABLE` and `FORCE ROW LEVEL SECURITY`, so the owner `app_owner` is filtered
+  too and holds no policy (two `TO app_owner` policies on `identity.users` for `staff:grant` are the one exception).
+  A table with no policy for a role denies everything. Only each set's bookkeeping table
+  (`<schema>.__drizzle_migrations`) and `app.tenant_colocation` carry no RLS, and no app role has any privilege on them.
+- **Explicit grants, deny by default.** No default table privileges: a new table is unreachable until its own
+  migration grants it. Function execution is revoked from `PUBLIC` the same way.
+- **Policies are row-local.** A policy uses only the row's own columns and the three session helpers `app.user_id()`,
+  `app.tenant_id()` and `app.elevated()` (called directly, never in a subquery), and calls no function that reads a
+  table: Citus rejects subqueries in policies, and a helper that reads another distributed table fails on a shard
+  (`XX000 cannot execute a distributed query from a query on a shard`). The per-table policies are in
+  [`domains/identity/README.md`](../domains/identity/README.md#data-model-identityschemats--identityschema) and
+  [`domains/billing/README.md`](../domains/billing/README.md#row-level-security-0003_rlssql-b3-5b3-6-program-spec-82).
+  Rows with `tenant_id = PLATFORM_TENANT_ID` match no runtime policy; only the system pool reads or writes them.
+- **One principal per transaction.** The principal is final before a unit of work opens. A runtime repository reaches
+  the database only through `inUnitOfWork`, which compares the CLS principal with what `BEGIN` applied and throws
+  `RLS_CONTEXT_STALE` when they differ. With no principal the adapter refuses to `BEGIN` (`RLS_NO_PRINCIPAL`).
+
+### The RLS context: `SET LOCAL`
+
+On `BEGIN`, the Drizzle transactional adapter sends the context in one simple-protocol round trip, built from the CLS
+principal:
+
+```sql
+SET LOCAL app.user_id = '<uuid>'; SET LOCAL app.tenant_id = '<uuid or empty>'; SET LOCAL app.elevated = 'off'
+```
+
+This is the only SQL in the codebase built from strings, because `SET` takes no bound parameters. It is safe by
+construction:
+
+- `buildRlsContextSql` (`libs/database/src/rls/rls-context.ts`) accepts a value only if it matches `RLS_UUID_PATTERN`
+  (`/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i`, no `m`, `u` or `g` flag, so `$` is the end of the
+  input and a trailing newline or quote fails). The result is lower-cased.
+- Anything else throws before any SQL is sent, with a message that never echoes the value:
+  `RLS_INVALID_USER_ID`, `RLS_INVALID_TENANT_ID`, and `RLS_PLATFORM_TENANT` for the nil UUID (never a runtime tenant
+  or user). `tenantId: null` yields the empty string, a user-scoped unit of work.
+- With no principal in CLS the adapter refuses to `BEGIN` (`RLS_NO_PRINCIPAL`), also inside a system context. At `COMMIT`,
+  and in every `inUnitOfWork` call, the CLS principal is compared with what `BEGIN` applied: a different one throws
+  `RLS_CONTEXT_STALE` and the transaction rolls back.
+- `set_config()` is never used: Citus propagates `SET LOCAL` to the worker connections of the transaction (the role
+  setting `citus.propagate_set_commands = 'local'` on `app_runtime` and `app_system`) but not `set_config()`.
+- The values are transaction-local, so they cannot leak across pooled connections, and they work behind PgBouncer in
+  transaction mode. No session `SET`, `set_config(…, false)`, `pg_advisory_lock`, `LISTEN` or temp table is used
+  behind the pooler.
+
+### Elevation
+
+`app.elevated` widens a policy from "my row" to "the tenant's rows". It never changes `app.tenant_id`, so elevation
+never crosses tenants. It needs a principal with a tenant, an open runtime transaction and a current context; every
+refusal happens before anything is sent. Each elevation is logged and counted in
+`db_rls_elevations_total{kind,name}`.
+
+- **`elevate(permission)`** (`RlsElevation`) asserts in TypeScript that the principal holds the permission, then sends
+  `SET LOCAL app.elevated = 'on'`, on until `COMMIT`. A principal without it gets 403 `ELEVATION_DENIED`, and nothing
+  is sent. It is the first call of the unit of work of `CreateInvitation`, `UpdateMemberRoles`, `RemoveMember`,
+  `RenameTenant` and the whole-tenant `ListPayments` (`members:manage`, `tenant:manage`, `billing:read-all`).
+- **`justified(reason, work)`** is elevation without a permission, for the code paths where the transaction itself
+  proves the right, on for `work` only and off again in `finally`. The reasons are a closed list, and only a
+  `*.elevated.ts` file may call it (`scripts/check-boundaries.mjs`):
+
+| Reason                | Why the transaction justifies it                                                                   | Where                  |
+| --------------------- | -------------------------------------------------------------------------------------------------- | ---------------------- |
+| `tenant-bootstrap`    | the tenant was created in the same transaction: the owner membership                               | `TenantBootstrap`      |
+| `verified-invitation` | a verified invitation token: the membership, the accepted flag, the audit row                      | `InvitationAcceptance` |
+| `membership-activity` | the member's own `last_active_at` touch, which the policy lets only an elevated transaction update | `MembershipActivity`   |
+
+### The system pool
+
+Work without a principal (a login lookup before there is a user, a cron, a platform webhook) and the reads the
+row-local policies leave out run on a separate pool: `app_system` (`BYPASSRLS`) on `DATABASE_SYSTEM_URL`, at most 5
+connections (`DATABASE_SYSTEM_POOL_MAX`), through PgBouncer. Without `DATABASE_SYSTEM_URL` there is no system pool,
+and a system method fails with `SYSTEM_DATABASE_UNAVAILABLE` (a 503 with that code; production refuses to start without
+it); it never falls back to `DATABASE_URL`.
+
+- **One door.** `SystemDatabase.run(method, work)` is the only way to the pool. Only a `*.system-repository.ts` file
+  may name `SystemDatabase`, `SYSTEM_DATABASE` or `InjectSystemDatabase` (`scripts/check-boundaries.mjs`), and each
+  domain pins its methods in `<domain>.system-methods.ts`, checked by a spec. `work` gets the system handle, never the
+  runtime pool or its open transaction: a write there commits on its own.
+- **Two scopes.** `pre-auth` methods run anywhere (the lookups before there is a principal). `system` methods run
+  only inside `SystemContext.run(reason, fn)`, which clears the principal; outside it `SystemDatabase.run` refuses with
+  `SYSTEM_CONTEXT_REQUIRED`. The reason (`<domain>.<job>`) goes into the log line of every call.
+- **Observable.** Every call, a refused one too, is logged once as `{ systemMethod, scope, reason, outcome }` and
+  counted in `db_system_calls_total{method,outcome}`.
+- **Grants.** `app_system` holds per-table grants for these methods and nothing else (identity: `SELECT` on `users`,
+  `tenants`, `memberships` and `invitations`, `SELECT, DELETE` on `sessions`; billing: `SELECT, INSERT, DELETE` on
+  `stripe_events` only).
+- **Not a pool method:** `staff:grant` connects as `app_owner` on `DATABASE_MIGRATION_URL`.
+
+The pinned lists (12 methods when B3 shipped; program spec section 9 numbers the first group, the second is the B3
+ruling below):
+
+| Method                                 | Scope    | Used by (reason)                                                                            |
+| -------------------------------------- | -------- | ------------------------------------------------------------------------------------------- |
+| `users.findCredentialsByEmail`         | pre-auth | login (spec 1): the credentials row by email                                                |
+| `users.existsByEmail`                  | pre-auth | register pre-check (spec 2); the unique constraint still guards races                       |
+| `invitations.findByTokenHash`          | pre-auth | accept invitation (spec 3): a multi-shard read, one index probe per shard                   |
+| `sessions.deleteExpired`               | system   | the hourly purge, `identity.purge-expired-sessions` (spec 4): multi-shard `DELETE` slices   |
+| `stripeEvents.deleteProcessedBefore`   | system   | the hourly purge, `billing.purge-stripe-events` (spec 5)                                    |
+| `stripeEvents.markProcessedAsPlatform` | system   | platform webhooks without a user, `billing.platform-webhook` (spec 8, `stripe_events` half) |
+| `users.findByIdInTenant`               | system   | `GET /v1/users/:id` and scoped `UsersPort` reads, `identity.user-directory`                 |
+| `users.listInTenant`                   | system   | `ListUsers`, `identity.user-directory`                                                      |
+| `users.findByIdsInTenant`              | system   | `GetUsersByIds` (the GraphQL users DataLoader, `Payment.user`), `identity.user-directory`   |
+| `memberships.findMember`               | system   | the member and profile after a role change, `identity.member-directory`                     |
+| `memberships.listMembers`              | system   | `ListMembers` and GraphQL `tenantMembers`, `identity.member-directory`                      |
+| `memberships.listForUser`              | system   | `ListMyTenants`, `identity.my-tenants`: every membership of the caller, across tenants      |
+
+Later phases add their own methods (the outbox relay, the ledger reconciliation) to the same pinned lists, with
+their per-table `app_system` grants and this table.
+
+### Trust model
+
+The row-local rule has a price. A co-member read (the member directory: `users JOIN memberships ON tenant_id = <the
+caller's tenant>`) and a read of the caller's tenants outside the session tenant cannot be a database policy, so they
+go through the system pool and are verified in application SQL: the handler asserts the scope first (the principal
+acts in that tenant, or it is the user itself), and the system method filters on it in the SQL text. This is the same
+trust model as the session context itself, which the application also supplies (the principal on `SET LOCAL`). A
+review of a new system method therefore reads its SQL for the scoping predicate, and every one is covered by an int
+spec that shows it returns only the asserted rows.
+
+### Boot guard
+
+After both pools are open and before `DatabaseModule` resolves, the boot guard asks the live connections what they
+are (`libs/database/src/boot/boot-guard.ts`). Each check is one catalog statement with bound parameters only, and a
+check whose statement errors, or answers in another shape than expected, is a finding like any other (fail closed).
+
+| Check                                  | Fails when                                                                                           |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `runtime.not-superuser`                | `DATABASE_URL` logs in as a superuser                                                                |
+| `runtime.no-bypassrls`                 | the runtime role has `BYPASSRLS`                                                                     |
+| `runtime.owns-no-table`                | the runtime role owns, or is a member of a role that owns, a relation of the migration sets' schemas |
+| `runtime.rls-forced`                   | a table of those schemas lacks `ENABLE` or `FORCE ROW LEVEL SECURITY` (bookkeeping tables excepted)  |
+| `runtime.no-bookkeeping-privilege`     | the runtime role holds a privilege on a bookkeeping table or `app.tenant_colocation`                 |
+| `runtime.citus-propagate-set-commands` | Citus is installed and `citus.propagate_set_commands` is not `local` for the runtime connection      |
+| `system.not-superuser`                 | `DATABASE_SYSTEM_URL` logs in as a superuser                                                         |
+| `system.bypassrls`                     | the system role lacks `BYPASSRLS`                                                                    |
+| `system.owns-no-table`                 | the system role owns a relation of those schemas                                                     |
+| `system.citus-propagate-set-commands`  | the same Citus setting, for the system connection                                                    |
+| `system.distinct-user`                 | the system and runtime connections log in as the same user                                           |
+| `system.configured`                    | `enforce` only: there is no system connection (`DATABASE_SYSTEM_URL` is not set)                     |
+
+The other `system.*` checks run only when `DATABASE_SYSTEM_URL` is set. Production config requires it too: login,
+register, accepting an invitation and the purges run on the system pool. `DATABASE_BOOT_GUARD` picks the mode:
+
+- `enforce` (the default in production, and the only value production accepts): any finding throws
+  `DatabaseBootGuardError` with every finding, and the app does not start. Compose sets it.
+- `warn` (the default elsewhere): each finding is logged as a warning and the app starts.
+- `off`: nothing is checked, with a warning. Only for fake databases (e2e suites); production config rejects it.
+
+A table added after B3 without forced RLS therefore stops the next deploy in `enforce`.
+
+### PgBouncer authentication
+
+PgBouncer runs in transaction mode (`pool_mode = transaction`, `max_prepared_statements = 200`) with
+`auth_type = scram-sha-256`. Compose mounts a userlist with the two dev passwords and nothing else
+(`docker/pgbouncer/userlist.txt`, local only). Production authenticates with `auth_user = pgbouncer_auth` and
+
+```text
+auth_query = SELECT usename, passwd FROM pgbouncer.get_auth($1)
+```
+
+`pgbouncer.get_auth` is a `SECURITY DEFINER` function with a pinned `search_path`, executable by `pgbouncer_auth`
+only, that returns the SCRAM verifier of `app_runtime` and `app_system` and nothing for any other name
+(`docker/postgres/init/03-pgbouncer-auth.sql`; the production SQL is under [Database roles](#database-roles)).
+`app_owner` is never reachable through the pooler.
+
+`ignore_startup_parameters` lists `extra_float_digits` only. It must **not** list `statement_timeout` (or
+`idle_in_transaction_session_timeout`): the roles carry both timeouts (`ALTER ROLE … SET`), and PgBouncer's refusal
+of `statement_timeout` as a startup parameter (`08P01`) is how the migration runner knows `DATABASE_MIGRATION_URL`
+was pointed at a pooler instead of the coordinator. Listing it would let the migrator run through the pooler and lose
+its session advisory lock.
+
 ## Secrets, configuration guards and logs
 
 ### Where configuration comes from
@@ -441,6 +703,13 @@ Prometheus scrape the pods directly. A separate metrics listener is a [known gap
       password or ACL user, `KAFKA_SSL` + SASL, `CASSANDRA_SSL` with `CASSANDRA_TLS_CA_PATH` and
       `CASSANDRA_REPLICATION_DATACENTERS`, SMTP with STARTTLS (`SMTP_REQUIRE_TLS`); S3/GCS credentials
       scoped to the bucket (`GCS_KEY_FILE` must be a `service_account` key, or use workload identity).
+- [ ] Database roles created from the production SQL in [Database roles](#database-roles), with
+      secret-store passwords; on a multi-node cluster, TLS (`verify-full`) and SCRAM between nodes.
+- [ ] Every app that uses the database has `DATABASE_URL` (`app_runtime`), `DATABASE_SYSTEM_URL` (`app_system`) and,
+      wherever migrations or CLIs run, `DATABASE_MIGRATION_URL` (`app_owner`, direct to the coordinator, never
+      PgBouncer); the three log in as different users. `DATABASE_BOOT_GUARD=enforce`.
+- [ ] PgBouncer in transaction mode with `auth_query` (`pgbouncer.get_auth`), `ignore_startup_parameters` set to
+      `extra_float_digits` only, and `app_system` capped at 5 connections; `DATABASE_POOLER=pgbouncer`.
 - [ ] `DATABASE_RUN_MIGRATIONS=false` and migrations run as a release job (see [DOCKER.md](DOCKER.md#bootstrap-jobs--migrations)).
 - [ ] `UV_THREADPOOL_SIZE` ≤ container CPU limit; `CLUSTER_WORKERS=1` under Kubernetes.
 - [ ] Proxy-level limit on WebSocket frame size (graphql-ws, Socket.IO).

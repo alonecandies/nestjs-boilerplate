@@ -5,6 +5,7 @@
 #
 #   scripts/docker/check-infra.sh                 # project "bp-infra-check"
 #   PROJECT=my-check KEEP=1 scripts/docker/check-infra.sh   # keep the stack running afterwards
+#   CITUS=1 scripts/docker/check-infra.sh         # the `citus` profile too: coordinator + one worker
 # Host ports can be remapped with the usual *_HOST_PORT variables (see .env.example) when the
 # defaults are taken.
 set -euo pipefail
@@ -12,7 +13,10 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 PROJECT="${PROJECT:-bp-infra-check}"
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-420}"
-compose() { COMPOSE_PROFILES='' docker compose -p "${PROJECT}" "$@"; }
+# The infra-only stack, or with CITUS=1 the `citus` profile on top (postgres-worker-1, citus-init).
+PROFILES=''
+[ "${CITUS:-0}" = 1 ] && PROFILES='citus'
+compose() { COMPOSE_PROFILES="${PROFILES}" docker compose -p "${PROJECT}" "$@"; }
 log() { printf '\n\033[1m[check-infra] %s\033[0m\n' "$*"; }
 fail() { printf '\033[31m[check-infra] FAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 
@@ -39,7 +43,9 @@ compose up -d --wait --wait-timeout "${WAIT_TIMEOUT}"
 log "stack healthy after $(($(date +%s) - start))s"
 
 log "one-shot init containers exited 0"
-for svc in kafka-init cassandra-init storage-init immudb-init; do
+inits=(kafka-init cassandra-init storage-init immudb-init)
+[ "${CITUS:-0}" = 1 ] && inits+=(citus-init)
+for svc in "${inits[@]}"; do
   cid="$(compose ps -a -q "${svc}")"
   [ -n "${cid}" ] || fail "${svc} never ran"
   state="$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "${cid}")"
@@ -84,6 +90,72 @@ version="$(psql_app "select current_setting('server_version') || ' uuidv7=' || u
   || ' shard_count=' || current_setting('citus.shard_count') || ' ' || citus_version()")"
 echo "  preload: ${preload}; extensions: ${exts}; ${version}"
 
+log "postgres roles: app_owner / app_runtime / app_system"
+roles="$(psql_app "select string_agg(rolname || ':' || rolsuper::int || rolbypassrls::int, ',' order by rolname) \
+  from pg_roles where rolname in ('app_owner','app_runtime','app_system')")"
+[ "${roles}" = "app_owner:00,app_runtime:00,app_system:01" ] || fail "roles (name:super,bypassrls): ${roles}"
+echo "  ${roles}"
+
+if [ "${CITUS:-0}" = 1 ]; then
+  log "citus profile: coordinator + one worker, roles on both, shards on the worker"
+  nodes="$(psql_app "select string_agg(groupid || ':' || nodename || ':' || shouldhaveshards::int, ',' order by groupid) \
+    from pg_dist_node")"
+  [ "${nodes}" = "0:postgres:0,1:postgres-worker-1:1" ] || fail "pg_dist_node (group:host:shouldhaveshards): ${nodes}"
+  echo "  pg_dist_node: ${nodes}"
+  # Every direction of the cluster: coordinator and worker, each to each (4 pairs for 2 nodes).
+  health="$(psql_app "select count(*) filter (where result) || '/' || count(*) from citus_check_cluster_node_health()")"
+  [ "${health}" = 4/4 ] || fail "citus_check_cluster_node_health(): ${health} pairs reachable"
+  echo "  citus_check_cluster_node_health(): ${health}"
+  worker_roles="$(psql_app "select result from run_command_on_workers(\$\$select string_agg(rolname || ':' || rolsuper::int \
+    || rolbypassrls::int, ',' order by rolname) from pg_roles where rolname in ('app_owner','app_runtime','app_system')\$\$)")"
+  [ "${worker_roles}" = "app_owner:00,app_runtime:00,app_system:01" ] || fail "roles on the worker: ${worker_roles}"
+  echo "  roles on the worker: ${worker_roles}"
+  # A throwaway distributed table: all of its shards must land on the worker, none on the coordinator.
+  psql_app "create table public.citus_probe (tenant_id uuid primary key)" >/dev/null
+  psql_app "select create_distributed_table('public.citus_probe', 'tenant_id')" >/dev/null
+  placed="$(psql_app "select string_agg(nodename || '=' || n, ',' order by nodename) from (select nodename, \
+    count(*) n from citus_shards where table_name = 'public.citus_probe'::regclass group by nodename) s")"
+  psql_app "drop table public.citus_probe" >/dev/null
+  shard_count="$(psql_app "show citus.shard_count")"
+  [ "${placed}" = "postgres-worker-1=${shard_count}" ] || fail "citus_probe shards (node=count): ${placed}"
+  echo "  citus_probe shards: ${placed}"
+fi
+
+log "pgbouncer: transaction pooling, two users, 6432 only for the pooled roles"
+# bounce <user> <db> <sql> [PGOPTIONS]: psql inside the pgbouncer container, through its own port.
+bounce() {
+  compose exec -T -e "PGPASSWORD=$1" -e "PGOPTIONS=${4:-}" pgbouncer \
+    psql -h 127.0.0.1 -p 6432 -U "$1" -d "$2" -tAc "$3"
+}
+db="${POSTGRES_DB:-app}"
+[ "$(bounce app_runtime "${db}" 'select current_user')" = app_runtime ] || fail "app_runtime through 6432"
+[ "$(bounce app_system "${db}" 'select current_user')" = app_system ] || fail "app_system through 6432"
+pools="$(bounce app_system pgbouncer 'show pools' | cut -d'|' -f1-2 | tr '\n' ' ')"
+for user in app_runtime app_system; do
+  [[ "${pools}" == *"${db}|${user}"* ]] || fail "SHOW POOLS lacks ${user} (have: ${pools})"
+done
+echo "  SHOW POOLS: ${pools}"
+config="$(bounce app_system pgbouncer 'show config')"
+mode="$(awk -F'|' '$1=="pool_mode"{print $2}' <<<"${config}")"
+[ "${mode}" = transaction ] || fail "pool_mode=${mode}"
+ignored="$(awk -F'|' '$1=="ignore_startup_parameters"{print $2}' <<<"${config}")"
+[ "${ignored}" = extra_float_digits ] || fail "ignore_startup_parameters=${ignored}"
+echo "  pool_mode=${mode} ignore_startup_parameters=${ignored}"
+# The roles carry the timeouts (ALTER ROLE ... SET), so the pooler never needs them as parameters.
+st="$(bounce app_runtime "${db}" 'show statement_timeout')"
+[ "${st}" = 15s ] || fail "app_runtime statement_timeout through PgBouncer is ${st}, want 15s"
+# A statement_timeout startup parameter must be refused: it is how the migration runner tells that
+# DATABASE_MIGRATION_URL points at a pooler (08P01), so PgBouncer must not be told to ignore it.
+if out="$(bounce app_runtime "${db}" 'select 1' '-c statement_timeout=0' 2>&1)"; then
+  fail "a statement_timeout startup parameter was accepted through PgBouncer: ${out}"
+fi
+[[ "${out}" == *"unsupported startup parameter"* ]] || fail "unexpected refusal: ${out}"
+echo "  startup parameter statement_timeout refused: $(tr -d '\r' <<<"${out}" | head -1)"
+if out="$(bounce app_owner "${db}" 'select 1' 2>&1)"; then
+  fail "app_owner logged in through PgBouncer: ${out}"
+fi
+echo "  app_owner through 6432 refused: $(tr -d '\r' <<<"${out}" | head -1)"
+
 log "redis: reachable from another container WITHOUT a password; BullMQ-safe eviction policy"
 network="$(docker network ls -q --filter "label=com.docker.compose.project=${PROJECT}" | head -1)"
 [ -n "${network}" ] || fail "compose network not found"
@@ -110,7 +182,7 @@ echo "  s3 CORS preflight: ${cors}"
 
 log "host ports (127.0.0.1) accept TCP connections"
 for pair in "postgres:${POSTGRES_HOST_PORT:-5432}" "redis:${REDIS_HOST_PORT:-6379}" \
-  "cassandra:${CASSANDRA_HOST_PORT:-9042}" "kafka:${KAFKA_HOST_PORT:-9094}" \
+  "pgbouncer:${PGBOUNCER_HOST_PORT:-6432}" "cassandra:${CASSANDRA_HOST_PORT:-9042}" "kafka:${KAFKA_HOST_PORT:-9094}" \
   "mailpit-smtp:${MAILPIT_SMTP_HOST_PORT:-1025}" "mailpit-ui:${MAILPIT_UI_HOST_PORT:-8025}" \
   "s3:${S3_HOST_PORT:-9000}" "gcs:${GCS_HOST_PORT:-4443}" "immudb:${IMMUDB_HOST_PORT:-3322}"; do
   (exec 3<>"/dev/tcp/127.0.0.1/${pair#*:}") 2>/dev/null || fail "${pair%%:*} not reachable on 127.0.0.1:${pair#*:}"

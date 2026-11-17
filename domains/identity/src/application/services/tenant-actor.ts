@@ -16,6 +16,16 @@ export function requireTenantActor(tenantId: string, actorId: string): Principal
 }
 
 /**
+ * The request's principal must be acting in `tenantId`: the assertion in front of a system read
+ * scoped to that tenant (the row-local policies cannot check it; ruling `b3-identity-policies`).
+ */
+export function requireActingIn(tenantId: string): Principal {
+  const principal = requirePrincipal();
+  if (principal.tenantId !== tenantId) throw new TenantAccessDeniedException();
+  return principal;
+}
+
+/**
  * User-scoped calls (my tenants, create a tenant): the request's user must be the principal. The
  * gateway copies both from the same token; identity-service trusts no request user id on its own.
  */

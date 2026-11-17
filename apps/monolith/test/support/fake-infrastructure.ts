@@ -40,6 +40,10 @@ export function createFakePostgres(
     return Object.assign(pending, {
       values: async (): Promise<unknown[][]> => (await pending).map((row) => Object.values(row)),
       cancel: (): void => undefined,
+      // postgres.js simple protocol: the RLS context statement on BEGIN (`unsafe(sql).simple()`).
+      simple() {
+        return this;
+      },
     });
   };
 

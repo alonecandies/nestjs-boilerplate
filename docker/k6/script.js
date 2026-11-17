@@ -16,11 +16,16 @@
 // Env: BASE_URL, RATE (journeys/s, default 5), DURATION (default 1m), READ_RATE (iterations/s,
 // default 0), P95_MS (default 250), MAX_ERROR_RATE (default 0.01), MAX_DROPPED_RATIO (default
 // 0.01 of the planned iterations), THROTTLE_LIMIT (app setting, default 300/min/user; sizes the
-// browse pool), PASSWORD, RUN_ID.
+// browse pool), PASSWORD, RUN_ID, SUMMARY_PATH (default /reports/k6-summary-<RUN_ID>.json).
+//
+// handleSummary prints the end-of-run text and writes a JSON summary (summary.js): the p95 of each
+// series, keyed by scenario and endpoint tag (`name`), plus the dropped iterations. Per-run files
+// feed scripts/perf/k6-baseline.mjs and scripts/perf/compare-k6.mjs (docs/PERFORMANCE.md, "RLS gate").
 // Keep DURATION below JWT_ACCESS_TTL_SEC (15 min) when READ_RATE > 0: pool tokens are not refreshed.
 import { check, fail, sleep } from 'k6';
 import exec from 'k6/execution';
 import http from 'k6/http';
+import { buildP95Summary, renderTextSummary, seriesThresholds } from './summary.js';
 
 const BASE_URL = (__ENV.BASE_URL || 'http://api:3000').replace(/\/+$/, '');
 const RATE = Number(__ENV.RATE || 5);
@@ -34,6 +39,17 @@ const PASSWORD = __ENV.PASSWORD || 'k6-load-test-Passw0rd';
 // Emails must be unique across runs against the same database.
 const RUN_ID = (__ENV.RUN_ID || Date.now().toString(36)).toLowerCase();
 const READS_PER_ITERATION = 3;
+const SUMMARY_PATH = __ENV.SUMMARY_PATH || `/reports/k6-summary-${RUN_ID}.json`;
+
+/** Endpoint (`name`) tags; threshold selectors cannot hold ':' or ',', hence "<id>". */
+const ENDPOINT = {
+  register: 'POST /v1/auth/register',
+  login: 'POST /v1/auth/login',
+  me: 'GET /v1/auth/me',
+  user: 'GET /v1/users/<id>',
+  graphqlMe: 'POST /graphql me',
+};
+const READ_ENDPOINTS = [ENDPOINT.me, ENDPOINT.user, ENDPOINT.graphqlMe];
 
 /** k6 duration string ("90s", "1m30s", "2h") -> seconds. */
 function durationSeconds(value) {
@@ -75,6 +91,10 @@ if (READ_RATE > 0) {
   };
 }
 
+/** The series the JSON summary reports: scenario -> endpoint tags it requests. */
+const SERIES = { journey: [ENDPOINT.register, ENDPOINT.login, ...READ_ENDPOINTS] };
+if (scenarios.browse) SERIES.browse = READ_ENDPOINTS;
+
 export const options = {
   scenarios,
   // setup() traffic (health polling, warm-up) is untagged, so it never counts against thresholds.
@@ -84,12 +104,15 @@ export const options = {
     'checks{phase:load}': [`rate>${1 - MAX_ERROR_RATE}`],
     // Cached reads must stay well under the overall budget (no Argon2 on these paths).
     // (Tag values in threshold selectors must not contain ':' or ',' — hence "<id>".)
-    'http_req_duration{phase:load,name:GET /v1/users/<id>}': [`p(95)<${Math.ceil(P95_MS / 2)}`],
+    [`http_req_duration{phase:load,name:${ENDPOINT.user}}`]: [`p(95)<${Math.ceil(P95_MS / 2)}`],
     // Drops = the API (or the VU pool) could not sustain the arrival rate. A small budget absorbs
     // one GC/VM hiccup on a laptop; sustained saturation still fails the run.
     dropped_iterations: [`count<=${Math.floor(PLANNED_ITERATIONS * MAX_DROPPED_RATIO)}`],
+    // Always-true thresholds that make k6 report each series' submetric (see summary.js).
+    ...seriesThresholds(SERIES),
   },
-  summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
+  // `count` lets the JSON summary drop a series without samples.
+  summaryTrendStats: ['avg', 'min', 'med', 'p(90)', 'p(95)', 'p(99)', 'max', 'count'],
   setupTimeout: '180s',
 };
 
@@ -104,7 +127,7 @@ function register(email, displayName, ip, tags) {
     JSON.stringify({ email, password: PASSWORD, displayName }),
     {
       headers: { ...JSON_HEADERS, 'x-forwarded-for': ip },
-      tags: { name: 'POST /v1/auth/register', ...tags },
+      tags: { name: ENDPOINT.register, ...tags },
     },
   );
 }
@@ -112,7 +135,7 @@ function register(email, displayName, ip, tags) {
 function login(email, ip) {
   return http.post(`${BASE_URL}/v1/auth/login`, JSON.stringify({ email, password: PASSWORD }), {
     headers: { ...JSON_HEADERS, 'x-forwarded-for': ip },
-    tags: { name: 'POST /v1/auth/login' },
+    tags: { name: ENDPOINT.login },
   });
 }
 
@@ -120,18 +143,18 @@ function login(email, ip) {
 function readAs(token, userId, ip) {
   const headers = { authorization: `Bearer ${token}`, 'x-forwarded-for': ip };
 
-  const me = http.get(`${BASE_URL}/v1/auth/me`, { headers, tags: { name: 'GET /v1/auth/me' } });
+  const me = http.get(`${BASE_URL}/v1/auth/me`, { headers, tags: { name: ENDPOINT.me } });
   check(me, { 'GET /v1/auth/me 200 (self)': (r) => r.status === 200 && r.json('id') === userId });
 
   const user = http.get(`${BASE_URL}/v1/users/${userId}`, {
     headers,
-    tags: { name: 'GET /v1/users/<id>' },
+    tags: { name: ENDPOINT.user },
   });
   check(user, { 'GET /v1/users/<id> 200': (r) => r.status === 200 && r.json('id') === userId });
 
   const gql = http.post(`${BASE_URL}/graphql`, JSON.stringify({ query: ME_QUERY }), {
     headers: { ...headers, ...JSON_HEADERS },
-    tags: { name: 'POST /graphql me' },
+    tags: { name: ENDPOINT.graphqlMe },
   });
   check(gql, {
     'GraphQL me (no errors)': (r) =>
@@ -208,4 +231,16 @@ export function browse(data) {
   const n = exec.scenario.iterationInTest;
   const user = data.pool[n % data.pool.length];
   readAs(user.token, user.id, clientIp(n, 1));
+}
+
+export function handleSummary(data) {
+  const summary = buildP95Summary(data, {
+    runId: RUN_ID,
+    settings: { rate: RATE, readRate: READ_RATE, duration: DURATION, p95Ms: P95_MS },
+    series: SERIES,
+  });
+  return {
+    stdout: renderTextSummary(data, SERIES),
+    [SUMMARY_PATH]: `${JSON.stringify(summary, null, 2)}\n`,
+  };
 }

@@ -1,10 +1,12 @@
 import { createPrincipal, generateId, runWithPrincipal } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { recordingEventBus } from '../../../../test/cqrs-fakes.js';
+import { principalLog } from '../../../../test/principal-log.js';
 import { MembershipCreatedEvent } from '../../../domain/events/membership-created.event.js';
 import { TENANT_SLUG_PATTERN } from '../../../domain/tenant-slug.js';
 import { UserAggregate } from '../../../domain/user.aggregate.js';
 import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
+import { TenantBootstrap } from '../../services/tenant-bootstrap.elevated.js';
 import { CreateTenantCommand } from './create-tenant.command.js';
 import { CreateTenantHandler } from './create-tenant.handler.js';
 
@@ -12,6 +14,7 @@ describe('CreateTenantHandler', () => {
   let persistence: ReturnType<typeof createInMemoryIdentityPersistence>;
   let handler: CreateTenantHandler;
   let events: ReturnType<typeof recordingEventBus>;
+  let log: ReturnType<typeof principalLog>;
   const userId = generateId();
   const self = createPrincipal({ userId, tenantId: generateId(), roles: ['owner'] });
   const run = (command: CreateTenantCommand) =>
@@ -29,11 +32,17 @@ describe('CreateTenantHandler', () => {
       }),
     );
     events = recordingEventBus();
+    log = principalLog();
+    const memberships = log.track('memberships', persistence.memberships);
     handler = new CreateTenantHandler(
-      persistence.tenants,
-      persistence.memberships,
+      memberships,
       persistence.transactions,
-      persistence.users,
+      new TenantBootstrap(
+        log.track('tenants', persistence.tenants),
+        memberships,
+        persistence.elevation,
+      ),
+      log.track('users', persistence.users),
       events.eventBus,
     );
   });
@@ -65,6 +74,22 @@ describe('CreateTenantHandler', () => {
     persistence.memberships.insert = () => Promise.reject(new Error('db down'));
     await expect(run(new CreateTenantCommand(userId, 'Acme'))).rejects.toThrow('db down');
     expect(events.published).toEqual([]);
+  });
+
+  it('every write and the read-back run as { user, newTenant, [owner] } (id generated first)', async () => {
+    const created = await run(new CreateTenantCommand(userId, 'Acme'));
+    const tenantId = created.tenant!.id;
+    expect(log.summary()).toEqual([
+      // The owner's own row (for the membership event), read as the caller before the unit of work.
+      ['users.findById', userId, self.tenantId],
+      ['tenants.insert', userId, tenantId],
+      ['memberships.insert', userId, tenantId],
+      ['memberships.listForUser', userId, tenantId],
+    ]);
+    expect(log.calls.every((c) => c.principal?.roles.join() === 'owner')).toBe(true);
+    expect(persistence.elevation.calls).toEqual([
+      { kind: 'justified', name: 'tenant-bootstrap', tenantId },
+    ]);
   });
 
   it.each(['', '   ', 'x'.repeat(101)])(

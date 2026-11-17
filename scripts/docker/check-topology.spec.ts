@@ -4,11 +4,13 @@ import { describe, expect, it } from 'vitest';
 import {
   appServices,
   type ComposeConfig,
+  databaseApps,
   projectName,
   SMOKE_PASSWORD,
   shiftedHostPorts,
   smokeJourney,
   TOPOLOGIES,
+  threeRoleProblems,
 } from './check-topology.js';
 
 const COMPOSE = readFileSync(join(import.meta.dirname, '..', '..', 'docker-compose.yml'), 'utf8');
@@ -171,5 +173,48 @@ describe('smokeJourney', () => {
     await expect(smokeJourney('http://127.0.0.1:23000', api.fetchImpl)).rejects.toThrow(
       /expected "smoke-/,
     );
+  });
+});
+
+describe('three-role wiring of the compose apps', () => {
+  const wired = {
+    DATABASE_URL: 'postgres://app_runtime:app_runtime@pgbouncer:6432/app',
+    DATABASE_SYSTEM_URL: 'postgres://app_system:app_system@pgbouncer:6432/app',
+    DATABASE_MIGRATION_URL: 'postgres://app_owner:app_owner@postgres:5432/app',
+    DATABASE_POOLER: 'pgbouncer',
+    DATABASE_BOOT_GUARD: 'enforce',
+  };
+
+  it('accepts the SH section 5 wiring', () => {
+    expect(threeRoleProblems('monolith', wired)).toEqual([]);
+  });
+
+  it('names every deviation: superuser runtime, shared URL, pooled owner, guard off', () => {
+    const problems = threeRoleProblems('monolith', {
+      ...wired,
+      DATABASE_URL: 'postgres://app:app@postgres:5432/app',
+      DATABASE_MIGRATION_URL: 'postgres://app_owner:app_owner@pgbouncer:6432/app',
+      DATABASE_BOOT_GUARD: 'warn',
+    });
+    expect(problems).toEqual([
+      'monolith: DATABASE_URL is app@postgres:5432, want app_runtime@pgbouncer:6432',
+      'monolith: DATABASE_MIGRATION_URL is app_owner@pgbouncer:6432, want app_owner@postgres:5432',
+      'monolith: DATABASE_BOOT_GUARD is not enforce',
+    ]);
+    expect(threeRoleProblems('x', undefined)).toHaveLength(5);
+  });
+
+  it('lists the apps that run the database, per topology', () => {
+    const config: ComposeConfig = {
+      services: {
+        monolith: { profiles: ['monolith'], environment: wired },
+        gateway: { profiles: ['microservices'], environment: {} },
+        'identity-service': { profiles: ['microservices'], environment: wired },
+        'billing-service': { profiles: ['microservices'], environment: wired },
+        'notifications-service': { profiles: ['microservices'] },
+      },
+    };
+    expect(databaseApps(config, 'monolith')).toEqual(['monolith']);
+    expect(databaseApps(config, 'microservices')).toEqual(['billing-service', 'identity-service']);
   });
 });

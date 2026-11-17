@@ -2,7 +2,14 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type INestApplicationContext, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { generateId, isUuidV7, sha256Hex } from '@platform/common';
+import {
+  createPrincipal,
+  generateId,
+  isUuidV7,
+  runWithPrincipal,
+  SystemContext,
+  sha256Hex,
+} from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import {
   type DatabaseMigrationSet,
@@ -11,26 +18,31 @@ import {
   type DrizzleDB,
   platformMigrations,
 } from '@platform/database';
-import { startTestPostgres, type TestPostgres } from '@platform/testing/postgres';
+import { type RlsTestPostgres, startRlsTestPostgres } from '@platform/testing/postgres';
 import { sql } from 'drizzle-orm';
+import { drizzle } from 'drizzle-orm/postgres-js';
 import { ClsModule } from 'nestjs-cls';
+import postgres, { type Sql } from 'postgres';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { EmailAlreadyTakenException } from '../../domain/identity.errors.js';
 import { UserAggregate } from '../../domain/user.aggregate.js';
 import { DrizzleSessionsRepository } from './drizzle-sessions.repository.js';
 import { DrizzleTransactionRunner } from './drizzle-transaction.runner.js';
 import { DrizzleUsersRepository } from './drizzle-users.repository.js';
+import { DrizzleUsersSystemRepository } from './drizzle-users.system-repository.js';
 import { identityMigrations } from './identity.migrations.js';
 import { type IdentitySchema, identitySchema } from './identity.schema.js';
 
 /*
- * DrizzleUsersRepository / DrizzleSessionsRepository against a real PostgreSQL 18, through the
- * real DatabaseModule, which applies the platform set and identity's REAL generated history
- * (./migrations, schema `identity`) at boot, like identity-service. Opt-in (needs Docker):
+ * DrizzleUsersRepository / DrizzleUsersSystemRepository / DrizzleSessionsRepository against a real
+ * PostgreSQL 18, through the real DatabaseModule, which applies the platform set and identity's REAL
+ * generated history (./migrations, schema `identity`) at boot as app_owner, like identity-service,
+ * and then runs as app_runtime (runtime pool) and app_system (system pool). Every runtime call runs
+ * as a principal; catalog checks, seeding and the "what is really there" reads use the superuser.
+ * Opt-in (needs Docker):
  *   INTEGRATION=1 bunx vitest run --project identity:int
- * Set INTEGRATION_DATABASE_URL to use an existing throwaway database instead of testcontainers.
- * The container is Citus 14.2 on PostgreSQL 18, single node (@platform/testing/postgres).
- * Rows use unique emails/search tokens, so reruns against the same database do not collide.
+ * The container is Citus 14.2 on PostgreSQL 18, single node, local execution off
+ * (startRlsTestPostgres). Rows use unique emails/search tokens, so reruns do not collide.
  */
 
 @Module({
@@ -43,7 +55,12 @@ import { type IdentitySchema, identitySchema } from './identity.schema.js';
       runMigrations: true,
     }),
   ],
-  providers: [DrizzleUsersRepository, DrizzleSessionsRepository, DrizzleTransactionRunner],
+  providers: [
+    DrizzleUsersRepository,
+    DrizzleUsersSystemRepository,
+    DrizzleSessionsRepository,
+    DrizzleTransactionRunner,
+  ],
 })
 class IdentityPersistenceModule {}
 
@@ -90,13 +107,24 @@ const register = (email: string, displayName = 'Integration User'): UserAggregat
   });
 
 describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on PostgreSQL 18', () => {
-  let pg: TestPostgres | undefined;
+  let pg: RlsTestPostgres | undefined;
   let app: INestApplicationContext | undefined;
+  /** The superuser: catalog checks, seeding and raw reads (never the app's pools). */
+  let adminClient: Sql | undefined;
   let db: DrizzleDB<IdentitySchema>;
   let usersRepo: DrizzleUsersRepository;
+  let usersSystem: DrizzleUsersSystemRepository;
   let sessionsRepo: DrizzleSessionsRepository;
   const run = generateId().slice(-12);
   const email = (name: string): string => `${name}.${run}@example.com`;
+  /** `work` as `userId` (in `tenantId`): one runtime unit of work per repository call. */
+  const as = <T>(userId: string, work: () => Promise<T>, tenantId: string | null = null) =>
+    runWithPrincipal(createPrincipal({ userId, tenantId }), work);
+  const directory = <T>(work: () => Promise<T>): Promise<T> =>
+    SystemContext.run('identity.user-directory', work);
+  /** A user inserted through the runtime repository, as itself (`users_insert`). */
+  const insertUser = (user: UserAggregate): Promise<void> =>
+    as(user.id, () => usersRepo.insert(user));
 
   /** Bookkeeping rows of the platform set (schema `app`) and of identity's set. */
   const bookkeeping = async (): Promise<{ app: number; identity: number }> => {
@@ -107,17 +135,22 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
   };
 
   beforeAll(async () => {
-    pg = await startTestPostgres();
-    vi.stubEnv('DATABASE_URL', pg.url);
+    pg = await startRlsTestPostgres();
+    vi.stubEnv('DATABASE_URL', pg.runtimeUrl);
+    vi.stubEnv('DATABASE_MIGRATION_URL', pg.migrationUrl);
+    vi.stubEnv('DATABASE_SYSTEM_URL', pg.systemUrl);
     vi.stubEnv('SERVICE_NAME', 'identity-int');
+    adminClient = postgres(pg.url, { max: 2, onnotice: () => undefined });
+    db = drizzle({ client: adminClient, schema: identitySchema, casing: 'snake_case' });
     app = await boot();
-    db = app.get(DRIZZLE);
     usersRepo = app.get(DrizzleUsersRepository);
+    usersSystem = app.get(DrizzleUsersSystemRepository);
     sessionsRepo = app.get(DrizzleSessionsRepository);
-  });
+  }, 360_000);
 
   afterAll(async () => {
     await app?.close();
+    await adminClient?.end({ timeout: 5 });
     await pg?.stop();
     vi.unstubAllEnvs();
   });
@@ -151,8 +184,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
 
   it('puts no table and no user_role type in public', async () => {
     // The platform set's pg_trgm puts functions, operators and types in public, never tables.
-    // Under this spec's role `app`, an unqualified table or enum lands in schema `app` instead
-    // (search_path "$user", public), where the first test's lists catch it.
+    // The migrator runs as `app_owner`: an unqualified table or enum would land in public.
     // Citus adds its views (citus_tables, citus_shards, …) to public: views are not tables.
     const tables = await db.execute<{ name: string }>(sql`
       select table_name as name from information_schema.tables
@@ -171,11 +203,11 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     });
   });
 
-  it('insert → findById (no hash) / findCredentialsByEmail (hash) / existsByEmail', async () => {
+  it('insert → findById (no hash, as itself) / findCredentialsByEmail (hash) / existsByEmail (system)', async () => {
     const user = register(email('ada'), 'Ada Lovelace');
-    await usersRepo.insert(user);
+    await insertUser(user);
 
-    const record = await usersRepo.findById(user.id);
+    const record = await as(user.id, () => usersRepo.findById(user.id));
     expect(record).toMatchObject({
       id: user.id,
       email: email('ada'),
@@ -184,30 +216,33 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     expect(record).not.toHaveProperty('passwordHash');
     expect(record?.createdAt).toBeInstanceOf(Date);
 
-    const credentials = await usersRepo.findCredentialsByEmail(email('ada'));
+    // pre-auth system methods: no principal needed.
+    const credentials = await usersSystem.findCredentialsByEmail(email('ada'));
     expect(credentials?.passwordHash).toMatch(/^\$argon2id\$/);
-    await expect(usersRepo.existsByEmail(email('ada'))).resolves.toBe(true);
-    await expect(usersRepo.existsByEmail(email('nobody'))).resolves.toBe(false);
-    await expect(usersRepo.findById(generateId())).resolves.toBeNull();
+    await expect(usersSystem.existsByEmail(email('ada'))).resolves.toBe(true);
+    await expect(usersSystem.existsByEmail(email('nobody'))).resolves.toBe(false);
+    await expect(as(user.id, () => usersRepo.findById(generateId()))).resolves.toBeNull();
   });
 
   it('maps the users_email_unique violation to EmailAlreadyTakenException', async () => {
-    await usersRepo.insert(register(email('dup')));
-    await expect(usersRepo.insert(register(email('dup')))).rejects.toBeInstanceOf(
+    await insertUser(register(email('dup')));
+    await expect(insertUser(register(email('dup')))).rejects.toBeInstanceOf(
       EmailAlreadyTakenException,
     );
   });
 
-  it('findByIds: one query, unknown ids omitted', async () => {
+  it('findByIds: one query, unknown ids omitted, other users hidden (row-local)', async () => {
     const [a, b] = [register(email('batch-a')), register(email('batch-b'))];
-    await usersRepo.insert(a);
-    await usersRepo.insert(b);
-    const found = await usersRepo.findByIds([a.id, generateId(), b.id]);
-    expect(found.map((row) => row.id).sort()).toEqual([a.id, b.id].sort());
-    await expect(usersRepo.findByIds([])).resolves.toEqual([]);
+    await insertUser(a);
+    await insertUser(b);
+    const found = await as(a.id, () => usersRepo.findByIds([a.id, generateId(), b.id]));
+    expect(found.map((row) => row.id)).toEqual([a.id]);
+    const foundByB = await as(b.id, () => usersRepo.findByIds([a.id, b.id]));
+    expect(foundByB.map((row) => row.id)).toEqual([b.id]);
+    await expect(as(a.id, () => usersRepo.findByIds([]))).resolves.toEqual([]);
   });
 
-  it('list: keyset pages newest first, search is a literal ILIKE', async () => {
+  it('listInTenant (system): keyset pages newest first, search is a literal ILIKE', async () => {
     const token = `kst${run}`;
     const [tenant] = await db.execute<{ id: string }>(
       sql`insert into identity.tenants (slug, name) values (${`dir-k-${run}`}, 'K') returning id`,
@@ -216,32 +251,36 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     const created: string[] = [];
     for (const name of ['one', 'two', 'three']) {
       const user = register(email(`${token}-${name}`), `Keyset ${name}`);
-      await usersRepo.insert(user);
+      await insertUser(user);
       await db.execute(
         sql`insert into identity.memberships (tenant_id, user_id, roles) values (${tenantId}, ${user.id}, '{member}')`,
       );
       created.push(user.id);
     }
-    const first = await usersRepo.list({ tenantId, limit: 2, search: token.toUpperCase() });
+    const first = await directory(() =>
+      usersSystem.listInTenant({ tenantId, limit: 2, search: token.toUpperCase() }),
+    );
     expect(first.items.map((row) => row.id)).toEqual([created[2], created[1]]);
     expect(first.nextCursor).toEqual(expect.any(String));
 
-    const second = await usersRepo.list({
-      tenantId,
-      limit: 2,
-      search: token,
-      cursor: first.nextCursor ?? '',
-    });
+    const second = await directory(() =>
+      usersSystem.listInTenant({
+        tenantId,
+        limit: 2,
+        search: token,
+        cursor: first.nextCursor ?? '',
+      }),
+    );
     expect(second.items.map((row) => row.id)).toEqual([created[0]]);
     expect(second.nextCursor).toBeNull();
 
     // `%` is escaped: it must not act as a wildcard.
     await expect(
-      usersRepo.list({ tenantId, limit: 5, search: `${token}%` }),
+      directory(() => usersSystem.listInTenant({ tenantId, limit: 5, search: `${token}%` })),
     ).resolves.toMatchObject({ items: [] });
   });
 
-  it('list and findByIdInTenant see only the members of the tenant', async () => {
+  it('listInTenant, findByIdInTenant and findByIdsInTenant (system) see only the members of the asserted tenant', async () => {
     const [tenantA] = await db.execute<{ id: string }>(
       sql`insert into identity.tenants (slug, name) values (${`dir-a-${run}`}, 'A') returning id`,
     );
@@ -250,29 +289,41 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     );
     const inA = register(email('dir-a'));
     const inB = register(email('dir-b'));
-    await usersRepo.insert(inA);
-    await usersRepo.insert(inB);
+    await insertUser(inA);
+    await insertUser(inB);
     await db.execute(sql`insert into identity.memberships (tenant_id, user_id, roles) values
       (${tenantA?.id}, ${inA.id}, '{member}'), (${tenantB?.id}, ${inB.id}, '{owner}')`);
 
-    const page = await usersRepo.list({ tenantId: tenantA?.id ?? '', limit: 50 });
+    const page = await directory(() =>
+      usersSystem.listInTenant({ tenantId: tenantA?.id ?? '', limit: 50 }),
+    );
     expect(page.items.map((user) => user.id)).toEqual([inA.id]);
-    await expect(usersRepo.findByIdInTenant(inA.id, tenantA?.id ?? '')).resolves.toMatchObject({
-      id: inA.id,
-    });
-    await expect(usersRepo.findByIdInTenant(inB.id, tenantA?.id ?? '')).resolves.toBeNull();
+    await expect(
+      directory(() => usersSystem.findByIdInTenant(inA.id, tenantA?.id ?? '')),
+    ).resolves.toMatchObject({ id: inA.id });
+    await expect(
+      directory(() => usersSystem.findByIdInTenant(inB.id, tenantA?.id ?? '')),
+    ).resolves.toBeNull();
+    const batch = await directory(() =>
+      usersSystem.findByIdsInTenant([inB.id, inA.id, generateId()], tenantA?.id ?? ''),
+    );
+    expect(batch.map((user) => user.id)).toEqual([inA.id]);
+    expect(batch[0]).not.toHaveProperty('passwordHash');
   });
 
   it('isPlatformStaff: false by default, true once flagged, false for an unknown id', async () => {
     const user = register(email('staff'));
-    await usersRepo.insert(user);
-    await expect(usersRepo.isPlatformStaff(user.id)).resolves.toBe(false);
+    await insertUser(user);
+    const self = <T>(work: () => Promise<T>) => as(user.id, work);
+    await expect(self(() => usersRepo.isPlatformStaff(user.id))).resolves.toBe(false);
     await db.execute(sql`update identity.users set is_platform_staff = true where id = ${user.id}`);
-    await expect(usersRepo.isPlatformStaff(user.id)).resolves.toBe(true);
-    await expect(usersRepo.findById(user.id)).resolves.toMatchObject({ isPlatformStaff: true });
-    await expect(usersRepo.isPlatformStaff('0190f3b2-0000-7000-8000-00000000dead')).resolves.toBe(
-      false,
-    );
+    await expect(self(() => usersRepo.isPlatformStaff(user.id))).resolves.toBe(true);
+    await expect(self(() => usersRepo.findById(user.id))).resolves.toMatchObject({
+      isPlatformStaff: true,
+    });
+    await expect(
+      self(() => usersRepo.isPlatformStaff('0190f3b2-0000-7000-8000-00000000dead')),
+    ).resolves.toBe(false);
   });
 
   it('drizzle queries are server-side prepared statements (DATABASE_PREPARE=true)', async () => {
@@ -284,11 +335,11 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
       const repo = single.get(DrizzleUsersRepository);
       const singleDb = single.get<DrizzleDB<IdentitySchema>>(DRIZZLE);
       const user = register(email('prepared'));
-      await usersRepo.insert(user);
+      await insertUser(user);
 
-      await repo.findById(user.id);
-      await repo.findByIds([user.id, generateId()]);
-      await repo.findByIds([user.id]);
+      await as(user.id, () => repo.findById(user.id));
+      await as(user.id, () => repo.findByIds([user.id, generateId()]));
+      await as(user.id, () => repo.findByIds([user.id]));
       // One connection: this sees the statements the calls above prepared on it.
       const statements = await singleDb.execute<{ statement: string }>(sql`
         select statement from pg_prepared_statements where not from_sql`);
@@ -310,6 +361,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
 
     const plan = await db.transaction(async (tx) => {
       // A handful of rows: force the planner off the sequential/PK scans it would rightly pick.
+      // users is a Citus reference table: the plan is the shard's, so the settings must reach it.
+      await tx.execute(sql`set local citus.propagate_set_commands = 'local'`);
       await tx.execute(sql`set local enable_seqscan = off`);
       await tx.execute(sql`set local enable_indexscan = off`);
       const rows = await tx.execute<{ 'QUERY PLAN': string }>(sql`
@@ -331,11 +384,13 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
 
   it('sessions: FK to users with ON DELETE CASCADE, rotation is compare-and-set', async () => {
     const user = register(email('sessions'));
-    await usersRepo.insert(user);
+    await insertUser(user);
     const now = new Date();
     const [tenant] = await db.execute<{ id: string }>(
       sql`insert into identity.tenants (slug, name) values (${`s-${run}`}, 'S') returning id`,
     );
+    const inTenant = <T>(userId: string, work: () => Promise<T>) =>
+      as(userId, work, tenant?.id ?? null);
     const session = {
       id: generateId(),
       userId: user.id,
@@ -345,7 +400,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
       ip: '127.0.0.1',
       expiresAt: new Date(now.getTime() + 60_000),
     };
-    await sessionsRepo.create(session);
+    await inTenant(user.id, () => sessionsRepo.create(session));
 
     const rotate = {
       id: session.id,
@@ -354,17 +409,28 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
       replacedById: generateId(),
       now,
     };
-    await expect(sessionsRepo.revokeForRotation(rotate)).resolves.toBe(true);
+    await expect(inTenant(user.id, () => sessionsRepo.revokeForRotation(rotate))).resolves.toBe(
+      true,
+    );
     // A second rotation of the same token loses (reuse detection hinges on this).
-    await expect(sessionsRepo.revokeForRotation(rotate)).resolves.toBe(false);
+    await expect(inTenant(user.id, () => sessionsRepo.revokeForRotation(rotate))).resolves.toBe(
+      false,
+    );
 
-    // Orphan sessions are rejected by the FK...
+    // Orphan sessions are rejected by the FK (the policy lets the orphan's own principal try)...
+    const orphan = generateId();
     await expect(
-      sessionsRepo.create({ ...session, id: generateId(), userId: generateId() }),
+      inTenant(orphan, () => sessionsRepo.create({ ...session, id: generateId(), userId: orphan })),
     ).rejects.toThrow();
     // ...and deleting the user cascades.
     await db.execute(sql`delete from identity.users where id = ${user.id}`);
-    await expect(sessionsRepo.findById(user.id, session.id)).resolves.toBeNull();
+    const [left] = await db.execute<{ n: number }>(
+      sql`select count(*)::int as n from identity.sessions where id = ${session.id}`,
+    );
+    expect(left?.n).toBe(0);
+    await expect(
+      inTenant(user.id, () => sessionsRepo.findById(user.id, session.id)),
+    ).resolves.toBeNull();
   });
 
   // Last: it replaces the context (and the repositories) the tests above share.
@@ -376,7 +442,6 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
     await first?.close();
     // Rejects, failing this test, if the restart re-ran a migration (`CREATE TYPE` again).
     app = await boot();
-    db = app.get(DRIZZLE);
     await expect(bookkeeping()).resolves.toEqual(before);
   });
 });

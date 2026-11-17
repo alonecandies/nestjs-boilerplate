@@ -1,13 +1,18 @@
-import { billingSchema } from '@domain/billing';
+import { billingSchema, StripeEventsSystemRepository } from '@domain/billing';
+import { InMemoryStripeEventsSystemRepository } from '@domain/billing/testing';
 import {
   AuditEventsRepository,
   InvitationsRepository,
+  InvitationsSystemRepository,
   identitySchema,
   MembershipsRepository,
+  MembershipsSystemRepository,
   SessionsRepository,
+  SessionsSystemRepository,
   TenantsRepository,
   TransactionRunner,
   UsersRepository,
+  UsersSystemRepository,
 } from '@domain/identity';
 import { createInMemoryIdentityPersistence } from '@domain/identity/testing';
 import { getQueueToken } from '@nestjs/bullmq';
@@ -17,7 +22,7 @@ import { Test } from '@nestjs/testing';
 import { buildFastifyOptions, configureHttpApp, setupApiDocs } from '@platform/bootstrap';
 import { CASSANDRA_CLIENT } from '@platform/cassandra';
 import { appConfig } from '@platform/config';
-import { DRIZZLE } from '@platform/database';
+import { DRIZZLE, RlsElevation } from '@platform/database';
 import { GRAPHQL_PUB_SUB } from '@platform/graphql';
 import { MAIL_QUEUE, MailProcessor } from '@platform/mailer';
 import { REDIS_CLIENT } from '@platform/redis';
@@ -51,6 +56,8 @@ export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
  * | `DRIZZLE`                                  | real drizzle over a fake postgres.js client (rows: `options.postgresRows`) |
  * | identity repositories + TransactionRunner  | in-memory (the handlers above them are real) |
  * | identity tenancy repositories                | in-memory (same store as users and sessions) |
+ * | `StripeEventsSystemRepository`             | in-memory (no app_system pool)               |
+ * | `RlsElevation`                             | `InMemoryRlsElevation` (no transaction to elevate) |
  * | `CASSANDRA_CLIENT`                         | empty result sets                            |
  * | BullMQ `mail` queue / `MailProcessor`      | recording queue / no worker                  |
  * | `CACHE_MANAGER`                            | real L1 tier only (L2 is node-redis)         |
@@ -97,6 +104,18 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     .useValue(identity.invitations)
     .overrideProvider(AuditEventsRepository)
     .useValue(identity.auditEvents)
+    // The system ports (app_system pool) read the same in-memory store.
+    .overrideProvider(UsersSystemRepository)
+    .useValue(identity.usersSystem)
+    .overrideProvider(MembershipsSystemRepository)
+    .useValue(identity.membershipsSystem)
+    .overrideProvider(InvitationsSystemRepository)
+    .useValue(identity.invitationsSystem)
+    .overrideProvider(SessionsSystemRepository)
+    .useValue(identity.sessionsSystem)
+    // The real RlsElevation needs an open runtime transaction; the inline runner opens none.
+    .overrideProvider(RlsElevation)
+    .useValue(identity.elevation)
     .overrideProvider(CASSANDRA_CLIENT)
     .useValue(cassandra.client)
     .overrideProvider(getQueueToken(MAIL_QUEUE))
@@ -111,7 +130,9 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     .overrideProvider(GRAPHQL_PUB_SUB)
     .useValue(new PubSub())
     .overrideProvider(StorageService)
-    .useValue(storage);
+    .useValue(storage)
+    .overrideProvider(StripeEventsSystemRepository)
+    .useValue(new InMemoryStripeEventsSystemRepository());
 
   const app: NestFastifyApplication = await createFastifyTestApp(
     builder,

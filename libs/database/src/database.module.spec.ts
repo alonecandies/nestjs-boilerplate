@@ -1,4 +1,11 @@
-import { type INestApplicationContext, Injectable, Module, type Provider } from '@nestjs/common';
+import {
+  type DynamicModule,
+  Global,
+  type INestApplicationContext,
+  Injectable,
+  Module,
+  type Provider,
+} from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
   InjectTransaction,
@@ -6,12 +13,20 @@ import {
   Transactional,
   TransactionHost,
 } from '@nestjs-cls/transactional';
+import {
+  createPrincipal,
+  PrincipalPermissions,
+  runWithPrincipal,
+  SystemContext,
+} from '@platform/common';
 import { AppConfigModule } from '@platform/config';
+import { sql as drizzleSql } from 'drizzle-orm';
 import { pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { ClsModule } from 'nestjs-cls';
 import postgres from 'postgres';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeSql, type FakeSql, type FakeSqlHandler } from '../test/fake-sql.js';
+import { DatabaseBootGuardError } from './boot/boot-guard.js';
 import { DatabaseModule } from './database.module.js';
 import type { DatabaseMigrationSet, DatabaseModuleOptions } from './database.types.js';
 import { DRIZZLE } from './drizzle/drizzle.constants.js';
@@ -20,6 +35,9 @@ import { DatabaseHealthIndicator } from './health/database.health.js';
 import { MIGRATIONS_TABLE } from './migrator/migrations.constants.js';
 import { runMigrations } from './migrator/run-migrations.js';
 import { platformMigrations } from './platform/platform.migrations.js';
+import { RlsElevation } from './rls/rls-elevation.service.js';
+import { SYSTEM_DATABASE, type SystemDatabase } from './system/system-database.js';
+import { defineSystemMethod } from './system/system-method.js';
 
 vi.mock('postgres', () => ({ default: vi.fn() }));
 vi.mock('./migrator/run-migrations.js', () => ({
@@ -31,6 +49,7 @@ vi.mock('./migrator/run-migrations.js', () => ({
 vi.mock('@platform/observability', () => ({
   HealthContributor: class HealthContributor {},
   getOrCreateGauge: () => undefined,
+  getOrCreateCounter: () => ({ inc: () => undefined }),
 }));
 
 const items = pgTable('items', { id: uuid().primaryKey(), name: text().notNull() });
@@ -49,6 +68,18 @@ type BootOptions = Omit<DatabaseModuleOptions<typeof schema>, 'migrations'> & {
 
 const ID_1 = '0199a1b2-0000-7000-8000-000000000001';
 const ID_2 = '0199a1b2-0000-7000-8000-000000000002';
+const USER = '0199a1b2-0000-7000-8000-0000000000a1';
+const TENANT = '0199a1b2-0000-7000-8000-0000000000b1';
+const principal = createPrincipal({ userId: USER, tenantId: TENANT, roles: ['member'] });
+/** What the adapter sends right after BEGIN (Task 5: always on, from the CLS principal). */
+const RLS_CONTEXT =
+  `SET LOCAL app.user_id = '${USER}'; SET LOCAL app.tenant_id = '${TENANT}'; ` +
+  `SET LOCAL app.elevated = 'off'`;
+/** Runtime units of work always run as a principal. */
+const asPrincipal = <T>(fn: () => T): T => runWithPrincipal(principal, fn);
+const SYSTEM_URL = 'postgres://app_system:s@localhost:5432/app';
+const sweep = defineSystemMethod('items.sweep', 'system');
+const probe = defineSystemMethod('items.probe', 'pre-auth');
 
 @Injectable()
 class ItemsService {
@@ -76,11 +107,15 @@ class ProxyUser {
 async function boot(
   options: BootOptions,
   providers: Provider[] = [],
-  { clsRoot = true }: { clsRoot?: boolean } = {},
+  {
+    clsRoot = true,
+    imports = [],
+  }: { clsRoot?: boolean; imports?: (DynamicModule | (new () => unknown))[] } = {},
 ): Promise<INestApplicationContext> {
   @Module({
     imports: [
       AppConfigModule.forRoot(),
+      ...imports,
       // Mounted by ObservabilityModule in the apps; DatabaseModule only registers its plugin.
       ...(clsRoot ? [ClsModule.forRoot({ global: true })] : []),
       DatabaseModule.forRootAsync({ migrations: [], ...options }),
@@ -105,6 +140,8 @@ describe('DatabaseModule', () => {
 
   beforeEach(() => {
     usePool();
+    // The pools here are fakes: the boot guard is off unless a case turns it on (Task 8 cases).
+    vi.stubEnv('DATABASE_BOOT_GUARD', 'off');
   });
   afterEach(async () => {
     await app?.close();
@@ -113,10 +150,15 @@ describe('DatabaseModule', () => {
   });
 
   describe('forRootAsync() definition', () => {
-    it('is global and exports DRIZZLE + the health contributor', () => {
+    it('is global and exports DRIZZLE, the health contributor, RlsElevation and SYSTEM_DATABASE', () => {
       const mod = DatabaseModule.forRootAsync({ schema, migrations: [] });
       expect(mod).toMatchObject({ module: DatabaseModule, global: true });
-      expect(mod.exports).toEqual([DRIZZLE, DatabaseHealthIndicator]);
+      expect(mod.exports).toEqual([
+        DRIZZLE,
+        DatabaseHealthIndicator,
+        RlsElevation,
+        SYSTEM_DATABASE,
+      ]);
     });
 
     it('registers the transactional CLS plugin unless disabled', () => {
@@ -163,9 +205,10 @@ describe('DatabaseModule', () => {
     });
 
     it('runs the platform set, then the given sets, BEFORE opening the pool', async () => {
+      vi.stubEnv('DATABASE_MIGRATION_URL', 'postgres://app_owner:o@localhost:5432/app');
       app = await boot({ schema, runMigrations: true, migrations: [itemsMigrations] });
       expect(runMigrations).toHaveBeenCalledWith(
-        'postgres://app:app@localhost:5432/app',
+        'postgres://app_owner:o@localhost:5432/app',
         expect.objectContaining({
           applicationName: 'app',
           migrations: [platformMigrations, itemsMigrations],
@@ -176,8 +219,17 @@ describe('DatabaseModule', () => {
       expect(migrateOrder).toBeLessThan(poolOrder ?? 0);
     });
 
+    it('refuses to migrate without DATABASE_MIGRATION_URL, before opening any connection', async () => {
+      // Never a fallback to DATABASE_URL (the runtime role cannot and must not run DDL).
+      vi.stubEnv('DATABASE_MIGRATION_URL', '');
+      await expect(boot({ schema, runMigrations: true })).rejects.toThrow(/DATABASE_MIGRATION_URL/);
+      expect(runMigrations).not.toHaveBeenCalled();
+      expect(postgres).not.toHaveBeenCalled();
+    });
+
     it('honours DATABASE_RUN_MIGRATIONS, and the option wins over it', async () => {
       vi.stubEnv('DATABASE_RUN_MIGRATIONS', 'true');
+      vi.stubEnv('DATABASE_MIGRATION_URL', 'postgres://app_owner:o@localhost:5432/app');
       vi.stubEnv('SERVICE_NAME', 'orders-service');
       app = await boot({ schema });
       // No domain sets: the platform set still runs.
@@ -223,13 +275,210 @@ describe('DatabaseModule', () => {
     });
   });
 
+  describe('system pool (B3 Task 7)', () => {
+    let system: FakeSql;
+    /** The runtime pool first (DRIZZLE), then the system pool (SYSTEM_DATABASE). */
+    const useSystemPool = (handler?: FakeSqlHandler): void => {
+      system = createFakeSql(handler);
+      vi.mocked(postgres).mockReset();
+      vi.mocked(postgres)
+        .mockReturnValueOnce(fake as never)
+        .mockReturnValueOnce(system as never);
+    };
+
+    it('opens no system pool without DATABASE_SYSTEM_URL; every run is SYSTEM_DATABASE_UNAVAILABLE', async () => {
+      app = await boot({ schema });
+      expect(postgres).toHaveBeenCalledTimes(1);
+      const database = app.get<SystemDatabase>(SYSTEM_DATABASE);
+      const work = vi.fn(async () => 1);
+      await expect(database.run(probe, work)).rejects.toMatchObject({
+        code: 'SYSTEM_DATABASE_UNAVAILABLE',
+      });
+      await expect(
+        SystemContext.run('items.nightly', () => database.run(sweep, work)),
+      ).rejects.toMatchObject({ code: 'SYSTEM_DATABASE_UNAVAILABLE' });
+      expect(work).not.toHaveBeenCalled();
+      // Never a fallback to the runtime pool.
+      expect(fake.queries).toEqual(['select 1']);
+    });
+
+    it('opens a second pool on DATABASE_SYSTEM_URL (systemPoolMax, :system name) after the runtime pool', async () => {
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      vi.stubEnv('DATABASE_SYSTEM_POOL_MAX', '3');
+      useSystemPool();
+      app = await boot({ schema, postgres: { max: 50 } });
+      expect(postgres).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(postgres).mock.calls[0]?.[0]).toBe('postgres://app:app@localhost:5432/app');
+      expect(postgres).toHaveBeenNthCalledWith(
+        2,
+        SYSTEM_URL,
+        expect.objectContaining({
+          // The overrides apply (TLS, debug), but never lift the system pool past its own max.
+          max: 3,
+          connection: expect.objectContaining({ application_name: 'app:system' }) as unknown,
+        }),
+      );
+      expect(fake.queries).toEqual(['select 1']);
+      expect(system.queries).toEqual(['select 1']);
+    });
+
+    it('runs work on the system pool, never on the runtime pool or its open transaction', async () => {
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      useSystemPool();
+      app = await boot({ schema }, [ItemsService]);
+      const database = app.get<SystemDatabase<typeof schema>>(SYSTEM_DATABASE);
+      const txHost = app.get<TransactionHost<Adapter>>(TransactionHost);
+      await asPrincipal(() =>
+        txHost.withTransaction(async () => {
+          await txHost.tx.insert(items).values({ id: ID_1, name: 'a' });
+          await database.run(probe, (db) => db.execute(drizzleSql`select 7`));
+        }),
+      );
+      await SystemContext.run('items.nightly', () => database.run(sweep, (db) => db.delete(items)));
+      expect(fake.queries.slice(1)).toEqual([
+        'begin',
+        RLS_CONTEXT,
+        'insert into "items" ("id", "name") values ($1, $2)',
+        'commit',
+      ]);
+      // No context statement and no BEGIN on the system pool: it is not a runtime transaction.
+      expect(system.queries).toEqual(['select 1', 'select 7', 'delete from "items"']);
+      expect(system.begin).not.toHaveBeenCalled();
+    });
+
+    it('refuses a system-scope method outside SystemContext, sending nothing', async () => {
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      useSystemPool();
+      app = await boot({ schema });
+      const database = app.get<SystemDatabase<typeof schema>>(SYSTEM_DATABASE);
+      await expect(
+        asPrincipal(() => database.run(sweep, (db) => db.delete(items))),
+      ).rejects.toMatchObject({ code: 'SYSTEM_CONTEXT_REQUIRED' });
+      expect(system.queries).toEqual(['select 1']);
+    });
+
+    it('closes both pools on shutdown', async () => {
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      useSystemPool();
+      app = await boot({ schema });
+      await app.close();
+      app = undefined;
+      expect(fake.end).toHaveBeenCalledWith({ timeout: 5 });
+      expect(system.end).toHaveBeenCalledWith({ timeout: 5 });
+    });
+
+    it('fails boot when the system pool is unreachable, releasing both pools', async () => {
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      useSystemPool(() => {
+        throw Object.assign(new Error('password authentication failed'), { code: '28P01' });
+      });
+      await expect(boot({ schema })).rejects.toThrow(/password authentication failed/);
+      expect(system.end).toHaveBeenCalledWith({ timeout: 0 });
+      expect(fake.end).toHaveBeenCalledWith({ timeout: 0 });
+    });
+  });
+
+  describe('boot guard (B3 Task 8)', () => {
+    let system: FakeSql;
+    /** Good answers per check, keyed by a fragment of its statement (`boot-guard.spec.ts`). */
+    const answer =
+      (role: 'runtime' | 'system', overrides: Record<string, unknown[]> = {}): FakeSqlHandler =>
+      (query) => {
+        const good: Record<string, unknown[]> = {
+          rolsuper: [{ flag: false }],
+          rolbypassrls: [{ flag: role === 'system' }],
+          pg_has_role: [],
+          relforcerowsecurity: [],
+          has_table_privilege: [],
+          citus_enabled: [{ citus: true, setting: 'local' }],
+          'current_user::text as name': [{ name: `app_${role}` }],
+          'select 1': [{ '?column?': 1 }],
+        };
+        const answers = { ...good, ...overrides };
+        const key = Object.keys(answers).find((fragment) => query.includes(fragment));
+        if (key === undefined) throw new Error(`unexpected statement: ${query}`);
+        return answers[key] ?? [];
+      };
+    const usePools = (
+      runtime: FakeSqlHandler,
+      systemHandler: FakeSqlHandler = answer('system'),
+    ): void => {
+      fake = createFakeSql(runtime);
+      system = createFakeSql(systemHandler);
+      vi.mocked(postgres).mockReset();
+      vi.mocked(postgres)
+        .mockReturnValueOnce(fake as never)
+        .mockReturnValueOnce(system as never);
+    };
+
+    it('enforce: good answers boot; the guard runs after both pools are warm', async () => {
+      vi.stubEnv('DATABASE_BOOT_GUARD', 'enforce');
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      usePools(answer('runtime'));
+      app = await boot({ schema, migrations: [itemsMigrations] });
+      expect(fake.queries[0]).toBe('select 1');
+      expect(system.queries[0]).toBe('select 1');
+      expect(fake.queries.length).toBeGreaterThan(1);
+      expect(system.queries.length).toBeGreaterThan(1);
+      // The domain set's schema is inspected next to the platform set's.
+      const owned = fake.unsafe.mock.calls.find(([query]) => query.includes('pg_has_role'));
+      expect(owned?.[1]).toEqual([['app', 'items']]);
+      expect(fake.end).not.toHaveBeenCalled();
+      expect(system.end).not.toHaveBeenCalled();
+    });
+
+    it('enforce: a finding refuses boot with DatabaseBootGuardError and ends both pools', async () => {
+      vi.stubEnv('DATABASE_BOOT_GUARD', 'enforce');
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      usePools(answer('runtime', { relforcerowsecurity: [{ name: 'items.items' }] }));
+      const error = await boot({ schema, migrations: [itemsMigrations] }).catch(
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(DatabaseBootGuardError);
+      expect((error as DatabaseBootGuardError).findings).toEqual([
+        { check: 'runtime.rls-forced', detail: expect.stringContaining('items.items') as unknown },
+      ]);
+      expect(fake.end).toHaveBeenCalledWith({ timeout: 0 });
+      expect(system.end).toHaveBeenCalledWith({ timeout: 0 });
+    });
+
+    it('enforce: a check that errors refuses boot (fails closed), also without a system pool', async () => {
+      vi.stubEnv('DATABASE_BOOT_GUARD', 'enforce');
+      const good = answer('runtime');
+      usePool((query, values) => {
+        if (query.includes('rolsuper')) throw new Error('permission denied for table pg_roles');
+        return good(query, values);
+      });
+      await expect(boot({ schema })).rejects.toBeInstanceOf(DatabaseBootGuardError);
+      expect(fake.end).toHaveBeenCalledWith({ timeout: 0 });
+    });
+
+    it('warn: findings are logged and boot goes on', async () => {
+      vi.stubEnv('DATABASE_BOOT_GUARD', 'warn');
+      usePool(answer('runtime', { rolsuper: [{ flag: true }] }));
+      app = await boot({ schema });
+      expect(fake.queries.some((query) => query.includes('rolsuper'))).toBe(true);
+      expect(fake.end).not.toHaveBeenCalled();
+    });
+
+    it('off: no guard statement on either pool', async () => {
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      usePools(answer('runtime'));
+      app = await boot({ schema });
+      expect(fake.queries).toEqual(['select 1']);
+      expect(system.queries).toEqual(['select 1']);
+    });
+  });
+
   describe('transactions (ClsModule.registerPlugins wiring)', () => {
     // Also guards the empty-config fix: no bare `set transaction` between begin and the inserts.
     it('@Transactional() runs both repository calls in ONE committed transaction', async () => {
       app = await boot({ schema }, [ItemsService]);
-      await app.get(ItemsService).createPair();
+      const service = app.get(ItemsService);
+      await asPrincipal(() => service.createPair());
       expect(fake.queries.slice(1)).toEqual([
         'begin',
+        RLS_CONTEXT,
         'insert into "items" ("id", "name") values ($1, $2)',
         'insert into "items" ("id", "name") values ($1, $2)',
         'commit',
@@ -238,15 +487,17 @@ describe('DatabaseModule', () => {
 
     it('rolls back when the method throws', async () => {
       app = await boot({ schema }, [ItemsService]);
-      await expect(app.get(ItemsService).createPair(true)).rejects.toThrow('boom');
+      const service = app.get(ItemsService);
+      await expect(asPrincipal(() => service.createPair(true))).rejects.toThrow('boom');
       expect(fake.queries.at(-1)).toBe('rollback');
       expect(fake.queries).not.toContain('commit');
     });
 
     it('works without ClsModule.forRoot (scripts / workers without ObservabilityModule)', async () => {
       app = await boot({ schema }, [ItemsService], { clsRoot: false });
-      await app.get(ItemsService).createPair();
-      expect(fake.queries.at(1)).toBe('begin');
+      const service = app.get(ItemsService);
+      await asPrincipal(() => service.createPair());
+      expect(fake.queries.slice(1, 3)).toEqual(['begin', RLS_CONTEXT]);
       expect(fake.queries.at(-1)).toBe('commit');
     });
 
@@ -262,11 +513,55 @@ describe('DatabaseModule', () => {
         { schema, transactional: { defaultTxOptions: { isolationLevel: 'serializable' } } },
         [ItemsService],
       );
-      await app.get(ItemsService).createPair();
-      expect(fake.queries.slice(1, 3)).toEqual([
+      const service = app.get(ItemsService);
+      await asPrincipal(() => service.createPair());
+      expect(fake.queries.slice(1, 4)).toEqual([
         'begin',
         'set transaction isolation level serializable',
+        RLS_CONTEXT,
       ]);
+    });
+
+    it('provides RlsElevation over the globally bound PrincipalPermissions (B3 Task 6)', async () => {
+      @Global()
+      @Module({
+        providers: [
+          {
+            provide: PrincipalPermissions,
+            useValue: { of: () => ['items:read-all'] } satisfies PrincipalPermissions,
+          },
+        ],
+        exports: [PrincipalPermissions],
+      })
+      class PermissionsModule {}
+      app = await boot({ schema }, [ItemsService], { imports: [PermissionsModule] });
+      const txHost = app.get<TransactionHost<Adapter>>(TransactionHost);
+      const elevation = app.get(RlsElevation);
+      await asPrincipal(() => txHost.withTransaction(() => elevation.elevate('items:read-all')));
+      expect(fake.queries.slice(1)).toEqual([
+        'begin',
+        RLS_CONTEXT,
+        "SET LOCAL app.elevated = 'on'",
+        'commit',
+      ]);
+    });
+
+    it('still boots without PrincipalPermissions; elevate then refuses and sends nothing', async () => {
+      app = await boot({ schema }, [ItemsService]);
+      const txHost = app.get<TransactionHost<Adapter>>(TransactionHost);
+      const elevation = app.get(RlsElevation);
+      await expect(
+        asPrincipal(() => txHost.withTransaction(() => elevation.elevate('items:read-all'))),
+      ).rejects.toThrow(/PrincipalPermissions is not bound/);
+      expect(fake.queries.slice(1)).toEqual(['begin', RLS_CONTEXT, 'rollback']);
+    });
+
+    it('refuses to open a transaction without a principal (RLS_NO_PRINCIPAL, no BEGIN)', async () => {
+      app = await boot({ schema }, [ItemsService]);
+      await expect(app.get(ItemsService).createPair()).rejects.toMatchObject({
+        code: 'RLS_NO_PRINCIPAL',
+      });
+      expect(fake.begin).not.toHaveBeenCalled();
     });
 
     it('provides @InjectTransaction() only when enableTransactionProxy is set', async () => {

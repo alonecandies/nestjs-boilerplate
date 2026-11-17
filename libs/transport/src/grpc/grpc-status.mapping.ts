@@ -17,6 +17,7 @@ import {
   pickDefined,
   ServiceUnavailableException,
   toValidationIssues,
+  translateInfrastructureError,
   UnauthenticatedException,
   type ValidationIssue,
 } from '@platform/common';
@@ -389,7 +390,9 @@ function fromRpcException(exception: RpcException): GrpcErrorResponse {
 /**
  * Converts anything thrown by a gRPC handler, pipe, guard or interceptor into the error object
  * grpc-js turns into a status:
- * - `DomainException` → mapped status + message + `x-error-code` / `x-error-details-bin` trailers.
+ * - `DomainException` → mapped status + message + `x-error-code` / `x-error-details-bin` trailers;
+ *   `@platform/database` errors first become the `DomainException` they stand for
+ *   (`translateInfrastructureError`: RLS_NO_PRINCIPAL → UNAUTHENTICATED, …).
  * - Nest `GrpcException` / `RpcException({ code })` → pass through.
  * - `HttpException` (shared ValidationPipe, guards) → mapped status. Validation `errors` become
  *   issues, and 5xx messages are hidden.
@@ -397,10 +400,11 @@ function fromRpcException(exception: RpcException): GrpcErrorResponse {
  * - anything else → `INTERNAL` with a generic message, unless `exposeInternal` is set.
  */
 export function exceptionToGrpcError(
-  exception: unknown,
+  raw: unknown,
   options: GrpcErrorMappingOptions = {},
 ): GrpcErrorResponse {
   const exposeInternal = options.exposeInternal ?? false;
+  const exception = translateInfrastructureError(raw) ?? raw;
   if (exception instanceof DomainException) {
     return withTrailers(
       domainExceptionToGrpcStatus(exception),

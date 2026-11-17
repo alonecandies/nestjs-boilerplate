@@ -15,8 +15,9 @@ export interface ExecutedQuery {
  * The `DRIZZLE` provider for app e2e tests: a REAL drizzle instance (the repositories build
  * prepared statements in their constructors, and drizzle maps rows to the schema) over a fake
  * postgres.js `Sql` client — the network edge. Covers what the app touches: `unsafe(query, params)`
- * (+ `.values()`) for drizzle, the tagged template for `DatabaseHealthIndicator`'s `select 1`, and
- * `end()` for the pool shutdown hook.
+ * (+ `.values()`) for drizzle, `begin(fn)` for the repositories' units of work (the child is the
+ * same fake; the RLS context statement is recorded in `executed` like any other), the tagged
+ * template for `DatabaseHealthIndicator`'s `select 1`, and `end()` for the pool shutdown hook.
  */
 export function createFakePostgres<TSchema extends Record<string, unknown>>(
   schema: TSchema,
@@ -30,6 +31,10 @@ export function createFakePostgres<TSchema extends Record<string, unknown>>(
     return Object.assign(pending, {
       values: async (): Promise<unknown[][]> => (await pending).map((row) => Object.values(row)),
       cancel: (): void => undefined,
+      // postgres.js simple protocol: the RLS context statement on BEGIN (`unsafe(sql).simple()`).
+      simple() {
+        return this;
+      },
     });
   };
   const end = vi.fn(async () => undefined);
@@ -37,6 +42,7 @@ export function createFakePostgres<TSchema extends Record<string, unknown>>(
     (strings: TemplateStringsArray, ...values: unknown[]) => run(strings.join('?'), values),
     {
       unsafe: (query: string, params: unknown[] = []) => run(query, params),
+      begin: (fn: (tx: unknown) => Promise<unknown>): Promise<unknown> => fn(client),
       options: { parsers: {}, serializers: {} },
       end,
     },

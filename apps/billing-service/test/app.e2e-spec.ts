@@ -1,4 +1,10 @@
-import { billingSchema, PaymentStatus, payments } from '@domain/billing';
+import {
+  billingSchema,
+  PaymentStatus,
+  payments,
+  StripeEventsSystemRepository,
+} from '@domain/billing';
+import { InMemoryStripeEventsSystemRepository } from '@domain/billing/testing';
 import {
   BILLING_GRPC_PACKAGE,
   type BillingServiceClient,
@@ -8,7 +14,12 @@ import { Metadata, type ServiceError, status } from '@grpc/grpc-js';
 import { ClientGrpcProxy } from '@nestjs/microservices';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
-import { DomainValidationException, ExternalServiceException, generateId } from '@platform/common';
+import {
+  DomainValidationException,
+  ExternalServiceException,
+  generateId,
+  PLATFORM_TENANT_ID,
+} from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
 import { DRIZZLE } from '@platform/database';
 import { MetricsListener } from '@platform/observability';
@@ -27,7 +38,7 @@ import { lastValueFrom, type Observable } from 'rxjs';
 import Stripe from 'stripe';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
-import { createFakePostgres, type FakeRow } from './support/fake-postgres.js';
+import { createFakePostgres, type ExecutedQuery, type FakeRow } from './support/fake-postgres.js';
 import { freePort } from './support/free-port.js';
 import { startServiceTestApp } from './support/service-test-app.js';
 
@@ -35,8 +46,10 @@ import { startServiceTestApp } from './support/service-test-app.js';
  * billing-service end to end, no Docker: the REAL AppModule (CQRS handlers, Drizzle repositories,
  * the transactional CLS plugin, StripeModule with real signature verification, observability,
  * common enhancers) with fakes only at the network edges — a drizzle instance over a fake
- * postgres.js client, an in-memory Redis and a recording Kafka producer. Stripe itself is never
- * called. gRPC is real: loopback server + gateway-style ClientGrpcProxy.
+ * postgres.js client, an in-memory system repository (no app_system pool), an in-memory Redis and
+ * a recording Kafka producer. Stripe itself is never called. gRPC is real: loopback server +
+ * gateway-style ClientGrpcProxy. Every repository call is a unit of work: BEGIN, the caller's RLS
+ * context (`SET LOCAL …`), the statement, COMMIT.
  */
 
 const WEBHOOK_SECRET = 'whsec_billing_service_e2e';
@@ -109,6 +122,13 @@ const postgres = createFakePostgres(billingSchema, (sql, params) => {
   return [];
 });
 
+/** The last statement a repository sent (not BEGIN / COMMIT / the RLS context). */
+const lastStatement = (): ExecutedQuery | undefined =>
+  postgres.executed.findLast(
+    ({ sql }) =>
+      sql !== 'BEGIN' && sql !== 'COMMIT' && sql !== 'ROLLBACK' && !sql.startsWith('SET LOCAL'),
+  );
+
 /** A webhook exactly as Stripe sends it: raw JSON bytes + `Stripe-Signature` over them. */
 function signedWebhook(type: string, id = `evt_${generateId().replaceAll('-', '')}`) {
   const json = JSON.stringify({
@@ -134,6 +154,8 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
   let client: ClientGrpcProxy;
   let billing: BillingServiceClient;
   const breakers = new GrpcCircuitBreakers();
+  /** The app_system side of the Stripe events ledger: platform webhooks land here, not in SQL. */
+  const systemEvents = new InMemoryStripeEventsSystemRepository();
 
   /** The caller metadata the gateway adapter derives from its CLS principal (B2-23). */
   const callerOf = (userId: string, tenantId = TENANT_ID) =>
@@ -165,7 +187,9 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
       .overrideProvider(REDIS_CLIENT)
       .useValue(new InMemoryRedis().asRedis())
       .overrideProvider(KafkaProducer)
-      .useValue(new FakeKafkaProducer({ source: 'billing-service' }));
+      .useValue(new FakeKafkaProducer({ source: 'billing-service' }))
+      .overrideProvider(StripeEventsSystemRepository)
+      .useValue(systemEvents);
     app = await startServiceTestApp(builder, { grpc: [BILLING_GRPC_PACKAGE] });
 
     client = new ClientGrpcProxy(
@@ -233,6 +257,7 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
     });
 
     it('ListPayments runs the real query handler + repository; int64 → string, Timestamp → Date', async () => {
+      const before = postgres.executed.length;
       const list: PaymentList = await call(
         billing.listPayments({ tenantId: TENANT_ID, userId: USER_ID, limit: 5 }, callerOf(USER_ID)),
         'BillingService.ListPayments',
@@ -255,8 +280,15 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
       expect(paid?.createdAt).toBeInstanceOf(Date);
       expect(pending).toMatchObject({ id: PENDING_ID, status: 'pending', amountTotal: '0' });
       // LIMIT = page size + 1 look-ahead row; both rows fit, so this is the last page.
-      expect(postgres.executed.at(-1)).toMatchObject({ params: [TENANT_ID, USER_ID, 6] });
+      expect(lastStatement()).toMatchObject({ params: [TENANT_ID, USER_ID, 6] });
       expect(list.nextCursor).toBeUndefined();
+      // One unit of work, opened as the caller (the principal from the gRPC metadata).
+      expect(postgres.executed.slice(before).map((query) => query.sql)).toEqual([
+        'BEGIN',
+        `SET LOCAL app.user_id = '${USER_ID}'; SET LOCAL app.tenant_id = '${TENANT_ID}'; SET LOCAL app.elevated = 'off'`,
+        expect.stringContaining('from "billing"."payments" where'),
+        'COMMIT',
+      ]);
     });
 
     it('ListPayments pages with a keyset cursor (next_cursor out, cursor in → id < $cursor)', async () => {
@@ -276,7 +308,7 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
       );
       // The fake answers only the first-page statement: the resumed query is a different one.
       expect(second.items).toEqual([]);
-      const resumed = postgres.executed.at(-1);
+      const resumed = lastStatement();
       expect(resumed?.sql).toContain('"billing"."payments"."id" < $3');
       expect(resumed?.params).toEqual([TENANT_ID, USER_ID, PAID_ID, 2]);
     });
@@ -351,14 +383,16 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
         call(billing.handleStripeWebhook(request), 'BillingService.HandleStripeWebhook'),
       ).resolves.toMatchObject({ eventId: webhook.id, duplicate: true });
 
-      expect(postgres.executed.slice(before).map((query) => query.sql)).toEqual([
-        'BEGIN',
-        expect.stringContaining('insert into "billing"."stripe_events"'),
-        'COMMIT',
-        'BEGIN',
-        expect.stringContaining('insert into "billing"."stripe_events"'),
-        'COMMIT',
+      // A customer event carries no owner: a platform event, recorded once through the system
+      // method (B3 Task 16); no runtime transaction, so no SQL on the app_runtime pool.
+      expect(systemEvents.events.filter((event) => event.id === webhook.id)).toEqual([
+        expect.objectContaining({
+          tenantId: PLATFORM_TENANT_ID,
+          userId: null,
+          type: 'customer.created',
+        }),
       ]);
+      expect(postgres.executed).toHaveLength(before);
     });
 
     it('HandleStripeWebhook with a forged signature → INVALID_ARGUMENT / INVALID_WEBHOOK_SIGNATURE, no SQL', async () => {

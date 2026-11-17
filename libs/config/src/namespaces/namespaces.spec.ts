@@ -65,6 +65,27 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       poolMax: 20,
       prepare: true,
       runMigrations: false,
+      systemUrl: undefined,
+      migrationUrl: undefined,
+      systemPoolMax: 5,
+      pooler: 'none',
+      bootGuard: 'warn',
+    });
+    expect(databaseConfig.parse({ NODE_ENV: 'test' }).bootGuard).toBe('warn');
+    expect(
+      databaseConfig.parse({
+        DATABASE_SYSTEM_URL: 'postgres://app_system:s@pgbouncer:6432/app',
+        DATABASE_MIGRATION_URL: 'postgresql://app_owner:o@postgres:5432/app',
+        DATABASE_SYSTEM_POOL_MAX: '1',
+        DATABASE_POOLER: 'pgbouncer',
+        DATABASE_BOOT_GUARD: 'off',
+      }),
+    ).toMatchObject({
+      systemUrl: 'postgres://app_system:s@pgbouncer:6432/app',
+      migrationUrl: 'postgresql://app_owner:o@postgres:5432/app',
+      systemPoolMax: 1,
+      pooler: 'pgbouncer',
+      bootGuard: 'off',
     });
     expect(cassandraConfig.parse({})).toMatchObject({
       contactPoints: ['localhost'],
@@ -243,6 +264,12 @@ describe('config namespaces — invalid values produce errors naming the env var
     [appConfig, { NODE_ENV: 'staging' }, 'NODE_ENV'],
     [databaseConfig, { DATABASE_URL: 'mysql://x' }, 'DATABASE_URL'],
     [databaseConfig, { DATABASE_POOL_MAX: '0' }, 'DATABASE_POOL_MAX'],
+    [databaseConfig, { DATABASE_SYSTEM_POOL_MAX: '6' }, 'DATABASE_SYSTEM_POOL_MAX'],
+    [databaseConfig, { DATABASE_SYSTEM_POOL_MAX: '0' }, 'DATABASE_SYSTEM_POOL_MAX'],
+    [databaseConfig, { DATABASE_SYSTEM_URL: 'mysql://x' }, 'DATABASE_SYSTEM_URL'],
+    [databaseConfig, { DATABASE_MIGRATION_URL: 'not a url' }, 'DATABASE_MIGRATION_URL'],
+    [databaseConfig, { DATABASE_POOLER: 'pgpool' }, 'DATABASE_POOLER'],
+    [databaseConfig, { DATABASE_BOOT_GUARD: 'strict' }, 'DATABASE_BOOT_GUARD'],
     [redisConfig, { REDIS_URL: 'localhost:6379' }, 'REDIS_URL'],
     [cassandraConfig, { CASSANDRA_KEYSPACE: 'app; DROP KEYSPACE x' }, 'CASSANDRA_KEYSPACE'],
     [cassandraConfig, { CASSANDRA_USERNAME: 'only-user' }, 'CASSANDRA_PASSWORD'],

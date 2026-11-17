@@ -18,8 +18,9 @@ export interface ListPaymentsCriteria {
 }
 
 /**
- * Payment persistence (implemented by `DrizzlePaymentsRepository`). Methods join the active
- * `@Transactional()` transaction when there is one.
+ * Payment persistence (implemented by `DrizzlePaymentsRepository`, under RLS). Each method joins
+ * the active `@Transactional()` transaction when there is one, and otherwise opens its own; either
+ * way it runs as the CLS principal, and without one it is refused (`RLS_NO_PRINCIPAL`).
  */
 export abstract class PaymentsRepository {
   /**

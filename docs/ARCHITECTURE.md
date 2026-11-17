@@ -59,7 +59,7 @@ Three top-level folders, one dependency direction: `apps/*` (`@app/*`, the deplo
 | `libs/graphql`                                                                               | Apollo on Fastify, graphql-ws, DataLoader registry, error formatting, Redis PubSub                                                                                                                                                                                                                    |
 | `libs/observability`                                                                         | pino logger (apps add their domains' redaction paths), nestjs-cls request context, Prometheus metrics, terminus health, OpenTelemetry, `@nestjs/observe`                                                                                                                                              |
 | `libs/config`                                                                                | The platform env namespaces, validated per namespace; domains define their own with the same helpers (see [CONFIGURATION.md](CONFIGURATION.md))                                                                                                                                                       |
-| `libs/database`                                                                              | Drizzle + postgres.js; the platform migration set, run before the domain sets the app passes, under one advisory lock; keyset pagination                                                                                                                                                              |
+| `libs/database`                                                                              | Drizzle + postgres.js; the platform migration set, run before the domain sets the app passes, under one advisory lock; keyset pagination; the RLS context on `BEGIN`, `inUnitOfWork`, elevation, the `app_system` pool (`SystemDatabase`) and the boot guard                                          |
 | `libs/mailer`                                                                                | BullMQ mail queue and worker; renders the template folders the app registers, with shared layout partials                                                                                                                                                                                             |
 | `libs/cassandra`, `libs/redis`, `libs/storage`, `libs/bootstrap`, `libs/testing`             | Platform adapters and app bootstrap helpers. Each has its own `README.md`                                                                                                                                                                                                                             |
 
@@ -326,6 +326,17 @@ Notes:
   caching those reads behind a per-tenant membership marker (`tenantCacheKey('identity', tid, 'member', uid)`,
   deleted on member remove and leave) and accept that a member removed some other way stays readable for up to 30 s;
   see the identity README.
+- **Database principal (B3).** Postgres enforces the principal too. Every runtime query runs as `app_runtime` (forced
+  RLS) in a unit of work whose `BEGIN` is followed by `SET LOCAL app.user_id/app.tenant_id/app.elevated` from the CLS
+  principal; the adapter refuses to `BEGIN` without one. The principal is final before a unit of work opens
+  (`runWithPrincipal` wraps the unit of work, never the reverse), so the flows that used to open a transaction first
+  (login, register, refresh, switch tenant, invitation acceptance, the Stripe webhook) now settle their principal, with
+  ids generated up front, then open one transaction. Three kinds of access leave the principal's rows:
+  `elevate(permission)` (a TypeScript permission check, then the tenant's rows for the rest of the transaction),
+  _justified_ elevation (`*.elevated.ts` services, three reasons), and the `app_system` pool (`*.system-repository.ts`
+  files, the named methods of the pinned lists, eleven at B3; `pre-auth` ones run before a principal exists, `system` ones inside
+  `SystemContext.run(reason, …)`). Co-member and cross-tenant reads are system reads that filter in their own SQL: the
+  application, not the database, verifies them ([SECURITY.md](SECURITY.md#row-level-security)).
 - **WebSocket session lifetime.** A socket is disconnected (after an `exception` with `TOKEN_EXPIRED`) when its access token expires, and every 30 s each replica disconnects sockets whose token was revoked (`TOKEN_REVOKED`).
 
 ```mermaid
@@ -585,12 +596,12 @@ Other structural decisions:
 
 Stated honestly, none of these are done:
 
-| Follow-up                                                                      | Today                                                                                                                                                                                                                                                 |
-| ------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Transactional outbox**                                                       | Integration events are published after commit. A crash or broker outage between commit and publish loses the event (the record stays). An outbox row written in the same transaction plus a relay would make delivery at-least-once                   |
-| **Per-domain `@domain/<x>/api` subpath exports**                               | The gateway imports `@domain/identity`, `@domain/notifications`, `@domain/billing` whole, so its image carries core code it never runs. Subpath exports for the API surface would slim it                                                             |
-| **Separate metrics listener**                                                  | `/metrics` is served on the application HTTP port                                                                                                                                                                                                     |
-| **Real-database integration specs for billing and notifications repositories** | Identity has a Postgres `*.int-spec.ts` (`users.repository.int-spec.ts`), and billing's migration history has one (`billing.migrations.int-spec.ts`); the billing (Drizzle) and notifications (Cassandra) repositories are covered by unit specs only |
+| Follow-up                                                              | Today                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Transactional outbox**                                               | Integration events are published after commit. A crash or broker outage between commit and publish loses the event (the record stays). An outbox row written in the same transaction plus a relay would make delivery at-least-once                              |
+| **Per-domain `@domain/<x>/api` subpath exports**                       | The gateway imports `@domain/identity`, `@domain/notifications`, `@domain/billing` whole, so its image carries core code it never runs. Subpath exports for the API surface would slim it                                                                        |
+| **Separate metrics listener**                                          | `/metrics` is served on the application HTTP port                                                                                                                                                                                                                |
+| **Real-database integration specs for the notifications repositories** | Identity and billing run int specs on real Citus with the three roles (repositories, every policy, the flows, cross-domain journeys in `apps/monolith/test/rls-journeys.int-spec.ts`); the notifications (Cassandra) repositories are covered by unit specs only |
 
 ## See also
 

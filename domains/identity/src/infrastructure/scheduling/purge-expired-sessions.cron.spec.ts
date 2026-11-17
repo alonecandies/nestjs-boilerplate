@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import type { CommandBus } from '@nestjs/cqrs';
 import { CronExpression } from '@nestjs/schedule';
+import { SystemContext } from '@platform/common';
 import { redisConfig } from '@platform/config';
 import { DistributedLockService, type LockBackend, RedisKeyService } from '@platform/redis';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -45,6 +46,18 @@ describe('PurgeExpiredSessionsCron', () => {
       expect.any(Function),
     );
     expect(commandBus.execute).toHaveBeenCalledWith(expect.any(PurgeExpiredSessionsCommand));
+  });
+
+  it("runs the purge in SystemContext('identity.purge-expired-sessions') and no principal", async () => {
+    const seen: unknown[] = [];
+    commandBus.execute.mockImplementation(async () => {
+      seen.push(SystemContext.current(), SystemContext.isActive());
+      return 1;
+    });
+    vi.spyOn(Logger.prototype, 'log').mockImplementation(() => undefined);
+    await cron.run();
+    expect(seen).toEqual([{ reason: 'identity.purge-expired-sessions' }, true]);
+    expect(SystemContext.isActive()).toBe(false);
   });
 
   it('skips the run when another replica holds the lock', async () => {

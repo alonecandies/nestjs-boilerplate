@@ -34,6 +34,60 @@ describe('buildPostgresOptions', () => {
     });
   });
 
+  it('sends all four startup parameters without a pooler (DATABASE_POOLER=none)', () => {
+    expect(cfg.pooler).toBe('none');
+    const { connection } = buildPostgresOptions(cfg, { applicationName: 'orders-service' });
+    expect(Object.keys(connection ?? {}).sort()).toEqual([
+      'TimeZone',
+      'application_name',
+      'idle_in_transaction_session_timeout',
+      'statement_timeout',
+    ]);
+  });
+
+  it('behind PgBouncer drops both timeouts (rejected as startup parameters; role settings)', () => {
+    const pooled = databaseConfig.parse({
+      DATABASE_URL: 'postgres://app_runtime:secret@pgbouncer:6432/app',
+      DATABASE_POOLER: 'pgbouncer',
+    });
+    const options = buildPostgresOptions(pooled, { applicationName: 'orders-service' });
+    expect(options.connection).toEqual({ application_name: 'orders-service', TimeZone: 'UTC' });
+    expect(options.connection).not.toHaveProperty('statement_timeout');
+    expect(options.connection).not.toHaveProperty('idle_in_transaction_session_timeout');
+    // prepare stays as configured: PgBouncer 1.26 tracks prepared statements.
+    expect(options.prepare).toBe(true);
+  });
+
+  it('builds the system pool from systemPoolMax with a :system application_name', () => {
+    const both = databaseConfig.parse({
+      DATABASE_POOL_MAX: '12',
+      DATABASE_SYSTEM_POOL_MAX: '3',
+      DATABASE_POOLER: 'pgbouncer',
+    });
+    const system = buildPostgresOptions(both, {
+      applicationName: 'orders-service',
+      pool: 'system',
+    });
+    expect(system.max).toBe(3);
+    expect(system.connection).toEqual({
+      application_name: 'orders-service:system',
+      TimeZone: 'UTC',
+    });
+    const runtime = buildPostgresOptions(both, {
+      applicationName: 'orders-service',
+      pool: 'runtime',
+    });
+    expect(runtime.max).toBe(12);
+    expect(runtime.connection).toMatchObject({ application_name: 'orders-service' });
+    const direct = buildPostgresOptions(cfg, { applicationName: 'app', pool: 'system' });
+    expect(direct.max).toBe(5);
+    expect(direct.connection).toMatchObject({
+      application_name: 'app:system',
+      statement_timeout: 5000,
+      idle_in_transaction_session_timeout: IDLE_IN_TRANSACTION_TIMEOUT_MS,
+    });
+  });
+
   it('treats 0 as "disabled" instead of passing a degenerate 0 to postgres.js', () => {
     const zero = databaseConfig.parse({
       DATABASE_IDLE_TIMEOUT_SEC: '0',

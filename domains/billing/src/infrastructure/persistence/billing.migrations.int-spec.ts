@@ -11,7 +11,7 @@ import {
   type DrizzleDB,
   platformMigrations,
 } from '@platform/database';
-import { startTestPostgres, type TestPostgres } from '@platform/testing/postgres';
+import { readRolesInitSql, startTestPostgres, type TestPostgres } from '@platform/testing/postgres';
 import { sql } from 'drizzle-orm';
 import { ClsModule } from 'nestjs-cls';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -23,8 +23,8 @@ import { type BillingSchema, billingSchema } from './billing.schema.js';
  * billing-service boots: the platform set, then billingMigrations, into the `billing` schema.
  * Opt-in (needs Docker):
  *   INTEGRATION=1 bunx vitest run --project billing:int
- * Set INTEGRATION_DATABASE_URL to use an existing throwaway database instead of testcontainers.
- * The container is Citus 14.2 on PostgreSQL 18, single node (@platform/testing/postgres).
+ * Always a fresh container (startTestPostgres ignores INTEGRATION_DATABASE_URL by default):
+ * Citus 14.2 on PostgreSQL 18, single node (@platform/testing/postgres).
  */
 
 @Module({
@@ -72,8 +72,10 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing migrations on Postg
   };
 
   beforeAll(async () => {
-    pg = await startTestPostgres();
+    // The platform set's 0002 needs the three roles; this spec still migrates as the superuser.
+    pg = await startTestPostgres({ initSql: readRolesInitSql() });
     vi.stubEnv('DATABASE_URL', pg.url);
+    vi.stubEnv('DATABASE_MIGRATION_URL', pg.url);
     vi.stubEnv('SERVICE_NAME', 'billing-int');
     app = await boot();
     db = app.get(DRIZZLE);

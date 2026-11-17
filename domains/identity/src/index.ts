@@ -57,6 +57,7 @@ export type {
   NewInvitation,
 } from './application/persistence/invitations.repository.js';
 export { InvitationsRepository } from './application/persistence/invitations.repository.js';
+export { InvitationsSystemRepository } from './application/persistence/invitations.system-repository.js';
 export type {
   MemberRecord,
   MembershipRecord,
@@ -64,17 +65,20 @@ export type {
   TenantMembership,
 } from './application/persistence/memberships.repository.js';
 export { MembershipsRepository } from './application/persistence/memberships.repository.js';
+export { MembershipsSystemRepository } from './application/persistence/memberships.system-repository.js';
 export type {
   NewSession,
   RotateSessionInput,
   SessionRecord,
 } from './application/persistence/sessions.repository.js';
 export { SessionsRepository } from './application/persistence/sessions.repository.js';
+export { SessionsSystemRepository } from './application/persistence/sessions.system-repository.js';
 export type { NewTenant, TenantRecord } from './application/persistence/tenants.repository.js';
 export { TenantsRepository } from './application/persistence/tenants.repository.js';
 export { TransactionRunner } from './application/persistence/transaction-runner.js';
 export type { ListUsersCriteria, UserRecord } from './application/persistence/users.repository.js';
 export { UsersRepository } from './application/persistence/users.repository.js';
+export { UsersSystemRepository } from './application/persistence/users.system-repository.js';
 export { InvitationMailer } from './application/ports/invitation-mailer.port.js';
 export { GetUserByIdQuery } from './application/queries/get-user-by-id/get-user-by-id.query.js';
 export { GetUsersByIdsQuery } from './application/queries/get-users-by-ids/get-users-by-ids.query.js';
@@ -83,10 +87,13 @@ export { ListMembersQuery } from './application/queries/list-members/list-member
 export { ListMyTenantsHandler } from './application/queries/list-my-tenants/list-my-tenants.handler.js';
 export { ListMyTenantsQuery } from './application/queries/list-my-tenants/list-my-tenants.query.js';
 export { ListUsersQuery } from './application/queries/list-users/list-users.query.js';
+export { InvitationAcceptance } from './application/services/invitation-acceptance.elevated.js';
+export { MembershipActivity } from './application/services/membership-activity.elevated.js';
 export { PersonalWorkspaces } from './application/services/personal-workspaces.service.js';
 export {
   type OpenSessionInput,
   SessionTokensService,
+  sessionPrincipal,
 } from './application/services/session-tokens.service.js';
 export {
   actorTenantRoles,
@@ -97,10 +104,8 @@ export {
   type TenantAuditEntry,
   TenantAuditLog,
 } from './application/services/tenant-audit-log.service.js';
-export {
-  type LoginMembership,
-  TenantSelection,
-} from './application/services/tenant-selection.service.js';
+export { TenantBootstrap } from './application/services/tenant-bootstrap.elevated.js';
+export { TenantSelection } from './application/services/tenant-selection.service.js';
 // Domain.
 export { normalizeEmail } from './domain/email.js';
 export {

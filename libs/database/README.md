@@ -9,6 +9,11 @@ Domain tables live in the domain packages, each in its own Postgres schema with 
 migration history (`domains/<x>`). This package owns the connection, the runner, the
 **platform set** (schema `app`, extensions) and the rule that the platform set always runs first.
 
+Every runtime query runs as `app_runtime` (`NOBYPASSRLS`) under forced row-level security: the adapter opens each
+transaction with the principal's `SET LOCAL` context, repositories reach it through `inUnitOfWork`, `RlsElevation`
+widens a policy inside it, and principal-less work goes through `SystemDatabase` on a small `app_system` pool (see
+[Roles and row-level security](#roles-and-row-level-security)). Nothing in this package names a domain.
+
 Production refuses a `DATABASE_URL` without TLS (`?sslmode=verify-full`, `require` or `verify-ca`, `ssl=true`, or
 `sslrootcert=system`; as in postgres.js, the last value of a repeated parameter wins). An `ssl` option passed in
 code (`DatabaseModule` `postgres.ssl`) wins at runtime, but the boot check only reads the URL: keep
@@ -16,33 +21,42 @@ code (`DatabaseModule` `postgres.ssl`) wins at runtime, but the boot check only 
 
 ## Public API
 
-| Export                                                                                                                                                  | Kind             | Purpose                                                                                                                                                                                                                           |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `DatabaseModule.forRootAsync<S>(options: DatabaseModuleOptions<S>): DynamicModule`                                                                      | module (global)  | Pool + Drizzle handle, transactional CLS plugin, migrations on boot, health indicator. Validates `migrations` when called                                                                                                         |
-| `DatabaseModuleOptions<S>`                                                                                                                              | interface        | `{ schema: S; migrations: readonly DatabaseMigrationSet[]; runMigrations?; transactional?: boolean \| DatabaseTransactionalOptions; postgres?: PostgresOptions }`                                                                 |
-| `DatabaseTransactionalOptions`                                                                                                                          | interface        | `{ defaultTxOptions?: PgTransactionConfig; enableTransactionProxy?: boolean }`                                                                                                                                                    |
-| `DatabaseMigrationSet`                                                                                                                                  | interface        | `{ name; folder; migrationsSchema; migrationsTable }`: one migration history with its own bookkeeping table                                                                                                                       |
-| `platformMigrations`                                                                                                                                    | const            | The platform set (`src/platform/migrations`, bookkeeping `app.__drizzle_migrations`): always applied first                                                                                                                        |
-| `withPlatformMigrations(sets)`                                                                                                                          | fn               | `[platformMigrations, ...sets]`; throws on a set listed twice or two sets sharing a bookkeeping table                                                                                                                             |
-| `DRIZZLE`, `DATABASE_MODULE_OPTIONS`                                                                                                                    | symbols          | Injection tokens                                                                                                                                                                                                                  |
-| `InjectDrizzle()`                                                                                                                                       | decorator        | `@InjectDrizzle() private readonly db: DrizzleDB<typeof schema>`                                                                                                                                                                  |
-| `DrizzleDB<S>`, `DrizzleTransaction<S>`, `DrizzleExecutor<S>`, `DrizzleSchema`                                                                          | types            | Handle (`PostgresJsDatabase<S> & { $client: Sql }`), tx handle, db-or-tx, schema record                                                                                                                                           |
-| `DrizzleTransactionalAdapter<S>`, `DrizzleTransactionHost<S>`                                                                                           | types            | Adapter and `TransactionHost` typing for your schema                                                                                                                                                                              |
-| `Transactional`, `TransactionHost`, `InjectTransaction`, `InjectTransactionHost`, `Propagation`                                                         | re-exports       | From `@nestjs-cls/transactional` (same package instance)                                                                                                                                                                          |
-| `DrizzlePostgresTransactionalAdapter`, `normalizeTxConfig(config)`                                                                                      | class, fn        | Drizzle adapter that drops empty tx configs (see Gotchas)                                                                                                                                                                         |
-| `runMigrations(url, options): Promise<MigrationRunSummary>`                                                                                             | fn               | Exactly `options.migrations`, in order: single-session client + `pg_try_advisory_lock` polling + drizzle `migrate()` per set                                                                                                      |
-| `RunMigrationsOptions`, `MigrationRunSummary`, `MigrationSetSummary`                                                                                    | types            | `{ migrations, logger?, applicationName?, lockTimeoutMs?, lockPollIntervalMs? }` → `{ sets: [{ name, folder, total, applied }], total, applied }`                                                                                 |
-| `runMigrationsCli(migrations, args?)`                                                                                                                   | fn               | Body of every app's `src/migrate.ts`: config from env, platform set + `migrations`, JSON log lines, `process.exitCode`                                                                                                            |
-| `MIGRATIONS_TABLE` (`__drizzle_migrations`), `MIGRATIONS_ADVISORY_LOCK_ID`                                                                              | consts           | The bookkeeping table name of every set; the one lock key                                                                                                                                                                         |
-| `DatabaseHealthIndicator`                                                                                                                               | provider         | `HealthContributor` with key `postgres` (`select 1`, 2 s timeout, cancels the query)                                                                                                                                              |
-| `keysetWhere(col, cursor, dir?)`, `keysetOrder(col, dir?)`, `keysetFetchLimit(limit)`, `keysetPage(rows, limit)`, `keysetPageBy(rows, limit, cursorOf)` | fns              | Seek pagination → `CursorPage<T>` from `@platform/common`                                                                                                                                                                         |
-| `encodeIdCursor(id)`, `decodeIdCursor(cursor)`, `normalizePageLimit(limit)`, `IdCursor`, `KeysetDirection`                                              | fns, types       | A bad cursor throws a 422 `INVALID_CURSOR`                                                                                                                                                                                        |
-| `buildPostgresOptions(cfg, ctx, overrides?)`, `PostgresOptions`, `IDLE_IN_TRANSACTION_TIMEOUT_MS`                                                       | fn, type         | Config → postgres.js options (seconds vs ms handled)                                                                                                                                                                              |
-| `createDrizzleDatabase(cfg, app, options, logger?)`                                                                                                     | fn               | The factory behind `DRIZZLE`, usable outside Nest                                                                                                                                                                                 |
-| `PoolUsage(pool, max)`, `PoolUsageSnapshot`                                                                                                             | class, interface | Connection demand of one postgres.js pool: `track(client)` returns a counting wrapper (awaited top-level queries and `begin()` transactions; `reserve()`, `listen()` not counted), `snapshot()` → `{ pool, max, inUse, waiting }` |
-| `registerPoolUsage(usage)`                                                                                                                              | fn               | Publishes a `PoolUsage` as the gauges below (one entry per pool name, the latest registration wins); `createDrizzleDatabase` registers `pool="runtime"`                                                                           |
-| `DB_POOL_CONNECTIONS_IN_USE`, `DB_POOL_OPERATIONS_WAITING`, `DB_POOL_CONNECTIONS_MAX`                                                                   | consts           | `db_pool_connections_in_use`, `db_pool_operations_waiting`, `db_pool_connections_max`, gauges labelled `{pool}` (see [OBSERVABILITY.md](../../docs/OBSERVABILITY.md#metrics-prometheus))                                          |
-| `isTransientConnectionError(e)`, `describePostgresUrl(url)`, `DrizzleQueryLogger`                                                                       | helpers          | Boot retries, credential-free log target, SQL debug logging                                                                                                                                                                       |
+| Export                                                                                                                                                  | Kind                    | Purpose                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `DatabaseModule.forRootAsync<S>(options: DatabaseModuleOptions<S>): DynamicModule`                                                                      | module (global)         | Pool + Drizzle handle, transactional CLS plugin, migrations on boot, health indicator. Validates `migrations` when called                                                                                                                               |
+| `DatabaseModuleOptions<S>`                                                                                                                              | interface               | `{ schema: S; migrations: readonly DatabaseMigrationSet[]; runMigrations?; transactional?: boolean \| DatabaseTransactionalOptions; postgres?: PostgresOptions }`                                                                                       |
+| `DatabaseTransactionalOptions`                                                                                                                          | interface               | `{ defaultTxOptions?: PgTransactionConfig; enableTransactionProxy?: boolean }`                                                                                                                                                                          |
+| `DatabaseMigrationSet`                                                                                                                                  | interface               | `{ name; folder; migrationsSchema; migrationsTable }`: one migration history with its own bookkeeping table                                                                                                                                             |
+| `platformMigrations`                                                                                                                                    | const                   | The platform set (`src/platform/migrations`, bookkeeping `app.__drizzle_migrations`): always applied first                                                                                                                                              |
+| `withPlatformMigrations(sets)`                                                                                                                          | fn                      | `[platformMigrations, ...sets]`; throws on a set listed twice or two sets sharing a bookkeeping table                                                                                                                                                   |
+| `assertMigrationSets(sets)`                                                                                                                             | fn                      | Throws unless the platform set is first, no set is listed twice and each set has its own bookkeeping table (`runMigrations` calls it)                                                                                                                   |
+| `DRIZZLE`, `DATABASE_MODULE_OPTIONS`                                                                                                                    | symbols                 | Injection tokens                                                                                                                                                                                                                                        |
+| `InjectDrizzle()`                                                                                                                                       | decorator               | `@InjectDrizzle() private readonly db: DrizzleDB<typeof schema>`                                                                                                                                                                                        |
+| `DrizzleDB<S>`, `DrizzleTransaction<S>`, `DrizzleExecutor<S>`, `DrizzleSchema`                                                                          | types                   | Handle (`PostgresJsDatabase<S> & { $client: Sql }`), tx handle, db-or-tx, schema record                                                                                                                                                                 |
+| `DrizzleTransactionalAdapter<S>`, `DrizzleTransactionHost<S>`                                                                                           | types                   | Adapter and `TransactionHost` typing for your schema                                                                                                                                                                                                    |
+| `Transactional`, `TransactionHost`, `InjectTransaction`, `InjectTransactionHost`, `Propagation`                                                         | re-exports              | From `@nestjs-cls/transactional` (same package instance)                                                                                                                                                                                                |
+| `DrizzlePostgresTransactionalAdapter`, `normalizeTxConfig(config)`                                                                                      | class, fn               | Drizzle adapter that drops empty tx configs (see Gotchas)                                                                                                                                                                                               |
+| `runMigrations(url, options): Promise<MigrationRunSummary>`                                                                                             | fn                      | Exactly `options.migrations`, in order: single-session client + `pg_try_advisory_lock` polling + drizzle `migrate()` per set                                                                                                                            |
+| `RunMigrationsOptions`, `MigrationRunSummary`, `MigrationSetSummary`                                                                                    | types                   | `{ migrations, logger?, applicationName?, lockTimeoutMs?, lockPollIntervalMs? }` → `{ sets: [{ name, folder, total, applied }], total, applied }`                                                                                                       |
+| `runMigrationsCli(migrations, args?)`                                                                                                                   | fn                      | Body of every app's `src/migrate.ts`: config from env, platform set + `migrations`, JSON log lines, `process.exitCode`                                                                                                                                  |
+| `MIGRATIONS_TABLE` (`__drizzle_migrations`), `MIGRATIONS_ADVISORY_LOCK_ID`                                                                              | consts                  | The bookkeeping table name of every set; the one lock key                                                                                                                                                                                               |
+| `DatabaseHealthIndicator`                                                                                                                               | provider                | `HealthContributor` with key `postgres` (`select 1`, 2 s timeout, cancels the query)                                                                                                                                                                    |
+| `keysetWhere(col, cursor, dir?)`, `keysetOrder(col, dir?)`, `keysetFetchLimit(limit)`, `keysetPage(rows, limit)`, `keysetPageBy(rows, limit, cursorOf)` | fns                     | Seek pagination → `CursorPage<T>` from `@platform/common`                                                                                                                                                                                               |
+| `encodeIdCursor(id)`, `decodeIdCursor(cursor)`, `normalizePageLimit(limit)`, `IdCursor`, `KeysetDirection`                                              | fns, types              | A bad cursor throws a 422 `INVALID_CURSOR`                                                                                                                                                                                                              |
+| `buildPostgresOptions(cfg, ctx, overrides?)`, `PostgresOptions`, `IDLE_IN_TRANSACTION_TIMEOUT_MS`                                                       | fn, type                | Config → postgres.js options (seconds vs ms handled)                                                                                                                                                                                                    |
+| `createDrizzleDatabase(cfg, app, options, logger?)`                                                                                                     | fn                      | The factory behind `DRIZZLE`, usable outside Nest                                                                                                                                                                                                       |
+| `PoolUsage(pool, max)`, `PoolUsageSnapshot`                                                                                                             | class, interface        | Connection demand of one postgres.js pool: `track(client)` returns a counting wrapper (awaited top-level queries and `begin()` transactions; `reserve()`, `listen()` not counted), `snapshot()` → `{ pool, max, inUse, waiting }`                       |
+| `registerPoolUsage(usage)`                                                                                                                              | fn                      | Publishes a `PoolUsage` as the gauges below (one entry per pool name, the latest registration wins); `createDrizzleDatabase` registers `pool="runtime"`                                                                                                 |
+| `DB_POOL_CONNECTIONS_IN_USE`, `DB_POOL_OPERATIONS_WAITING`, `DB_POOL_CONNECTIONS_MAX`                                                                   | consts                  | `db_pool_connections_in_use`, `db_pool_operations_waiting`, `db_pool_connections_max`, gauges labelled `{pool}` (see [OBSERVABILITY.md](../../docs/OBSERVABILITY.md#metrics-prometheus))                                                                |
+| `isTransientConnectionError(e)`, `describePostgresUrl(url)`, `DrizzleQueryLogger`                                                                       | helpers                 | Boot retries, credential-free log target, SQL debug logging                                                                                                                                                                                             |
+| `inUnitOfWork(txHost, work)`                                                                                                                            | fn                      | The only way a runtime repository reaches the database: `work` runs in the open transaction or a new one (`Propagation.Required`) opened with the CLS principal's context; throws `RLS_CONTEXT_STALE` when the principal is not the one `BEGIN` applied |
+| `assertRowsAffected(result, expected, what)`, `RowCountMismatchError`                                                                                   | fn, class               | Under RLS a hidden write affects 0 rows instead of failing: a repository that expects a change checks the count                                                                                                                                         |
+| `buildRlsContextSql(input)`, `rlsContextOf(principal)`, `getAppliedRlsContext()`, `RLS_UUID_PATTERN`, `RlsContextError`                                 | fns, const, class       | The `SET LOCAL` string (the one string-built SQL; values must match the strict UUID pattern), the context of a principal, and what `BEGIN` sent for the active transaction                                                                              |
+| `RlsElevation` (`elevate(permission)`, `justified(reason, work)`), `ELEVATION_REASONS`, `ELEVATION_DENIED`                                              | provider, consts        | Turns `app.elevated` on in the open transaction after a TypeScript permission check, or for a closed list of reasons (`*.elevated.ts` files only)                                                                                                       |
+| `SystemDatabase.run(method, work)`, `InjectSystemDatabase()`, `SYSTEM_DATABASE`, `SystemDatabaseError`                                                  | class, decorator, token | The only door to the `app_system` pool on `DATABASE_SYSTEM_URL`; `*.system-repository.ts` files only. Logged and counted (`db_system_calls_total`)                                                                                                      |
+| `defineSystemMethod(name, scope)`, `SystemMethod`, `SystemMethodScope`                                                                                  | fn, types               | One named door: `<repository>.<method>`, scope `pre-auth` (anywhere) or `system` (inside `SystemContext.run` only)                                                                                                                                      |
+| `purgeInTimeSlices(options)`, `DEFAULT_PURGE_SLICE_MS`, `DEFAULT_PURGE_MAX_SLICES`, `MIN_PURGE_SLICE_MS`                                                | fn, consts              | Bounded progress for a purge of a distributed table (no `LIMIT` pushdown on Citus): `min(t)` of the due rows, one DELETE up to it + a slice (15 min), at most 96 per run; a slice that hits `statement_timeout` is retried at half the span             |
+| `DatabaseBootGuardError`, `BootGuardFinding`                                                                                                            | class, interface        | What `DatabaseModule` throws in `DATABASE_BOOT_GUARD=enforce` when a connection or table is not as required                                                                                                                                             |
 
 ## Usage
 
@@ -67,19 +81,21 @@ import 'reflect-metadata';
 await runMigrationsCli(DATABASE_MIGRATIONS);
 
 // drizzle-orders.repository.ts (infrastructure layer)
-import { type DrizzleTransactionalAdapter, keysetFetchLimit, keysetOrder, keysetPage, keysetWhere, TransactionHost } from '@platform/database';
+import { type DrizzleTransactionalAdapter, inUnitOfWork, keysetFetchLimit, keysetOrder, keysetPage, keysetWhere, TransactionHost } from '@platform/database';
 
 @Injectable()
 export class DrizzleOrdersRepository {
-  // TransactionHost is a class → imported as a VALUE (DI by type). txHost.tx = the active tx or the pool.
+  // TransactionHost is a class → imported as a VALUE (DI by type).
   constructor(private readonly txHost: TransactionHost<DrizzleTransactionalAdapter<typeof ordersSchema>>) {}
 
-  async list(q: { limit: number; cursor?: string }) {
-    const rows = await this.txHost.tx.select().from(orders)
-      .where(keysetWhere(orders.id, q.cursor))  // id < cursor (uuidv7 = time-ordered)
-      .orderBy(keysetOrder(orders.id))          // ORDER BY id DESC
-      .limit(keysetFetchLimit(q.limit));        // limit + 1 look-ahead
-    return keysetPage(rows, q.limit);           // { items, nextCursor }
+  async list(q: { tenantId: string; limit: number; cursor?: string }) {
+    // inUnitOfWork: the open transaction, or a new one that starts with the principal's SET LOCAL context.
+    const rows = await inUnitOfWork(this.txHost, (tx) =>
+      tx.select().from(orders)
+        .where(and(eq(orders.tenantId, q.tenantId), keysetWhere(orders.id, q.cursor))) // explicit tenant: one shard
+        .orderBy(keysetOrder(orders.id))          // ORDER BY id DESC
+        .limit(keysetFetchLimit(q.limit)));       // limit + 1 look-ahead
+    return keysetPage(rows, q.limit);             // { items, nextCursor }
   }
 }
 
@@ -87,6 +103,75 @@ export class DrizzleOrdersRepository {
 @Transactional()
 async execute(cmd: PlaceOrderCommand) { await this.orders.insert(...); await this.lineItems.insert(...); }
 ```
+
+## Roles and row-level security
+
+Three roles come from one script, `docker/postgres/init/02-roles.sql` (compose runs it once on an empty volume;
+`startRlsTestPostgres()` runs it in every spec that asserts isolation; production SQL is in
+[SECURITY.md](../../docs/SECURITY.md#database-roles)). Roles never come from a migration.
+
+| Role          | URL                      | Connects to                      | Does                                                                                  |
+| ------------- | ------------------------ | -------------------------------- | ------------------------------------------------------------------------------------- |
+| `app_owner`   | `DATABASE_MIGRATION_URL` | the coordinator, never a pooler  | owns schemas and tables; runs migrations, drizzle-kit, `staff:grant`. No fallback URL |
+| `app_runtime` | `DATABASE_URL`           | PgBouncer in compose and prod    | every request; `NOBYPASSRLS`; no privilege beyond its per-table grants                |
+| `app_system`  | `DATABASE_SYSTEM_URL`    | PgBouncer, at most 5 connections | `BYPASSRLS`; only the named system methods (`SystemDatabase.run`)                     |
+
+- **FORCE RLS everywhere.** Each domain table has `ENABLE` and `FORCE ROW LEVEL SECURITY`, so even the owner is
+  filtered (it has no policy and sees no row). The boot guard refuses a domain table without both.
+- **Grants are explicit and deny by default.** No default table privileges: a table is unreachable until its own
+  migration grants it to `app_runtime` and, for a system method, to `app_system`. The bookkeeping tables
+  (`<schema>.__drizzle_migrations`) carry no RLS and no grant.
+- **Migrations change schema only; backfills run as `app_system`.** A migration runs as `app_owner`, which `FORCE` makes
+  blind to every row: a data `UPDATE` there would touch nothing, silently. A backfill is a separate step on the system
+  pool, in a named system method.
+- **A unit of work per call.** A repository method runs `inUnitOfWork(txHost, (tx) => …)`. A standalone call opens a
+  transaction whose `BEGIN` is followed by the principal's `SET LOCAL` context (about 4 round trips: `BEGIN`, the
+  context, the query, `COMMIT`); inside a handler's `@Transactional()` it joins that transaction at no extra cost.
+  The principal is final before a unit of work opens: `runWithPrincipal` wraps the unit of work, never the other way
+  round, and ids a flow needs for its principal are generated before `BEGIN`. No principal means no `BEGIN`
+  (`RLS_NO_PRINCIPAL`); a different principal inside the transaction means `RLS_CONTEXT_STALE`.
+- **Row counts.** A write the policies hide affects 0 rows instead of failing: repositories whose method must change one
+  row call `assertRowsAffected(result, 1, '…')`.
+- **No domain names here.** `libs/` never names a domain (`scripts/libs-vocabulary.spec.ts`); each domain owns its
+  distribution migration, its RLS migration and its repositories.
+- **Behind PgBouncer:** no session `SET`, no `set_config(…, false)`, no `pg_advisory_lock`, no `LISTEN`, no temp tables.
+  `pg_advisory_xact_lock` is fine.
+
+Policies are row-local: only the row's own columns and `app.user_id()`, `app.tenant_id()`, `app.elevated()`, called
+directly (see [SECURITY.md](../../docs/SECURITY.md#row-level-security) for why, and for elevation, the system pool and
+the boot guard).
+
+### Adding a system method
+
+A principal-less or cross-tenant read or write belongs on the system pool.
+
+1. Define it in the domain's `<domain>.system-methods.ts`:
+   `defineSystemMethod('<repository>.<method>', 'pre-auth' | 'system')`. Use `pre-auth` only for a lookup that runs
+   before any principal exists (login, register, an invitation token); everything else is `system` and runs inside
+   `SystemContext.run('<domain>.<job>', …)`.
+2. Implement it in a `drizzle-<x>.system-repository.ts` (the only files that may name `SystemDatabase` or
+   `@InjectSystemDatabase()`), through `this.system.run(methods.<name>, (db) => …)`, behind an abstract
+   `<x>.system-repository.ts` port. Put the scoping predicate in the SQL itself (`tenant_id = $caller`, the caller's own
+   id): the database does not check it.
+3. Grant `app_system` what the method needs, per table, in a new RLS migration of that domain (never
+   `ALL`, never a table the method does not touch).
+4. Update the domain's `*.system-methods.spec.ts` (the pinned list) and the table in
+   [SECURITY.md](../../docs/SECURITY.md#the-system-pool); `scripts/docs-b3.spec.ts` fails until both name it.
+5. Add an int spec that shows the method returns only the asserted rows (and, for `system` scope, that it refuses
+   outside `SystemContext`).
+
+### Adding a table
+
+In the migration that creates it, in this order (one statement per `GRANT` and per policy, one table per statement):
+
+1. `CREATE TABLE` with `tenant_id` or `user_id` leading its keys ([Citus-ready rules](../../docs/DEVELOPMENT.md#citus-ready-schema-rules));
+2. the distribution call (`app.distribute_by_tenant`, `app.distribute_by_user` or `app.make_reference`), then indexes, then foreign keys;
+3. `ALTER TABLE … ENABLE ROW LEVEL SECURITY` and `… FORCE ROW LEVEL SECURITY`;
+4. the policies, `TO app_runtime`, row-local, one per command the runtime role needs (no policy means denied);
+5. explicit grants to `app_runtime`, and to `app_system` only for a system method.
+
+Then repositories use `inUnitOfWork`, and a both-path policy spec (`startRlsTestPostgres()`, local execution off) asserts
+exact rows for the allowed and the forbidden case. Without step 3 the boot guard refuses to start.
 
 ## Migrations
 
@@ -102,6 +187,12 @@ async execute(cmd: PlaceOrderCommand) { await this.orders.insert(...); await thi
 - **One bookkeeping table per set** (`<schema>.__drizzle_migrations`). drizzle's migrator compares file timestamps only
   with the newest row of the table it writes to, so two histories in one table would silently skip the older one's
   files. `withPlatformMigrations` rejects a shared table.
+- **The runner checks it too, before it connects.** `runMigrations` refuses sets that do not start with the platform
+  set, two sets sharing a bookkeeping table and a set whose folder has no `meta/_journal.json`, whoever calls it.
+- **Direct coordinator only.** On Citus, `runMigrations` refuses a node that is not the coordinator
+  (`citus_is_coordinator()` false on a node that is in a cluster; a fresh single node counts as the coordinator).
+  Its session sends `statement_timeout = '0'` as a startup parameter, which PgBouncer refuses (`08P01`): the runner
+  rethrows that as an error naming `DATABASE_MIGRATION_URL`, which must never point at the pooler.
 - Each set's pending files run in one transaction (all-or-nothing per set); a set that already ran stays applied when
   a later set fails.
 
@@ -122,16 +213,24 @@ A domain's first migration comes from `bun run --filter @domain/<x> db:generate 
 change that line to `CREATE SCHEMA IF NOT EXISTS "<x>";` (the domain's `*.migrations.spec.ts` checks it). Every other
 generated file is committed as generated. Never edit an applied migration.
 
-Set `DATABASE_RUN_MIGRATIONS=true` (or `runMigrations: true`) to migrate at boot. In production, prefer each app's
-`dist/migrate.js` as a one-off job.
+Set `DATABASE_RUN_MIGRATIONS=true` (or `runMigrations: true`) to migrate at boot; it needs `DATABASE_MIGRATION_URL`
+(`app_owner`), and the app then serves requests as `app_runtime`. In production, prefer each app's `dist/migrate.js` as a
+one-off job.
 
 ## Environment (`database` namespace, plus `SERVICE_NAME` from `app`)
 
-`DATABASE_URL`, `DATABASE_POOL_MAX` (20), `DATABASE_IDLE_TIMEOUT_SEC` (30), `DATABASE_MAX_LIFETIME_SEC` (1800),
-`DATABASE_CONNECT_TIMEOUT_SEC` (10), `DATABASE_STATEMENT_TIMEOUT_MS` (15000), `DATABASE_PREPARE` (true; false behind
-PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params are logged only outside production),
-`DATABASE_RUN_MIGRATIONS` (false). `SERVICE_NAME` becomes the session's `application_name`. Every session also gets
-`idle_in_transaction_session_timeout=60s` and `TimeZone=UTC`.
+`DATABASE_URL` (`app_runtime`), `DATABASE_SYSTEM_URL` (`app_system`; unset = no system pool, refused in production by config and by the `enforce` boot
+guard, `system.configured`),
+`DATABASE_MIGRATION_URL` (`app_owner`, direct to the coordinator; required where migrations or CLIs run; no URL ever
+falls back to `DATABASE_URL`), `DATABASE_POOL_MAX` (20), `DATABASE_SYSTEM_POOL_MAX` (5, at most 5), `DATABASE_POOLER`
+(`none`; `pgbouncer` stops sending the two timeouts as startup parameters, the roles carry them),
+`DATABASE_BOOT_GUARD` (`enforce` in production, `warn` elsewhere, `off` for fake databases),
+`DATABASE_IDLE_TIMEOUT_SEC` (30), `DATABASE_MAX_LIFETIME_SEC` (1800), `DATABASE_CONNECT_TIMEOUT_SEC` (10),
+`DATABASE_STATEMENT_TIMEOUT_MS` (15000), `DATABASE_PREPARE` (true; stays true behind PgBouncer 1.26, `false` is the
+escape hatch), `DATABASE_LOG_QUERIES` (false; params are logged only outside production), `DATABASE_RUN_MIGRATIONS`
+(false). `SERVICE_NAME` becomes the session's `application_name`. Every session also gets `TimeZone=UTC`, and
+`idle_in_transaction_session_timeout=60s` and `statement_timeout` (direct connections as startup parameters, pooled ones
+from the role settings). The full table is in [CONFIGURATION.md](../../docs/CONFIGURATION.md#database--postgresql-18-postgresjs--drizzle).
 
 ## Tests
 
@@ -148,7 +247,21 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
   `test/fixtures/gadgets/migrations` is hand-written. `test/citus.int-spec.ts` covers the
   Citus helpers (placement, colocation, idempotency, kind changes, the plain-Postgres no-op) and the runner's
   Citus session settings (a set applied while sessions default to remote execution, and the parallel-mode
-  failure they avoid), with the `test/fixtures/citus` set.
+  failure they avoid), with the `test/fixtures/citus` set. `test/platform-rls.int-spec.ts`
+  (`startRlsTestPostgres()`, migrated as `app_owner`, local execution off) covers the 0002 helpers as `app_runtime`,
+  `SET LOCAL` reaching every shard where `set_config()` does not, the grants and the default privilege, and the
+  missing-role stop. The RLS specs all use `startRlsTestPostgres()` (the three roles, `citus.enable_local_execution=off`,
+  never `INTEGRATION_DATABASE_URL`): `test/rls-context.int-spec.ts` (the `SET LOCAL` context
+  reaching every shard of a distributed fixture, `WITH CHECK` on a foreign insert, concurrent principals alternating over
+  a small pool, `RLS_NO_PRINCIPAL`, each with `DATABASE_PREPARE` true and false), `test/rls-elevation.int-spec.ts`
+  (`elevate` widening the same transaction's read but never to another tenant, `justified` for its callback only, the
+  next transaction on the connection not elevated, a refused elevation sending nothing), `test/system-database.int-spec.ts`
+  (the system pool reading every row where the runtime handle reads none, a `system` method refused outside
+  `SystemContext`, a system write surviving a runtime rollback, the pool cap), `test/boot-guard.int-spec.ts` (each check refusing in
+  `enforce` and leaving no backend behind) and `test/sharding.int-spec.ts` (coordinator plus one worker: the context
+  crossing the wire, a mid-transaction `elevate`, `set_config` failing where `SET LOCAL` works, a reference-table write
+  on every node). Unit specs fake the pool (`test/fake-sql.ts`), so `bunx vitest run --project database` still needs no
+  Docker.
 
 ## Gotchas
 
@@ -164,9 +277,16 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
   loader. Declare tables with `pgSchema('<x>').table(...)` and export the `pgSchema` object (drizzle-kit emits
   `CREATE SCHEMA` only for exports). `casing: 'snake_case'` must match in every `drizzle.config.ts` and at runtime.
   Raw SQL uses snake_case and schema-qualified names (`orders.line_items`, `ARRAY['placed']::orders.order_status[]`).
-- The compose and testcontainers role is `app`, and the platform set creates schema `app`: the default `search_path`
-  (`"$user", public`) then starts with `app`, so unqualified DDL run as that role lands in `app`. Qualify names in
-  hand-written SQL.
+- The compose and testcontainers superuser is `app`, and the platform set creates schema `app`: a session as that role
+  has `app` first on its `search_path` (`"$user", public`), so unqualified DDL lands in `app`. Qualify names in
+  hand-written SQL. The three application roles (`app_owner`, `app_runtime`, `app_system`) each pin `search_path =
+pg_catalog, public`, so nothing resolves through a schema that shares a role's name.
+- **A data statement in a migration touches nothing.** Migrations run as `app_owner`, which `FORCE ROW LEVEL SECURITY`
+  filters to zero rows. A backfill is a separate step on the system pool.
+- **A runtime write the policy hides is a 0-row success.** Check the count (`assertRowsAffected`); an `INSERT` the
+  `WITH CHECK` refuses does raise (`42501`).
+- **Never run a spec's isolation checks as the superuser or with local execution on.** Local execution makes
+  `set_config` look correct on one node, and a superuser bypasses every policy.
 - Pass `date.toISOString()` for a JS `Date` inside a raw ` sql` `` template, not the `Date` itself. Operators
   (`lt(col, date)`) are fine.
 - `migrate()` runs a set's pending migrations in **one transaction**, so `CREATE INDEX CONCURRENTLY` is impossible.
@@ -200,6 +320,25 @@ When the database has the `citus` extension, `runMigrations` sets `citus.enable_
 distribute tables and add their foreign keys in one transaction, also on a server whose sessions default to
 remote execution. The migration URL must reach the coordinator directly, never a transaction pooler.
 
+`0002_rls_helpers.sql` adds the RLS context helpers every policy calls (program spec 8.1, sharding design 7.1):
+
+| Helper            | Returns   | Value                                                                            |
+| ----------------- | --------- | -------------------------------------------------------------------------------- |
+| `app.user_id()`   | `uuid`    | `app.user_id`; raises `42501` `app.user_id is not set` when it is unset or empty |
+| `app.tenant_id()` | `uuid`    | `app.tenant_id`, or `NULL` when unset or empty                                   |
+| `app.elevated()`  | `boolean` | true only when `app.elevated` is the literal `on`                                |
+
+All three are `STABLE` and read `current_setting(…, true)`. The context is set with `SET LOCAL` on `BEGIN`, never
+`set_config()` (Citus propagates only `SET LOCAL` to shard connections), and policies call the helpers directly,
+never in a subquery. The file also holds the platform half of the grant model (deny by default): `USAGE` on schema
+`app` and `EXECUTE` on the three helpers and `app.citus_enabled()` for `app_runtime` and `app_system`, nothing for
+`PUBLIC` on any function in `app` (the 0001 distribution helpers are for migrations only), no grant on
+`app.__drizzle_migrations`, and `ALTER DEFAULT PRIVILEGES FOR ROLE app_owner REVOKE EXECUTE ON FUNCTIONS FROM
+PUBLIC`, so every later function is granted explicitly. Roles never come from a migration: on a server without
+`app_owner`, `app_runtime` and `app_system` (`docker/postgres/init/02-roles.sql`) the file stops with
+`database role(s) missing: …`. Every spec that applies the platform set therefore starts Postgres with
+`initSql: readRolesInitSql()` or `startRlsTestPostgres()`.
+
 The files are hand-written: drizzle-kit has nothing to diff here, and `drizzle-kit generate --custom` refuses to run
 without a schema file. The runtime migrator reads only `meta/_journal.json` and the `.sql` files. To add a file:
 
@@ -208,4 +347,5 @@ without a schema file. The runtime migrator reads only `meta/_journal.json` and 
    `src/platform/migrations/meta/_journal.json`. `when` must be larger than the previous entry's: drizzle applies only
    files newer than the last applied one;
 3. never edit an applied file. `platform.migrations.spec.ts` checks the journal against the folder, and the runner
-   rejects a malformed journal before it connects.
+   rejects a malformed journal before it connects. Grant what a new function needs in the same file: the default
+   privilege leaves it unexecutable by anyone but its owner.

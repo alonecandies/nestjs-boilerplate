@@ -1,27 +1,23 @@
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
-import { PURGE_SESSIONS_BATCH_SIZE } from '../../../identity.constants.js';
-import { SessionsRepository } from '../../persistence/sessions.repository.js';
+import { SessionsSystemRepository } from '../../persistence/sessions.system-repository.js';
 import { PurgeExpiredSessionsCommand } from './purge-expired-sessions.command.js';
 
-/** Safety valve: at most this many batches per run (the next hourly run continues). */
-const MAX_BATCHES_PER_RUN = 200;
-
 /**
- * Deletes expired sessions in bounded batches (short statements: no long row locks, no WAL
- * spike). Revoked-but-unexpired sessions are KEPT on purpose: they are what makes replaying a
- * rotated refresh token detectable until the token itself expires.
+ * Deletes expired sessions in bounded progress (sessions are distributed by `user_id`; a `LIMIT`ed
+ * batch cannot be pushed down to the shards): time slices oldest first (`purgeInTimeSlices`, B3
+ * final review F3). It reads the oldest due timestamp, deletes up to it + 15 minutes and repeats,
+ * at most 96 multi-shard statements per run, each committing on its own and far below the role's
+ * `statement_timeout`. A backlog larger than one run (a day of expiries) drains over the next
+ * hourly ticks; a failed run is retried by the next tick, and the slices it committed stay deleted.
+ * Revoked-but-unexpired sessions are KEPT on purpose: they are what makes replaying a rotated
+ * refresh token detectable until the token itself expires.
+ * A `system` method (spec §9 method 5): it runs only inside `SystemContext.run`.
  */
 @CommandHandler(PurgeExpiredSessionsCommand)
 export class PurgeExpiredSessionsHandler implements ICommandHandler<PurgeExpiredSessionsCommand> {
-  constructor(private readonly sessions: SessionsRepository) {}
+  constructor(private readonly sessions: SessionsSystemRepository) {}
 
-  async execute(command: PurgeExpiredSessionsCommand): Promise<number> {
-    let total = 0;
-    for (let batch = 0; batch < MAX_BATCHES_PER_RUN; batch += 1) {
-      const deleted = await this.sessions.deleteExpired(command.now, PURGE_SESSIONS_BATCH_SIZE);
-      total += deleted;
-      if (deleted < PURGE_SESSIONS_BATCH_SIZE) break;
-    }
-    return total;
+  execute(command: PurgeExpiredSessionsCommand): Promise<number> {
+    return this.sessions.deleteExpired(command.now);
   }
 }

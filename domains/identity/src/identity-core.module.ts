@@ -21,29 +21,40 @@ import { MembershipEventsRelay } from './application/event-handlers/membership-e
 import { UserRegisteredRelay } from './application/event-handlers/user-registered.relay.js';
 import { AuditEventsRepository } from './application/persistence/audit-events.repository.js';
 import { InvitationsRepository } from './application/persistence/invitations.repository.js';
+import { InvitationsSystemRepository } from './application/persistence/invitations.system-repository.js';
 import { MembershipsRepository } from './application/persistence/memberships.repository.js';
+import { MembershipsSystemRepository } from './application/persistence/memberships.system-repository.js';
 import { SessionsRepository } from './application/persistence/sessions.repository.js';
+import { SessionsSystemRepository } from './application/persistence/sessions.system-repository.js';
 import { TenantsRepository } from './application/persistence/tenants.repository.js';
 import { TransactionRunner } from './application/persistence/transaction-runner.js';
 import { UsersRepository } from './application/persistence/users.repository.js';
+import { UsersSystemRepository } from './application/persistence/users.system-repository.js';
 import { InvitationMailer } from './application/ports/invitation-mailer.port.js';
 import { GetUserByIdHandler } from './application/queries/get-user-by-id/get-user-by-id.handler.js';
 import { GetUsersByIdsHandler } from './application/queries/get-users-by-ids/get-users-by-ids.handler.js';
 import { ListMembersHandler } from './application/queries/list-members/list-members.handler.js';
 import { ListMyTenantsHandler } from './application/queries/list-my-tenants/list-my-tenants.handler.js';
 import { ListUsersHandler } from './application/queries/list-users/list-users.handler.js';
+import { InvitationAcceptance } from './application/services/invitation-acceptance.elevated.js';
+import { MembershipActivity } from './application/services/membership-activity.elevated.js';
 import { PersonalWorkspaces } from './application/services/personal-workspaces.service.js';
 import { SessionTokensService } from './application/services/session-tokens.service.js';
 import { TenantAuditLog } from './application/services/tenant-audit-log.service.js';
+import { TenantBootstrap } from './application/services/tenant-bootstrap.elevated.js';
 import { TenantSelection } from './application/services/tenant-selection.service.js';
 import { QueuedInvitationMailer } from './infrastructure/mail/queued-invitation.mailer.js';
 import { DrizzleAuditEventsRepository } from './infrastructure/persistence/drizzle-audit-events.repository.js';
 import { DrizzleInvitationsRepository } from './infrastructure/persistence/drizzle-invitations.repository.js';
+import { DrizzleInvitationsSystemRepository } from './infrastructure/persistence/drizzle-invitations.system-repository.js';
 import { DrizzleMembershipsRepository } from './infrastructure/persistence/drizzle-memberships.repository.js';
+import { DrizzleMembershipsSystemRepository } from './infrastructure/persistence/drizzle-memberships.system-repository.js';
 import { DrizzleSessionsRepository } from './infrastructure/persistence/drizzle-sessions.repository.js';
+import { DrizzleSessionsSystemRepository } from './infrastructure/persistence/drizzle-sessions.system-repository.js';
 import { DrizzleTenantsRepository } from './infrastructure/persistence/drizzle-tenants.repository.js';
 import { DrizzleTransactionRunner } from './infrastructure/persistence/drizzle-transaction.runner.js';
 import { DrizzleUsersRepository } from './infrastructure/persistence/drizzle-users.repository.js';
+import { DrizzleUsersSystemRepository } from './infrastructure/persistence/drizzle-users.system-repository.js';
 import { PurgeExpiredSessionsCron } from './infrastructure/scheduling/purge-expired-sessions.cron.js';
 import { passwordConfig } from './infrastructure/security/password.config.js';
 import { PasswordHasher } from './infrastructure/security/password-hasher.service.js';
@@ -79,7 +90,10 @@ export const IDENTITY_QUERY_HANDLERS = [
 
 export const IDENTITY_EVENT_HANDLERS = [UserRegisteredRelay, MembershipEventsRelay];
 
-/** Persistence bindings (the only place that knows it is Drizzle/Postgres). */
+/**
+ * Persistence bindings (the only place that knows it is Drizzle/Postgres): the runtime ports
+ * (app_runtime, under RLS) and the system ports (app_system, by identity's named system methods).
+ */
 const PERSISTENCE: Provider[] = [
   { provide: UsersRepository, useClass: DrizzleUsersRepository },
   { provide: SessionsRepository, useClass: DrizzleSessionsRepository },
@@ -88,6 +102,10 @@ const PERSISTENCE: Provider[] = [
   { provide: InvitationsRepository, useClass: DrizzleInvitationsRepository },
   { provide: AuditEventsRepository, useClass: DrizzleAuditEventsRepository },
   { provide: TransactionRunner, useClass: DrizzleTransactionRunner },
+  { provide: UsersSystemRepository, useClass: DrizzleUsersSystemRepository },
+  { provide: MembershipsSystemRepository, useClass: DrizzleMembershipsSystemRepository },
+  { provide: InvitationsSystemRepository, useClass: DrizzleInvitationsSystemRepository },
+  { provide: SessionsSystemRepository, useClass: DrizzleSessionsSystemRepository },
 ];
 
 /**
@@ -127,6 +145,10 @@ const PERSISTENCE: Provider[] = [
     PersonalWorkspaces,
     TenantSelection,
     TenantAuditLog,
+    // Justified RLS elevation (spec §9), one service per reason: the only `*.elevated.ts` files.
+    TenantBootstrap,
+    InvitationAcceptance,
+    MembershipActivity,
     PurgeExpiredSessionsCron,
   ],
 })

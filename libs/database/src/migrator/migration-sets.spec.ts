@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DatabaseMigrationSet } from '../database.types.js';
 import { platformMigrations } from '../platform/platform.migrations.js';
-import { withPlatformMigrations } from './migration-sets.js';
+import { assertMigrationSets, withPlatformMigrations } from './migration-sets.js';
 import { MIGRATIONS_TABLE } from './migrations.constants.js';
 
 const set = (
@@ -52,5 +52,43 @@ describe('withPlatformMigrations', () => {
     expect(() => withPlatformMigrations([set('ledger', { migrationsSchema: 'app' })])).toThrow(
       /"platform" and "ledger" share app\.__drizzle_migrations/,
     );
+  });
+});
+
+describe('assertMigrationSets (what runMigrations checks before it connects)', () => {
+  it('accepts the platform set first, then sets with their own bookkeeping tables', () => {
+    expect(() => assertMigrationSets([platformMigrations])).not.toThrow();
+    expect(() =>
+      assertMigrationSets([platformMigrations, set('orders'), set('catalog')]),
+    ).not.toThrow();
+    expect(() => assertMigrationSets(withPlatformMigrations([set('orders')]))).not.toThrow();
+  });
+
+  it.each([
+    ['no set at all', [] as DatabaseMigrationSet[]],
+    ['a domain set alone', [set('orders')]],
+    ['the platform set second', [set('orders'), platformMigrations]],
+    [
+      'a look-alike named "platform" from another folder',
+      [{ ...platformMigrations, folder: '/elsewhere' }, set('orders')],
+    ],
+  ])('rejects %s: the platform set must run first', (_label, sets) => {
+    expect(() => assertMigrationSets(sets)).toThrow(
+      /The platform migration set must run first .*withPlatformMigrations/,
+    );
+  });
+
+  it('rejects a set listed twice and two sets sharing one bookkeeping table', () => {
+    const orders = set('orders');
+    expect(() => assertMigrationSets([platformMigrations, orders, orders])).toThrow(
+      /"orders" is listed twice/,
+    );
+    expect(() =>
+      assertMigrationSets([
+        platformMigrations,
+        set('orders'),
+        set('audit', { migrationsSchema: 'orders' }),
+      ]),
+    ).toThrow(/"orders" and "audit" share orders\.__drizzle_migrations/);
   });
 });

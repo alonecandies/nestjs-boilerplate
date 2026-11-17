@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { startTestPostgres, type TestPostgres } from '@platform/testing/postgres';
+import { readRolesInitSql, startTestPostgres, type TestPostgres } from '@platform/testing/postgres';
 import { noop } from 'lodash-es';
 import postgres, { type Sql } from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -76,7 +76,8 @@ describe('Citus helpers and sequential migrations on Citus 14.2 (single node)', 
   };
 
   beforeAll(async () => {
-    pg = await startTestPostgres({ allowExternalUrl: false });
+    // The platform set's 0002 grants to the app roles, which only the init SQL creates.
+    pg = await startTestPostgres({ allowExternalUrl: false, initSql: readRolesInitSql() });
     citus = postgres(pg.url, { max: 1, onnotice: noop });
     await citus`create database plain`;
     const url = new URL(pg.url);

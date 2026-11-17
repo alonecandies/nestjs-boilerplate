@@ -29,7 +29,9 @@ export class LeaveTenantHandler implements ICommandHandler<LeaveTenantCommand> {
       const self = await this.memberships.find(tenantId, userId);
       if (self === null) throw new TenantAccessDeniedException();
       if (self.roles.includes('owner') && owners <= 1) throw new LastOwnerException();
-      await this.memberships.delete(tenantId, userId);
+      // Under RLS a refused DELETE matches no row instead of failing: never audit it as done.
+      if (!(await this.memberships.delete(tenantId, userId)))
+        throw new TenantAccessDeniedException();
       await this.audit.record({
         tenantId,
         actorId: userId,

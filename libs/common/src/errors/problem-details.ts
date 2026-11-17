@@ -11,6 +11,7 @@ import {
 } from 'lodash-es';
 import { isDomainException } from './domain.exception.js';
 import { ErrorCode, errorCodeForStatus } from './error-codes.js';
+import { translateInfrastructureError } from './infrastructure-errors.js';
 import type { ValidationIssue } from './validation-issue.js';
 
 /**
@@ -66,6 +67,8 @@ const titleFor = memoize(
  * Maps ANY thrown value to a problem document. Used by the HTTP filter, the maintenance middleware
  * and WS/GraphQL adapters so every transport speaks the same error vocabulary.
  *
+ * - `@platform/database` errors (`RlsContextError`, `RowCountMismatchError`, `SystemDatabaseError`) →
+ *   the `DomainException` they stand for (`translateInfrastructureError`); unlisted codes → 500.
  * - `DomainException` → its status/code; `details.issues` → `errors`; message is client-safe by contract.
  * - `HttpException` (incl. ValidationPipe 400 lists/grouped objects, ThrottlerException 429) →
  *   status-derived code (or Nest 12 `errorCode`); 5xx messages hidden unless `exposeInternal`.
@@ -96,7 +99,8 @@ interface ResolvedProblem {
   details?: Record<string, unknown> | undefined;
 }
 
-function resolveProblem(exception: unknown, exposeInternal: boolean): ResolvedProblem {
+function resolveProblem(raw: unknown, exposeInternal: boolean): ResolvedProblem {
+  const exception = translateInfrastructureError(raw) ?? raw;
   if (isDomainException(exception)) {
     const issues = exception.details?.['issues'];
     const status: number = exception.httpStatus;

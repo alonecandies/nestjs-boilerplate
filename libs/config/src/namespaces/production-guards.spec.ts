@@ -114,6 +114,10 @@ describe('grpc', () => {
 
 describe('database', () => {
   const url = (query: string): string => `postgres://u:p@db.internal:5432/app?${query}`;
+  /** Production requires the system pool (login, register, invitations, the purges need it). */
+  const SYSTEM = {
+    DATABASE_SYSTEM_URL: 'postgres://app_system:p@db.internal:5432/app?sslmode=verify-full',
+  } as const;
 
   it('requires the TLS mode postgres.js will actually use to encrypt, unless opted out', () => {
     const error = errorOf(() => databaseConfig.parse(PROD));
@@ -129,9 +133,10 @@ describe('database', () => {
       // postgres.js reads the LAST value of a repeated parameter
       'sslmode=disable&sslmode=verify-full',
     ]) {
-      expect(databaseConfig.parse({ ...PROD, DATABASE_URL: url(query) }).url, query).toBe(
-        url(query),
-      );
+      expect(
+        databaseConfig.parse({ ...PROD, ...SYSTEM, DATABASE_URL: url(query) }).url,
+        query,
+      ).toBe(url(query));
     }
     for (const query of [
       'sslmode=disable',
@@ -141,13 +146,32 @@ describe('database', () => {
       'sslmode=verify-full&sslmode=disable',
       'sslrootcert=system&sslrootcert=/etc/ca.pem',
     ]) {
-      expect(() => databaseConfig.parse({ ...PROD, DATABASE_URL: url(query) }), query).toThrow(
-        EnvValidationError,
+      expect(
+        () => databaseConfig.parse({ ...PROD, ...SYSTEM, DATABASE_URL: url(query) }),
+        query,
+      ).toThrow(EnvValidationError);
+    }
+    expect(
+      databaseConfig.parse({ ...PROD, ...SYSTEM, DATABASE_ALLOW_INSECURE: 'true' }).url,
+    ).toContain('localhost');
+  });
+
+  it('requires DATABASE_SYSTEM_URL in production only (no system pool: login and the purges fail)', () => {
+    for (const env of [
+      { ...PROD, DATABASE_URL: url('sslmode=verify-full') },
+      { ...PROD, DATABASE_ALLOW_INSECURE: 'true' },
+    ]) {
+      const error = errorOf(() => databaseConfig.parse(env));
+      expect(error.message).toContain('→ at DATABASE_SYSTEM_URL');
+      expect(error.message).toContain('app_system');
+      expect(databaseConfig.parse({ ...env, ...SYSTEM }).systemUrl).toBe(
+        SYSTEM.DATABASE_SYSTEM_URL,
       );
     }
-    expect(databaseConfig.parse({ ...PROD, DATABASE_ALLOW_INSECURE: 'true' }).url).toContain(
-      'localhost',
-    );
+    // Development and tests still boot without it (no system pool; each system call is refused).
+    for (const NODE_ENV of ['development', 'test']) {
+      expect(databaseConfig.parse({ NODE_ENV }).systemUrl).toBeUndefined();
+    }
   });
 
   it('never echoes the URL (it carries the password) in the error', () => {
@@ -155,6 +179,132 @@ describe('database', () => {
       databaseConfig.parse({ ...PROD, DATABASE_URL: 'postgres://u:s3cr3t@db.internal:5432/app' }),
     );
     expect(error.message).not.toContain('s3cr3t');
+  });
+
+  describe('three URLs (runtime, system, migration)', () => {
+    const TLS = 'sslmode=verify-full';
+    const pg = (user: string, hostPort: string, query = TLS): string =>
+      `postgres://${user}:s3cr3t@${hostPort}/app?${query}`;
+    /** The production topology of the sharding design §5: two pooled URLs, one direct. */
+    const TOPOLOGY = {
+      ...PROD,
+      DATABASE_URL: pg('app_runtime', 'pgbouncer.internal:6432'),
+      DATABASE_SYSTEM_URL: pg('app_system', 'pgbouncer.internal:6432'),
+      DATABASE_MIGRATION_URL: pg('app_owner', 'db.internal:5432'),
+      DATABASE_POOLER: 'pgbouncer',
+      DATABASE_RUN_MIGRATIONS: 'true',
+    } as const;
+    /** Every guard below also holds with the TLS opt-out set. */
+    const INSECURE = { ...TOPOLOGY, DATABASE_ALLOW_INSECURE: 'true' } as const;
+
+    it('accepts the production topology, with the boot guard enforced by default', () => {
+      expect(databaseConfig.parse(TOPOLOGY)).toMatchObject({
+        url: TOPOLOGY.DATABASE_URL,
+        systemUrl: TOPOLOGY.DATABASE_SYSTEM_URL,
+        migrationUrl: TOPOLOGY.DATABASE_MIGRATION_URL,
+        pooler: 'pgbouncer',
+        bootGuard: 'enforce',
+        runMigrations: true,
+      });
+      expect(databaseConfig.parse({ ...TOPOLOGY, DATABASE_BOOT_GUARD: 'enforce' }).bootGuard).toBe(
+        'enforce',
+      );
+    });
+
+    it.each(['DATABASE_SYSTEM_URL', 'DATABASE_MIGRATION_URL'] as const)(
+      'requires TLS on %s too, unless opted out',
+      (key) => {
+        const plain = TOPOLOGY[key].replace(TLS, 'sslmode=prefer');
+        const error = errorOf(() => databaseConfig.parse({ ...TOPOLOGY, [key]: plain }));
+        expect(error.message).toContain(`→ at ${key}`);
+        expect(error.message).toContain(`${key} must enable TLS in production`);
+        expect(error.message).not.toContain('s3cr3t');
+        expect(error.message).not.toContain('→ at DATABASE_URL');
+        expect(databaseConfig.parse({ ...INSECURE, [key]: plain })).toBeDefined();
+      },
+    );
+
+    it.each(['warn', 'off'])('rejects DATABASE_BOOT_GUARD=%s in production', (mode) => {
+      for (const env of [TOPOLOGY, INSECURE]) {
+        const error = errorOf(() => databaseConfig.parse({ ...env, DATABASE_BOOT_GUARD: mode }));
+        expect(error.message).toContain('→ at DATABASE_BOOT_GUARD');
+      }
+      expect(databaseConfig.parse({ NODE_ENV: 'test', DATABASE_BOOT_GUARD: mode }).bootGuard).toBe(
+        mode,
+      );
+    });
+
+    it('rejects DATABASE_RUN_MIGRATIONS=true without DATABASE_MIGRATION_URL', () => {
+      for (const env of [TOPOLOGY, INSECURE]) {
+        const { DATABASE_MIGRATION_URL: _omitted, ...rest } = env;
+        const error = errorOf(() => databaseConfig.parse(rest));
+        expect(error.message).toContain('→ at DATABASE_MIGRATION_URL');
+        expect(error.message).toContain('DATABASE_RUN_MIGRATIONS');
+        expect(
+          databaseConfig.parse({ ...rest, DATABASE_RUN_MIGRATIONS: 'false' }).migrationUrl,
+        ).toBeUndefined();
+      }
+      // Outside production the factory refuses at the point of use instead.
+      expect(databaseConfig.parse({ DATABASE_RUN_MIGRATIONS: 'true' }).runMigrations).toBe(true);
+    });
+
+    it.each(['DATABASE_SYSTEM_URL', 'DATABASE_MIGRATION_URL'] as const)(
+      'rejects %s with the same user as DATABASE_URL',
+      (key) => {
+        for (const env of [TOPOLOGY, INSECURE]) {
+          const host = key === 'DATABASE_SYSTEM_URL' ? 'pgbouncer.internal:6432' : 'db.internal';
+          for (const user of ['app_runtime', 'app%5Fruntime']) {
+            const error = errorOf(() => databaseConfig.parse({ ...env, [key]: pg(user, host) }));
+            expect(error.message, user).toContain(`→ at ${key}`);
+            expect(error.message).toContain('user');
+            expect(error.message).not.toContain('s3cr3t');
+          }
+        }
+        expect(
+          databaseConfig.parse({
+            NODE_ENV: 'development',
+            DATABASE_URL: 'postgres://app:app@localhost:5432/app',
+            [key]: 'postgres://app:app@localhost:5432/app',
+          }),
+        ).toBeDefined();
+      },
+    );
+
+    it('with DATABASE_POOLER=pgbouncer, rejects a migration URL on the host and port of DATABASE_URL', () => {
+      for (const env of [TOPOLOGY, INSECURE]) {
+        for (const hostPort of ['pgbouncer.internal:6432', 'PGBOUNCER.internal:6432']) {
+          const error = errorOf(() =>
+            databaseConfig.parse({ ...env, DATABASE_MIGRATION_URL: pg('app_owner', hostPort) }),
+          );
+          expect(error.message, hostPort).toContain('→ at DATABASE_MIGRATION_URL');
+          expect(error.message).toContain('PgBouncer');
+          expect(error.message).not.toContain('s3cr3t');
+        }
+        // The port defaults to 5432 on either side.
+        expect(() =>
+          databaseConfig.parse({
+            ...env,
+            DATABASE_URL: pg('app_runtime', 'pool.internal'),
+            DATABASE_MIGRATION_URL: pg('app_owner', 'pool.internal:5432'),
+          }),
+        ).toThrow(EnvValidationError);
+        // Same host, another port: the coordinator next to the pooler.
+        expect(
+          databaseConfig.parse({
+            ...env,
+            DATABASE_MIGRATION_URL: pg('app_owner', 'pgbouncer.internal:5432'),
+          }).migrationUrl,
+        ).toContain('pgbouncer.internal:5432');
+      }
+      // Without a pooler the runtime and the migrator may share the coordinator's address.
+      expect(
+        databaseConfig.parse({
+          ...TOPOLOGY,
+          DATABASE_POOLER: 'none',
+          DATABASE_MIGRATION_URL: pg('app_owner', 'pgbouncer.internal:6432'),
+        }).pooler,
+      ).toBe('none');
+    });
   });
 });
 

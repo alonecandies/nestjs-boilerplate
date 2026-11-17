@@ -1,15 +1,22 @@
 import { type CursorPage, normalizeTenantRoles, type TenantRole } from '@platform/common';
-import { decodeIdCursor, keysetPage, keysetPageBy } from '@platform/database';
+import {
+  decodeIdCursor,
+  keysetPage,
+  keysetPageBy,
+  RowCountMismatchError,
+} from '@platform/database';
 import {
   type AuditEventRecord,
   AuditEventsRepository,
   InvalidRolesException,
   type InvitationRecord,
   InvitationsRepository,
+  InvitationsSystemRepository,
   type MemberRecord,
   MembershipAlreadyExistsException,
   type MembershipRecord,
   MembershipsRepository,
+  MembershipsSystemRepository,
   type NewAuditEvent,
   type NewInvitation,
   type NewMembership,
@@ -89,20 +96,18 @@ export class InMemoryMembershipsRepository extends MembershipsRepository {
   }
 
   async findMostRecentForUser(userId: string): Promise<MembershipRecord | null> {
-    return this.ofUser(userId)[0] ?? null;
+    return membershipsOf(this.store, userId)[0] ?? null;
   }
 
   async listForUser(userId: string): Promise<TenantMembership[]> {
-    return this.ofUser(userId).flatMap((membership) => {
-      const tenant = this.store.tenants.get(membership.tenantId);
-      return tenant ? [{ ...membership, tenant }] : [];
-    });
+    return withTenants(this.store, membershipsOf(this.store, userId));
   }
 
   async touch(tenantId: string, userId: string, at: Date): Promise<void> {
     const key = membershipKey(tenantId, userId);
     const membership = this.store.memberships.get(key);
-    if (membership) this.store.memberships.set(key, { ...membership, lastActiveAt: at });
+    if (!membership) throw new RowCountMismatchError(1, 0, 'memberships.touch');
+    this.store.memberships.set(key, { ...membership, lastActiveAt: at });
   }
 
   async updateRoles(
@@ -126,6 +131,13 @@ export class InMemoryMembershipsRepository extends MembershipsRepository {
     return [...this.store.memberships.values()].filter(
       (m) => m.tenantId === tenantId && m.roles.includes('owner'),
     ).length;
+  }
+}
+
+/** `MembershipsSystemRepository` over the same store. */
+export class InMemoryMembershipsSystemRepository extends MembershipsSystemRepository {
+  constructor(private readonly store: InMemoryIdentityStore) {
+    super();
   }
 
   async findMember(tenantId: string, userId: string): Promise<MemberRecord | null> {
@@ -164,11 +176,23 @@ export class InMemoryMembershipsRepository extends MembershipsRepository {
     };
   }
 
-  private ofUser(userId: string): MembershipRecord[] {
-    return [...this.store.memberships.values()]
-      .filter((m) => m.userId === userId)
-      .sort(recentFirst);
+  async listForUser(userId: string): Promise<TenantMembership[]> {
+    return withTenants(this.store, membershipsOf(this.store, userId));
   }
+}
+
+function membershipsOf(store: InMemoryIdentityStore, userId: string): MembershipRecord[] {
+  return [...store.memberships.values()].filter((m) => m.userId === userId).sort(recentFirst);
+}
+
+function withTenants(
+  store: InMemoryIdentityStore,
+  memberships: readonly MembershipRecord[],
+): TenantMembership[] {
+  return memberships.flatMap((membership) => {
+    const tenant = store.tenants.get(membership.tenantId);
+    return tenant ? [{ ...membership, tenant }] : [];
+  });
 }
 
 export class InMemoryInvitationsRepository extends InvitationsRepository {
@@ -185,10 +209,6 @@ export class InMemoryInvitationsRepository extends InvitationsRepository {
     });
   }
 
-  async findByTokenHash(tokenHash: string): Promise<InvitationRecord | null> {
-    return [...this.store.invitations.values()].find((i) => i.tokenHash === tokenHash) ?? null;
-  }
-
   async listPending(tenantId: string, now: Date): Promise<InvitationRecord[]> {
     return [...this.store.invitations.values()]
       .filter((i) => i.tenantId === tenantId && i.acceptedAt === null && i.expiresAt > now)
@@ -201,6 +221,17 @@ export class InMemoryInvitationsRepository extends InvitationsRepository {
     if (!invitation || invitation.acceptedAt !== null || invitation.expiresAt <= now) return false;
     this.store.invitations.set(key, { ...invitation, acceptedAt: now });
     return true;
+  }
+}
+
+/** `InvitationsSystemRepository` over the same store. */
+export class InMemoryInvitationsSystemRepository extends InvitationsSystemRepository {
+  constructor(private readonly store: InMemoryIdentityStore) {
+    super();
+  }
+
+  async findByTokenHash(tokenHash: string): Promise<InvitationRecord | null> {
+    return [...this.store.invitations.values()].find((i) => i.tokenHash === tokenHash) ?? null;
   }
 }
 

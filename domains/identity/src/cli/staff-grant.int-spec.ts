@@ -10,8 +10,9 @@ describe('staff:grant against Postgres', () => {
 
   beforeAll(async () => {
     database = await startIdentityDatabase([]);
-    url = process.env.DATABASE_URL ?? '';
-    await database.db.execute(
+    // The CLI connects as app_owner (DATABASE_MIGRATION_URL), through the TO app_owner policies.
+    url = database.pg.migrationUrl;
+    await database.admin.execute(
       sql`insert into identity.users (email, password_hash, display_name) values ('ops@example.com', 'x', 'Ops')`,
     );
   }, 180_000);
@@ -21,7 +22,7 @@ describe('staff:grant against Postgres', () => {
   });
 
   const flag = async (): Promise<boolean | undefined> => {
-    const [row] = await database.db.execute<{ is_platform_staff: boolean }>(
+    const [row] = await database.admin.execute<{ is_platform_staff: boolean }>(
       sql`select is_platform_staff from identity.users where email = 'ops@example.com'`,
     );
     return row?.is_platform_staff;
@@ -29,7 +30,7 @@ describe('staff:grant against Postgres', () => {
 
   it('grants and revokes is_platform_staff by email; unknown emails exit 1', async () => {
     const deps = {
-      env: { DATABASE_URL: url },
+      env: { DATABASE_MIGRATION_URL: url },
       connect: createPostgresStaffStore,
       out: () => undefined,
       err: () => undefined,

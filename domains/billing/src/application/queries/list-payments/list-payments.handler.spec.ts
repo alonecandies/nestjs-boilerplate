@@ -1,13 +1,16 @@
 import { createTestRbacRegistry, TEST_TENANT_ID } from '@platform/auth/testing';
 import { createPrincipal, generateId, runWithPrincipal, type TenantRole } from '@platform/common';
+import type { RlsElevation } from '@platform/database';
 import { createMock, type Mocked } from '@platform/testing';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
   InMemoryBillingStore,
   InMemoryPaymentsRepository,
+  installTestTransactionHost,
   makePayment,
+  type TestTransactions,
 } from '../../../../test/billing-test.utils.js';
-import { BILLING_RBAC } from '../../../billing.permissions.js';
+import { BILLING_RBAC, BillingPermission } from '../../../billing.permissions.js';
 import type { PaymentsRepository } from '../../repositories/payments.repository.js';
 import { ListPaymentsHandler } from './list-payments.handler.js';
 import { ListPaymentsQuery } from './list-payments.query.js';
@@ -17,12 +20,29 @@ const as = <T>(principal: { userId: string; tenantId: string; roles: TenantRole[
 
 describe('ListPaymentsHandler', () => {
   let repository: Mocked<PaymentsRepository>;
+  let elevation: Mocked<RlsElevation>;
+  let tx: TestTransactions;
+  /** What happened, in order: transactions, elevations and repository reads. */
+  let trail: string[];
   let handler: ListPaymentsHandler;
 
   beforeEach(() => {
+    tx = installTestTransactionHost();
+    trail = [];
     repository = createMock<PaymentsRepository>();
-    repository.list.mockResolvedValue({ items: [], nextCursor: null });
-    handler = new ListPaymentsHandler(repository, createTestRbacRegistry(BILLING_RBAC));
+    repository.list.mockImplementation(async () => {
+      trail.push(tx.active ? 'list in tx' : 'list');
+      return { items: [], nextCursor: null };
+    });
+    elevation = createMock<RlsElevation>();
+    elevation.elevate.mockImplementation(async (permission) => {
+      trail.push(tx.active ? `elevate ${permission} in tx` : `elevate ${permission}`);
+    });
+    handler = new ListPaymentsHandler(
+      repository,
+      elevation as unknown as RlsElevation,
+      createTestRbacRegistry(BILLING_RBAC),
+    );
   });
 
   it('lists one user’s payments as contracts', async () => {
@@ -83,6 +103,38 @@ describe('ListPaymentsHandler', () => {
     });
   });
 
+  it('with billing:read-all: elevate(billing:read-all) first, then the read, in one unit of work', async () => {
+    await as(admin(), () =>
+      handler.execute(new ListPaymentsQuery({ tenantId: TEST_TENANT_ID, limit: 10 })),
+    );
+    expect(trail).toEqual([`elevate ${BillingPermission.ReadAll} in tx`, 'list in tx']);
+    expect(elevation.elevate).toHaveBeenCalledTimes(1);
+    expect(tx.begun).toBe(1);
+  });
+
+  it('own payments: one unit of work, never elevated (also for an admin)', async () => {
+    const principal = admin();
+    await as(principal, () =>
+      handler.execute(
+        new ListPaymentsQuery({ tenantId: TEST_TENANT_ID, userId: principal.userId, limit: 10 }),
+      ),
+    );
+    expect(trail).toEqual(['list in tx']);
+    expect(elevation.elevate).not.toHaveBeenCalled();
+    expect(tx.begun).toBe(1);
+  });
+
+  it('a refused elevation fails the request and reads nothing', async () => {
+    elevation.elevate.mockRejectedValueOnce(new Error('ELEVATION_DENIED'));
+    await expect(
+      as(admin(), () =>
+        handler.execute(new ListPaymentsQuery({ tenantId: TEST_TENANT_ID, limit: 10 })),
+      ),
+    ).rejects.toThrow('ELEVATION_DENIED');
+    expect(repository.list).not.toHaveBeenCalled();
+    expect(tx.rolledBack).toBe(1);
+  });
+
   it.each([
     [undefined, 20],
     [0, 20], // proto3 "not set"
@@ -109,12 +161,18 @@ describe('tenant scope (B2-26)', () => {
   const ada = generateId();
   const bob = generateId();
   let store: InMemoryBillingStore;
+  let tx: TestTransactions;
+  let elevation: Mocked<RlsElevation>;
   let scoped: ListPaymentsHandler;
 
   beforeEach(() => {
     store = new InMemoryBillingStore();
+    tx = installTestTransactionHost(store);
+    elevation = createMock<RlsElevation>();
+    elevation.elevate.mockResolvedValue(undefined);
     scoped = new ListPaymentsHandler(
       new InMemoryPaymentsRepository(store),
+      elevation as unknown as RlsElevation,
       createTestRbacRegistry(BILLING_RBAC),
     );
     store.seed(
@@ -137,6 +195,9 @@ describe('tenant scope (B2-26)', () => {
         scoped.execute(new ListPaymentsQuery({ tenantId: tenantA, limit: 10 })),
       ),
     ).rejects.toMatchObject({ code: 'FORBIDDEN', details: { required: ['billing:read-all'] } });
+    // Refused in TypeScript before any unit of work opens.
+    expect(tx.begun).toBe(0);
+    expect(elevation.elevate).not.toHaveBeenCalled();
   });
 
   it('403 TENANT_MISMATCH when the request names a tenant the principal is not acting in', async () => {
@@ -145,5 +206,6 @@ describe('tenant scope (B2-26)', () => {
         scoped.execute(new ListPaymentsQuery({ tenantId: tenantB, userId: ada, limit: 10 })),
       ),
     ).rejects.toMatchObject({ code: 'TENANT_MISMATCH' });
+    expect(tx.begun).toBe(0);
   });
 });

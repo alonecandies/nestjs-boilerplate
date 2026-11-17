@@ -9,9 +9,11 @@ import {
   DomainValidationException,
   EntityNotFoundException,
   generateId,
+  ServiceUnavailableException,
   UnauthenticatedException,
 } from '@platform/common';
 import { AppConfigModule, grpcConfig } from '@platform/config';
+import { RlsContextError, SystemDatabaseError } from '@platform/database';
 import { AppCacheService } from '@platform/redis';
 import { createGrpcServerStrategy } from '@platform/transport';
 import { ClsModule } from 'nestjs-cls';
@@ -129,6 +131,32 @@ describe('identity over gRPC (forRemote adapters ↔ gRPC controllers)', () => {
     const error = await users.getUser(id).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(EntityNotFoundException);
     expect(error).toMatchObject({ httpStatus: 404, details: { entity: 'User', id } });
+  });
+
+  it('GetUser without a principal: RLS_NO_PRINCIPAL is a server bug, INTERNAL with a generic message', async () => {
+    // What the runtime pool throws when a unit of work opens without a CLS principal: a guard
+    // should have refused the call first, so it stays a logged 500 rather than a client 401.
+    queryBus.execute.mockRejectedValue(
+      new RlsContextError('RLS_NO_PRINCIPAL', 'RLS context: no principal in CLS'),
+    );
+    const error = await users.getUser(generateId()).catch((e: unknown) => e);
+    // The upstream INTERNAL reaches the gateway's caller as 502 (an upstream failure), not a 401.
+    expect(error).not.toBeInstanceOf(UnauthenticatedException);
+    expect(error).toMatchObject({ httpStatus: 502 });
+    expect((error as Error).message).not.toContain('RLS context');
+  });
+
+  it('GetUser with the system pool missing: SYSTEM_DATABASE_UNAVAILABLE (503), message generic', async () => {
+    queryBus.execute.mockRejectedValue(
+      new SystemDatabaseError(
+        'SYSTEM_DATABASE_UNAVAILABLE',
+        'System method users.findByIdInTenant: no system pool (set DATABASE_SYSTEM_URL)',
+      ),
+    );
+    const error = await users.getUser(generateId(), { tenantId: TENANT }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect(error).toMatchObject({ httpStatus: 503, code: 'SYSTEM_DATABASE_UNAVAILABLE' });
+    expect((error as Error).message).not.toContain('DATABASE_SYSTEM_URL');
   });
 
   it('GetUser: an invalid id is rejected by the zod pipe (INVALID_ARGUMENT) before the bus', async () => {

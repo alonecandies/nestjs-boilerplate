@@ -17,6 +17,8 @@ app.elevated = …`, with `ALTER ROLE app_runtime SET citus.propagate_set_comman
 3. **No subqueries in policies.** Citus rejects them on distributed and reference tables [P-3]. Write `app.x()`, not
    `(select app.x())`. A cross-table check goes through a STABLE helper, and the helper may read only **reference**
    tables: one that reads a distributed table fails inside pushed-down joins [P-7, P-8].
+   (Amended 2026-11-17: even a reference-table helper failed on a shard with local execution off, so B3 policies are
+   row-local; see 7.2.)
 4. **Layout.**
    - Reference: `users`, `tenants`, `memberships`, so the global `email` and `slug` uniques still work.
    - Distributed by `tenant_id`, colocated with the platform anchor `app.tenant_colocation`: invitations,
@@ -456,12 +458,36 @@ Replace the helper bullet's last line with:
 
 Add:
 
-> - **Cross-table policy checks** go through `STABLE` helpers that read reference tables only (for example
+> - **Cross-table policy checks** (superseded 2026-11-17, see 7.2: no policy helper reads a table) go through `STABLE` helpers that read reference tables only (for example
 >   `identity.shares_current_tenant(user_id)` over `identity.memberships`; a helper that names a domain table lives
 >   in that domain's schema and migration set, not in `app`). A helper that reads a distributed table fails inside
 >   pushed-down queries.
 
 ### 7.2 Spec §8.2 changes
+
+> **Superseded 2026-11-17** by the B3 ruling `b3-identity-policies` (program spec section 8.2 and the delta in section
+> 16). Lane DI probed Citus 14.2 with `citus.enable_local_execution=off` (cluster behaviour): a policy that calls a helper
+> reading another distributed table fails as `app_runtime` with `XX000 cannot execute a distributed query from a query on
+a shard`. That covers `identity.shares_current_tenant`, `identity.is_member` and `identity.staff_flag`, also when the
+> table they read (`identity.memberships`) is a reference table, so the helper rule of items 3 and 7.1 ("helpers may read
+> reference tables only") does not hold for a policy that runs on a shard. `citus.allow_nested_distributed_execution`
+> ("possible incorrectness") and running the policy specs with local execution on (which hides the failure) were not
+> accepted as fixes.
+
+What §8.2 changes instead:
+
+- **`identity.users` read:** `id = app.user_id()`. **`identity.tenants` read:** `id = app.tenant_id()`. No helper function
+  is created. Every policy is row-local: only the row's own columns and `app.user_id()`, `app.tenant_id()`,
+  `app.elevated()`.
+- **All rows:** `(select app.x())` → `app.x()` (unchanged from the original text below).
+- **Co-member and cross-tenant reads** (the member directory, scoped user reads, the caller's tenants outside the session
+  tenant) are system-pool methods that filter on the tenant in their own SQL (spec section 9, methods 12-14). They are
+  verified in application SQL, not by the database policy: the same trust model as the session context.
+- A column-level `INSERT` grant on `identity.users` also fails on Citus (the shard `INSERT` names every defaulted column,
+  so `is_platform_staff` needs `INSERT` privilege), so `INSERT` is table-level and the `WITH CHECK` refuses
+  `is_platform_staff = true`. The `UPDATE` column list works.
+
+Original text (2026-11-09), kept for the record:
 
 - **`identity.users` read:** `id = app.user_id() or identity.shares_current_tenant(id)`, where
 

@@ -1,12 +1,15 @@
 import { RbacErrorCode } from '@platform/auth';
 import {
+  createPrincipal,
   DomainValidationException,
   EntityNotFoundException,
   PLATFORM_TENANT_ID,
+  runWithPrincipal,
 } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { makeUserRecord } from '../../../../test/fixtures.js';
 import { mockOf } from '../../../../test/mocks.js';
+import { principalLog } from '../../../../test/principal-log.js';
 import { NotPlatformStaffException } from '../../../domain/identity.errors.js';
 import type { TokenIssuer } from '../../../infrastructure/security/token-issuer.service.js';
 import { AUDIT_EVENT_TYPES } from '../../persistence/audit-events.repository.js';
@@ -26,6 +29,7 @@ describe('StaffSwitchInHandler', () => {
   let issuer: ReturnType<typeof mockOf<TokenIssuer>>;
   let audit: ReturnType<typeof mockOf<TenantAuditLog>>;
   let handler: StaffSwitchInHandler;
+  let principals: ReturnType<typeof principalLog>;
 
   beforeEach(() => {
     log.length = 0;
@@ -51,7 +55,14 @@ describe('StaffSwitchInHandler', () => {
         return 'audit-1';
       },
     });
-    handler = new StaffSwitchInHandler(users, tenants, issuer, audit, { ttlSec: 300 });
+    principals = principalLog();
+    handler = new StaffSwitchInHandler(
+      principals.track('users', users),
+      principals.track('tenants', tenants),
+      issuer,
+      principals.track('audit', audit),
+      { ttlSec: 300 },
+    );
   });
 
   it('issues an admin + staff access token in the tenant, for the configured TTL, and audits it', async () => {
@@ -116,4 +127,22 @@ describe('StaffSwitchInHandler', () => {
       expect(log).toEqual([]);
     },
   );
+  it('checks staff as the caller; reads the tenant and audits as { staff, tenant, [admin], staff: true }', async () => {
+    const HOME = '0190f3b2-0000-7000-8000-0000000000bb';
+    await runWithPrincipal(createPrincipal({ userId: staff.id, tenantId: HOME }), () =>
+      handler.execute(new StaffSwitchInCommand(staff.id, TENANT, 'ticket')),
+    );
+    expect(principals.summary()).toEqual([
+      ['users.isPlatformStaff', staff.id, HOME],
+      ['users.findById', staff.id, HOME],
+      ['tenants.findById', staff.id, TENANT],
+      ['audit.record', staff.id, TENANT],
+    ]);
+    expect(principals.calls.at(-1)?.principal).toEqual({
+      userId: staff.id,
+      tenantId: TENANT,
+      roles: ['admin'],
+      staff: true,
+    });
+  });
 });

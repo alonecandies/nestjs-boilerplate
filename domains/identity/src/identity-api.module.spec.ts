@@ -4,15 +4,22 @@ import { CqrsModule } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { provideCommonEnhancers } from '@platform/common';
-import { DRIZZLE, TransactionHost } from '@platform/database';
+import {
+  DRIZZLE,
+  RlsElevation,
+  SYSTEM_DATABASE,
+  SystemDatabase,
+  TransactionHost,
+} from '@platform/database';
 import { MailService } from '@platform/mailer';
 import { AppCacheService } from '@platform/redis';
 import { createFastifyTestApp } from '@platform/testing';
 import { KafkaProducer } from '@platform/transport';
 import { FakeKafkaProducer } from '@platform/transport/testing';
+import { ClsModule } from 'nestjs-cls';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AUTH_TEST_IMPORTS, bearer, principal } from '../test/auth-test.module.js';
-import { createFakePostgres, type FakeResult } from '../test/fake-postgres.js';
+import { createFakePostgres, type FakeResult, fakeTransactionHost } from '../test/fake-postgres.js';
 import { InMemoryAppCache } from '../test/in-memory-app-cache.js';
 import { AuthPort } from './application/ports/auth.port.js';
 import { UsersPort } from './application/ports/users.port.js';
@@ -78,16 +85,26 @@ const kafka = new FakeKafkaProducer({ source: 'monolith' });
 @Module({
   providers: [
     { provide: DRIZZLE, useValue: database.db },
-    {
-      provide: TransactionHost,
-      useValue: { tx: database.db, withTransaction: (work: () => Promise<unknown>) => work() },
-    },
+    // The real adapter over the fake pool: repositories open RLS-context transactions as in
+    // production, and the system ports run on the same fake through SystemDatabase.
+    { provide: TransactionHost, useValue: fakeTransactionHost(database.db) },
+    { provide: SYSTEM_DATABASE, useValue: new SystemDatabase(database.db) },
+    // DatabaseModule's RlsElevation: justified elevation sends SET LOCAL on the fake transaction.
+    RlsElevation,
     { provide: KafkaProducer, useValue: kafka },
     { provide: AppCacheService, useValue: new InMemoryAppCache() },
     // AppMailerModule's global MailService (the invitation mail is queued through it).
     { provide: MailService, useValue: { enqueue: vi.fn() } },
   ],
-  exports: [DRIZZLE, TransactionHost, KafkaProducer, AppCacheService, MailService],
+  exports: [
+    DRIZZLE,
+    TransactionHost,
+    SYSTEM_DATABASE,
+    RlsElevation,
+    KafkaProducer,
+    AppCacheService,
+    MailService,
+  ],
 })
 class FakeInfrastructureModule {}
 
@@ -97,6 +114,9 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
   beforeAll(async () => {
     const builder = Test.createTestingModule({
       imports: [
+        // The request CLS context the apps open (ObservabilityModule): JwtAuthGuard writes the
+        // principal into it, and the RLS context and tenant assertions read it.
+        ClsModule.forRoot({ global: true, middleware: { mount: true } }),
         ...AUTH_TEST_IMPORTS,
         CqrsModule.forRoot(),
         FakeInfrastructureModule,

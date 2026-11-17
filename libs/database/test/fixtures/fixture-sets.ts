@@ -33,3 +33,25 @@ export const catalogMigrations: DatabaseMigrationSet = {
   migrationsSchema: 'catalog',
   migrationsTable: MIGRATIONS_TABLE,
 };
+
+/**
+ * The boot guard fixture (B3 Task 8): one tenant-distributed table under forced RLS, in its own
+ * schema with its own bookkeeping table. Runs after platformMigrations (it calls its helpers).
+ */
+export const guardedMigrations: DatabaseMigrationSet = {
+  name: 'guarded',
+  folder: join(import.meta.dirname, 'guarded', 'migrations'),
+  migrationsSchema: 'guarded',
+  migrationsTable: MIGRATIONS_TABLE,
+};
+
+/**
+ * The sharding smoke fixture (B3 Task 18): a reference table and a tenant-distributed table under
+ * forced RLS, with policies that call `app.user_id()`. Runs after platformMigrations.
+ */
+export const shardingMigrations: DatabaseMigrationSet = {
+  name: 'sharding',
+  folder: join(import.meta.dirname, 'sharding', 'migrations'),
+  migrationsSchema: 'sharding',
+  migrationsTable: MIGRATIONS_TABLE,
+};
