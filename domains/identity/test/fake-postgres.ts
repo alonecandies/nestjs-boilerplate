@@ -31,6 +31,10 @@ export function createFakePostgres(handler: FakeQueryHandler = () => []) {
     const pending = Promise.resolve().then(() => handler(sql, params));
     return Object.assign(pending, {
       values: async (): Promise<unknown[][]> => (await pending).map((row) => Object.values(row)),
+      // postgres.js simple protocol: the RLS context statement on BEGIN (`unsafe(sql).simple()`).
+      simple() {
+        return this;
+      },
     });
   });
   const client = { unsafe, options: { parsers: {}, serializers: {} } };

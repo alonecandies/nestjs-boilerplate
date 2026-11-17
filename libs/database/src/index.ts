@@ -3,7 +3,9 @@
  * `DatabaseModule`), CLS-propagated transactions (`@Transactional()`), migration sets (the
  * platform set first, then each domain's own drizzle-kit history) applied by an advisory-locked
  * runner at boot or by each app's `migrate.ts` (`runMigrationsCli`), a readiness contributor and
- * uuidv7 keyset-pagination helpers. Domain `*.schema.ts` files and histories live in the domains.
+ * uuidv7 keyset-pagination helpers. Every runtime transaction opens with the RLS context of the CLS
+ * principal (`SET LOCAL`, refused without one); repositories reach it through `inUnitOfWork`.
+ * Domain `*.schema.ts` files and histories live in the domains.
  */
 
 /*
@@ -34,3 +36,15 @@ export * from './migrator/migrations.constants.js';
 export * from './migrator/run-migrations.js';
 export * from './pagination/keyset.js';
 export * from './platform/platform.migrations.js';
+// The RLS contract only: the applied-context recorder and comparison stay package-internal.
+export {
+  buildRlsContextSql,
+  getAppliedRlsContext,
+  RLS_UUID_PATTERN,
+  RlsContextError,
+  type RlsContextInput,
+  type RlsErrorCode,
+  rlsContextOf,
+} from './rls/rls-context.js';
+export * from './rls/row-count.js';
+export * from './rls/unit-of-work.js';

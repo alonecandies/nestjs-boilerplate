@@ -30,6 +30,10 @@ export function createFakePostgres<TSchema extends Record<string, unknown>>(
     return Object.assign(pending, {
       values: async (): Promise<unknown[][]> => (await pending).map((row) => Object.values(row)),
       cancel: (): void => undefined,
+      // postgres.js simple protocol: the RLS context statement on BEGIN (`unsafe(sql).simple()`).
+      simple() {
+        return this;
+      },
     });
   };
   const end = vi.fn(async () => undefined);

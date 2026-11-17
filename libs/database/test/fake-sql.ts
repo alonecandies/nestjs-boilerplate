@@ -3,11 +3,21 @@ import { type Mock, vi } from 'vitest';
 /** Resolves a query's rows. `query` is normalized SQL text: template params rendered as `$`. */
 export type FakeSqlHandler = (query: string, values: unknown[]) => unknown[] | Promise<unknown[]>;
 
-/** A pending query: awaitable, cancellable, and (for `unsafe`) with drizzle's `.values()` mode. */
+/**
+ * A pending query: awaitable, cancellable, and (for `unsafe`) with drizzle's `.values()` mode and
+ * postgres.js' `.simple()` (simple protocol: recorded in `FakeSql.statements`).
+ */
 export type FakeQuery = Promise<unknown[]> & {
   cancel: () => void;
   values: () => Promise<unknown[][]>;
+  simple: () => FakeQuery;
 };
+
+/** One statement as sent: `simple` is true once `.simple()` was called on its query. */
+export interface FakeStatement {
+  readonly text: string;
+  simple: boolean;
+}
 
 export interface FakeSql {
   (strings: TemplateStringsArray | string, ...values: unknown[]): unknown;
@@ -15,11 +25,24 @@ export interface FakeSql {
   unsafe: Mock<(query: string, params?: unknown[]) => FakeQuery>;
   /** postgres.js `sql.begin(fn)` — records `begin` / `commit` / `rollback` around `fn`. */
   begin: Mock<(fn: (tx: FakeSql) => Promise<unknown>) => Promise<unknown>>;
+  /**
+   * postgres.js `tx.savepoint(fn)` (transaction clients only in the real driver) — records
+   * `savepoint` / `release savepoint` / `rollback to savepoint` around `fn`.
+   */
+  savepoint: Mock<(fn: (tx: FakeSql) => Promise<unknown>) => Promise<unknown>>;
   end: Mock<(options?: { timeout?: number }) => Promise<void>>;
   /** What drizzle's postgres-js driver mutates on construction. */
   options: { parsers: Record<string, unknown>; serializers: Record<string, unknown> };
   /** Every statement in execution order (shared with transaction children). */
   queries: string[];
+  /** The same statements with their protocol (shared with transaction children). */
+  statements: FakeStatement[];
+  cancels: Mock<() => void>;
+}
+
+interface Shared {
+  queries: string[];
+  statements: FakeStatement[];
   cancels: Mock<() => void>;
 }
 
@@ -28,46 +51,58 @@ const normalize = (query: string): string => query.replace(/\s+/g, ' ').trim();
 /**
  * Minimal stand-in for a postgres.js `Sql` pool — enough for module wiring, `@Transactional()`,
  * health and migration-lock tests without a database: tagged templates and `unsafe()` resolve
- * through `handler`, `sql('ident')` returns an identifier marker, `begin()` hands `fn` a child
- * fake that shares the query log, and `end()` is a spy.
+ * through `handler`, `sql('ident')` returns an identifier marker, `begin()` / `savepoint()` hand
+ * `fn` a child fake that shares the query log, and `end()` is a spy.
  */
 export function createFakeSql(
   handler: FakeSqlHandler = () => [{ '?column?': 1 }],
-  shared: { queries: string[]; cancels: Mock<() => void> } = {
-    queries: [],
-    cancels: vi.fn<() => void>(),
-  },
+  shared: Shared = { queries: [], statements: [], cancels: vi.fn<() => void>() },
 ): FakeSql {
-  const { queries, cancels } = shared;
+  const { queries, statements, cancels } = shared;
   const run = (query: string, values: unknown[]): FakeQuery => {
+    const statement: FakeStatement = { text: query, simple: false };
     queries.push(query);
+    statements.push(statement);
     const pending = Promise.resolve().then(() => handler(query, values));
-    return Object.assign(pending, {
+    const fakeQuery: FakeQuery = Object.assign(pending, {
       cancel: cancels,
       values: async (): Promise<unknown[][]> =>
         (await pending).map((row) => Object.values(row as Record<string, unknown>)),
+      simple: (): FakeQuery => {
+        statement.simple = true;
+        return fakeQuery;
+      },
     });
+    return fakeQuery;
   };
+  const scope =
+    (open: string, done: string, undo: string) =>
+    async (fn: (tx: FakeSql) => Promise<unknown>): Promise<unknown> => {
+      queries.push(open);
+      statements.push({ text: open, simple: false });
+      try {
+        const result = await fn(createFakeSql(handler, shared));
+        queries.push(done);
+        statements.push({ text: done, simple: false });
+        return result;
+      } catch (error) {
+        queries.push(undo);
+        statements.push({ text: undo, simple: false });
+        throw error;
+      }
+    };
   const sql = (strings: TemplateStringsArray | string, ...values: unknown[]): unknown => {
     if (typeof strings === 'string') return { identifier: strings };
     return run(normalize(strings.join('$')), values);
   };
   const fake: FakeSql = Object.assign(sql, {
     unsafe: vi.fn((query: string, params: unknown[] = []) => run(normalize(query), params)),
-    begin: vi.fn(async (fn: (tx: FakeSql) => Promise<unknown>) => {
-      queries.push('begin');
-      try {
-        const result = await fn(createFakeSql(handler, shared));
-        queries.push('commit');
-        return result;
-      } catch (error) {
-        queries.push('rollback');
-        throw error;
-      }
-    }),
+    begin: vi.fn(scope('begin', 'commit', 'rollback')),
+    savepoint: vi.fn(scope('savepoint', 'release savepoint', 'rollback to savepoint')),
     end: vi.fn(async (_options?: { timeout?: number }) => undefined),
     options: { parsers: {}, serializers: {} },
     queries,
+    statements,
     cancels,
   });
   return fake;

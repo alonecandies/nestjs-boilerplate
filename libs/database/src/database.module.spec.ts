@@ -6,6 +6,7 @@ import {
   Transactional,
   TransactionHost,
 } from '@nestjs-cls/transactional';
+import { createPrincipal, runWithPrincipal } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { ClsModule } from 'nestjs-cls';
@@ -49,6 +50,15 @@ type BootOptions = Omit<DatabaseModuleOptions<typeof schema>, 'migrations'> & {
 
 const ID_1 = '0199a1b2-0000-7000-8000-000000000001';
 const ID_2 = '0199a1b2-0000-7000-8000-000000000002';
+const USER = '0199a1b2-0000-7000-8000-0000000000a1';
+const TENANT = '0199a1b2-0000-7000-8000-0000000000b1';
+const principal = createPrincipal({ userId: USER, tenantId: TENANT, roles: ['member'] });
+/** What the adapter sends right after BEGIN (Task 5: always on, from the CLS principal). */
+const RLS_CONTEXT =
+  `SET LOCAL app.user_id = '${USER}'; SET LOCAL app.tenant_id = '${TENANT}'; ` +
+  `SET LOCAL app.elevated = 'off'`;
+/** Runtime units of work always run as a principal. */
+const asPrincipal = <T>(fn: () => T): T => runWithPrincipal(principal, fn);
 
 @Injectable()
 class ItemsService {
@@ -237,9 +247,11 @@ describe('DatabaseModule', () => {
     // Also guards the empty-config fix: no bare `set transaction` between begin and the inserts.
     it('@Transactional() runs both repository calls in ONE committed transaction', async () => {
       app = await boot({ schema }, [ItemsService]);
-      await app.get(ItemsService).createPair();
+      const service = app.get(ItemsService);
+      await asPrincipal(() => service.createPair());
       expect(fake.queries.slice(1)).toEqual([
         'begin',
+        RLS_CONTEXT,
         'insert into "items" ("id", "name") values ($1, $2)',
         'insert into "items" ("id", "name") values ($1, $2)',
         'commit',
@@ -248,15 +260,17 @@ describe('DatabaseModule', () => {
 
     it('rolls back when the method throws', async () => {
       app = await boot({ schema }, [ItemsService]);
-      await expect(app.get(ItemsService).createPair(true)).rejects.toThrow('boom');
+      const service = app.get(ItemsService);
+      await expect(asPrincipal(() => service.createPair(true))).rejects.toThrow('boom');
       expect(fake.queries.at(-1)).toBe('rollback');
       expect(fake.queries).not.toContain('commit');
     });
 
     it('works without ClsModule.forRoot (scripts / workers without ObservabilityModule)', async () => {
       app = await boot({ schema }, [ItemsService], { clsRoot: false });
-      await app.get(ItemsService).createPair();
-      expect(fake.queries.at(1)).toBe('begin');
+      const service = app.get(ItemsService);
+      await asPrincipal(() => service.createPair());
+      expect(fake.queries.slice(1, 3)).toEqual(['begin', RLS_CONTEXT]);
       expect(fake.queries.at(-1)).toBe('commit');
     });
 
@@ -272,11 +286,21 @@ describe('DatabaseModule', () => {
         { schema, transactional: { defaultTxOptions: { isolationLevel: 'serializable' } } },
         [ItemsService],
       );
-      await app.get(ItemsService).createPair();
-      expect(fake.queries.slice(1, 3)).toEqual([
+      const service = app.get(ItemsService);
+      await asPrincipal(() => service.createPair());
+      expect(fake.queries.slice(1, 4)).toEqual([
         'begin',
         'set transaction isolation level serializable',
+        RLS_CONTEXT,
       ]);
+    });
+
+    it('refuses to open a transaction without a principal (RLS_NO_PRINCIPAL, no BEGIN)', async () => {
+      app = await boot({ schema }, [ItemsService]);
+      await expect(app.get(ItemsService).createPair()).rejects.toMatchObject({
+        code: 'RLS_NO_PRINCIPAL',
+      });
+      expect(fake.begin).not.toHaveBeenCalled();
     });
 
     it('provides @InjectTransaction() only when enableTransactionProxy is set', async () => {

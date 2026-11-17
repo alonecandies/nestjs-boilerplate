@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { type INestApplicationContext, Injectable, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { Transactional, TransactionHost } from '@nestjs-cls/transactional';
-import { generateId, isUuidV7 } from '@platform/common';
+import { createPrincipal, generateId, isUuidV7, runWithPrincipal } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { readRolesInitSql, startTestPostgres, type TestPostgres } from '@platform/testing/postgres';
 import { and, eq, sql } from 'drizzle-orm';
@@ -41,6 +41,9 @@ type Adapter = DrizzleTransactionalAdapter<typeof schema>;
 
 const execFileAsync = promisify(execFile);
 const silent = { log: noop, warn: noop, error: noop, debug: noop };
+/** Every runtime transaction opens with the principal's RLS context (Task 5): run as one. */
+const principal = createPrincipal({ userId: generateId(), tenantId: generateId() });
+const asPrincipal = <T>(fn: () => T): T => runWithPrincipal(principal, fn);
 
 @Injectable()
 class WidgetsRepository {
@@ -324,20 +327,22 @@ describe('@platform/database against PostgreSQL 18', () => {
 
     it('@Transactional() commits all statements together', async () => {
       const ownerId = generateId();
-      await service.createMany(ownerId, ['a', 'b', 'c']);
+      await asPrincipal(() => service.createMany(ownerId, ['a', 'b', 'c']));
       expect(await repo.countFor(ownerId)).toBe(3);
     });
 
     it('@Transactional() rolls back every statement when the method throws', async () => {
       const ownerId = generateId();
-      await expect(service.createMany(ownerId, ['x', 'y', 'z'], 2)).rejects.toThrow(
-        'business rule violated',
-      );
+      await expect(
+        asPrincipal(() => service.createMany(ownerId, ['x', 'y', 'z'], 2)),
+      ).rejects.toThrow('business rule violated');
       expect(await repo.countFor(ownerId)).toBe(0);
     });
 
     it('applies per-call transaction options', async () => {
-      await expect(service.isolationInsideSerializable()).resolves.toBe('serializable');
+      await expect(asPrincipal(() => service.isolationInsideSerializable())).resolves.toBe(
+        'serializable',
+      );
     });
 
     it('why the adapter normalizes options: drizzle renders {} as an invalid SET TRANSACTION', async () => {
