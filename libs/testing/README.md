@@ -16,12 +16,16 @@ package** (so any package can use it without dependency cycles) and pulls in `vi
 
 ### @platform/testing/postgres
 
-| Export                | Signature                                                                               | Purpose                                                                                         |
-| --------------------- | --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `startTestPostgres`   | `(options?: TestPostgresOptions) => Promise<TestPostgres>`                              | a fresh single-node Citus container per int spec, or the database at `INTEGRATION_DATABASE_URL` |
-| `TestPostgresOptions` | `{ localExecution?: boolean; initSql?: readonly string[]; allowExternalUrl?: boolean }` | `localExecution: false` forces remote shard execution; `initSql` runs as superuser              |
-| `TestPostgres`        | `{ readonly url: string; urlFor(role, password): string; stop(): Promise<void> }`       | superuser URL of database `app`; percent-encoded logins for other roles                         |
-| `TEST_POSTGRES_IMAGE` | `'citusdata/citus:14.2.0'`                                                              | the image compose runs too                                                                      |
+| Export                 | Signature                                                                                                   | Purpose                                                                                                                                   |
+| ---------------------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `startTestPostgres`    | `(options?: TestPostgresOptions) => Promise<TestPostgres>`                                                  | a fresh single-node Citus container per int spec, or (with `allowExternalUrl: true`) the database at `INTEGRATION_DATABASE_URL`           |
+| `TestPostgresOptions`  | `{ localExecution?: boolean; initSql?: readonly string[]; allowExternalUrl?: boolean }`                     | `localExecution: false` forces remote shard execution; `initSql` runs as superuser                                                        |
+| `TestPostgres`         | `{ readonly url: string; urlFor(role, password): string; stop(): Promise<void> }`                           | superuser URL of database `app`; percent-encoded logins for other roles                                                                   |
+| `TEST_POSTGRES_IMAGE`  | `'citusdata/citus:14.2.0'`                                                                                  | the image compose runs too                                                                                                                |
+| `startRlsTestPostgres` | `(options?: { localExecution?: boolean }) => Promise<RlsTestPostgres>`                                      | the Postgres of every spec that asserts isolation: always a container, `localExecution` default `false`, `initSql` = `readRolesInitSql()` |
+| `RlsTestPostgres`      | `TestPostgres & { readonly migrationUrl: string; readonly runtimeUrl: string; readonly systemUrl: string }` | logins as `app_owner`, `app_runtime`, `app_system` (dev password = role name); `url` stays the superuser, for seeding                     |
+| `TEST_DB_ROLES`        | `{ owner: 'app_owner'; runtime: 'app_runtime'; system: 'app_system' }`                                      | the role names                                                                                                                            |
+| `readRolesInitSql`     | `() => readonly string[]`                                                                                   | `docker/postgres/init/02-roles.sql` and `03-pgbouncer-auth.sql`, in that order (the files compose runs)                                   |
 
 ## Usage
 
@@ -49,8 +53,8 @@ Test.createTestingModule({ providers: [SomeHandler] }).useMocker(() => createMoc
 
 ## Environment variables
 
-`INTEGRATION_DATABASE_URL`: read by `startTestPostgres` only (unless `allowExternalUrl: false`); when set and
-not empty, that database is used instead of a container.
+`INTEGRATION_DATABASE_URL`: read by `startTestPostgres` only with `allowExternalUrl: true` (default `false`);
+when set and not empty, that database is used instead of a container. `startRlsTestPostgres` never reads it.
 
 `TEST_POSTGRES_STARTUP_TIMEOUT_MS`: how long `startTestPostgres` waits for a healthy container, in ms (default
 120000, testcontainers' own). Raise it when the amd64-only Citus image starts slowly under emulation on a busy
