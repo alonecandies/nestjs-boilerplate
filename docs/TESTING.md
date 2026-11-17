@@ -235,6 +235,35 @@ in-memory notifications repositories by default (`notificationStores: 'cassandra
 Cassandra client, which answers every query with no rows). The digest cron's system context is a unit spec
 (`daily-digest.cron.spec.ts`).
 
+### Real Socket.IO suites
+
+`realtime-socket.e2e-spec.ts` (E-1) is the first spec that reaches the `/notifications` gateway over a real
+connection: `socket.io-client` (websocket transport, no reconnection) against an app bound to `127.0.0.1` on a free
+port by `listenOnLoopback` (`@platform/testing/realtime`, which also holds the client helpers `SocketClients`,
+`connected`, `refused`, `nextEvent`, `disconnected`, `collectEvents`). It binds a port, so it needs the sandbox off,
+like every spec that listens. Both files set `WS_REVOCATION_SWEEP_INTERVAL_MS=200` before the app boots and raise
+C11's connection caps so they never interfere. No Kafka and no Redis adapter are connected (one process): a push is
+driven by calling `app.get(NotificationPushConsumer).onNotificationCreated(envelope)` with an envelope from
+`createEventEnvelope`, which is what the Kafka server does.
+
+- **Monolith (full suite, the notifications core is real).** Handshake (`MISSING_TOKEN`, `TOKEN_EXPIRED`,
+  `TOKEN_REVOKED`, `INVALID_TOKEN`; `auth.token` and the `Authorization` header connect, a query-string token does not),
+  messages (`ping`/`pong`, `notifications.markRead` acks `{ ok: true }`, 404 and 400, the 429 of the
+  `notifications.mark-read` policy, an `exception` event when no ack callback is given), push and rooms (an envelope for
+  (A, U) reaches U's socket in A exactly once in the REST shape, not U's socket in B nor V's in A; a redelivered
+  envelope id and an envelope without `tenantId` push nothing), expiry (`exception` `TOKEN_EXPIRED`, then
+  `io server disconnect`), revocation (a logged-out token's socket closes within two sweep intervals; a message sent
+  before the sweep is refused with 401 `TOKEN_REVOKED`) and a real tenant switch (the switched-away socket closes, the
+  user's other session keeps its socket, the new token's socket gets (B, U) pushes only).
+- **Gateway (reduced suite, the cases that need no real inbox).** Handshake, push and rooms, revocation (including the 401
+  for a message sent between logout and sweep, which the session guard answers before the inbox) and the tenant
+  switch, against the Socket.IO host of the microservices topology. The other per-message cases (acks, the
+  mark-read policy) use the fake notifications-service there, so they stay in the monolith suite.
+
+Fixtures go through register, invite, accept, login and switch-tenant. The one hand-signed token is the short-lived
+and the already expired one (`TokenIssuer.issueAccessToken` with a `ttlSec`), because the real flows cannot mint
+them. Not covered: fan-out across replicas through the Redis adapter, and C11's socket caps (C12 owns C's e2e).
+
 ### Gotchas
 
 - **`clearMocks: true`**: call history is reset before each test. Assert on calls made in the same
