@@ -202,6 +202,27 @@ value fails where it is needed (migrations throw before connecting; no system UR
 | `DATABASE_RUN_MIGRATIONS`       | `false`                                   | Apply the platform migration set and the app's domain sets at boot under a Postgres advisory lock; otherwise run the app's migrate job (`bun run --filter @app/<app> db:migrate`, or `dist/migrate.js` in the image; the root `bun run db:migrate` applies the monolith's sets).                                                                                                                   |
 | `DATABASE_ALLOW_INSECURE`       | `false`                                   | Production refuses any of the three URLs without TLS unless this is `true`: only when a sidecar (Cloud SQL Auth Proxy, …) or the network layer encrypts the connection. The local compose stack sets it.                                                                                                                                                                                           |
 
+#### Which process needs which URL
+
+| Process                                                       | `DATABASE_URL`     | `DATABASE_SYSTEM_URL` | `DATABASE_MIGRATION_URL`               |
+| ------------------------------------------------------------- | ------------------ | --------------------- | -------------------------------------- |
+| `monolith`                                                    | yes                | yes                   | yes (migrations at boot, `db:migrate`) |
+| `identity-service`                                            | yes                | yes                   | yes                                    |
+| `billing-service`                                             | yes                | yes                   | yes                                    |
+| `gateway`, `notifications-service`                            | none (no Postgres) | none                  | none                                   |
+| a release job (`dist/migrate.js`), `staff:grant`, drizzle-kit | none               | none                  | yes: the only URL they connect with    |
+
+- Every app that runs the identity or billing core needs all three. The system URL serves login and register lookups, the
+  member directory, the purge crons and the platform webhooks; without it each of those fails at the call with
+  `SYSTEM_DATABASE_UNAVAILABLE` (the app still boots, and the boot guard skips the `system.*` checks).
+- `DATABASE_MIGRATION_URL` has **no fallback**: where migrations or a CLI run, a missing value throws before any
+  connection. It is `app_owner`, straight to the coordinator.
+- The built-in default of `DATABASE_URL` is the compose superuser `app`, which bypasses RLS. The boot guard warns about
+  it outside production and refuses it in `enforce` (compose and production). `.env.example` sets all three URLs to the
+  three roles.
+- Behind PgBouncer set `DATABASE_POOLER=pgbouncer`; the pooler's ini must not list `statement_timeout` in
+  `ignore_startup_parameters` ([SECURITY.md](SECURITY.md#pgbouncer-authentication)).
+
 ### `cassandra` — notifications inbox
 
 [`cassandra.config.ts`](../libs/config/src/namespaces/cassandra.config.ts) · monolith,

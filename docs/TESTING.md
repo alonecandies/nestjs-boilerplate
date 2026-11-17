@@ -52,7 +52,9 @@ package (`<domain>-contracts`):
 Examples: `redis`, `identity`, `billing-contracts`, `gateway`, `gateway:e2e`, `identity-service:e2e`,
 `database:int`, `identity:int`. A new package gets its projects automatically. You do not need to register it.
 One more project, `scripts`, runs the specs of the repo tooling (`scripts/**/*.spec.ts`, such as the layer boundary
-check).
+check) and the docs checks: `scripts/docs-catalogue.spec.ts` (error codes in API.md) and `scripts/docs-b3.spec.ts`
+(SECURITY.md lists exactly the system methods, elevation reasons and boot guard checks of the code, CONFIGURATION.md the
+database keys, and the spec delta and READMEs describe B3).
 
 Shared settings: `globals: true`, `setupFiles: ['reflect-metadata']`, `pool: 'forks'` (Nest apps hold
 sockets and timers, and forks isolate them most reliably), `clearMocks` and `restoreMocks`. Coverage

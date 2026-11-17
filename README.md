@@ -8,7 +8,8 @@ A production-grade starting point for a NestJS 12 backend on Node 24 LTS, TypeSc
 (identity, notifications, billing, files) is written once as hexagonal + CQRS libraries and runs either in a single
 process (`apps/monolith`) or split behind an API gateway (`apps/gateway`) into gRPC services (`identity-service`,
 `notifications-service`, `billing-service`) that share integration events over Kafka. The stack covers REST, GraphQL
-(Apollo, with subscriptions), Socket.IO and gRPC; PostgreSQL 18 with Drizzle, Cassandra, Redis and Kafka; JWT + RBAC;
+(Apollo, with subscriptions), Socket.IO and gRPC; PostgreSQL 18 (Citus, behind PgBouncer) with Drizzle and row-level
+security per tenant, Cassandra, Redis and Kafka; JWT + RBAC;
 pino logs, Prometheus metrics and OpenTelemetry traces; mail through a BullMQ queue; cron jobs; S3 / GCS file storage;
 and Stripe payments. All of it is wired, tested (Vitest, unit + e2e + integration) and containerised (one Dockerfile,
 one compose file with profiles). Copy it, delete the domains you don't need, and add your own.
@@ -34,7 +35,7 @@ Every requested capability, where it lives and where to see it in use. Paths are
 | Commitlint                                                  | `commitlint.config.ts` (Conventional Commits, scopes = workspace packages + `deps`, `docker`, `ci`, `docs`…)                                                                                                                                                                                                                                                                                                           | `.husky/commit-msg`                                                                                                                                                                                                         |
 | Husky                                                       | `.husky/pre-commit`, `.husky/commit-msg` (installed by the `prepare` script)                                                                                                                                                                                                                                                                                                                                           | runs on every `git commit`                                                                                                                                                                                                  |
 | lint-staged                                                 | `lint-staged.config.ts` (Biome then ESLint on TS; Biome on JS/JSON; Prettier on MD/YAML)                                                                                                                                                                                                                                                                                                                               | `.husky/pre-commit`                                                                                                                                                                                                         |
-| PostgreSQL 18                                               | `libs/database` (postgres.js pool, health, migration runner, platform set `libs/database/src/platform/migrations`), `docker/postgres`                                                                                                                                                                                                                                                                                  | identity users/sessions (schema `identity`), billing payments (schema `billing`), each with its own `migrations/`: `domains/identity/src/infrastructure/persistence`, `domains/billing/src/infrastructure/persistence`      |
+| PostgreSQL 18                                               | `libs/database` (postgres.js pool, health, migration runner, platform set `libs/database/src/platform/migrations`, the forced-RLS context, system pool and boot guard), `docker/postgres` (the three roles), `docker/pgbouncer`                                                                                                                                                                                        | identity users/sessions (schema `identity`), billing payments (schema `billing`), each with its own `migrations/`: `domains/identity/src/infrastructure/persistence`, `domains/billing/src/infrastructure/persistence`      |
 | GraphQL                                                     | `libs/graphql` (Apollo config, complexity limit, DataLoader registry, Redis pub/sub, scalars)                                                                                                                                                                                                                                                                                                                          | resolvers in `domains/*/src/presentation/graphql`; [GraphQL example](#graphql-and-subscriptions)                                                                                                                            |
 | Cassandra 5                                                 | `libs/cassandra` (client, CQL migrator, paging, health)                                                                                                                                                                                                                                                                                                                                                                | notifications inbox: `domains/notifications/src/infrastructure/persistence/cassandra-notifications.repository.ts`                                                                                                           |
 | Redis                                                       | `libs/redis` (client factory, cache, throttler storage, distributed locks, BullMQ, Socket.IO adapter)                                                                                                                                                                                                                                                                                                                  | `libs/redis/src/lock/with-lock.decorator.ts`, `libs/redis/src/throttler`                                                                                                                                                    |
@@ -110,17 +111,20 @@ Then open:
 
 Notes:
 
-- `bun run db:migrate` runs the monolith's migrate entry (`apps/monolith/src/migrate.ts`) against the `DATABASE_URL` of
-  the root `.env`: the platform migration set first, then identity's and billing's, each in its own Postgres schema with
+- `bun run db:migrate` runs the monolith's migrate entry (`apps/monolith/src/migrate.ts`) against the
+  `DATABASE_MIGRATION_URL` of the root `.env` (the `app_owner` role, straight to Postgres, never PgBouncer): the platform migration set first, then identity's and billing's, each in its own Postgres schema with
   its own history. It is optional on a dev machine: every app `.env.example` that owns Postgres tables sets
   `DATABASE_RUN_MIGRATIONS=true`, so the app applies its sets at boot under an advisory lock. Use the explicit step in CI
   or when you set `DATABASE_RUN_MIGRATIONS=false`. Cassandra tables have no root script: they are created at boot
   (`CASSANDRA_RUN_MIGRATIONS=true`).
-- **A local database from before the per-domain schemas.** Identity's and billing's tables now live in the
-  `identity` and `billing` Postgres schemas, each with its own history starting at `0000_init`; nothing moves the old
-  `public` tables. The apps still boot (they create the new schemas), but users and payments created before are left
-  behind in `public`. Reset once with `docker compose --profile '*' down -v` (it deletes every local volume: Postgres,
-  Cassandra, Kafka, Redis and the buckets), then `bun run docker:infra`.
+- **One `docker compose --profile '*' down -v` after B3.** Postgres runs `docker/postgres/init/*` only on an empty data
+  directory, and B3 puts three roles there (`app_owner` for migrations, `app_runtime` for every request, `app_system` for
+  the named system methods; the app connects through PgBouncer on `127.0.0.1:${PGBOUNCER_HOST_PORT:-6432}`, migrations
+  go straight to `${POSTGRES_HOST_PORT:-5432}`). A volume from an earlier stack has none of them, so the apps
+  cannot log in. The reset deletes every local volume (Postgres, Cassandra, Kafka, Redis and the buckets);
+  then `bun run docker:infra`. It also clears the older layout: identity's and billing's tables live in the `identity`
+  and `billing` Postgres schemas, each with its own history starting at `0000_init`, and nothing moves the tables an
+  even older database left in `public`. Copy the new `.env.example`: it carries the three database URLs.
 - The per-app settings that must differ between apps (`SERVICE_NAME`, `PORT`, `GRPC_URL`, `KAFKA_GROUP_ID`,
   `DATABASE_RUN_MIGRATIONS`) live **only** in `apps/*/.env`. Every root `dev*` script runs `bun run setup:env` first,
   so those files exist. If you start an app another way, run `bun run setup:env` once.
@@ -357,6 +361,7 @@ Host ports bind `127.0.0.1` only.
 | 3001 / 3002 / 3003     | identity / notifications / billing service on the host (health + metrics) |
 | 50051 / 50052 / 50053  | identity / notifications / billing gRPC                                   |
 | 5432, 6379, 9042, 9094 | Postgres, Redis, Cassandra, Kafka (EXTERNAL listener)                     |
+| 6432                   | PgBouncer (`DATABASE_URL`, `DATABASE_SYSTEM_URL`)                         |
 | 1025 / 8025            | Mailpit SMTP / UI                                                         |
 | 9000 / 9001, 4443      | RustFS S3 / console, fake-gcs                                             |
 | 3300, 9090, 16686      | Grafana, Prometheus, Jaeger (`observability` profile)                     |
