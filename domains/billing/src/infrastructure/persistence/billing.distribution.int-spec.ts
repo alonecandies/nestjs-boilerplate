@@ -19,7 +19,9 @@ import { DrizzleStripeEventsRepository } from './drizzle-stripe-events.repositor
  * Billing's distribution migration (sharding design SH-6) on Citus 14.2, single node, local execution
  * off (startRlsTestPostgres): every shard query goes over a remote connection, as on a cluster.
  * The real runner applies the platform set and billing's whole history as app_owner (the migration
- * role), all pending files of a set in one transaction, as on a fresh production database.
+ * role), all pending files of a set in one transaction, as on a fresh production database. Data
+ * goes through the superuser: under 0003's forced RLS the owner reads and writes no row, and the
+ * policies themselves are billing.rls.int-spec.ts's subject.
  * Opt-in (needs Docker):
  *   INTEGRATION=1 bunx vitest run --project billing:int distribution
  */
@@ -72,13 +74,19 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
     db = context.get(DRIZZLE);
   };
 
-  /** Every Citus table of the two sets: kind, colocation group and shard count. */
+  /**
+   * Every Citus table of the two sets: kind, colocation group and shard count. Names are qualified
+   * from pg_namespace: `regclass::text` drops the schema that is on the search_path (the
+   * superuser's "$user" is `app`).
+   */
   const citusTables = async (): Promise<unknown[]> => [
     ...(await db.execute(sql`
-      select d.logicalrelid::text as name, d.partmethod, d.colocationid,
+      select n.nspname || '.' || c.relname as name, d.partmethod, d.colocationid,
         (select count(*)::int from pg_dist_shard s where s.logicalrelid = d.logicalrelid) as shards
       from pg_dist_partition d
-      where d.logicalrelid::text like 'billing.%' or d.logicalrelid::text like 'app.%'
+      join pg_class c on c.oid = d.logicalrelid
+      join pg_namespace n on n.oid = c.relnamespace
+      where n.nspname in ('billing', 'app')
       order by 1`)),
   ];
 
@@ -92,7 +100,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
 
   beforeAll(async () => {
     pg = await startRlsTestPostgres();
-    vi.stubEnv('DATABASE_URL', pg.migrationUrl);
+    vi.stubEnv('DATABASE_URL', pg.url);
+    vi.stubEnv('DATABASE_MIGRATION_URL', pg.migrationUrl);
     vi.stubEnv('SERVICE_NAME', 'billing-distribution-int');
     use(await boot());
   });
@@ -103,10 +112,12 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
     vi.unstubAllEnvs();
   });
 
-  it('runs as app_owner with local execution off', async () => {
-    const [row] = await db.execute<{ user: string; local: string }>(sql`
-      select current_user as user, current_setting('citus.enable_local_execution') as local`);
-    expect(row).toEqual({ user: 'app_owner', local: 'off' });
+  it('migrated as app_owner, with local execution off', async () => {
+    const [row] = await db.execute<{ owners: string; local: string }>(sql`
+      select (select string_agg(distinct tableowner, ',') from pg_tables
+          where schemaname = 'billing' and tablename in ('payments', 'stripe_events')) as owners,
+        current_setting('citus.enable_local_execution') as local`);
+    expect(row).toEqual({ owners: 'app_owner', local: 'off' });
   });
 
   it('distributes payments and stripe_events by tenant_id, colocated with app.tenant_colocation', async () => {
@@ -223,7 +234,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
     };
     const before = await citusTables();
     const files = await applied();
-    expect(files).toBe(3);
+    expect(files).toBe(4);
     const first = app;
     app = undefined; // afterAll then closes only what is open, even if the boot below throws
     await first?.close();

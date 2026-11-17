@@ -86,7 +86,7 @@ describe('billingMigrations', () => {
     ) as { entries: { idx: number; tag: string }[] };
 
     it('is the third journal entry', () => {
-      expect(journal.entries.map((entry) => entry.tag)).toEqual([
+      expect(journal.entries.map((entry) => entry.tag).slice(0, 3)).toEqual([
         '0000_init',
         '0001_tenant_columns',
         '0002_distribute',
@@ -102,6 +102,74 @@ describe('billingMigrations', () => {
       expect(calls).toEqual([
         "SELECT app.distribute_by_tenant('billing.payments');",
         "SELECT app.distribute_by_tenant('billing.stripe_events');",
+      ]);
+    });
+  });
+
+  describe('0003_rls (custom, B3-5/B3-6: forced RLS, explicit grants, the §8.2 billing policies)', () => {
+    const journal = JSON.parse(
+      readFileSync(join(billingMigrations.folder, 'meta', '_journal.json'), 'utf8'),
+    ) as { entries: { idx: number; tag: string }[] };
+    // Comments dropped, whitespace collapsed: one entry per statement, as drizzle splits them.
+    const statements = readFileSync(join(billingMigrations.folder, '0003_rls.sql'), 'utf8')
+      .split('--> statement-breakpoint')
+      .map((statement) =>
+        statement
+          .split('\n')
+          .filter((line) => !line.trimStart().startsWith('--'))
+          .join(' ')
+          .replace(/\s+/g, ' ')
+          .trim(),
+      )
+      .filter((statement) => statement !== '');
+
+    it('is the fourth and last journal entry', () => {
+      expect(journal.entries.map((entry) => entry.tag)).toEqual([
+        '0000_init',
+        '0001_tenant_columns',
+        '0002_distribute',
+        '0003_rls',
+      ]);
+    });
+
+    it('calls the app.* helpers directly: no subquery in any policy', () => {
+      const policies = statements.filter((statement) => statement.startsWith('CREATE POLICY'));
+      expect(policies).toHaveLength(5);
+      for (const policy of policies) {
+        expect(policy).not.toMatch(/\(\s*select/i);
+      }
+    });
+
+    it('grants one table (or schema) to one role per statement, and changes no default privilege', () => {
+      const grants = statements.filter((statement) => /^(GRANT|REVOKE)\b/.test(statement));
+      expect(grants).toHaveLength(5);
+      for (const grant of grants) {
+        expect(grant).toMatch(
+          /^GRANT [A-Z, ]+ ON (SCHEMA billing|TABLE billing\.[a-z_]+) TO (app_runtime|app_system);$/,
+        );
+      }
+      const text = statements.join('\n');
+      expect(text).not.toMatch(/DEFAULT PRIVILEGES/i);
+      expect(text).not.toMatch(/__drizzle_migrations/);
+      expect(text).not.toMatch(/\bPUBLIC\b/);
+    });
+
+    it('holds exactly: forced RLS on both tables, the five policies of the plan, then the grants', () => {
+      expect(statements).toEqual([
+        'ALTER TABLE billing.payments ENABLE ROW LEVEL SECURITY;',
+        'ALTER TABLE billing.payments FORCE ROW LEVEL SECURITY;',
+        'ALTER TABLE billing.stripe_events ENABLE ROW LEVEL SECURITY;',
+        'ALTER TABLE billing.stripe_events FORCE ROW LEVEL SECURITY;',
+        'CREATE POLICY payments_select ON billing.payments FOR SELECT TO app_runtime USING (tenant_id = app.tenant_id() AND (user_id = app.user_id() OR app.elevated()));',
+        'CREATE POLICY payments_insert ON billing.payments FOR INSERT TO app_runtime WITH CHECK (tenant_id = app.tenant_id() AND user_id = app.user_id());',
+        'CREATE POLICY payments_update ON billing.payments FOR UPDATE TO app_runtime USING (tenant_id = app.tenant_id() AND user_id = app.user_id()) WITH CHECK (tenant_id = app.tenant_id() AND user_id = app.user_id());',
+        'CREATE POLICY stripe_events_select ON billing.stripe_events FOR SELECT TO app_runtime USING (tenant_id = app.tenant_id() AND user_id = app.user_id());',
+        'CREATE POLICY stripe_events_insert ON billing.stripe_events FOR INSERT TO app_runtime WITH CHECK (tenant_id = app.tenant_id() AND user_id = app.user_id());',
+        'GRANT USAGE ON SCHEMA billing TO app_runtime;',
+        'GRANT USAGE ON SCHEMA billing TO app_system;',
+        'GRANT SELECT, INSERT, UPDATE ON TABLE billing.payments TO app_runtime;',
+        'GRANT SELECT, INSERT ON TABLE billing.stripe_events TO app_runtime;',
+        'GRANT SELECT, INSERT, DELETE ON TABLE billing.stripe_events TO app_system;',
       ]);
     });
   });

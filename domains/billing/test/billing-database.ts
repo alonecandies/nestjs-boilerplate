@@ -2,7 +2,7 @@ import { type INestApplicationContext, Module, type Provider } from '@nestjs/com
 import { NestFactory } from '@nestjs/core';
 import { AppConfigModule } from '@platform/config';
 import { DatabaseModule, DRIZZLE, type DrizzleDB } from '@platform/database';
-import { startTestPostgres } from '@platform/testing/postgres';
+import { readRolesInitSql, startTestPostgres } from '@platform/testing/postgres';
 import { ClsModule } from 'nestjs-cls';
 import { vi } from 'vitest';
 import { billingMigrations } from '../src/infrastructure/persistence/billing.migrations.js';
@@ -26,7 +26,10 @@ export async function startBillingDatabase(
   providers: Provider[],
   options: { runMigrations?: boolean; localExecution?: boolean } = {},
 ): Promise<BillingDatabase> {
-  const pg = await startTestPostgres({ localExecution: options.localExecution ?? true });
+  const pg = await startTestPostgres({
+    localExecution: options.localExecution ?? true,
+    initSql: readRolesInitSql(), // the platform set's 0002 needs the three roles
+  });
   vi.stubEnv('DATABASE_URL', pg.url);
   vi.stubEnv('DATABASE_MIGRATION_URL', pg.url); // the superuser until the role flip
   vi.stubEnv('SERVICE_NAME', 'billing-int');
