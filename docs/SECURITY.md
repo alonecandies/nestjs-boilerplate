@@ -627,6 +627,49 @@ of `statement_timeout` as a startup parameter (`08P01`) is how the migration run
 was pointed at a pooler instead of the coordinator. Listing it would let the migrator run through the pooler and lose
 its session advisory lock.
 
+## Tenant isolation outside Postgres
+
+Row-level security guards only the Postgres tables. Everything else (the Cassandra inbox and recipients, the
+Redis cache, the object store, Socket.IO rooms and GraphQL subscription triggers) is isolated by **key design**:
+each store has one named builder that takes `(tenantId, userId)`, and no key of these stores is concatenated
+anywhere else.
+
+| Store                     | Key                                                                                                | Builder                        |
+| ------------------------- | -------------------------------------------------------------------------------------------------- | ------------------------------ |
+| Cassandra inbox           | `notifications_by_tenant_user`, `PRIMARY KEY ((tenant_id, user_id), notification_id)`              | CQL `004`, `NOTIFICATIONS_CQL` |
+| Cassandra recipients      | `notification_recipients_by_tenant`, `PRIMARY KEY ((tenant_id, user_id))`                          | CQL `003`, `RECIPIENTS_CQL`    |
+| Socket.IO room            | `t:<tid>:u:<uid>`                                                                                  | `tenantUserRoom`               |
+| GraphQL trigger (Redis)   | `notificationCreated:<tid>:<uid>`                                                                  | `notificationCreatedTrigger`   |
+| Redis cache, tenant data  | `<prefix>:cache:<scope>:<tid>:…`                                                                   | `tenantCacheKey`               |
+| Redis cache, user profile | `<prefix>:cache:user:<uid>`, only for the caller's own profile (B4 ruling 4: no per-tenant marker) | `userCacheKey`                 |
+| Storage object            | `tenants/<tid>/users/<uid>/<uuidv7>/<safeFilename>`                                                | `buildUserFileKey`             |
+| Mail idempotency          | digest `digest-<tid>-<uid>-<day>`; `welcome-<uid>` and `receipt-<paymentId>` are one tenant each   | the handlers                   |
+| Unchanged                 | `auth:denylist:<jti>`, `lock:*`, `throttle:*`, `notifications:push:dedupe:<envelope id>`, BullMQ   | -                              |
+
+**The tenant source rule.** A tenant id reaches a key only from `AuthUser.tenantId` /
+`requirePrincipal().tenantId` or from a validated Kafka envelope `tenantId`. A tenant in a request body, a gRPC field
+or an object key is only compared with the principal, never used as the source. A tenant-scoped event whose envelope
+has no `tenantId` (or the platform tenant) throws in the consumer and lands in the dead-letter topic: no write, no
+push, no mail (fail closed). A principal without a tenant never reaches a key builder.
+
+**What a tenant switch guarantees.** `POST /v1/auth/switch-tenant` denylists the access token it was presented.
+Every socket authenticated with that token, on either transport and on every replica, is closed by its replica's
+sweep within `WS_REVOCATION_SWEEP_INTERVAL_MS` (Socket.IO: `exception` `TOKEN_REVOKED`, then disconnect;
+graphql-ws: close 4401 `Access token revoked`), and Socket.IO messages on it are refused at once. A socket never
+changes room or trigger: it joins exactly one room, fixed at the handshake from its token, so the new tenant needs a
+new connection with the new token. There is no room-wide close: access tokens carry no session id, so the user's
+other sessions in the old tenant stay connected (switching does not end the old membership; removal flows revoke on
+their own).
+
+**Legacy data.** There is no backfill. Old user-keyed Cassandra tables are dropped (`005`), and objects under
+`users/…` stay in the bucket but answer 403 for everyone. After B4, run `docker compose down -v` once in a dev
+environment (an adopter with real data follows the migration notes in
+[the files README](../domains/files/README.md#data-model)).
+
+The edge wiring is proved by `apps/{monolith,gateway}/test/tenant-isolation.e2e-spec.ts` (see
+[TESTING.md](TESTING.md#tenant-isolation-suites)); the stores themselves by the Cassandra int specs of the
+notifications domain and the real-Citus journeys of B3.
+
 ## Secrets, configuration guards and logs
 
 ### Where configuration comes from

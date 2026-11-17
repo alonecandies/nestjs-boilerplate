@@ -239,10 +239,14 @@ Topics are named `<context>.<event-name>.v<major>` and declared once, as an `Eve
 | Topic                                   | Producer (relay / handler)                                     | Key     | Consumers                                                                 |
 | --------------------------------------- | -------------------------------------------------------------- | ------- | ------------------------------------------------------------------------- |
 | `identity.user-registered.v1`           | `UserRegisteredRelay` (identity core)                          | user id | `IdentityEventsConsumer` → welcome notification + welcome email           |
+| `identity.membership-created.v1`        | identity membership handlers (after commit)                    | user id | `IdentityEventsConsumer` → upsert the `(tenant, user)` mail recipient     |
+| `identity.membership-removed.v1`        | identity membership handlers (after commit)                    | user id | `IdentityEventsConsumer` → remove the `(tenant, user)` mail recipient     |
 | `billing.payment-succeeded.v1`          | `PaymentSucceededRelay` (billing core)                         | user id | `BillingEventsConsumer` → receipt notification + receipt email            |
 | `notifications.notification-created.v1` | `PublishNotificationCreatedHandler` (via `NotificationsSagas`) | user id | `NotificationPushConsumer` (edge) → Socket.IO room + GraphQL subscription |
 
-Keying by user id keeps one user's events ordered on one partition.
+Keying by user id keeps one user's events ordered on one partition. All five are tenant-scoped: the envelope
+`tenantId` names the tenant, and a consumer without one (or with the platform tenant) throws, so the message
+dead-letters (B4; see [SECURITY.md](SECURITY.md#tenant-isolation-outside-postgres)).
 
 **Envelope.** Every record value is the same JSON envelope, validated with zod by the producer (`KafkaProducer.publish`) and by the consumer (`ParseEventEnvelopePipe`):
 
@@ -337,7 +341,7 @@ Notes:
   files, the named methods of the pinned lists, eleven at B3; `pre-auth` ones run before a principal exists, `system` ones inside
   `SystemContext.run(reason, …)`). Co-member and cross-tenant reads are system reads that filter in their own SQL: the
   application, not the database, verifies them ([SECURITY.md](SECURITY.md#row-level-security)).
-- **WebSocket session lifetime.** A socket is disconnected (after an `exception` with `TOKEN_EXPIRED`) when its access token expires, and every 30 s each replica disconnects sockets whose token was revoked (`TOKEN_REVOKED`).
+- **WebSocket session lifetime.** A socket is disconnected (after an `exception` with `TOKEN_EXPIRED`) when its access token expires, and every `WS_REVOCATION_SWEEP_INTERVAL_MS` (30 s by default) each replica closes the sockets, on both transports, whose token was revoked (`TOKEN_REVOKED`; graphql-ws closes with 4401). A socket joins exactly one tenant room, fixed at the handshake from its token, so a tenant switch (which denylists the old token) needs a new connection.
 
 ```mermaid
 sequenceDiagram
@@ -445,8 +449,8 @@ sequenceDiagram
   H-)R: user.commit() emits UserRegisteredEvent
   R-)K: publish identity.user-registered.v1 (key = user id)
   K-)IC: consumer group monolith
+  IC->>CS: identity.membership-created.v1 upserts the (tenant, user) recipient
   IC->>W: CommandBus.execute(WelcomeUserCommand)
-  W->>CS: upsert notification recipient
   W->>CN: CreateNotificationCommand (key welcome:userId)
   CN->>CS: insert notification
   CN-)K: NotificationCreatedEvent, saga, publish notifications.notification-created.v1
@@ -479,13 +483,14 @@ sequenceDiagram
   GW-->>C: 201 tokens
   ID-)K: UserRegisteredRelay publishes identity.user-registered.v1
   K-)NS: IdentityEventsConsumer (group notifications-service)
-  NS->>CS: upsert recipient, insert welcome notification
+  NS->>CS: upsert the (tenant, user) recipient (identity.membership-created.v1)
+  NS->>CS: insert welcome notification (tenant from the envelope)
   NS->>MQ: enqueue welcome mail
   MQ-)NS: MailProcessor delivers via SMTP
   NS-)K: notifications.notification-created.v1
   K-)GW: NotificationPushConsumer (group gateway-push)
   GW->>GW: Redis SET NX push dedupe key
-  GW-->>C: Socket.IO room user:ID + GraphQL subscription
+  GW-->>C: Socket.IO room t:TID:u:UID + GraphQL subscription
 ```
 
 If identity-service answers `ALREADY_EXISTS` with trailer `x-error-code: EMAIL_TAKEN`, the gateway rebuilds `EmailAlreadyTakenException` and returns `409` problem+json, identical to the monolith.
@@ -522,7 +527,7 @@ sequenceDiagram
   GW-->>S: 200
   K-)BC: consumer group notifications-service or monolith
   BC->>SR: CommandBus.execute(SendPaymentReceiptCommand)
-  SR->>CS: receipt notification (key receipt:paymentId), look up recipient
+  SR->>CS: receipt notification (key receipt:paymentId), look up the (tenant, user) recipient
   SR->>MQ: enqueue receipt mail (idempotency key receipt-paymentId)
 ```
 
@@ -596,12 +601,11 @@ Other structural decisions:
 
 Stated honestly, none of these are done:
 
-| Follow-up                                                              | Today                                                                                                                                                                                                                                                            |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Transactional outbox**                                               | Integration events are published after commit. A crash or broker outage between commit and publish loses the event (the record stays). An outbox row written in the same transaction plus a relay would make delivery at-least-once                              |
-| **Per-domain `@domain/<x>/api` subpath exports**                       | The gateway imports `@domain/identity`, `@domain/notifications`, `@domain/billing` whole, so its image carries core code it never runs. Subpath exports for the API surface would slim it                                                                        |
-| **Separate metrics listener**                                          | `/metrics` is served on the application HTTP port                                                                                                                                                                                                                |
-| **Real-database integration specs for the notifications repositories** | Identity and billing run int specs on real Citus with the three roles (repositories, every policy, the flows, cross-domain journeys in `apps/monolith/test/rls-journeys.int-spec.ts`); the notifications (Cassandra) repositories are covered by unit specs only |
+| Follow-up                                        | Today                                                                                                                                                                                                                               |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Transactional outbox**                         | Integration events are published after commit. A crash or broker outage between commit and publish loses the event (the record stays). An outbox row written in the same transaction plus a relay would make delivery at-least-once |
+| **Per-domain `@domain/<x>/api` subpath exports** | The gateway imports `@domain/identity`, `@domain/notifications`, `@domain/billing` whole, so its image carries core code it never runs. Subpath exports for the API surface would slim it                                           |
+| **Separate metrics listener**                    | `/metrics` is served on the application HTTP port                                                                                                                                                                                   |
 
 ## See also
 

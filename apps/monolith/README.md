@@ -65,7 +65,9 @@ defaults for the local docker-compose infra in `libs/config` (see the root READM
 | `MAINTENANCE_MODE`         | `false`          | every route except `/health*` and `/metrics` answers 503 + `Retry-After`          |
 
 The Kafka topics (and their `.dlq`) must exist — auto-creation is off: `identity.user-registered.v1`,
-`billing.payment-succeeded.v1`, `notifications.notification-created.v1`.
+`identity.membership-created.v1`, `identity.membership-removed.v1`, `billing.payment-succeeded.v1`,
+`notifications.notification-created.v1`. The in-process consumers (notifications messaging and the push consumer) read
+all five, and every topic is tenant-scoped: an envelope without a tenant dead-letters.
 
 ## Endpoints
 

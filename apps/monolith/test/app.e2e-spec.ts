@@ -50,7 +50,7 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
   const inject = (...args: Parameters<MonolithE2e['app']['inject']>) => e2e.app.inject(...args);
 
   beforeAll(async () => {
-    e2e = await createMonolithE2eApp();
+    e2e = await createMonolithE2eApp({ notificationStores: 'cassandra' });
   });
 
   afterAll(async () => {

@@ -62,7 +62,7 @@ Every requested capability, where it lives and where to see it in use. Paths are
 | lodash                                                      | `lodash-es` named imports across the codebase (ESM). CommonJS `lodash` is kept only in `libs/mailer/package.json`, because `@nestjs-modules/mailer`'s Handlebars adapter `require`s it without declaring it                                                                                                                                                                                                            | `libs/bootstrap/src/docs/setup-api-docs.ts` (`omitBy`, `once`)                                                                                                                                                              |
 | rimraf                                                      | every package's `clean` script, root `clean`                                                                                                                                                                                                                                                                                                                                                                           | `bun run clean`                                                                                                                                                                                                             |
 | Lerna                                                       | `lerna.json` (independent versions, Conventional Commits), Nx 23 task runner and cache (`nx.json`)                                                                                                                                                                                                                                                                                                                     | `bun run build`, `bun run release`; [docs/RELEASING.md](docs/RELEASING.md)                                                                                                                                                  |
-| Tests                                                       | Vitest 5 (`vitest.config.ts`, one project per package): `*.spec.ts` unit, `apps/*/test/*.e2e-spec.ts` e2e, `*.int-spec.ts` integration (`INTEGRATION=1`; Testcontainers Postgres, live Redis); helpers in `libs/testing`                                                                                                                                                                                               | `bun run test`; 393 test files / 2890 tests at the time of writing; [docs/TESTING.md](docs/TESTING.md)                                                                                                                      |
+| Tests                                                       | Vitest 5 (`vitest.config.ts`, one project per package): `*.spec.ts` unit, `apps/*/test/*.e2e-spec.ts` e2e, `*.int-spec.ts` integration (`INTEGRATION=1`; Testcontainers Postgres, live Redis); helpers in `libs/testing`                                                                                                                                                                                               | `bun run test`; 419 test files / 3364 tests at the time of writing; [docs/TESTING.md](docs/TESTING.md)                                                                                                                      |
 | API specification page                                      | `libs/bootstrap/src/docs/setup-api-docs.ts`                                                                                                                                                                                                                                                                                                                                                                            | Scalar at `/docs`, OpenAPI at `/openapi.json` and `/openapi.yaml`, Apollo Sandbox at `/graphql`; [docs/API.md](docs/API.md)                                                                                                 |
 
 ### Version policy and deliberate pins
@@ -125,6 +125,13 @@ Notes:
   then `bun run docker:infra`. It also clears the older layout: identity's and billing's tables live in the `identity`
   and `billing` Postgres schemas, each with its own history starting at `0000_init`, and nothing moves the tables an
   even older database left in `public`. Copy the new `.env.example`: it carries the three database URLs.
+- **One more `docker compose --profile '*' down -v` after B4.** Tenant isolation outside Postgres re-keys three stores
+  and nothing is backfilled: the Cassandra inbox and mail recipients move to per-`(tenant, user)` tables (the old
+  user-keyed ones are dropped), object keys move under `tenants/<tid>/users/<uid>/` (objects under `users/…` stay in
+  the bucket but answer 403), and two new Kafka topics (`identity.membership-created.v1`,
+  `identity.membership-removed.v1`, each with a `.dlq`) appear. The reset gives a dev stack the new tables, topics and an
+  empty bucket; an adopter who keeps real data follows [the files README](domains/files/README.md#data-model) and
+  [docs/SECURITY.md](docs/SECURITY.md#tenant-isolation-outside-postgres).
 - The per-app settings that must differ between apps (`SERVICE_NAME`, `PORT`, `GRPC_URL`, `KAFKA_GROUP_ID`,
   `DATABASE_RUN_MIGRATIONS`) live **only** in `apps/*/.env`. Every root `dev*` script runs `bun run setup:env` first,
   so those files exist. If you start an app another way, run `bun run setup:env` once.
@@ -462,9 +469,6 @@ Deliberately not done yet:
 - **Transactional outbox.** Integration events are published after the database commit today; a crash between the
   commit and the publish loses the event.
 - **Separate metrics listener**, so `/metrics` is served on its own port instead of the API port.
-- **Real-database integration specs for the billing and notifications repositories**. Today `*.int-spec.ts` covers
-  the database lib, the identity users repository and billing's migration history (`billing.migrations.int-spec.ts`)
-  (Testcontainers Postgres) and the Redis lib (a live Redis at `REDIS_URL`).
 
 ## License
 

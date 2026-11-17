@@ -15,6 +15,11 @@ import {
   UsersSystemRepository,
 } from '@domain/identity';
 import { createInMemoryIdentityPersistence } from '@domain/identity/testing';
+import { NotificationRecipientsRepository, NotificationsRepository } from '@domain/notifications';
+import {
+  InMemoryNotificationRecipientsRepository,
+  InMemoryNotificationsRepository,
+} from '@domain/notifications/testing';
 import { getQueueToken } from '@nestjs/bullmq';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -58,6 +63,7 @@ export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
  * | identity tenancy repositories                | in-memory (same store as users and sessions) |
  * | `StripeEventsSystemRepository`             | in-memory (no app_system pool)               |
  * | `RlsElevation`                             | `InMemoryRlsElevation` (no transaction to elevate) |
+ * | `NotificationsRepository`, `NotificationRecipientsRepository` | in-memory, keyed by (tenant, user); `notificationStores: 'cassandra'` keeps the real adapters over the fake client |
  * | `CASSANDRA_CLIENT`                         | empty result sets                            |
  * | BullMQ `mail` queue / `MailProcessor`      | recording queue / no worker                  |
  * | `CACHE_MANAGER`                            | real L1 tier only (L2 is node-redis)         |
@@ -70,6 +76,13 @@ export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
 export interface MonolithE2eOptions {
   /** Rows the fake Postgres answers a statement with (`sql` whitespace-normalised); default none. */
   postgresRows?: (sql: string, params: unknown[]) => FakeRows;
+  /**
+   * What holds the notifications inbox and the recipients projection. `'in-memory'` (default)
+   * binds the in-memory repositories, which keep state per `(tenantId, userId)`; `'cassandra'`
+   * keeps the real adapters over the fake client, which answers every query with no rows (for a
+   * spec that asserts the CQL the adapters send).
+   */
+  notificationStores?: 'in-memory' | 'cassandra';
 }
 
 export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
@@ -82,6 +95,8 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     options.postgresRows,
   );
   const cassandra = createFakeCassandra();
+  const notifications = new InMemoryNotificationsRepository();
+  const recipients = new InMemoryNotificationRecipientsRepository();
   const mailQueue = createFakeQueue();
   const storage = new InMemoryStorageService();
 
@@ -134,6 +149,14 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     .overrideProvider(StripeEventsSystemRepository)
     .useValue(new InMemoryStripeEventsSystemRepository());
 
+  if (options.notificationStores !== 'cassandra') {
+    builder
+      .overrideProvider(NotificationsRepository)
+      .useValue(notifications)
+      .overrideProvider(NotificationRecipientsRepository)
+      .useValue(recipients);
+  }
+
   const app: NestFastifyApplication = await createFastifyTestApp(
     builder,
     async (created) => {
@@ -146,5 +169,16 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     },
   );
 
-  return { app, redis, kafka, identity, postgres, cassandra, mailQueue, storage };
+  return {
+    app,
+    redis,
+    kafka,
+    identity,
+    postgres,
+    cassandra,
+    notifications,
+    recipients,
+    mailQueue,
+    storage,
+  };
 }
