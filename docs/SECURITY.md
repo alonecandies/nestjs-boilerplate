@@ -523,7 +523,8 @@ refusal happens before anything is sent. Each elevation is logged and counted in
 Work without a principal (a login lookup before there is a user, a cron, a platform webhook) and the reads the
 row-local policies leave out run on a separate pool: `app_system` (`BYPASSRLS`) on `DATABASE_SYSTEM_URL`, at most 5
 connections (`DATABASE_SYSTEM_POOL_MAX`), through PgBouncer. Without `DATABASE_SYSTEM_URL` there is no system pool,
-and a system method fails with `SYSTEM_DATABASE_UNAVAILABLE`; it never falls back to `DATABASE_URL`.
+and a system method fails with `SYSTEM_DATABASE_UNAVAILABLE` (a 503 with that code; production refuses to start without
+it); it never falls back to `DATABASE_URL`.
 
 - **One door.** `SystemDatabase.run(method, work)` is the only way to the pool. Only a `*.system-repository.ts` file
   may name `SystemDatabase`, `SYSTEM_DATABASE` or `InjectSystemDatabase` (`scripts/check-boundaries.mjs`), and each

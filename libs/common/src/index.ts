@@ -13,6 +13,7 @@ export * from './decorators/timeout.decorator.js';
 export * from './dto/cursor-pagination.dto.js';
 export * from './errors/domain.exception.js';
 export * from './errors/error-codes.js';
+export * from './errors/infrastructure-errors.js';
 export * from './errors/problem-details.js';
 export * from './errors/validation-issue.js';
 export * from './filters/all-exceptions.filter.js';

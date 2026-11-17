@@ -27,6 +27,33 @@ function httpHost(request: object, response: object): ExecutionContextHost {
 
 const fastifyReply = () => ({ status: vi.fn(), sent: false });
 
+/*
+ * Structural stand-ins for @platform/database's errors (@platform/common cannot import it): the
+ * mapping keys on `name` and `code`. libs/database/src/errors.problem-details.spec.ts runs the same
+ * mapping over the real classes.
+ */
+class RlsContextError extends Error {
+  override readonly name = 'RlsContextError';
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+class SystemDatabaseError extends Error {
+  override readonly name = 'SystemDatabaseError';
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+class RowCountMismatchError extends Error {
+  override readonly name = 'RowCountMismatchError';
+}
+
 describe('AllExceptionsFilter', () => {
   let errorSpy: ReturnType<typeof vi.spyOn>;
   let debugSpy: ReturnType<typeof vi.spyOn>;
@@ -38,6 +65,81 @@ describe('AllExceptionsFilter', () => {
   afterEach(() => vi.restoreAllMocks());
 
   describe('http', () => {
+    describe('database errors become stable codes, never their internal messages', () => {
+      const reply = (exception: unknown) => {
+        const { host, adapter } = fakeAdapterHost();
+        const request = { id: 'req-db', url: '/v1/things', method: 'GET', headers: {} };
+        new AllExceptionsFilter(host).catch(exception, httpHost(request, fastifyReply()));
+        const [, body, status] = adapter.reply.mock.calls[0] as [object, ProblemDetails, number];
+        return { body, status };
+      };
+
+      it.each([
+        [
+          'RLS_NO_PRINCIPAL → 401 UNAUTHENTICATED',
+          new RlsContextError('RLS_NO_PRINCIPAL', 'RLS context: no principal in CLS'),
+          401,
+          'UNAUTHENTICATED',
+        ],
+        [
+          'RLS_PLATFORM_TENANT → 403 FORBIDDEN',
+          new RlsContextError('RLS_PLATFORM_TENANT', 'RLS context: the platform tenant 0000…'),
+          403,
+          'FORBIDDEN',
+        ],
+        [
+          'RowCountMismatchError → 409 CONFLICT',
+          new RowCountMismatchError('users.updatePasswordHash: expected 1 row(s) affected, got 0'),
+          409,
+          'CONFLICT',
+        ],
+        [
+          'SYSTEM_DATABASE_UNAVAILABLE → 503',
+          new SystemDatabaseError(
+            'SYSTEM_DATABASE_UNAVAILABLE',
+            'System method users.findCredentialsByEmail: no system pool (set DATABASE_SYSTEM_URL)',
+          ),
+          503,
+          'SYSTEM_DATABASE_UNAVAILABLE',
+        ],
+      ])('%s', (_name, exception, status, code) => {
+        const problem = reply(exception);
+        expect(problem.status).toBe(status);
+        expect(problem.body).toMatchObject({ status, code });
+        const text = JSON.stringify(problem.body);
+        for (const internal of ['RLS context', 'users.', 'DATABASE_SYSTEM_URL', 'row(s)', '0000']) {
+          expect(text, internal).not.toContain(internal);
+        }
+        // 4xx are client outcomes (debug); the 503 is an incident, logged with the original error.
+        if (status >= 500) {
+          expect(errorSpy).toHaveBeenCalledWith(
+            expect.objectContaining({ err: exception }),
+            expect.any(String),
+          );
+        } else {
+          expect(errorSpy).not.toHaveBeenCalled();
+        }
+      });
+
+      it.each([
+        ['RLS_CONTEXT_STALE', new RlsContextError('RLS_CONTEXT_STALE', 'RLS context: stale')],
+        ['RLS_NO_TRANSACTION', new RlsContextError('RLS_NO_TRANSACTION', 'RLS: no transaction')],
+        [
+          'SYSTEM_CONTEXT_REQUIRED',
+          new SystemDatabaseError('SYSTEM_CONTEXT_REQUIRED', 'System method x outside context'),
+        ],
+      ])('%s stays a 500 INTERNAL (a programming error), message hidden', (_name, exception) => {
+        const problem = reply(exception);
+        expect(problem.body).toMatchObject({ status: 500, code: 'INTERNAL' });
+        expect(JSON.stringify(problem.body)).not.toContain(exception.message);
+      });
+
+      it('a look-alike that is not an Error is not translated', () => {
+        const problem = reply({ name: 'RlsContextError', code: 'RLS_NO_PRINCIPAL' });
+        expect(problem.body).toMatchObject({ status: 500, code: 'INTERNAL' });
+      });
+    });
+
     it('replies problem+json through the adapter (Fastify reply)', () => {
       const { host, adapter } = fakeAdapterHost();
       const filter = new AllExceptionsFilter(host);

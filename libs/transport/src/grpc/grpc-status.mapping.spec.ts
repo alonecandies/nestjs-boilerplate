@@ -258,7 +258,62 @@ describe('grpcErrorToDomainException (client side)', () => {
   });
 });
 
+/** Structural stand-in for @platform/database's errors (matched by `name` and `code`). */
+const databaseError = (name: string, code: string | undefined, message: string): Error =>
+  Object.assign(new Error(message), { name, ...(code === undefined ? {} : { code }) });
+
 describe('exceptionToGrpcError (server side)', () => {
+  it.each([
+    [
+      'RlsContextError RLS_NO_PRINCIPAL',
+      databaseError('RlsContextError', 'RLS_NO_PRINCIPAL', 'RLS context: no principal in CLS'),
+      GrpcStatus.UNAUTHENTICATED,
+      ErrorCode.UNAUTHENTICATED,
+    ],
+    [
+      'RlsContextError RLS_PLATFORM_TENANT',
+      databaseError('RlsContextError', 'RLS_PLATFORM_TENANT', 'RLS context: platform tenant'),
+      GrpcStatus.PERMISSION_DENIED,
+      ErrorCode.FORBIDDEN,
+    ],
+    [
+      'RowCountMismatchError',
+      databaseError('RowCountMismatchError', undefined, 'memberships.touch: expected 1, got 0'),
+      GrpcStatus.ALREADY_EXISTS,
+      ErrorCode.CONFLICT,
+    ],
+    [
+      'SystemDatabaseError SYSTEM_DATABASE_UNAVAILABLE',
+      databaseError(
+        'SystemDatabaseError',
+        'SYSTEM_DATABASE_UNAVAILABLE',
+        'System method users.existsByEmail: no system pool (set DATABASE_SYSTEM_URL)',
+      ),
+      GrpcStatus.UNAVAILABLE,
+      'SYSTEM_DATABASE_UNAVAILABLE',
+    ],
+  ])('maps %s to a status and code, without its internal message', (_name, error, status, code) => {
+    const response = exceptionToGrpcError(error);
+    expect(response.code).toBe(status);
+    expect(response.metadata?.get('x-error-code')).toEqual([code]);
+    expect(response.message).not.toBe(error.message);
+    for (const internal of ['RLS context', 'memberships.', 'DATABASE_SYSTEM_URL', 'users.']) {
+      expect(response.message, internal).not.toContain(internal);
+    }
+  });
+
+  it('keeps RLS_CONTEXT_STALE and SYSTEM_CONTEXT_REQUIRED an INTERNAL with a generic message', () => {
+    for (const error of [
+      databaseError('RlsContextError', 'RLS_CONTEXT_STALE', 'RLS context: stale'),
+      databaseError('SystemDatabaseError', 'SYSTEM_CONTEXT_REQUIRED', 'System method x'),
+    ]) {
+      expect(exceptionToGrpcError(error)).toEqual({
+        code: GrpcStatus.INTERNAL,
+        message: 'Internal server error',
+      });
+    }
+  });
+
   it('maps a DomainException to status + message + trailers', () => {
     const response = exceptionToGrpcError(new EmailTakenException('Email already registered'));
     expect(response.code).toBe(GrpcStatus.ALREADY_EXISTS);

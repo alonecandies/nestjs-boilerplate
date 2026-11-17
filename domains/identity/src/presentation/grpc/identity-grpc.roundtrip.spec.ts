@@ -9,9 +9,11 @@ import {
   DomainValidationException,
   EntityNotFoundException,
   generateId,
+  ServiceUnavailableException,
   UnauthenticatedException,
 } from '@platform/common';
 import { AppConfigModule, grpcConfig } from '@platform/config';
+import { RlsContextError, SystemDatabaseError } from '@platform/database';
 import { AppCacheService } from '@platform/redis';
 import { createGrpcServerStrategy } from '@platform/transport';
 import { ClsModule } from 'nestjs-cls';
@@ -129,6 +131,30 @@ describe('identity over gRPC (forRemote adapters ↔ gRPC controllers)', () => {
     const error = await users.getUser(id).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(EntityNotFoundException);
     expect(error).toMatchObject({ httpStatus: 404, details: { entity: 'User', id } });
+  });
+
+  it('GetUser without a principal: the runtime RLS_NO_PRINCIPAL is UNAUTHENTICATED, not INTERNAL', async () => {
+    // What the runtime pool throws when a unit of work opens without a CLS principal.
+    queryBus.execute.mockRejectedValue(
+      new RlsContextError('RLS_NO_PRINCIPAL', 'RLS context: no principal in CLS'),
+    );
+    const error = await users.getUser(generateId()).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UnauthenticatedException);
+    expect(error).toMatchObject({ httpStatus: 401, code: 'UNAUTHENTICATED' });
+    expect((error as Error).message).not.toContain('RLS context');
+  });
+
+  it('GetUser with the system pool missing: SYSTEM_DATABASE_UNAVAILABLE (503), message generic', async () => {
+    queryBus.execute.mockRejectedValue(
+      new SystemDatabaseError(
+        'SYSTEM_DATABASE_UNAVAILABLE',
+        'System method users.findByIdInTenant: no system pool (set DATABASE_SYSTEM_URL)',
+      ),
+    );
+    const error = await users.getUser(generateId(), { tenantId: TENANT }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ServiceUnavailableException);
+    expect(error).toMatchObject({ httpStatus: 503, code: 'SYSTEM_DATABASE_UNAVAILABLE' });
+    expect((error as Error).message).not.toContain('DATABASE_SYSTEM_URL');
   });
 
   it('GetUser: an invalid id is rejected by the zod pipe (INVALID_ARGUMENT) before the bus', async () => {
