@@ -88,6 +88,12 @@ export const PAID_WITHOUT_AMOUNT_METRIC = 'billing_checkout_paid_without_amount_
 export const AMOUNT_MISMATCH_METRIC = 'billing_checkout_amount_mismatch_total';
 /** Prometheus counter: webhook events whose `api_version` differs from `STRIPE_API_VERSION`. */
 export const API_VERSION_MISMATCH_METRIC = 'billing_stripe_api_version_mismatch_total';
+/**
+ * Prometheus counter: checkout requests that sent no `Idempotency-Key` (S-4b). The header stays
+ * optional; this shows how many clients skip it (each such request makes a new payment).
+ */
+export const CHECKOUT_WITHOUT_IDEMPOTENCY_KEY_METRIC =
+  'billing_checkout_without_idempotency_key_total';
 
 /** gRPC circuit-breaker / operation names (logs, metrics). */
 export const BILLING_GRPC_UPSTREAM = 'billing';

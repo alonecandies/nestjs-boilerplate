@@ -12,6 +12,7 @@ import { StripeEventsSystemRepository } from './application/repositories/stripe-
 import {
   AMOUNT_MISMATCH_METRIC,
   API_VERSION_MISMATCH_METRIC,
+  CHECKOUT_WITHOUT_IDEMPOTENCY_KEY_METRIC,
   PAID_WITHOUT_AMOUNT_METRIC,
   PAID_WITHOUT_CURRENCY_METRIC,
 } from './billing.constants.js';
@@ -72,6 +73,10 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
     makeCounterProvider({
       name: API_VERSION_MISMATCH_METRIC,
       help: 'Stripe webhook events whose api_version differs from the pinned STRIPE_API_VERSION',
+    }),
+    makeCounterProvider({
+      name: CHECKOUT_WITHOUT_IDEMPOTENCY_KEY_METRIC,
+      help: 'Checkout requests that sent no Idempotency-Key',
     }),
     { provide: PaymentsRepository, useClass: DrizzlePaymentsRepository },
     { provide: StripeEventsRepository, useClass: DrizzleStripeEventsRepository },
