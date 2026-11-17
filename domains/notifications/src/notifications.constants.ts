@@ -1,3 +1,5 @@
+import type { NotificationCreatedPayload } from '@domain/notifications-contracts';
+
 /**
  * Names shared by the notifications edges (WebSocket, GraphQL) and the core. Everything here is a
  * wire contract with clients, so renaming a value is a breaking change.
@@ -31,13 +33,21 @@ export const tenantUserRoom = (tenantId: string, userId: string): string =>
 export const NOTIFICATION_CREATED_TRIGGER = 'notificationCreated';
 
 /**
- * Per-user trigger (`notificationCreated:<userId>`): the push consumer publishes to the owner's
- * trigger and each subscription listens to its own user's only. With RedisPubSub that is one
- * Redis channel per connected user per replica, so an event wakes only the iterators of its owner
- * instead of every subscriber on every replica.
+ * Per-(tenant, user) trigger (`notificationCreated:<tenantId>:<userId>`): the push consumer
+ * publishes to the trigger of the envelope tenant and the payload's user, and each subscription
+ * listens to the trigger of its token's tenant and user only. A user signed in to tenant A never
+ * hears tenant B's notifications, their own included. With RedisPubSub that is one Redis channel
+ * per connected (tenant, user) per replica, so an event wakes only its owner's iterators.
  */
-export const notificationCreatedTrigger = (userId: string): string =>
-  `${NOTIFICATION_CREATED_TRIGGER}:${userId}`;
+export const notificationCreatedTrigger = (tenantId: string, userId: string): string =>
+  `${NOTIFICATION_CREATED_TRIGGER}:${tenantId}:${userId}`;
+
+/**
+ * What the push consumer publishes on `notificationCreatedTrigger`: the event payload plus the
+ * envelope tenant. The subscription filter sees this object, not the Kafka envelope, so the tenant
+ * must travel in it. `resolve` drops it: the GraphQL `Notification` has no tenant field.
+ */
+export type NotificationCreatedPush = NotificationCreatedPayload & { tenantId: string };
 
 /** Inbox page size (REST `limit`, GraphQL `limit`, gRPC `limit`; 0 over gRPC = default). */
 export const DEFAULT_NOTIFICATIONS_PAGE_SIZE = 20;

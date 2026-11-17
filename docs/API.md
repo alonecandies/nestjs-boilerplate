@@ -470,7 +470,7 @@ HTTP POST, and subscriptions go over **graphql-ws** on the same path. Authentica
 | Mutation     | `markNotificationRead(input: MarkNotificationReadInput!)`   | `notifications:read`                         | `Boolean!`                | Idempotent. `NOTIFICATION_NOT_FOUND` outside my inbox                                                                                                                          |
 | Mutation     | `createCheckoutSession(input: CreateCheckoutSessionInput!)` | `billing:checkout`                           | `CheckoutSession!`        | `idempotencyKey` in the input                                                                                                                                                  |
 | Mutation     | `createUploadUrl(input: CreateUploadUrlInput!)`             | `files:write`                                | `PresignedUpload!`        | Presigned PUT (the same as `POST /v1/files/presigned-uploads`)                                                                                                                 |
-| Subscription | `notificationCreated`                                       | `notifications:read`                         | `Notification!`           | Only the subscriber's own notifications                                                                                                                                        |
+| Subscription | `notificationCreated`                                       | `notifications:read`                         | `Notification!`           | Only the subscriber's own notifications in the token's tenant                                                                                                                  |
 
 The GraphQL surface is smaller than REST. Logout, the streaming upload, file download and delete, and the Stripe
 webhook are **REST only**.
@@ -563,8 +563,10 @@ curl -s "$API/graphql" -H 'content-type: application/json' -H "authorization: Be
 - The client must send `connection_init` within **10 s**, or the socket is closed.
 - A missing, invalid or revoked token closes the socket with **4403** Forbidden.
 - When the access token expires mid-session, the socket is closed with **4401**. Reconnect with a fresh token.
-- Events fan out through Redis PubSub, so a subscriber connected to any replica gets its own events. Each user has
-  their own trigger (`notificationCreated:<userId>`).
+- Events fan out through Redis PubSub, so a subscriber connected to any replica gets its own events. Each
+  (tenant, user) pair has its own trigger (`notificationCreated:<tenantId>:<userId>`), both taken from the token at
+  `connection_init`: a subscription only hears notifications of the tenant its token is for. After a tenant switch,
+  open a new connection with the new token. The filter re-checks tenant and user on every event.
 
 ```ts
 import { createClient } from 'graphql-ws';

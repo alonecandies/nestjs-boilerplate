@@ -18,6 +18,7 @@ export {
   NOTIFICATION_CREATED_TRIGGER,
   NOTIFICATIONS_WS_EVENTS,
   NOTIFICATIONS_WS_NAMESPACE,
+  type NotificationCreatedPush,
   notificationCreatedTrigger,
   PAGE_STATE_MAX_LENGTH,
   PAGE_STATE_PATTERN,

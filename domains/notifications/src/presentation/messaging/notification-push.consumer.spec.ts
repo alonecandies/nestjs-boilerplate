@@ -76,7 +76,7 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
     server.producer.send.mockClear();
   });
 
-  it('pushes to the (envelope tenant, payload user) room (REST shape) and publishes the GraphQL trigger', async () => {
+  it('pushes to the (envelope tenant, payload user) room (REST shape) and publishes the (tenant, user) trigger', async () => {
     const envelope = createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, {
       id: NOTIFICATION_ID,
       source: 'notifications-service',
@@ -95,8 +95,16 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
       data: { paymentId: 'p1' },
       createdAt: CREATED_AT.toISOString(),
     });
-    expect(publish).toHaveBeenCalledWith(`notificationCreated:${USER_ID}`, payload);
-    expect(publish).toHaveBeenCalledWith(notificationCreatedTrigger(USER_ID), payload);
+    // The published object carries the envelope tenant: the subscription filter sees it.
+    expect(publish).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith(`notificationCreated:${TENANT_ID}:${USER_ID}`, {
+      ...payload,
+      tenantId: TENANT_ID,
+    });
+    expect(publish).toHaveBeenCalledWith(notificationCreatedTrigger(TENANT_ID, USER_ID), {
+      ...payload,
+      tenantId: TENANT_ID,
+    });
     expect(server.deadLetters()).toHaveLength(0);
   });
 
@@ -111,6 +119,11 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
 
     expect(gateway.pushToUser).toHaveBeenCalledOnce();
     expect(gateway.pushToUser).toHaveBeenCalledWith(OTHER_TENANT_ID, USER_ID, expect.anything());
+    expect(publish).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith(`notificationCreated:${OTHER_TENANT_ID}:${USER_ID}`, {
+      ...payload,
+      tenantId: OTHER_TENANT_ID,
+    });
   });
 
   it('dead-letters an envelope without tenantId before the dedupe claim and pushes nothing', async () => {

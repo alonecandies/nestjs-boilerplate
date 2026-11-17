@@ -4,7 +4,10 @@ import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
 import { type GqlContext, type GraphqlPubSub, InjectPubSub } from '@platform/graphql';
 import { notificationFromCreatedPayload } from '../../application/mappers/notification.mapper.js';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
-import { notificationCreatedTrigger } from '../../notifications.constants.js';
+import {
+  type NotificationCreatedPush,
+  notificationCreatedTrigger,
+} from '../../notifications.constants.js';
 import { NotificationsPermission } from '../../notifications.permissions.js';
 import { toNotificationView } from '../notification-view.js';
 import { ListNotificationsArgs } from './list-notifications.args.js';
@@ -20,17 +23,22 @@ export function toNotificationConnection(page: NotificationPage): NotificationCo
 }
 
 /**
- * Subscribers only receive their own notifications. The trigger is already per user
- * (`notificationCreatedTrigger`), so this filter is defence in depth: a payload published on the
- * wrong trigger still never reaches another user.
+ * Subscribers only receive their own notifications in the tenant their token is for. The trigger
+ * is already per (tenant, user) (`notificationCreatedTrigger`), so this filter is defence in depth:
+ * a payload published on the wrong trigger, or without a tenant, still reaches nobody else.
  */
 export function isOwnNotification(
-  payload: NotificationCreatedPayload,
+  payload: NotificationCreatedPush,
   _variables: unknown,
   context: GqlContext,
 ): boolean {
-  const userId = context.req.user?.id;
-  return userId !== undefined && payload.userId === userId;
+  const user = context.req.user;
+  if (user === undefined) return false;
+  return (
+    typeof payload.tenantId === 'string' &&
+    payload.tenantId === user.tenantId &&
+    payload.userId === user.id
+  );
 }
 
 /**
@@ -93,10 +101,11 @@ export class NotificationsResolver {
   })
   @RequirePermissions(NotificationsPermission.Read)
   notificationCreated(
-    @CurrentUser('id') userId: string,
-  ): AsyncIterableIterator<NotificationCreatedPayload> {
-    return this.pubSub.asyncIterableIterator<NotificationCreatedPayload>(
-      notificationCreatedTrigger(userId),
+    @CurrentUser() user: AuthUser,
+  ): AsyncIterableIterator<NotificationCreatedPush> {
+    // Tenant and user both from the verified token, fixed for the life of the subscription.
+    return this.pubSub.asyncIterableIterator<NotificationCreatedPush>(
+      notificationCreatedTrigger(user.tenantId, user.id),
     );
   }
 }

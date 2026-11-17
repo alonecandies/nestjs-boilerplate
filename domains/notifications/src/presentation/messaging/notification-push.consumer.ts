@@ -11,7 +11,10 @@ import {
 } from '@platform/transport';
 import type { Redis } from 'ioredis';
 import { notificationFromCreatedPayload } from '../../application/mappers/notification.mapper.js';
-import { notificationCreatedTrigger } from '../../notifications.constants.js';
+import {
+  type NotificationCreatedPush,
+  notificationCreatedTrigger,
+} from '../../notifications.constants.js';
 import { toNotificationResponse } from '../http/notifications.dto.js';
 import { toNotificationView } from '../notification-view.js';
 import { NotificationsGateway } from '../ws/notifications.gateway.js';
@@ -27,7 +30,8 @@ export const PUSH_DEDUPE_TTL_SEC = 600;
 
 /**
  * Edge fan-out of `notifications.notification-created.v1` (gateway / monolith). The Socket.IO push
- * goes to the room of (envelope `tenantId`, `payload.userId`): the tenant comes only from the
+ * goes to the room of (envelope `tenantId`, `payload.userId`) and the GraphQL push to the trigger
+ * of the same pair, with the tenant added to the published object: the tenant comes only from the
  * envelope, and an envelope without one (or with the platform tenant) is dead-lettered before the
  * dedupe claim, so nothing is pushed or claimed. All edge replicas
  * share ONE consumer group, so each event is handled once; the socket.io Redis adapter and
@@ -67,8 +71,10 @@ export class NotificationPushConsumer {
       payload.userId,
       toNotificationResponse(toNotificationView(notificationFromCreatedPayload(payload))),
     );
-    // Only the owner's subscriptions listen to this trigger; resolve() maps the payload.
-    await this.pubSub.publish(notificationCreatedTrigger(payload.userId), payload);
+    // Only the owner's subscriptions in this tenant listen to this trigger. The object carries the
+    // tenant because the subscription filter sees it, not the envelope; resolve() maps the payload.
+    const push: NotificationCreatedPush = { ...payload, tenantId };
+    await this.pubSub.publish(notificationCreatedTrigger(tenantId, payload.userId), push);
   }
 
   /** `true` for the first delivery of `eventId` (or when Redis is unavailable: fail open). */

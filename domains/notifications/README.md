@@ -20,7 +20,7 @@ billing.payment-succeeded.v1 ──┤   → WelcomeUser /      ├─► MailSe
                               │                                      └─► notifications.notification-created.v1
 edge (gateway / monolith) ◄───┴── NotificationPushConsumer ◄──────────────┘
    ├─► socket.io room t:{tid}:u:{uid} ('notification.created') — fanned out by the Redis adapter
-   └─► GRAPHQL_PUB_SUB 'notificationCreated:{userId}'          — RedisPubSub, one channel per user
+   └─► GRAPHQL_PUB_SUB 'notificationCreated:{tid}:{uid}'       — RedisPubSub, one channel per (tenant, user)
 ```
 
 ## Modules
@@ -135,13 +135,18 @@ enum NotificationType {
 ```
 
 Every operation requires `notifications:read`, enforced by the global guards (they are
-GraphQL-aware). Args/inputs are validated with class-validator. The subscription listens on its
-user's own trigger, `notificationCreated:{userId}` (`notificationCreatedTrigger`), and the push
-consumer publishes to the owner's trigger. With RedisPubSub that is one Redis channel per
-connected user per replica (Redis handles many channels well), so an event only wakes its owner's
-iterators instead of every subscriber on every replica. The filter (`payload.userId` ===
-`ctx.req.user.id`) stays as defence in depth; `resolve` maps the JSON payload (from RedisPubSub)
-to the model.
+GraphQL-aware). Args/inputs are validated with class-validator. The subscription listens on the
+trigger of its token's tenant and user, `notificationCreated:{tenantId}:{userId}`
+(`notificationCreatedTrigger(user.tenantId, user.id)`, both from `@CurrentUser()`), and the push
+consumer publishes `{ ...payload, tenantId }` (`NotificationCreatedPush`, the tenant from the
+envelope) on `notificationCreatedTrigger(tenantId, payload.userId)`. A user signed in to tenant A
+never hears tenant B's notifications, their own included; a new tenant needs a new connection with
+the new token. With RedisPubSub that is one Redis channel per connected (tenant, user) per replica
+(Redis handles many channels well), so an event only wakes its owner's iterators. The filter
+(`isOwnNotification`: `payload.tenantId` and `payload.userId` both equal the connection user's)
+stays as defence in depth, so a payload published on a wrong trigger, or without a tenant, reaches
+nobody. `resolve` maps the JSON payload (from RedisPubSub) to the model, which has no tenant
+field.
 
 ### WebSocket (socket.io namespace `/notifications`)
 
