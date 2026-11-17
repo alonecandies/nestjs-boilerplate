@@ -27,16 +27,20 @@ const recipient = (n: number): NotificationRecipient => ({
   updatedAt: NOW,
 });
 
-function setup(pages: NotificationRecipientsSlice[], unreadByUser: Record<string, number>) {
+/**
+ * `unread` counts unread items per inbox: keyed `<tenantId>:<userId>` for one pair, or by the bare
+ * user id for that user's inbox in every tenant.
+ */
+function setup(pages: NotificationRecipientsSlice[], unread: Record<string, number>) {
   const recipients = createMock<NotificationRecipientsRepository>();
   for (const page of pages) recipients.scan.mockResolvedValueOnce(page);
   recipients.scan.mockResolvedValue({ items: [], pageState: null });
   const notifications = createMock<NotificationsRepository>({
-    findRecentByUser: async (userId: string) => [
-      ...Array.from({ length: unreadByUser[userId] ?? 0 }, (_, i) =>
-        makeNotificationProps({ userId, title: `n${i}` }),
+    findRecentByUser: async (tenantId: string, userId: string) => [
+      ...Array.from({ length: unread[`${tenantId}:${userId}`] ?? unread[userId] ?? 0 }, (_, i) =>
+        makeNotificationProps({ tenantId, userId, title: `n${i}` }),
       ),
-      makeNotificationProps({ userId, read: true }),
+      makeNotificationProps({ tenantId, userId, read: true }),
     ],
   });
   const mail = createMock<MailService>({ enqueue: async () => ({ jobId: 'x' }) });
@@ -63,7 +67,11 @@ describe('SendDailyDigestHandler', () => {
 
     expect(result).toEqual({ scanned: 3, enqueued: 2, failed: 0 });
     expect(recipients.scan.mock.calls.map(([, state]) => state)).toEqual([undefined, 'aa01']);
-    expect(notifications.findRecentByUser).toHaveBeenCalledWith(r2.userId, DIGEST_SCAN_PER_USER);
+    expect(notifications.findRecentByUser).toHaveBeenCalledWith(
+      TENANT_ID,
+      r2.userId,
+      DIGEST_SCAN_PER_USER,
+    );
 
     const mails: MailMessage[] = mail.enqueue.mock.calls.map(([m]) => m);
     const first = mails.find((m) => m.to === r1.email);
@@ -101,6 +109,35 @@ describe('SendDailyDigestHandler', () => {
         `digest-${OTHER_TENANT_ID}-${USER_ID}-2026-09-29`,
       ].sort(),
     );
+  });
+
+  it("reads each pair's own inbox: unread items in B never trigger A's digest", async () => {
+    const inTenant = (tenantId: string): NotificationRecipient => ({
+      tenantId,
+      userId: USER_ID,
+      email: `ada@${tenantId}.example`,
+      displayName: 'Ada',
+      updatedAt: NOW,
+    });
+    const { notifications, mail, handler } = setup(
+      [{ items: [inTenant(TENANT_ID), inTenant(OTHER_TENANT_ID)], pageState: null }],
+      { [`${OTHER_TENANT_ID}:${USER_ID}`]: 2 },
+    );
+
+    await expect(handler.execute(new SendDailyDigestCommand({ now: NOW }))).resolves.toEqual({
+      scanned: 2,
+      enqueued: 1,
+      failed: 0,
+    });
+    expect(notifications.findRecentByUser.mock.calls.map(([t, u]) => [t, u]).sort()).toEqual(
+      [
+        [TENANT_ID, USER_ID],
+        [OTHER_TENANT_ID, USER_ID],
+      ].sort(),
+    );
+    expect(mail.enqueue.mock.calls.map(([m]) => [m.to, m.idempotencyKey])).toEqual([
+      [`ada@${OTHER_TENANT_ID}.example`, `digest-${OTHER_TENANT_ID}-${USER_ID}-2026-09-29`],
+    ]);
   });
 
   it('honours maxRecipients (bounded run) and never asks for more than the remaining budget', async () => {

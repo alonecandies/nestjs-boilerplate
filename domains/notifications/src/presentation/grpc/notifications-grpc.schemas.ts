@@ -9,9 +9,11 @@ import {
  * ts-proto request types are interfaces, so class-validator would silently skip them
  * (nest-distributed §3.4): payloads are validated with zod via `ZodRpcValidationPipe`, which
  * answers INVALID_ARGUMENT with the issues. proto3 defaults are accepted: `limit` 0 = default page,
- * an absent `page_state` arrives as null or ''.
+ * an absent `page_state` arrives as null or ''. `tenant_id` is a proto3 `optional` that is required
+ * here: an absent (null), empty or malformed tenant is INVALID_ARGUMENT before any handler runs.
  */
 export const listNotificationsRequestSchema = z.object({
+  tenantId: z.uuid(),
   userId: z.uuid(),
   limit: z.number().int().min(0).max(MAX_NOTIFICATIONS_PAGE_SIZE),
   pageState: z
@@ -23,6 +25,7 @@ export const listNotificationsRequestSchema = z.object({
 });
 
 export const markNotificationReadRequestSchema = z.object({
+  tenantId: z.uuid(),
   userId: z.uuid(),
   notificationId: z.uuid(),
 });

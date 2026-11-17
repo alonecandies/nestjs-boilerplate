@@ -19,6 +19,11 @@ export const notificationCreatedPayload = z.object({
 
 export type NotificationCreatedPayload = z.infer<typeof notificationCreatedPayload>;
 
-/** An inbox entry was stored. Produced by notifications; the edges push it to sockets. */
+/**
+ * An inbox entry was stored. Produced by notifications; the edges push it to sockets.
+ * Tenant-scoped (B4-1): the envelope `tenantId` is the inbox tenant; the payload is unchanged.
+ */
 export const NOTIFICATION_CREATED_EVENT: EventContract<NotificationCreatedPayload> =
-  defineEventContract('notifications.notification-created.v1', notificationCreatedPayload);
+  defineEventContract('notifications.notification-created.v1', notificationCreatedPayload, {
+    tenantScoped: true,
+  });

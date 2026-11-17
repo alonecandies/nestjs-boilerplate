@@ -21,6 +21,9 @@ export class PublishNotificationCreatedHandler
         {
           // Per-user ordering: every push of one user lands on the same partition.
           key: notification.userId,
+          // The inbox tenant, explicitly: the CLS principal of the consumer that created the
+          // notification is not necessarily it (the event is tenant-scoped).
+          tenantId: notification.tenantId,
           // The envelope id IS the notification id: a re-publish (Kafka redelivery upstream)
           // carries the same event id, so edge consumers can deduplicate on it.
           eventId: notification.id,

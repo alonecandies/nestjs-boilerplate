@@ -9,7 +9,7 @@ import { AppConfigModule, grpcConfig } from '@platform/config';
 import { createGrpcServerStrategy, GrpcClientsModule } from '@platform/transport';
 import { ClsModule } from 'nestjs-cls';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeNotificationProps, USER_ID } from '../../../test/support/fixtures.js';
+import { makeNotificationProps, TENANT_ID, USER_ID } from '../../../test/support/fixtures.js';
 import { MarkNotificationReadCommand } from '../../application/commands/mark-notification-read/mark-notification-read.command.js';
 import { toNotificationPage } from '../../application/mappers/notification.mapper.js';
 import { ListNotificationsQuery } from '../../application/queries/list-notifications/list-notifications.query.js';
@@ -102,12 +102,14 @@ describe('notifications over gRPC (NotificationsGrpcAdapter ↔ NotificationsGrp
     });
     queryBus.execute.mockResolvedValue(local);
 
-    const remote = await adapter.list({ userId: USER_ID, limit: 2 });
+    const remote = await adapter.list({ tenantId: TENANT_ID, userId: USER_ID, limit: 2 });
 
     expect(remote).toEqual(local);
     expect(remote.items[0]?.createdAt).toBeInstanceOf(Date);
     expect(remote.items[0]?.read).toBe(false);
-    expect(queryBus.execute).toHaveBeenCalledWith(new ListNotificationsQuery(USER_ID, 2));
+    expect(queryBus.execute).toHaveBeenCalledWith(
+      new ListNotificationsQuery(TENANT_ID, USER_ID, 2),
+    );
     // proto-loader's null for the absent page_state must reach the query as undefined.
     const [query] = queryBus.execute.mock.calls[0] as [ListNotificationsQuery];
     expect(query.pageState).toBeUndefined();
@@ -117,23 +119,34 @@ describe('notifications over gRPC (NotificationsGrpcAdapter ↔ NotificationsGrp
     const local = toNotificationPage({ items: [], pageState: null });
     queryBus.execute.mockResolvedValue(local);
 
-    const remote = await adapter.list({ userId: USER_ID, limit: 0, pageState: 'c0ffee' });
+    const remote = await adapter.list({
+      tenantId: TENANT_ID,
+      userId: USER_ID,
+      limit: 0,
+      pageState: 'c0ffee',
+    });
 
     expect(remote).toEqual({ items: [] });
     expect(Object.keys(remote)).toEqual(Object.keys(local));
-    expect(queryBus.execute).toHaveBeenCalledWith(new ListNotificationsQuery(USER_ID, 0, 'c0ffee'));
+    expect(queryBus.execute).toHaveBeenCalledWith(
+      new ListNotificationsQuery(TENANT_ID, USER_ID, 0, 'c0ffee'),
+    );
   });
 
   it('MarkNotificationRead: dispatches the command; NOT_FOUND keeps its domain code', async () => {
     const notificationId = generateId();
     commandBus.execute.mockResolvedValueOnce(undefined);
-    await expect(adapter.markRead({ userId: USER_ID, notificationId })).resolves.toBeUndefined();
+    await expect(
+      adapter.markRead({ tenantId: TENANT_ID, userId: USER_ID, notificationId }),
+    ).resolves.toBeUndefined();
     expect(commandBus.execute).toHaveBeenCalledWith(
-      new MarkNotificationReadCommand(USER_ID, notificationId),
+      new MarkNotificationReadCommand(TENANT_ID, USER_ID, notificationId),
     );
 
     commandBus.execute.mockRejectedValueOnce(new NotificationNotFoundException(notificationId));
-    await expect(adapter.markRead({ userId: USER_ID, notificationId })).rejects.toMatchObject({
+    await expect(
+      adapter.markRead({ tenantId: TENANT_ID, userId: USER_ID, notificationId }),
+    ).rejects.toMatchObject({
       httpStatus: 404,
       code: 'NOTIFICATION_NOT_FOUND',
     });
@@ -141,7 +154,7 @@ describe('notifications over gRPC (NotificationsGrpcAdapter ↔ NotificationsGrp
 
   it('a malformed page state is rejected by the zod pipe (INVALID_ARGUMENT) before the bus', async () => {
     const error = await adapter
-      .list({ userId: USER_ID, limit: 5, pageState: 'not hex!' })
+      .list({ tenantId: TENANT_ID, userId: USER_ID, limit: 5, pageState: 'not hex!' })
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(DomainValidationException);
     expect(queryBus.execute).not.toHaveBeenCalled();

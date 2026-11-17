@@ -32,7 +32,7 @@ function validate(props: NewNotificationProps): ValidationIssue[] {
 }
 
 /**
- * One entry of a user's inbox. Created unread; the only state change is being marked read
+ * One entry of a user's inbox in one tenant (a user in two tenants has two inboxes). Created unread; the only state change is being marked read
  * (idempotent). Notifications are immutable otherwise and expire with the table TTL (90 days).
  */
 export class NotificationEntity extends AggregateRoot {
@@ -56,6 +56,10 @@ export class NotificationEntity extends AggregateRoot {
 
   get id(): string {
     return this.props.id;
+  }
+
+  get tenantId(): string {
+    return this.props.tenantId;
   }
 
   get userId(): string {

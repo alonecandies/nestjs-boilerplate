@@ -4,3 +4,4 @@
  */
 export * from './fake-notifications-port.js';
 export * from './in-memory-notification-recipients.repository.js';
+export * from './in-memory-notifications.repository.js';

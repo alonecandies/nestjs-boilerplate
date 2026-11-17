@@ -4,6 +4,7 @@ import { CommandBus, CqrsModule, QueryBus } from '@nestjs/cqrs';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { AuthModule, RbacModule } from '@platform/auth';
 import { CASSANDRA_CLIENT, type CassandraClient } from '@platform/cassandra';
+import { createPrincipal, runWithPrincipal } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { GraphqlPubSubModule } from '@platform/graphql';
 import { MailService } from '@platform/mailer';
@@ -14,7 +15,7 @@ import { FakeKafkaProducer } from '@platform/transport/testing';
 import type cassandra from 'cassandra-driver';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeRedisModule } from '../test/support/edge-test-app.js';
-import { USER_ID } from '../test/support/fixtures.js';
+import { TENANT_ID, USER_ID } from '../test/support/fixtures.js';
 import { WelcomeUserCommand } from './application/commands/welcome-user/welcome-user.command.js';
 import { NotificationsPort } from './application/ports/notifications.port.js';
 import { ListNotificationsQuery } from './application/queries/list-notifications/list-notifications.query.js';
@@ -88,6 +89,7 @@ describe('notifications modules (composition, no infrastructure)', () => {
 
     const notification = await moduleRef.get(CommandBus).execute(
       new WelcomeUserCommand({
+        tenantId: TENANT_ID,
         userId: USER_ID,
         email: 'ada@example.com',
         displayName: 'Ada',
@@ -95,12 +97,17 @@ describe('notifications modules (composition, no infrastructure)', () => {
       }),
     );
 
-    expect(notification).toMatchObject({ userId: USER_ID, type: 'welcome', read: false });
+    expect(notification).toMatchObject({
+      tenantId: TENANT_ID,
+      userId: USER_ID,
+      type: 'welcome',
+      read: false,
+    });
     // Only the inbox insert hits Cassandra (recipients follow membership events); the mail is queued.
     expect(infra.cassandraClient.execute).toHaveBeenCalledTimes(1);
-    expect(infra.cassandraClient.execute.mock.calls[0]?.[0]).toMatch(
-      /^INSERT INTO notifications_by_user /,
-    );
+    const [insert, params] = infra.cassandraClient.execute.mock.calls[0] ?? [];
+    expect(insert).toMatch(/^INSERT INTO notifications_by_tenant_user /);
+    expect(Array.isArray(params) ? params.slice(0, 2) : params).toEqual([TENANT_ID, USER_ID]);
     expect(infra.mail.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({ template: 'welcome', idempotencyKey: `welcome-${USER_ID}` }),
     );
@@ -110,11 +117,16 @@ describe('notifications modules (composition, no infrastructure)', () => {
     );
     expect(infra.kafka.envelopes(NOTIFICATION_CREATED_EVENT)[0]).toMatchObject({
       id: notification.id,
+      tenantId: TENANT_ID,
       payload: { notificationId: notification.id, userId: USER_ID, type: 'welcome' },
     });
 
+    const owner = createPrincipal({ userId: USER_ID, tenantId: TENANT_ID, roles: ['member'] });
+    const queryBus = moduleRef.get(QueryBus);
     await expect(
-      moduleRef.get(QueryBus).execute(new ListNotificationsQuery(USER_ID, 10)),
+      runWithPrincipal(owner, () =>
+        queryBus.execute(new ListNotificationsQuery(TENANT_ID, USER_ID, 10)),
+      ),
     ).resolves.toEqual({ items: [] });
   });
 

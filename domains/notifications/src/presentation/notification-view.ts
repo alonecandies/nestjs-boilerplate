@@ -24,7 +24,7 @@ const isNotificationType = (value: string): value is NotificationType =>
  * optional; edges promise clients an enum and a timestamp, so both are normalised here (an
  * unknown type from a newer service renders as `system`).
  */
-export function toNotificationView(notification: Notification): NotificationView {
+export function toNotificationView(notification: Omit<Notification, 'tenantId'>): NotificationView {
   return {
     id: notification.id,
     type: isNotificationType(notification.type) ? notification.type : 'system',

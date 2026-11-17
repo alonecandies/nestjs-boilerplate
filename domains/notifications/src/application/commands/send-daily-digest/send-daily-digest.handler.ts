@@ -25,8 +25,8 @@ const utcDay = (date: Date): string => date.toISOString().slice(0, 10);
 
 /**
  * Bounded demo of a batch job over Cassandra: pages through the recipients projection, one item
- * per `(tenant, user)` (token order, `maxRecipients` cap), reads each recipient's newest
- * notifications (one partition read, at most `DIGEST_CONCURRENCY` in flight) and queues a digest
+ * per `(tenant, user)` (token order, `maxRecipients` cap), reads each pair's own newest
+ * notifications (one `(tenant, user)` partition read, at most `DIGEST_CONCURRENCY` in flight) and queues a digest
  * for those with unread items. The idempotency key `digest-<tenant>-<user>-<day>` makes a re-run
  * on the same day (another replica after a lock expiry, a manual trigger) a no-op in the mail
  * queue, and keeps the digests of one user's two tenants apart.
@@ -67,7 +67,9 @@ export class SendDailyDigestHandler implements ICommandHandler<SendDailyDigestCo
 
   private async digest(recipient: NotificationRecipient, day: string): Promise<DigestOutcome> {
     try {
+      // This pair's own inbox: a user's unread items in another tenant belong to that digest.
       const recent = await this.notifications.findRecentByUser(
+        recipient.tenantId,
         recipient.userId,
         DIGEST_SCAN_PER_USER,
       );

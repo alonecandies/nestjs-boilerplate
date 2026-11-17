@@ -1,5 +1,6 @@
 import type { NotificationCreatedPayload } from '@domain/notifications-contracts';
 import { GraphQLSchemaHost } from '@nestjs/graphql';
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { type GqlContext, GRAPHQL_PUB_SUB, type GraphqlPubSub } from '@platform/graphql';
 import { type ExecutionResult, parse, printSchema, subscribe } from 'graphql';
 import { PubSub } from 'graphql-subscriptions';
@@ -111,7 +112,12 @@ describe('NotificationsResolver (Apollo on Fastify, real guards, fake port)', ()
     const body = await gql(LIST, { limit: 5, pageState: 'beef' }, userToken);
 
     expect(body.errors).toBeUndefined();
-    expect(port.list).toHaveBeenCalledWith({ userId: USER_ID, limit: 5, pageState: 'beef' });
+    expect(port.list).toHaveBeenCalledWith({
+      tenantId: TEST_TENANT_ID,
+      userId: USER_ID,
+      limit: 5,
+      pageState: 'beef',
+    });
     expect(body.data?.notifications).toEqual({
       items: [
         {
@@ -150,6 +156,7 @@ describe('NotificationsResolver (Apollo on Fastify, real guards, fake port)', ()
     const ok = await gql(MARK, { id: NOTIFICATION_ID }, userToken);
     expect(ok).toEqual({ data: { markNotificationRead: true } });
     expect(port.markRead).toHaveBeenCalledWith({
+      tenantId: TEST_TENANT_ID,
       userId: USER_ID,
       notificationId: NOTIFICATION_ID,
     });

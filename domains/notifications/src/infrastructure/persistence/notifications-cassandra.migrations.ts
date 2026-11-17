@@ -13,7 +13,7 @@ export const notificationsCassandraMigrations: CassandraMigrationSource = {
 
 /**
  * Lifetime of an inbox row in seconds (90 days). MUST equal `default_time_to_live` of
- * `001_create_notifications.cql` (asserted by the migrations spec): `markRead` writes its cell
+ * `004_create_notifications_by_tenant_user.cql` (asserted by the migrations spec): `markRead` writes its cell
  * with the row's remaining lifetime so it never outlives the row.
  */
 export const NOTIFICATIONS_TTL_SEC = 7_776_000;

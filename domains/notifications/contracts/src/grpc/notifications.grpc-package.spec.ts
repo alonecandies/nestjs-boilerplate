@@ -55,9 +55,10 @@ describe('NOTIFICATIONS_GRPC_PACKAGE', () => {
 });
 
 describe('notifications.v1 wire format (proto-loader semantics + generated types)', () => {
-  it('round-trips map<string, string> and Timestamp', () => {
+  it('round-trips map<string, string>, Timestamp and the tenant', () => {
     const notification: Notification = {
       id: 'n1',
+      tenantId: 't1',
       userId: 'u1',
       type: 'welcome',
       title: 'Welcome',

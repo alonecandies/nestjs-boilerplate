@@ -198,9 +198,14 @@ export class NotificationsGateway
   @RateLimit(NOTIFICATIONS_RATE_LIMITS.MARK_READ)
   async markRead(
     @MessageBody({ schema: markReadMessageSchema }) body: MarkReadMessage,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: AuthUser,
   ): Promise<MarkReadAck> {
-    await this.notifications.markRead({ userId, notificationId: body.id });
+    // The (tenant, user) inbox of the token this socket authenticated with.
+    await this.notifications.markRead({
+      tenantId: user.tenantId,
+      userId: user.id,
+      notificationId: body.id,
+    });
     return { ok: true };
   }
 

@@ -20,7 +20,7 @@ import {
   type MockInstance,
   vi,
 } from 'vitest';
-import { CREATED_AT, USER_ID } from '../../../test/support/fixtures.js';
+import { CREATED_AT, TENANT_ID, USER_ID } from '../../../test/support/fixtures.js';
 import { InMemoryKafkaServer } from '../../../test/support/in-memory-kafka.server.js';
 import { notificationCreatedTrigger } from '../../notifications.constants.js';
 import { NotificationsGateway } from '../ws/notifications.gateway.js';
@@ -75,6 +75,7 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
     const envelope = createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, {
       id: NOTIFICATION_ID,
       source: 'notifications-service',
+      tenantId: TENANT_ID,
     });
 
     await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, envelope, USER_ID);
@@ -104,6 +105,7 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
     const envelope = createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, {
       id: generateId(),
       source: 'notifications-service',
+      tenantId: TENANT_ID,
     });
 
     await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, envelope, USER_ID);
@@ -119,6 +121,7 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
     const envelope = createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, {
       id: generateId(),
       source: 'notifications-service',
+      tenantId: TENANT_ID,
     });
 
     await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, envelope, USER_ID);

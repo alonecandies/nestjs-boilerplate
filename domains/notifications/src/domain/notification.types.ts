@@ -10,10 +10,12 @@ export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 export const isNotificationKind = (value: unknown): value is NotificationKind =>
   typeof value === 'string' && (NOTIFICATION_KINDS as readonly string[]).includes(value);
 
-/** State of one inbox entry (one row of `notifications_by_user`). */
+/** State of one inbox entry (one row of `notifications_by_tenant_user`). */
 export interface NotificationProps {
   /** uuidv7 — its time component orders the inbox (clustering key, newest first). */
   id: string;
+  /** The tenant whose inbox holds it: with `userId`, the partition key `(tenant_id, user_id)`. */
+  tenantId: string;
   userId: string;
   type: NotificationKind;
   title: string;

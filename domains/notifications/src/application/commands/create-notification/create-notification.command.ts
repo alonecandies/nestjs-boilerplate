@@ -3,6 +3,8 @@ import { Command } from '@nestjs/cqrs';
 import type { NotificationKind } from '../../../domain/notification.types.js';
 
 export interface CreateNotificationInput {
+  /** The inbox tenant: from a validated event envelope, never from a request body. */
+  tenantId: string;
   userId: string;
   type: NotificationKind;
   title: string;
@@ -16,7 +18,7 @@ export interface CreateNotificationInput {
   idempotency?: { key: string; occurredAt: Date };
 }
 
-/** Adds a notification to a user's inbox and raises `NotificationCreatedEvent`. */
+/** Adds a notification to a (tenant, user) inbox and raises `NotificationCreatedEvent`. */
 export class CreateNotificationCommand extends Command<Notification> {
   constructor(readonly input: CreateNotificationInput) {
     super();

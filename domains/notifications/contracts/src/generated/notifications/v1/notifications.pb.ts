@@ -22,7 +22,11 @@ export interface Notification {
   read: boolean;
   /** Free-form string attributes for clients (deep links, ids). */
   data: { [key: string]: string };
-  createdAt?: Date | undefined;
+  createdAt?:
+    | Date
+    | undefined;
+  /** The tenant whose inbox holds the notification. */
+  tenantId: string;
 }
 
 export interface Notification_DataEntry {
@@ -34,7 +38,14 @@ export interface ListNotificationsRequest {
   userId: string;
   limit: number;
   /** Opaque paging state from a previous NotificationPage.next_page_state. */
-  pageState?: string | undefined;
+  pageState?:
+    | string
+    | undefined;
+  /**
+   * The caller's active tenant (`req.user.tenantId`). Required: the service compares it with the
+   * caller principal (PERMISSION_DENIED TENANT_MISMATCH otherwise) and never takes it as the source.
+   */
+  tenantId?: string | undefined;
 }
 
 export interface NotificationPage {
@@ -46,6 +57,11 @@ export interface NotificationPage {
 export interface MarkNotificationReadRequest {
   userId: string;
   notificationId: string;
+  /**
+   * The caller's active tenant; required and compared with the caller principal, as in
+   * ListNotificationsRequest.
+   */
+  tenantId?: string | undefined;
 }
 
 wrappers[".google.protobuf.Timestamp"] = {
@@ -62,7 +78,7 @@ export interface NotificationsServiceClient {
 
   listNotifications(request: ListNotificationsRequest, metadata?: Metadata): Observable<NotificationPage>;
 
-  /** Idempotent. Fails with NOT_FOUND when the notification does not belong to the user. */
+  /** Idempotent. Fails with NOT_FOUND when the notification is not in the (tenant, user) inbox. */
 
   markNotificationRead(request: MarkNotificationReadRequest, metadata?: Metadata): Observable<Empty>;
 }
@@ -75,7 +91,7 @@ export interface NotificationsServiceController {
     metadata?: Metadata,
   ): Promise<NotificationPage> | Observable<NotificationPage> | NotificationPage;
 
-  /** Idempotent. Fails with NOT_FOUND when the notification does not belong to the user. */
+  /** Idempotent. Fails with NOT_FOUND when the notification is not in the (tenant, user) inbox. */
 
   markNotificationRead(request: MarkNotificationReadRequest, metadata?: Metadata): void | Promise<void>;
 }

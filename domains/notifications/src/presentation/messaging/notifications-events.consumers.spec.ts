@@ -96,7 +96,7 @@ describe('Kafka consumers (Nest RPC pipeline, in-memory broker)', () => {
   });
 
   describe('IdentityEventsConsumer', () => {
-    it('USER_REGISTERED → WelcomeUserCommand (dates revived), nothing dead-lettered', async () => {
+    it('USER_REGISTERED → WelcomeUserCommand in the envelope tenant (dates revived)', async () => {
       commandBus.execute.mockResolvedValue(undefined);
 
       await server.dispatch(USER_REGISTERED_EVENT.topic, userRegistered(), USER_ID);
@@ -104,6 +104,7 @@ describe('Kafka consumers (Nest RPC pipeline, in-memory broker)', () => {
       const [command] = commandBus.execute.mock.calls[0] ?? [];
       expect(command).toBeInstanceOf(WelcomeUserCommand);
       expect((command as WelcomeUserCommand).input).toEqual({
+        tenantId: TENANT_ID,
         userId: USER_ID,
         email: 'ada@example.com',
         displayName: 'Ada',
@@ -169,6 +170,7 @@ describe('Kafka consumers (Nest RPC pipeline, in-memory broker)', () => {
     });
 
     it.each([
+      ['user-registered', USER_REGISTERED_EVENT.topic, userRegistered],
       ['membership-created', MEMBERSHIP_CREATED_EVENT.topic, membershipCreated],
       ['membership-removed', MEMBERSHIP_REMOVED_EVENT.topic, membershipRemoved],
     ])(

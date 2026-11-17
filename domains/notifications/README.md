@@ -1,6 +1,6 @@
 # @domain/notifications
 
-The notifications bounded context: a per-user inbox in Cassandra, welcome and receipt
+The notifications bounded context: one inbox per `(tenant, user)` in Cassandra, welcome and receipt
 notifications (plus mails) derived from identity and billing events, a daily digest, and
 real-time delivery over WebSocket and GraphQL subscriptions.
 
@@ -9,7 +9,7 @@ port to the CQRS buses and the gateway binds it to gRPC; the presentation classe
 in both.
 
 ```
-identity.user-registered.v1 ──┐                       ┌─► Cassandra notifications_by_user
+identity.user-registered.v1 ──┐                       ┌─► Cassandra notifications_by_tenant_user
 identity.membership-created.v1 ┤                       │   Cassandra notification_recipients_by_tenant
 identity.membership-removed.v1 ┼─► Messaging consumers ─┤
 billing.payment-succeeded.v1 ──┤   → WelcomeUser /      ├─► MailService.enqueue (BullMQ, idempotent)
@@ -171,10 +171,19 @@ with a fresh token.
 
 ### gRPC (`notifications.v1.NotificationsService`, service side)
 
-| RPC                    | Command / query               | Validation                                                                                      |
-| ---------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------- |
-| `ListNotifications`    | `ListNotificationsQuery`      | `ZodRpcValidationPipe`: `userId` uuid, `limit` 0–100 (0 = default), `pageState` hex / null / '' |
-| `MarkNotificationRead` | `MarkNotificationReadCommand` | `userId`, `notificationId` uuid                                                                 |
+| RPC                    | Command / query               | Validation                                                                                                  |
+| ---------------------- | ----------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `ListNotifications`    | `ListNotificationsQuery`      | `ZodRpcValidationPipe`: `tenantId`, `userId` uuid, `limit` 0–100 (0 = default), `pageState` hex / null / '' |
+| `MarkNotificationRead` | `MarkNotificationReadCommand` | `tenantId`, `userId`, `notificationId` uuid                                                                 |
+
+Both requests carry `tenant_id` (a proto3 `optional`, required by the schema) and every returned
+`Notification` carries its `tenant_id`. The request tenant and user are only compared with the
+caller principal that `GrpcContextInterceptor` adopts from the metadata, never used as its source:
+`requireInboxActor(tenantId, userId)` (`application/inbox-actor.ts`), called by both handlers
+before the repository, is the one inbox check for both topologies. Another pair is
+`PERMISSION_DENIED` `TENANT_MISMATCH`, no principal is `UNAUTHENTICATED` `PRINCIPAL_MISSING`. The
+edges always pass `tenantId: user.tenantId`; the local adapter refuses a request without a tenant
+with the same 403.
 
 Errors: `DomainToGrpcExceptionFilter` (via `@GrpcController()`). `NotificationNotFoundException`
 becomes `NOT_FOUND` with an `x-error-code: NOTIFICATION_NOT_FOUND` trailer. The gateway's
@@ -198,22 +207,25 @@ controller-scoped dead-letter filter: any failure, including an invalid envelope
 The tenant of a tenant-scoped event comes only from its envelope: `requireEventTenant(event)`
 (`presentation/messaging/event-tenant.ts`) returns the envelope `tenantId` and throws
 `DomainValidationException` `EVENT_TENANT_REQUIRED` when it is absent, malformed or the platform
-(nil) tenant. The membership and payment consumers call it before any command, so an envelope
-published before B2-24 is dead-lettered: no row, no mail.
+(nil) tenant. The user-registered, membership and payment consumers call it before any command,
+so an envelope published before B2-24 is dead-lettered: no row, no mail. The welcome lands in the
+envelope tenant's inbox (the personal workspace) and the receipt in the payment's tenant.
+`notifications.notification-created.v1` is tenant-scoped: `PublishNotificationCreatedCommand`
+publishes it with the explicit option `tenantId: notification.tenantId` (the inbox tenant).
 
 ## Commands and queries
 
-| Class                               | Effect                                                                                                                                   |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `CreateNotificationCommand`         | `NotificationEntity.create()` → insert → `NotificationCreatedEvent`. With `idempotency: { key, occurredAt }` the id is derived (upsert). |
-| `MarkNotificationReadCommand`       | `UPDATE … USING TTL <remaining> … IF EXISTS`; 404 `NOTIFICATION_NOT_FOUND` when not in the user's inbox (or past its 90 days)            |
-| `PublishNotificationCreatedCommand` | Kafka publish (key = user id, envelope id = notification id). Never throws; resolves `false` on failure                                  |
-| `WelcomeUserCommand`                | Welcome notification (`welcome:{userId}`), welcome mail to the event's email (`welcome-{userId}`)                                        |
-| `UpsertRecipientCommand`            | Upsert the `(tenant, user)` recipient row, `USING TIMESTAMP` = the membership's `createdAt`                                              |
-| `RemoveRecipientCommand`            | Delete the `(tenant, user)` recipient row, `USING TIMESTAMP` = `removedAt`                                                               |
-| `SendPaymentReceiptCommand`         | Receipt notification (`receipt:{paymentId}`), receipt mail (`receipt-{paymentId}`) when the user is a recipient in the payment's tenant  |
-| `SendDailyDigestCommand`            | Bounded scan of `(tenant, user)` recipients, unread items, one digest mail per pair (`digest-{tenantId}-{userId}-{yyyy-mm-dd}`)          |
-| `ListNotificationsQuery`            | One inbox page (`executePage`, driver paging state)                                                                                      |
+| Class                               | Effect                                                                                                                                                                           |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CreateNotificationCommand`         | `NotificationEntity.create()` → insert into the input's `(tenant, user)` inbox → `NotificationCreatedEvent`. With `idempotency: { key, occurredAt }` the id is derived (upsert). |
+| `MarkNotificationReadCommand`       | `requireInboxActor`, then `UPDATE … USING TTL <remaining> … IF EXISTS`; 404 `NOTIFICATION_NOT_FOUND` when not in the `(tenant, user)` inbox (or past its 90 days)                |
+| `PublishNotificationCreatedCommand` | Kafka publish (key = user id, envelope id = notification id, envelope tenant = inbox tenant). Never throws; resolves `false` on failure                                          |
+| `WelcomeUserCommand`                | Welcome notification (`welcome:{userId}`), welcome mail to the event's email (`welcome-{userId}`)                                                                                |
+| `UpsertRecipientCommand`            | Upsert the `(tenant, user)` recipient row, `USING TIMESTAMP` = the membership's `createdAt`                                                                                      |
+| `RemoveRecipientCommand`            | Delete the `(tenant, user)` recipient row, `USING TIMESTAMP` = `removedAt`                                                                                                       |
+| `SendPaymentReceiptCommand`         | Receipt notification (`receipt:{paymentId}`), receipt mail (`receipt-{paymentId}`) when the user is a recipient in the payment's tenant                                          |
+| `SendDailyDigestCommand`            | Bounded scan of `(tenant, user)` recipients, each pair's own unread items, one digest mail per pair (`digest-{tenantId}-{userId}-{yyyy-mm-dd}`)                                  |
+| `ListNotificationsQuery`            | `requireInboxActor`, then one `(tenant, user)` inbox page (`executePage`, driver paging state)                                                                                   |
 
 `DailyDigestCron` runs at 09:00 UTC (`@Cron` + `@WithLock('notifications:daily-digest', 5 min)`,
 `waitForCompletion`), looking at up to 1,000 recipients and 50 notifications each.
@@ -242,25 +254,31 @@ Delivery is at-least-once, so every consumer path is idempotent:
 ## Data model (Cassandra, `src/infrastructure/persistence/migrations/*.cql`)
 
 ```sql
--- 001: inbox, one partition per user, newest first, 90-day TTL
-CREATE TABLE IF NOT EXISTS notifications_by_user (
-  user_id uuid, notification_id uuid, type text, title text, body text,
-  data map<text, text>, read boolean, created_at timestamp,
-  PRIMARY KEY ((user_id), notification_id)
-) WITH CLUSTERING ORDER BY (notification_id DESC) AND default_time_to_live = 7776000;
-
--- 002: user-keyed mail recipients (no longer read or written; a later migration drops it)
-CREATE TABLE IF NOT EXISTS notification_recipients (
-  user_id uuid PRIMARY KEY, email text, display_name text, updated_at timestamp);
+-- 001: user-keyed inbox and 002: user-keyed recipients (both dropped by 005)
 
 -- 003: mail recipients per membership, a projection of identity's membership events
 CREATE TABLE IF NOT EXISTS notification_recipients_by_tenant (
   tenant_id uuid, user_id uuid, email text, display_name text, updated_at timestamp,
   PRIMARY KEY ((tenant_id, user_id)));
+
+-- 004: inbox, one partition per (tenant, user), newest first, 90-day TTL
+CREATE TABLE IF NOT EXISTS notifications_by_tenant_user (
+  tenant_id uuid, user_id uuid, notification_id uuid, type text, title text, body text,
+  data map<text, text>, read boolean, created_at timestamp,
+  PRIMARY KEY ((tenant_id, user_id), notification_id)
+) WITH CLUSTERING ORDER BY (notification_id DESC) AND default_time_to_live = 7776000;
+
+-- 005: drop the user-keyed tables
+DROP TABLE IF EXISTS notifications_by_user;
+DROP TABLE IF EXISTS notification_recipients;
 ```
 
-There is no backfill from `notification_recipients`: a user-keyed row has no tenant. Recipients come
-back from new membership events; a dev stack resets its volumes (`docker compose down -v`).
+A user in two tenants has two inboxes. Every inbox statement binds `tenant_id` then `user_id`, so a
+paging state only ever pages the partition it is replayed on.
+
+There is no backfill from the user-keyed tables: their rows have no tenant, and Cassandra cannot
+derive one. Old inbox rows (90-day TTL, best effort) and old recipients are dropped; recipients come
+back from new membership events. A dev stack resets its volumes (`docker compose down -v`).
 
 Rows expire with the table's default TTL, and that TTL applies to UPDATEs too: a plain
 `UPDATE … SET read = true` would give `read` a fresh 90 days and leave a "ghost" row (only `read`,
@@ -283,13 +301,15 @@ paged and capped.
 - Mail templates (`infrastructure/mail/notifications-mail-templates.spec.ts`): every declared template ships, has a context type and renders with the shared layout partials in strict mode, with HTML escaping.
 - Repositories against a mocked `cassandra-driver` client (CQL, prepare/idempotent flags, paging, LWT result). Migrations parsed with `@platform/cassandra`'s loader.
 - `test/recipients.int-spec.ts` (Docker; `INTEGRATION=1 bunx vitest run --project notifications:int`): the real migrations and recipients repository on `@platform/testing/cassandra`: per-pair rows, removal of one pair, write-timestamp ordering and the scan.
+- `test/inbox-isolation.int-spec.ts` (Docker, same command): all five migrations (the user-keyed tables are gone), one inbox per `(tenant, user)` for list and `markRead`, a paging state replayed on another pair, a re-inserted read notification, and the digest reading each pair's own inbox (and stopping after a membership removal).
+- `application/inbox-actor.spec.ts`: the principal must be exactly the inbox pair (403 `TENANT_MISMATCH`, 401 `PRINCIPAL_MISSING`); the list and markRead handler specs reject a mismatch before the repository, and the gRPC controller spec proves it with the real handlers and principal metadata (`PERMISSION_DENIED`).
 - Local adapter (buses). gRPC adapter (null normalisation, NOT_FOUND trailers → `EntityNotFoundException`, sanitised 503). Cron (schedule metadata, lock won/lost, failure).
 - REST and GraphQL through a Fastify test app: real `AuthModule` (real tokens), common enhancers and Apollo, with a **fake port**. The specs cover 200/204, 400 validation (zod and class-validator), 401, 403 and 404 problem details, the schema SDL, and the subscription filter, resolve and iterator.
 - gRPC controller and Kafka consumers run through Nest's real RPC pipeline on in-memory transports (`test/support/in-memory-{grpc,kafka}.server.ts`): bus mapping, `INVALID_ARGUMENT`, NOT_FOUND trailers, and DLQ records for invalid envelopes and failing commands.
 - gRPC round trip (`presentation/grpc/notifications-grpc.roundtrip.spec.ts`): `NotificationsGrpcAdapter` ↔ `NotificationsGrpcController` over real loopback gRPC. The remote adapter returns the local mapper's exact shape (map data, Date, `nextPageState` absent on the last page) and keeps `NOTIFICATION_NOT_FOUND` across the hop.
 - WebSocket gateway: handshake middleware (valid, Bearer header, missing, revoked, forged), room join, disconnect at token expiry (and timer cleanup), the revocation sweep, `WsSessionGuard` (TOKEN_REVOKED), `markRead` ack, `ping`, room push.
 - Module composition for every topology: the Core welcome flow end to end (command → aggregate → saga → Kafka), `forLocal()`/`forRemote()` port binding, and the gRPC/Messaging controllers.
-- Test doubles for the apps: `@domain/notifications/testing` exports `FakeNotificationsPort` (an in-memory inbox behind the gateway's `NotificationsPort`) and `InMemoryNotificationRecipientsRepository` (the recipients projection with the Cassandra adapter's last-write-wins rules).
+- Test doubles for the apps: `@domain/notifications/testing` exports `FakeNotificationsPort` (an in-memory inbox per `(tenantId, userId)` behind the gateway's `NotificationsPort`; `add()` requires the tenant), `InMemoryNotificationsRepository` (the inbox repository keyed like the table) and `InMemoryNotificationRecipientsRepository` (the recipients projection with the Cassandra adapter's last-write-wins rules).
 
 ## Gotchas
 

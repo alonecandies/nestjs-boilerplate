@@ -717,8 +717,9 @@ once every service is registered and switches to `NOT_SERVING` when shutdown sta
 **Trust model.** The gateway authenticates and enforces RBAC at the edge, then forwards the caller's principal on every
 call as `x-user-id`, `x-tenant-id`, `x-user-roles` and `x-staff`. A service rebuilds the principal from that metadata
 (malformed values fail with 401 `INVALID_PRINCIPAL`; no `x-user-id` means no principal) and recomputes permissions from the
-roles. Services trust this metadata and the `user_id` / `tenant_id` fields of a request (billing cross-checks the
-tenant against the principal: 403 `TENANT_MISMATCH`), so they must not be reachable from outside the cluster. In production they need
+roles. Services trust this metadata and the `user_id` / `tenant_id` fields of a request (billing and notifications
+cross-check the tenant against the principal: 403 `TENANT_MISMATCH`; notifications also requires the request's user to
+be the principal's), so they must not be reachable from outside the cluster. In production they need
 TLS: `GRPC_TLS_CA_PATH`, `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, and mutual TLS by default
 (`GRPC_TLS_REQUIRE_CLIENT_CERT`). With `NODE_ENV=production`, plaintext is refused unless `GRPC_ALLOW_INSECURE=true`.
 docker-compose sets that flag, plus `GRPC_REFLECTION=true`, for local use only. Other metadata carried on each call:
@@ -816,10 +817,15 @@ a member who left). `actorId` is the acting user: the member themself, or the ad
 published once, after its transaction committed; a rejected command publishes nothing.
 
 Notifications keeps its mail recipients per `(tenant, user)` from the two membership topics, so receipts and digests
-follow memberships and stop when one ends. Its membership and payment consumers take the tenant only from the envelope
-and dead-letter an envelope without `tenantId` (or with the platform tenant) before any write or mail. Recipient writes
+follow memberships and stop when one ends. Its user-registered, membership and payment consumers take the tenant only
+from the envelope and dead-letter an envelope without `tenantId` (or with the platform tenant) before any write or mail.
+The inbox is keyed by `(tenant, user)` too: the welcome lands in the personal workspace's inbox, a receipt in the
+payment's tenant, and `notifications.notification-created.v1` is tenant-scoped (envelope `tenantId` = the inbox
+tenant). `ListNotificationsRequest` and `MarkNotificationReadRequest` carry `tenant_id`, which must be the caller's
+active tenant, and every `Notification` carries its `tenant_id`. Recipient writes
 are stamped with the event's time (`createdAt`, `removedAt`), so a replayed or reordered `membership-created` cannot
-bring back a removed member. The daily digest sends one mail per `(tenant, user)`, keyed `digest-<tid>-<uid>-<day>`.
+bring back a removed member. The daily digest sends one mail per `(tenant, user)`, keyed `digest-<tid>-<uid>-<day>`, listing only that pair's
+unread notifications.
 
 Consumer groups (`KAFKA_GROUP_ID` overrides the monolith's default and the gateway's `gateway-push`; notifications-service pins `notifications-service` in code, `NOTIFICATIONS_CONSUMER_GROUP`, so it ignores `KAFKA_GROUP_ID`):
 

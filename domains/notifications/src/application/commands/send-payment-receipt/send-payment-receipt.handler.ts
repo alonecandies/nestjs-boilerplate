@@ -27,6 +27,9 @@ export class SendPaymentReceiptHandler implements ICommandHandler<SendPaymentRec
     const [notification, recipient] = await Promise.all([
       this.commandBus.execute(
         new CreateNotificationCommand({
+          // The payment's tenant: the receipt lands in that inbox. receipt:<paymentId> stays the
+          // derived-id key (a payment belongs to one tenant).
+          tenantId,
           userId,
           type: 'payment_receipt',
           title: RECEIPT_NOTIFICATION_TITLE,

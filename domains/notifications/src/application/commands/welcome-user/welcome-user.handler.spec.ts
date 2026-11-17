@@ -2,7 +2,12 @@ import type { CommandBus } from '@nestjs/cqrs';
 import type { MailService } from '@platform/mailer';
 import { createMock } from '@platform/testing';
 import { describe, expect, it } from 'vitest';
-import { asClass, makeContractNotification, USER_ID } from '../../../../test/support/fixtures.js';
+import {
+  asClass,
+  makeContractNotification,
+  TENANT_ID,
+  USER_ID,
+} from '../../../../test/support/fixtures.js';
 import { CreateNotificationCommand } from '../create-notification/create-notification.command.js';
 import { WelcomeUserCommand } from './welcome-user.command.js';
 import { WELCOME_NOTIFICATION_TITLE, WelcomeUserHandler } from './welcome-user.handler.js';
@@ -23,6 +28,7 @@ describe('WelcomeUserHandler', () => {
 
     const result = await handler.execute(
       new WelcomeUserCommand({
+        tenantId: TENANT_ID,
         userId: USER_ID,
         email: 'ada@example.com',
         displayName: '  Ada  ',
@@ -35,7 +41,9 @@ describe('WelcomeUserHandler', () => {
     expect(commandBus.execute).toHaveBeenCalledTimes(1);
     const [command] = commandBus.execute.mock.calls[0] ?? [];
     expect(command).toBeInstanceOf(CreateNotificationCommand);
+    // The inbox entry lives in the event's tenant (the personal workspace).
     expect((command as CreateNotificationCommand).input).toEqual({
+      tenantId: TENANT_ID,
       userId: USER_ID,
       type: 'welcome',
       title: WELCOME_NOTIFICATION_TITLE,
@@ -54,7 +62,13 @@ describe('WelcomeUserHandler', () => {
   it('falls back to a neutral greeting without a display name', async () => {
     const { commandBus, mail, handler } = setup();
     await handler.execute(
-      new WelcomeUserCommand({ userId: USER_ID, email: 'a@b.io', displayName: '', registeredAt }),
+      new WelcomeUserCommand({
+        tenantId: TENANT_ID,
+        userId: USER_ID,
+        email: 'a@b.io',
+        displayName: '',
+        registeredAt,
+      }),
     );
     const [command] = commandBus.execute.mock.calls[0] ?? [];
     expect((command as CreateNotificationCommand).input.body).toBe(
@@ -69,6 +83,7 @@ describe('WelcomeUserHandler', () => {
     await expect(
       handler.execute(
         new WelcomeUserCommand({
+          tenantId: TENANT_ID,
           userId: USER_ID,
           email: 'a@b.io',
           displayName: 'A',

@@ -17,15 +17,16 @@ export class WelcomeUserHandler implements ICommandHandler<WelcomeUserCommand> {
   ) {}
 
   async execute({ input }: WelcomeUserCommand): Promise<Notification> {
-    const { userId, email, registeredAt } = input;
+    const { tenantId, userId, email, registeredAt } = input;
     // The mail goes to the event's own email: the recipients projection follows memberships
     // (`membership-created`, published alongside this event for the personal workspace).
     const displayName = trim(input.displayName);
 
     // Keyed by the user, not the envelope id: a re-published event (new envelope id) is
-    // still recognised as the same welcome.
+    // still recognised as the same welcome. A user registers once, so one tenant holds it.
     const notification = await this.commandBus.execute(
       new CreateNotificationCommand({
+        tenantId,
         userId,
         type: 'welcome',
         title: WELCOME_NOTIFICATION_TITLE,

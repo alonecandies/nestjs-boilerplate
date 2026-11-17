@@ -16,6 +16,7 @@ export function makeNotificationProps(
 ): NotificationProps {
   return {
     id: generateId(),
+    tenantId: TENANT_ID,
     userId: USER_ID,
     type: 'system',
     title: 'Hello',
@@ -30,6 +31,7 @@ export function makeNotificationProps(
 export function makeContractNotification(overrides: Partial<Notification> = {}): Notification {
   return {
     id: generateId(),
+    tenantId: TENANT_ID,
     userId: USER_ID,
     type: 'welcome',
     title: 'Welcome aboard!',

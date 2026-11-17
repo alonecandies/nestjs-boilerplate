@@ -26,6 +26,7 @@ export function normalizeNotification(wire: WireNotification): Notification {
   const id = wire.id ?? '';
   const notification: Notification = {
     id,
+    tenantId: wire.tenantId ?? '',
     userId: wire.userId ?? '',
     type: wire.type ?? 'system',
     title: wire.title ?? '',

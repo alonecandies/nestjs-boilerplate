@@ -18,6 +18,7 @@ export * from './application/commands/send-daily-digest/send-daily-digest.comman
 export * from './application/commands/send-payment-receipt/send-payment-receipt.command.js';
 export * from './application/commands/upsert-recipient/upsert-recipient.command.js';
 export * from './application/commands/welcome-user/welcome-user.command.js';
+export * from './application/inbox-actor.js';
 export * from './application/mail/notifications-mail.js';
 export * from './application/mappers/notification.mapper.js';
 export * from './application/ports/notification-recipients.repository.js';

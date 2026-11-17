@@ -1,6 +1,6 @@
 import type { NotificationCreatedPayload, NotificationPage } from '@domain/notifications-contracts';
 import { Args, Mutation, Query, Resolver, Subscription } from '@nestjs/graphql';
-import { CurrentUser, RequirePermissions } from '@platform/auth';
+import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
 import { type GqlContext, type GraphqlPubSub, InjectPubSub } from '@platform/graphql';
 import { notificationFromCreatedPayload } from '../../application/mappers/notification.mapper.js';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
@@ -56,10 +56,12 @@ export class NotificationsResolver {
   @RequirePermissions(NotificationsPermission.Read)
   async notifications(
     @Args() args: ListNotificationsArgs,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: AuthUser,
   ): Promise<NotificationConnectionModel> {
+    // The caller's own (tenant, user) inbox: both from the verified token.
     const page = await this.port.list({
-      userId,
+      tenantId: user.tenantId,
+      userId: user.id,
       limit: args.limit,
       pageState: args.pageState ?? undefined,
     });
@@ -73,9 +75,13 @@ export class NotificationsResolver {
   @RequirePermissions(NotificationsPermission.Read)
   async markNotificationRead(
     @Args('input') input: MarkNotificationReadInput,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: AuthUser,
   ): Promise<boolean> {
-    await this.port.markRead({ userId, notificationId: input.id });
+    await this.port.markRead({
+      tenantId: user.tenantId,
+      userId: user.id,
+      notificationId: input.id,
+    });
     return true;
   }
 

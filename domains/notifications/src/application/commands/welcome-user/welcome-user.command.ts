@@ -2,6 +2,8 @@ import type { Notification } from '@domain/notifications-contracts';
 import { Command } from '@nestjs/cqrs';
 
 export interface WelcomeUserInput {
+  /** The envelope tenant of `user-registered`: the personal workspace, whose inbox gets the welcome. */
+  tenantId: string;
   userId: string;
   email: string;
   displayName: string;

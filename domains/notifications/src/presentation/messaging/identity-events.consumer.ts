@@ -32,14 +32,22 @@ type MembershipRemovedEnvelope = EventEnvelopeOf<typeof MEMBERSHIP_REMOVED_EVENT
 export class IdentityEventsConsumer {
   constructor(private readonly commandBus: CommandBus) {}
 
+  /** The welcome lands in the envelope tenant's inbox (the personal workspace). */
   @KafkaEventPattern(USER_REGISTERED_EVENT)
   async onUserRegistered(
     @Payload(new ParseEventEnvelopePipe(USER_REGISTERED_EVENT))
     event: UserRegisteredEnvelope,
   ): Promise<void> {
+    const tenantId = requireEventTenant(event);
     const { userId, email, displayName, registeredAt } = event.payload;
     await this.commandBus.execute(
-      new WelcomeUserCommand({ userId, email, displayName, registeredAt: new Date(registeredAt) }),
+      new WelcomeUserCommand({
+        tenantId,
+        userId,
+        email,
+        displayName,
+        registeredAt: new Date(registeredAt),
+      }),
     );
   }
 

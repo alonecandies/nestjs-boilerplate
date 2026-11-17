@@ -11,9 +11,12 @@ import type {
  * presentation code cannot tell them apart.
  */
 export abstract class NotificationsPort {
-  /** Newest first. `pageState` is the opaque Cassandra paging state of the previous page. */
+  /**
+   * Newest first. `pageState` is the opaque Cassandra paging state of the previous page. Edges pass
+   * `tenantId: user.tenantId`; a pair other than the caller's own is 403 TENANT_MISMATCH.
+   */
   abstract list(input: ListNotificationsRequest): Promise<NotificationPage>;
 
-  /** Idempotent. Rejects with `NotificationNotFoundException` (404) outside the user's inbox. */
+  /** Idempotent. Rejects with `NotificationNotFoundException` (404) outside the (tenant, user) inbox. */
   abstract markRead(input: MarkNotificationReadRequest): Promise<void>;
 }

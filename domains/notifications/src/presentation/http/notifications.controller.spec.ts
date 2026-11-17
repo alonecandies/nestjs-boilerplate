@@ -1,3 +1,4 @@
+import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import {
   bearer,
@@ -47,7 +48,12 @@ describe('NotificationsController (Fastify, real guards, fake port)', () => {
       });
 
       expect(res.statusCode).toBe(200);
-      expect(port.list).toHaveBeenCalledWith({ userId: USER_ID, limit: 5, pageState: 'beef' });
+      expect(port.list).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
+        userId: USER_ID,
+        limit: 5,
+        pageState: 'beef',
+      });
       expect(res.json()).toEqual({
         items: [
           {
@@ -74,7 +80,12 @@ describe('NotificationsController (Fastify, real guards, fake port)', () => {
         headers: { authorization: userToken },
       });
       expect(res.statusCode).toBe(200);
-      expect(port.list).toHaveBeenCalledWith({ userId: USER_ID, limit: 20, pageState: undefined });
+      expect(port.list).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
+        userId: USER_ID,
+        limit: 20,
+        pageState: undefined,
+      });
       expect(res.json()).toEqual({ items: [], nextPageState: null });
     });
 
@@ -135,6 +146,7 @@ describe('NotificationsController (Fastify, real guards, fake port)', () => {
       expect(res.statusCode).toBe(204);
       expect(res.body).toBe('');
       expect(port.markRead).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
         userId: USER_ID,
         notificationId: NOTIFICATION_ID,
       });

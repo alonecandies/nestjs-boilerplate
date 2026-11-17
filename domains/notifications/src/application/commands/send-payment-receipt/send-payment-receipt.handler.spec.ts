@@ -67,7 +67,9 @@ describe('SendPaymentReceiptHandler', () => {
     await expect(handler.execute(command)).resolves.toBe(notification);
 
     const [created] = commandBus.execute.mock.calls[0] ?? [];
+    // The inbox entry lives in the payment's tenant.
     expect((created as CreateNotificationCommand).input).toEqual({
+      tenantId: OTHER_TENANT_ID,
       userId: USER_ID,
       type: 'payment_receipt',
       title: RECEIPT_NOTIFICATION_TITLE,

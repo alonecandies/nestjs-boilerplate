@@ -231,10 +231,14 @@ describe('NotificationsGateway', () => {
   describe('messages', () => {
     it('notifications.markRead marks the caller notification read and acks { ok: true }', async () => {
       port.markRead.mockResolvedValue(undefined);
-      await expect(gateway.markRead({ id: NOTIFICATION_ID }, USER_ID)).resolves.toEqual({
+      const { user } = authedSocket().data;
+      if (user === undefined) throw new Error('authedSocket() always sets a user');
+      await expect(gateway.markRead({ id: NOTIFICATION_ID }, user)).resolves.toEqual({
         ok: true,
       });
+      // The inbox is the caller's (tenant, user) pair, both taken from the authenticated socket.
       expect(port.markRead).toHaveBeenCalledWith({
+        tenantId: TEST_TENANT_ID,
         userId: USER_ID,
         notificationId: NOTIFICATION_ID,
       });
