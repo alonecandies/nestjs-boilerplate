@@ -1,9 +1,9 @@
-import type { NotificationCreatedPayload } from '@domain/notifications-contracts';
 import { GraphQLSchemaHost } from '@nestjs/graphql';
+import { makeAuthUser, TEST_TENANT_ID } from '@platform/auth/testing';
 import { type GqlContext, GRAPHQL_PUB_SUB, type GraphqlPubSub } from '@platform/graphql';
 import { type ExecutionResult, parse, printSchema, subscribe } from 'graphql';
 import { PubSub } from 'graphql-subscriptions';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   bearer,
   createEdgeTestApp,
@@ -14,11 +14,16 @@ import {
   createFakePort,
   makeContractNotification,
   makeNotificationPage,
+  OTHER_TENANT_ID,
   OTHER_USER_ID,
+  TENANT_ID,
   USER_ID,
 } from '../../../test/support/fixtures.js';
 import { NotificationNotFoundException } from '../../domain/notification.errors.js';
-import { notificationCreatedTrigger } from '../../notifications.constants.js';
+import {
+  type NotificationCreatedPush,
+  notificationCreatedTrigger,
+} from '../../notifications.constants.js';
 import {
   isOwnNotification,
   NotificationsResolver,
@@ -27,9 +32,10 @@ import {
 
 const NOTIFICATION_ID = '01920000-0000-7000-8000-00000000abcd';
 
-const subscriptionPayload: NotificationCreatedPayload = {
+const subscriptionPayload: NotificationCreatedPush = {
   notificationId: NOTIFICATION_ID,
   userId: USER_ID,
+  tenantId: TEST_TENANT_ID,
   type: 'welcome',
   title: 'Welcome aboard!',
   body: 'Hi',
@@ -111,7 +117,12 @@ describe('NotificationsResolver (Apollo on Fastify, real guards, fake port)', ()
     const body = await gql(LIST, { limit: 5, pageState: 'beef' }, userToken);
 
     expect(body.errors).toBeUndefined();
-    expect(port.list).toHaveBeenCalledWith({ userId: USER_ID, limit: 5, pageState: 'beef' });
+    expect(port.list).toHaveBeenCalledWith({
+      tenantId: TEST_TENANT_ID,
+      userId: USER_ID,
+      limit: 5,
+      pageState: 'beef',
+    });
     expect(body.data?.notifications).toEqual({
       items: [
         {
@@ -150,6 +161,7 @@ describe('NotificationsResolver (Apollo on Fastify, real guards, fake port)', ()
     const ok = await gql(MARK, { id: NOTIFICATION_ID }, userToken);
     expect(ok).toEqual({ data: { markNotificationRead: true } });
     expect(port.markRead).toHaveBeenCalledWith({
+      tenantId: TEST_TENANT_ID,
       userId: USER_ID,
       notificationId: NOTIFICATION_ID,
     });
@@ -162,7 +174,7 @@ describe('NotificationsResolver (Apollo on Fastify, real guards, fake port)', ()
     });
   });
 
-  it('subscription notificationCreated: listens on the caller’s own trigger only (real guards)', async () => {
+  it('subscription notificationCreated: listens on the caller’s own (tenant, user) trigger and filters (real guards)', async () => {
     const pubSub = app.get<GraphqlPubSub>(GRAPHQL_PUB_SUB);
     const result = await subscribe({
       schema: app.get(GraphQLSchemaHost).schema,
@@ -173,13 +185,26 @@ describe('NotificationsResolver (Apollo on Fastify, real guards, fake port)', ()
     const stream = result as AsyncGenerator<ExecutionResult>;
     const next = stream.next();
 
-    const own = { ...subscriptionPayload, userId: USER_ID };
-    await pubSub.publish(notificationCreatedTrigger(OTHER_USER_ID), {
+    const own = { ...subscriptionPayload, tenantId: TEST_TENANT_ID, userId: USER_ID };
+    // Another user of the same tenant: another trigger.
+    await pubSub.publish(notificationCreatedTrigger(TEST_TENANT_ID, OTHER_USER_ID), {
       ...own,
       userId: OTHER_USER_ID,
       title: 'not mine',
     });
-    await pubSub.publish(notificationCreatedTrigger(USER_ID), own);
+    // The same user in another tenant: another trigger.
+    await pubSub.publish(notificationCreatedTrigger(OTHER_TENANT_ID, USER_ID), {
+      ...own,
+      tenantId: OTHER_TENANT_ID,
+      title: 'other tenant',
+    });
+    // A (B, U) payload published on the (A, U) trigger: the filter drops it.
+    await pubSub.publish(notificationCreatedTrigger(TEST_TENANT_ID, USER_ID), {
+      ...own,
+      tenantId: OTHER_TENANT_ID,
+      title: 'wrong trigger',
+    });
+    await pubSub.publish(notificationCreatedTrigger(TEST_TENANT_ID, USER_ID), own);
 
     await expect(next).resolves.toEqual({
       value: { data: { notificationCreated: { id: NOTIFICATION_ID, title: own.title } } },
@@ -196,28 +221,48 @@ describe('NotificationsResolver (Apollo on Fastify, real guards, fake port)', ()
 });
 
 describe('notificationCreated subscription', () => {
-  const payload: NotificationCreatedPayload = {
+  const payload: NotificationCreatedPush = {
     notificationId: NOTIFICATION_ID,
     userId: USER_ID,
+    tenantId: TENANT_ID,
     type: 'welcome',
     title: 'Welcome aboard!',
     body: 'Hi',
     data: {},
     createdAt: CREATED_AT.toISOString(),
   };
-  const contextFor = (userId?: string) =>
+  const contextFor = (user?: { tenantId: string; id: string }) =>
     ({
-      req: { headers: {}, user: userId ? { id: userId } : undefined },
+      req: { headers: {}, user: user ? makeAuthUser(user) : undefined },
       loaders: {},
     }) as GqlContext;
 
-  it('only delivers the subscriber’s own notifications', () => {
-    expect(isOwnNotification(payload, {}, contextFor(USER_ID))).toBe(true);
-    expect(isOwnNotification(payload, {}, contextFor(OTHER_USER_ID))).toBe(false);
+  it('isOwnNotification: true only when tenant and user both match', () => {
+    expect(isOwnNotification(payload, {}, contextFor({ tenantId: TENANT_ID, id: USER_ID }))).toBe(
+      true,
+    );
+    // The same user, signed in to another tenant.
+    expect(
+      isOwnNotification(payload, {}, contextFor({ tenantId: OTHER_TENANT_ID, id: USER_ID })),
+    ).toBe(false);
+    // Another user of the same tenant.
+    expect(
+      isOwnNotification(payload, {}, contextFor({ tenantId: TENANT_ID, id: OTHER_USER_ID })),
+    ).toBe(false);
+    // A payload without a tenant (a pre-B4 publisher) reaches nobody.
+    const { tenantId: _tenantId, ...untenanted } = payload;
+    expect(
+      isOwnNotification(
+        untenanted as NotificationCreatedPush,
+        {},
+        contextFor({ tenantId: TENANT_ID, id: USER_ID }),
+      ),
+    ).toBe(false);
+    // A context without a user.
     expect(isOwnNotification(payload, {}, contextFor())).toBe(false);
   });
 
-  it('resolves the JSON payload into the model (Date revived)', () => {
+  it('resolves the JSON payload into the model (Date revived, no tenantId field)', () => {
     expect(toCreatedNotificationModel(payload)).toEqual({
       id: NOTIFICATION_ID,
       type: 'welcome',
@@ -229,14 +274,61 @@ describe('notificationCreated subscription', () => {
     });
   });
 
-  it('iterates the subscriber’s own per-user trigger of the GraphQL PubSub', async () => {
+  it('asks the PubSub for exactly notificationCreated:<tenant>:<user> of the caller', () => {
+    const pubSub = new PubSub();
+    const iterate = vi.spyOn(pubSub, 'asyncIterableIterator');
+    const resolver = new NotificationsResolver(createFakePort(), pubSub);
+
+    const iterator = resolver.notificationCreated(
+      makeAuthUser({ tenantId: TENANT_ID, id: USER_ID }),
+    );
+
+    expect(iterate).toHaveBeenCalledOnce();
+    expect(iterate).toHaveBeenCalledWith(`notificationCreated:${TENANT_ID}:${USER_ID}`);
+    expect(notificationCreatedTrigger(TENANT_ID, USER_ID)).toBe(
+      `notificationCreated:${TENANT_ID}:${USER_ID}`,
+    );
+    void iterator.return?.();
+  });
+
+  it('a publish for (A, U) reaches the (A, U) iterator only, not (B, U) nor (A, V)', async () => {
     const pubSub = new PubSub();
     const resolver = new NotificationsResolver(createFakePort(), pubSub);
-    const iterator = resolver.notificationCreated(USER_ID);
-    const next = iterator.next();
-    expect(notificationCreatedTrigger(USER_ID)).toBe(`notificationCreated:${USER_ID}`);
-    await pubSub.publish(notificationCreatedTrigger(USER_ID), payload);
-    await expect(next).resolves.toEqual({ value: payload, done: false });
-    await iterator.return?.();
+    const subscribe = (tenantId: string, id: string) =>
+      resolver.notificationCreated(makeAuthUser({ tenantId, id }));
+    const own = subscribe(TENANT_ID, USER_ID);
+    const otherTenant = subscribe(OTHER_TENANT_ID, USER_ID);
+    const otherUser = subscribe(TENANT_ID, OTHER_USER_ID);
+    const ownNext = own.next();
+    const otherTenantNext = otherTenant.next();
+    const otherUserNext = otherUser.next();
+
+    await pubSub.publish(notificationCreatedTrigger(TENANT_ID, USER_ID), payload);
+    // Markers on the other triggers: each iterator's first value must be its own marker.
+    const marker = (tenantId: string, userId: string): NotificationCreatedPush => ({
+      ...payload,
+      tenantId,
+      userId,
+      title: `marker ${tenantId} ${userId}`,
+    });
+    await pubSub.publish(
+      notificationCreatedTrigger(OTHER_TENANT_ID, USER_ID),
+      marker(OTHER_TENANT_ID, USER_ID),
+    );
+    await pubSub.publish(
+      notificationCreatedTrigger(TENANT_ID, OTHER_USER_ID),
+      marker(TENANT_ID, OTHER_USER_ID),
+    );
+
+    await expect(ownNext).resolves.toEqual({ value: payload, done: false });
+    await expect(otherTenantNext).resolves.toEqual({
+      value: marker(OTHER_TENANT_ID, USER_ID),
+      done: false,
+    });
+    await expect(otherUserNext).resolves.toEqual({
+      value: marker(TENANT_ID, OTHER_USER_ID),
+      done: false,
+    });
+    await Promise.all([own.return?.(), otherTenant.return?.(), otherUser.return?.()]);
   });
 });

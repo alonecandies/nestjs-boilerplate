@@ -21,6 +21,7 @@ export class CreateNotificationHandler implements ICommandHandler<CreateNotifica
     const notification = this.publisher.mergeObjectContext(
       NotificationEntity.create({
         id,
+        tenantId: input.tenantId,
         userId: input.userId,
         type: input.type,
         title: input.title,

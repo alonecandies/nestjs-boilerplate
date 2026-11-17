@@ -15,7 +15,7 @@ import {
 } from '@platform/transport';
 import { type Observable, of, throwError } from 'rxjs';
 import { describe, expect, it } from 'vitest';
-import { asClass, CREATED_AT, USER_ID } from '../../../../test/support/fixtures.js';
+import { asClass, CREATED_AT, TENANT_ID, USER_ID } from '../../../../test/support/fixtures.js';
 import { NotificationsGrpcAdapter } from './notifications-grpc.adapter.js';
 
 const NOTIFICATION_ID = '01920000-0000-7000-8000-00000000abcd';
@@ -45,6 +45,7 @@ describe('NotificationsGrpcAdapter', () => {
           items: [
             {
               id: NOTIFICATION_ID,
+              tenantId: TENANT_ID,
               userId: USER_ID,
               type: 'welcome',
               title: 'Hi',
@@ -59,13 +60,14 @@ describe('NotificationsGrpcAdapter', () => {
         }),
     });
 
-    const page = await adapter.list({ userId: USER_ID, limit: 2 });
+    const page = await adapter.list({ tenantId: TENANT_ID, userId: USER_ID, limit: 2 });
 
     expect(grpc.getService).toHaveBeenCalledWith('NotificationsService');
     expect(page).toEqual({
       items: [
         {
           id: NOTIFICATION_ID,
+          tenantId: TENANT_ID,
           userId: USER_ID,
           type: 'welcome',
           title: 'Hi',
@@ -76,6 +78,8 @@ describe('NotificationsGrpcAdapter', () => {
         },
         {
           id: NOTIFICATION_ID,
+          // An absent tenant_id (null) normalises to the proto3 default.
+          tenantId: '',
           userId: USER_ID,
           type: 'system',
           title: '',
@@ -96,10 +100,12 @@ describe('NotificationsGrpcAdapter', () => {
     const { adapter } = setup({
       listNotifications: () => of({ items: null, nextPageState: 'abcd' }),
     });
-    await expect(adapter.list({ userId: USER_ID, limit: 2 })).resolves.toEqual({
-      items: [],
-      nextPageState: 'abcd',
-    });
+    await expect(adapter.list({ tenantId: TENANT_ID, userId: USER_ID, limit: 2 })).resolves.toEqual(
+      {
+        items: [],
+        nextPageState: 'abcd',
+      },
+    );
   });
 
   it('maps NOT_FOUND (with the domain code from the error trailers) to EntityNotFoundException', async () => {
@@ -118,7 +124,11 @@ describe('NotificationsGrpcAdapter', () => {
         ),
     });
 
-    const promise = adapter.markRead({ userId: USER_ID, notificationId: NOTIFICATION_ID });
+    const promise = adapter.markRead({
+      tenantId: TENANT_ID,
+      userId: USER_ID,
+      notificationId: NOTIFICATION_ID,
+    });
     await expect(promise).rejects.toBeInstanceOf(EntityNotFoundException);
     await expect(promise).rejects.toMatchObject({
       code: 'NOTIFICATION_NOT_FOUND',
@@ -136,7 +146,7 @@ describe('NotificationsGrpcAdapter', () => {
           }),
         ),
     });
-    const promise = adapter.list({ userId: USER_ID, limit: 2 });
+    const promise = adapter.list({ tenantId: TENANT_ID, userId: USER_ID, limit: 2 });
     await expect(promise).rejects.toBeInstanceOf(ServiceUnavailableException);
     await expect(promise).rejects.not.toMatchObject({
       message: expect.stringContaining('10.0.0.7'),

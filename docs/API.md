@@ -470,7 +470,7 @@ HTTP POST, and subscriptions go over **graphql-ws** on the same path. Authentica
 | Mutation     | `markNotificationRead(input: MarkNotificationReadInput!)`   | `notifications:read`                         | `Boolean!`                | Idempotent. `NOTIFICATION_NOT_FOUND` outside my inbox                                                                                                                          |
 | Mutation     | `createCheckoutSession(input: CreateCheckoutSessionInput!)` | `billing:checkout`                           | `CheckoutSession!`        | `idempotencyKey` in the input                                                                                                                                                  |
 | Mutation     | `createUploadUrl(input: CreateUploadUrlInput!)`             | `files:write`                                | `PresignedUpload!`        | Presigned PUT (the same as `POST /v1/files/presigned-uploads`)                                                                                                                 |
-| Subscription | `notificationCreated`                                       | `notifications:read`                         | `Notification!`           | Only the subscriber's own notifications                                                                                                                                        |
+| Subscription | `notificationCreated`                                       | `notifications:read`                         | `Notification!`           | Only the subscriber's own notifications in the token's tenant                                                                                                                  |
 
 The GraphQL surface is smaller than REST. Logout, the streaming upload, file download and delete, and the Stripe
 webhook are **REST only**.
@@ -563,8 +563,10 @@ curl -s "$API/graphql" -H 'content-type: application/json' -H "authorization: Be
 - The client must send `connection_init` within **10 s**, or the socket is closed.
 - A missing, invalid or revoked token closes the socket with **4403** Forbidden.
 - When the access token expires mid-session, the socket is closed with **4401**. Reconnect with a fresh token.
-- Events fan out through Redis PubSub, so a subscriber connected to any replica gets its own events. Each user has
-  their own trigger (`notificationCreated:<userId>`).
+- Events fan out through Redis PubSub, so a subscriber connected to any replica gets its own events. Each
+  (tenant, user) pair has its own trigger (`notificationCreated:<tenantId>:<userId>`), both taken from the token at
+  `connection_init`: a subscription only hears notifications of the tenant its token is for. After a tenant switch,
+  open a new connection with the new token. The filter re-checks tenant and user on every event.
 
 ```ts
 import { createClient } from 'graphql-ws';
@@ -621,12 +623,18 @@ accepted, so no message can arrive before authentication. Pass the token in `aut
 `Bearer <jwt>`. Server-to-server clients can send an `Authorization: Bearer` header instead. Tokens in the query string
 are deliberately rejected, because they end up in access logs. A refused client gets `connect_error`, and `err.data` is
 the problem document (`code` = `MISSING_TOKEN`, `INVALID_TOKEN`, `TOKEN_EXPIRED` or `TOKEN_REVOKED`). Once connected,
-the socket joins the room `user:<id>`.
+the socket joins exactly one room, `t:<tenantId>:u:<userId>`, both taken from its token. A push for a notification
+reaches only the sockets of that user signed in to that notification's tenant: a socket connected with tenant A's
+token never receives tenant B's notifications, the user's own included. A socket never changes room; to follow
+another tenant, connect again with that tenant's token.
 
 **Session lifetime.** Tokens are short-lived but sockets are not:
 
 - When the token expires, the server emits `exception` (`TOKEN_EXPIRED`) and disconnects the socket.
-- Every 30 s, each replica disconnects its sockets whose token was revoked by a logout (`exception`, `TOKEN_REVOKED`).
+- Every `WS_REVOCATION_SWEEP_INTERVAL_MS` (default 30 s), each replica disconnects its sockets whose token was revoked
+  (`exception`, `TOKEN_REVOKED`). Logout and `POST /v1/auth/switch-tenant` both revoke the access token they were
+  called with, so after a tenant switch the old token's sockets close within one interval. Sockets opened with another
+  token of the same user stay connected.
 
 The client must reconnect with a fresh token. Socket.IO does not reconnect on its own after a server-side disconnect.
 
@@ -717,8 +725,9 @@ once every service is registered and switches to `NOT_SERVING` when shutdown sta
 **Trust model.** The gateway authenticates and enforces RBAC at the edge, then forwards the caller's principal on every
 call as `x-user-id`, `x-tenant-id`, `x-user-roles` and `x-staff`. A service rebuilds the principal from that metadata
 (malformed values fail with 401 `INVALID_PRINCIPAL`; no `x-user-id` means no principal) and recomputes permissions from the
-roles. Services trust this metadata and the `user_id` / `tenant_id` fields of a request (billing cross-checks the
-tenant against the principal: 403 `TENANT_MISMATCH`), so they must not be reachable from outside the cluster. In production they need
+roles. Services trust this metadata and the `user_id` / `tenant_id` fields of a request (billing and notifications
+cross-check the tenant against the principal: 403 `TENANT_MISMATCH`; notifications also requires the request's user to
+be the principal's), so they must not be reachable from outside the cluster. In production they need
 TLS: `GRPC_TLS_CA_PATH`, `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, and mutual TLS by default
 (`GRPC_TLS_REQUIRE_CLIENT_CERT`). With `NODE_ENV=production`, plaintext is refused unless `GRPC_ALLOW_INSECURE=true`.
 docker-compose sets that flag, plus `GRPC_REFLECTION=true`, for local use only. Other metadata carried on each call:
@@ -797,13 +806,13 @@ in the producer's `@domain/<context>-contracts`. A breaking payload change ships
 changes stay on the same topic, because readers ignore fields they do not know: zod strips unknown keys instead of
 rejecting them.
 
-| Topic                                   | Producer                                            | Key      | Payload (zod)                                                                                       | Consumers                                                                                     |
-| --------------------------------------- | --------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `identity.user-registered.v1`           | identity (`UserRegisteredRelay`)                    | `userId` | `userId`, `email`, `displayName`, `registeredAt`                                                    | notifications (`IdentityEventsConsumer`): welcome notification + mail                         |
-| `identity.membership-created.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `email`, `displayName`, `createdAt`                                                       | none yet (the notifications recipients projection, B4)                                        |
-| `identity.membership-removed.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `removedAt`                                                                               | none yet (the notifications recipients projection, B4)                                        |
-| `billing.payment-succeeded.v1`          | billing (`PaymentSucceededRelay`)                   | `userId` | `paymentId`, `userId`, `stripeCheckoutSessionId`, `amountTotal` (minor units), `currency`, `paidAt` | notifications (`BillingEventsConsumer`): payment receipt                                      |
-| `notifications.notification-created.v1` | notifications (`PublishNotificationCreatedHandler`) | `userId` | `notificationId`, `userId`, `type`, `title`, `body`, `data`, `createdAt`                            | edge (`NotificationPushConsumer`): Socket.IO room `user:<id>` + GraphQL `notificationCreated` |
+| Topic                                   | Producer                                            | Key      | Payload (zod)                                                                                       | Consumers                                                                                           |
+| --------------------------------------- | --------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `identity.user-registered.v1`           | identity (`UserRegisteredRelay`)                    | `userId` | `userId`, `email`, `displayName`, `registeredAt`                                                    | notifications (`IdentityEventsConsumer`): welcome notification + mail                               |
+| `identity.membership-created.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `email`, `displayName`, `createdAt`                                                       | notifications (`IdentityEventsConsumer`): upsert the `(tenant, user)` mail recipient                |
+| `identity.membership-removed.v1`        | identity (`MembershipEventsRelay`)                  | `userId` | `userId`, `removedAt`                                                                               | notifications (`IdentityEventsConsumer`): remove the `(tenant, user)` mail recipient                |
+| `billing.payment-succeeded.v1`          | billing (`PaymentSucceededRelay`)                   | `userId` | `paymentId`, `userId`, `stripeCheckoutSessionId`, `amountTotal` (minor units), `currency`, `paidAt` | notifications (`BillingEventsConsumer`): payment receipt, mailed in the payment's tenant            |
+| `notifications.notification-created.v1` | notifications (`PublishNotificationCreatedHandler`) | `userId` | `notificationId`, `userId`, `type`, `title`, `body`, `data`, `createdAt`                            | edge (`NotificationPushConsumer`): Socket.IO room `t:<tid>:u:<uid>` + GraphQL `notificationCreated` |
 
 Each topic has a dead-letter topic, `<topic>.dlq`. The record key is always `userId`, so all events of one user land on
 the same partition and are consumed in order.
@@ -815,13 +824,24 @@ workspace of an account without one, a new tenant, an accepted invitation) and `
 a member who left). `actorId` is the acting user: the member themself, or the admin who removed them. Each event is
 published once, after its transaction committed; a rejected command publishes nothing.
 
+Notifications keeps its mail recipients per `(tenant, user)` from the two membership topics, so receipts and digests
+follow memberships and stop when one ends. Its user-registered, membership and payment consumers take the tenant only
+from the envelope and dead-letter an envelope without `tenantId` (or with the platform tenant) before any write or mail.
+The inbox is keyed by `(tenant, user)` too: the welcome lands in the personal workspace's inbox, a receipt in the
+payment's tenant, and `notifications.notification-created.v1` is tenant-scoped (envelope `tenantId` = the inbox
+tenant). `ListNotificationsRequest` and `MarkNotificationReadRequest` carry `tenant_id`, which must be the caller's
+active tenant, and every `Notification` carries its `tenant_id`. Recipient writes
+are stamped with the event's time (`createdAt`, `removedAt`), so a replayed or reordered `membership-created` cannot
+bring back a removed member. The daily digest sends one mail per `(tenant, user)`, keyed `digest-<tid>-<uid>-<day>`, listing only that pair's
+unread notifications.
+
 Consumer groups (`KAFKA_GROUP_ID` overrides the monolith's default and the gateway's `gateway-push`; notifications-service pins `notifications-service` in code, `NOTIFICATIONS_CONSUMER_GROUP`, so it ignores `KAFKA_GROUP_ID`):
 
-| Process                 | Default group           | Consumes                                                      |
-| ----------------------- | ----------------------- | ------------------------------------------------------------- |
-| `monolith`              | `monolith`              | All three topics                                              |
-| `notifications-service` | `notifications-service` | `identity.user-registered.v1`, `billing.payment-succeeded.v1` |
-| `gateway`               | `gateway-push`          | `notifications.notification-created.v1`                       |
+| Process                 | Default group           | Consumes                                                                                                                          |
+| ----------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `monolith`              | `monolith`              | Every topic above                                                                                                                 |
+| `notifications-service` | `notifications-service` | `identity.user-registered.v1`, `identity.membership-created.v1`, `identity.membership-removed.v1`, `billing.payment-succeeded.v1` |
+| `gateway`               | `gateway-push`          | `notifications.notification-created.v1`                                                                                           |
 
 All replicas of a process share one group, so each event is handled once per process type. The Redis Socket.IO adapter
 and Redis PubSub then fan a push out to whichever replica holds the user's connection.

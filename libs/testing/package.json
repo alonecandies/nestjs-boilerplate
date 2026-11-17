@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Test helpers: Fastify e2e app factory, Proxy-based Vitest auto mocks, Citus test containers.",
+  "description": "Test helpers: Fastify e2e app factory, Proxy-based Vitest auto mocks, Citus and Cassandra test containers.",
   "exports": {
     ".": {
       "@repo/source": "./src/index.ts",
@@ -14,6 +14,11 @@
       "@repo/source": "./src/postgres/index.ts",
       "types": "./src/postgres/index.ts",
       "default": "./dist/postgres/index.js"
+    },
+    "./cassandra": {
+      "@repo/source": "./src/cassandra/index.ts",
+      "types": "./src/cassandra/index.ts",
+      "default": "./dist/cassandra/index.js"
     },
     "./package.json": "./package.json"
   },
@@ -29,9 +34,11 @@
     "@nestjs/platform-fastify": "catalog:",
     "@nestjs/testing": "catalog:",
     "@testcontainers/postgresql": "catalog:",
+    "cassandra-driver": "catalog:",
     "postgres": "catalog:",
     "reflect-metadata": "catalog:",
     "rxjs": "catalog:",
+    "testcontainers": "catalog:",
     "vitest": "catalog:"
   }
 }

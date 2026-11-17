@@ -7,6 +7,8 @@ import type { NotificationProps } from '../../src/domain/notification.types.js';
 
 export const USER_ID = '01920000-0000-7000-8000-000000000001';
 export const OTHER_USER_ID = '01920000-0000-7000-8000-000000000002';
+export const TENANT_ID = '01920000-0000-7000-8000-0000000000a1';
+export const OTHER_TENANT_ID = '01920000-0000-7000-8000-0000000000b2';
 export const CREATED_AT = new Date('2026-09-29T08:00:00.000Z');
 
 export function makeNotificationProps(
@@ -14,6 +16,7 @@ export function makeNotificationProps(
 ): NotificationProps {
   return {
     id: generateId(),
+    tenantId: TENANT_ID,
     userId: USER_ID,
     type: 'system',
     title: 'Hello',
@@ -28,6 +31,7 @@ export function makeNotificationProps(
 export function makeContractNotification(overrides: Partial<Notification> = {}): Notification {
   return {
     id: generateId(),
+    tenantId: TENANT_ID,
     userId: USER_ID,
     type: 'welcome',
     title: 'Welcome aboard!',

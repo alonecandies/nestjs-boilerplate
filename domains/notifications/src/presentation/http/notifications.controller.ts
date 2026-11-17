@@ -22,7 +22,7 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
-import { CurrentUser, RequirePermissions } from '@platform/auth';
+import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
 import { NotificationsPermission } from '../../notifications.permissions.js';
 import {
@@ -63,10 +63,12 @@ export class NotificationsController {
   @SerializeOptions({ schema: notificationPageResponseSchema })
   async list(
     @Query({ schema: listNotificationsQuerySchema }) query: ListNotificationsQueryParams,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: AuthUser,
   ): Promise<NotificationPageResponse> {
+    // The caller's own (tenant, user) inbox: both from the verified token, never from the request.
     const page = await this.notifications.list({
-      userId,
+      tenantId: user.tenantId,
+      userId: user.id,
       limit: query.limit,
       pageState: query.pageState,
     });
@@ -83,8 +85,12 @@ export class NotificationsController {
   @ApiNotFoundResponse({ description: 'No such notification in the caller’s inbox.' })
   async markRead(
     @Param('id', { schema: notificationIdParamSchema }) id: string,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: AuthUser,
   ): Promise<void> {
-    await this.notifications.markRead({ userId, notificationId: id });
+    await this.notifications.markRead({
+      tenantId: user.tenantId,
+      userId: user.id,
+      notificationId: id,
+    });
   }
 }

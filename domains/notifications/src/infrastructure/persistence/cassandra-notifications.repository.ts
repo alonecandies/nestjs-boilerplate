@@ -17,25 +17,26 @@ import {
 } from './cassandra-row.util.js';
 import { NOTIFICATIONS_TTL_SEC } from './notifications-cassandra.migrations.js';
 
-const COLUMNS = 'user_id, notification_id, type, title, body, data, read, created_at';
+const COLUMNS = 'tenant_id, user_id, notification_id, type, title, body, data, read, created_at';
 
 /**
  * Every statement is a constant string executed with `prepare: true`: the driver prepares it
  * once per node and caches it (bind + token-aware routing afterwards). Queries always hit ONE
- * partition (`user_id = ?`) — no ALLOW FILTERING, no scatter-gather.
+ * partition (`tenant_id = ? AND user_id = ?`, bound in that order) — no ALLOW FILTERING, no
+ * scatter-gather, and a paging state never leaves the partition it is replayed on.
  */
 export const NOTIFICATIONS_CQL = {
   // `read` is deliberately not written: see NotificationsRepository.insert.
   insert:
-    'INSERT INTO notifications_by_user (user_id, notification_id, type, title, body, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  listByUser: `SELECT ${COLUMNS} FROM notifications_by_user WHERE user_id = ?`,
-  recentByUser: `SELECT ${COLUMNS} FROM notifications_by_user WHERE user_id = ? LIMIT ?`,
+    'INSERT INTO notifications_by_tenant_user (tenant_id, user_id, notification_id, type, title, body, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+  listByUser: `SELECT ${COLUMNS} FROM notifications_by_tenant_user WHERE tenant_id = ? AND user_id = ?`,
+  recentByUser: `SELECT ${COLUMNS} FROM notifications_by_tenant_user WHERE tenant_id = ? AND user_id = ? LIMIT ?`,
   // LWT (Paxos): a plain UPDATE would upsert a ghost row holding only `read` for unknown ids.
   // USING TTL: the table's default TTL applies to UPDATEs too, so without it the `read` cell would
   // get a fresh 90 days and keep a "ghost" row (only `read`, no row marker) alive after the
   // inserted cells expired. The bound TTL is the row's remaining lifetime (`remainingTtlSec`).
   markRead:
-    'UPDATE notifications_by_user USING TTL ? SET read = true WHERE user_id = ? AND notification_id = ? IF EXISTS',
+    'UPDATE notifications_by_tenant_user USING TTL ? SET read = true WHERE tenant_id = ? AND user_id = ? AND notification_id = ? IF EXISTS',
 } as const;
 
 /**
@@ -72,6 +73,7 @@ export function toNotificationProps(row: cassandra.types.Row): NotificationProps
   const type = textCell(row, 'type');
   return {
     id,
+    tenantId: uuidCell(row, 'tenant_id'),
     userId: uuidCell(row, 'user_id'),
     type: isNotificationKind(type) ? type : 'system',
     title: textCell(row, 'title'),
@@ -91,6 +93,7 @@ export class CassandraNotificationsRepository implements NotificationsRepository
     await this.client.execute(
       NOTIFICATIONS_CQL.insert,
       [
+        notification.tenantId,
         notification.userId,
         notification.id,
         notification.type,
@@ -104,8 +107,13 @@ export class CassandraNotificationsRepository implements NotificationsRepository
     );
   }
 
-  async listByUser(userId: string, limit: number, pageState?: string): Promise<NotificationsSlice> {
-    const page = await executePage(this.client, NOTIFICATIONS_CQL.listByUser, [userId], {
+  async listByUser(
+    tenantId: string,
+    userId: string,
+    limit: number,
+    pageState?: string,
+  ): Promise<NotificationsSlice> {
+    const page = await executePage(this.client, NOTIFICATIONS_CQL.listByUser, [tenantId, userId], {
       fetchSize: limit,
       pageState: pageState ?? null,
       mapRow: toLiveNotificationProps,
@@ -114,21 +122,26 @@ export class CassandraNotificationsRepository implements NotificationsRepository
     return { items: page.items.filter(isDefined), pageState: page.pageState };
   }
 
-  async findRecentByUser(userId: string, limit: number): Promise<NotificationProps[]> {
-    const rs = await this.client.execute(NOTIFICATIONS_CQL.recentByUser, [userId, limit], {
-      prepare: true,
-      isIdempotent: true,
-    });
+  async findRecentByUser(
+    tenantId: string,
+    userId: string,
+    limit: number,
+  ): Promise<NotificationProps[]> {
+    const rs = await this.client.execute(
+      NOTIFICATIONS_CQL.recentByUser,
+      [tenantId, userId, limit],
+      { prepare: true, isIdempotent: true },
+    );
     return rs.rows.map(toLiveNotificationProps).filter(isDefined);
   }
 
-  async markRead(userId: string, notificationId: string): Promise<boolean> {
+  async markRead(tenantId: string, userId: string, notificationId: string): Promise<boolean> {
     const ttlSec = remainingTtlSec(notificationId);
     // Past its 90 days the notification is gone from the inbox's contract (or is about to be).
     if (ttlSec <= 0) return false;
     const rs = await this.client.execute(
       NOTIFICATIONS_CQL.markRead,
-      [ttlSec, userId, notificationId],
+      [ttlSec, tenantId, userId, notificationId],
       { prepare: true },
     );
     return rs.wasApplied();

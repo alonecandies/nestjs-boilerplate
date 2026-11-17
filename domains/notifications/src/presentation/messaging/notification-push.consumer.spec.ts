@@ -3,7 +3,7 @@ import {
   type NotificationCreatedPayload,
 } from '@domain/notifications-contracts';
 import { Test } from '@nestjs/testing';
-import { generateId } from '@platform/common';
+import { generateId, PLATFORM_TENANT_ID } from '@platform/common';
 import { redisConfig } from '@platform/config';
 import { createEventEnvelope } from '@platform/contracts';
 import { GRAPHQL_PUB_SUB } from '@platform/graphql';
@@ -20,7 +20,7 @@ import {
   type MockInstance,
   vi,
 } from 'vitest';
-import { CREATED_AT, USER_ID } from '../../../test/support/fixtures.js';
+import { CREATED_AT, OTHER_TENANT_ID, TENANT_ID, USER_ID } from '../../../test/support/fixtures.js';
 import { InMemoryKafkaServer } from '../../../test/support/in-memory-kafka.server.js';
 import { notificationCreatedTrigger } from '../../notifications.constants.js';
 import { NotificationsGateway } from '../ws/notifications.gateway.js';
@@ -35,6 +35,11 @@ const payload: NotificationCreatedPayload = {
   body: 'We received your payment of $19.99. Thank you!',
   data: { paymentId: 'p1' },
   createdAt: CREATED_AT.toISOString(),
+};
+
+const withoutTenant = <T extends { tenantId?: string | undefined }>(envelope: T) => {
+  const { tenantId: _tenantId, ...rest } = envelope;
+  return rest;
 };
 
 describe('NotificationPushConsumer (edge fan-out)', () => {
@@ -71,15 +76,17 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
     server.producer.send.mockClear();
   });
 
-  it('pushes to the user room (REST shape) and publishes the GraphQL trigger', async () => {
+  it('pushes to the (envelope tenant, payload user) room (REST shape) and publishes the (tenant, user) trigger', async () => {
     const envelope = createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, {
       id: NOTIFICATION_ID,
       source: 'notifications-service',
+      tenantId: TENANT_ID,
     });
 
     await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, envelope, USER_ID);
 
-    expect(gateway.pushToUser).toHaveBeenCalledWith(USER_ID, {
+    expect(gateway.pushToUser).toHaveBeenCalledOnce();
+    expect(gateway.pushToUser).toHaveBeenCalledWith(TENANT_ID, USER_ID, {
       id: NOTIFICATION_ID,
       type: 'payment_receipt',
       title: payload.title,
@@ -88,9 +95,73 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
       data: { paymentId: 'p1' },
       createdAt: CREATED_AT.toISOString(),
     });
-    expect(publish).toHaveBeenCalledWith(`notificationCreated:${USER_ID}`, payload);
-    expect(publish).toHaveBeenCalledWith(notificationCreatedTrigger(USER_ID), payload);
+    // The published object carries the envelope tenant: the subscription filter sees it.
+    expect(publish).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith(`notificationCreated:${TENANT_ID}:${USER_ID}`, {
+      ...payload,
+      tenantId: TENANT_ID,
+    });
+    expect(publish).toHaveBeenCalledWith(notificationCreatedTrigger(TENANT_ID, USER_ID), {
+      ...payload,
+      tenantId: TENANT_ID,
+    });
     expect(server.deadLetters()).toHaveLength(0);
+  });
+
+  it('addresses the push by the envelope tenant (another tenant, same user)', async () => {
+    const envelope = createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, {
+      id: generateId(),
+      source: 'notifications-service',
+      tenantId: OTHER_TENANT_ID,
+    });
+
+    await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, envelope, USER_ID);
+
+    expect(gateway.pushToUser).toHaveBeenCalledOnce();
+    expect(gateway.pushToUser).toHaveBeenCalledWith(OTHER_TENANT_ID, USER_ID, expect.anything());
+    expect(publish).toHaveBeenCalledOnce();
+    expect(publish).toHaveBeenCalledWith(`notificationCreated:${OTHER_TENANT_ID}:${USER_ID}`, {
+      ...payload,
+      tenantId: OTHER_TENANT_ID,
+    });
+  });
+
+  it('dead-letters an envelope without tenantId before the dedupe claim and pushes nothing', async () => {
+    const set = vi.spyOn(redis, 'set');
+    const envelope = createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, {
+      id: generateId(),
+      source: 'notifications-service',
+      tenantId: TENANT_ID,
+    });
+
+    await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, withoutTenant(envelope), USER_ID);
+
+    expect(set).not.toHaveBeenCalled();
+    expect(gateway.pushToUser).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(server.deadLetters().at(-1)?.topic).toBe(`${NOTIFICATION_CREATED_EVENT.topic}.dlq`);
+
+    // Nothing was claimed: the same envelope id with its tenant still pushes.
+    await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, envelope, USER_ID);
+    expect(gateway.pushToUser).toHaveBeenCalledOnce();
+    expect(gateway.pushToUser).toHaveBeenCalledWith(TENANT_ID, USER_ID, expect.anything());
+  });
+
+  it('dead-letters an envelope for the platform (nil) tenant and pushes nothing', async () => {
+    const envelope = {
+      ...createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, {
+        id: generateId(),
+        source: 'notifications-service',
+        tenantId: TENANT_ID,
+      }),
+      tenantId: PLATFORM_TENANT_ID,
+    };
+
+    await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, envelope, USER_ID);
+
+    expect(gateway.pushToUser).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
+    expect(server.deadLetters().at(-1)?.topic).toBe(`${NOTIFICATION_CREATED_EVENT.topic}.dlq`);
   });
 
   it('dead-letters a malformed event and pushes nothing', async () => {
@@ -104,6 +175,7 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
     const envelope = createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, {
       id: generateId(),
       source: 'notifications-service',
+      tenantId: TENANT_ID,
     });
 
     await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, envelope, USER_ID);
@@ -119,6 +191,7 @@ describe('NotificationPushConsumer (edge fan-out)', () => {
     const envelope = createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, {
       id: generateId(),
       source: 'notifications-service',
+      tenantId: TENANT_ID,
     });
 
     await server.dispatch(NOTIFICATION_CREATED_EVENT.topic, envelope, USER_ID);

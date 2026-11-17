@@ -1,4 +1,4 @@
-import { Logger, type OnModuleDestroy, UseGuards } from '@nestjs/common';
+import { Inject, Logger, type OnModuleDestroy, UseGuards } from '@nestjs/common';
 import {
   MessageBody,
   type OnGatewayConnection,
@@ -17,16 +17,18 @@ import {
   CurrentUser,
   extractSocketToken,
   RequirePermissions,
+  RevocationSweeper,
   TokenService,
 } from '@platform/auth';
 import { toProblemDetails, UnauthenticatedException, UseWsExceptionFilter } from '@platform/common';
+import { type AuthConfig, authConfig } from '@platform/config';
 import { RateLimit, WsThrottlerGuard } from '@platform/redis';
 import type { DefaultEventsMap, ExtendedError, Namespace, Socket } from 'socket.io';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
 import {
   NOTIFICATIONS_WS_EVENTS,
   NOTIFICATIONS_WS_NAMESPACE,
-  userRoom,
+  tenantUserRoom,
 } from '../../notifications.constants.js';
 import { NotificationsPermission } from '../../notifications.permissions.js';
 import type { NotificationResponse } from '../http/notifications.dto.js';
@@ -57,9 +59,6 @@ export type NotificationsNamespace = Namespace<
   NotificationsSocketData
 >;
 
-/** How often each replica disconnects its sockets whose access token was revoked (logout). */
-export const WS_REVOCATION_SWEEP_INTERVAL_MS = 30_000;
-
 /** `setTimeout` fires at once beyond this delay (~24.8 days), so longer expiries are capped. */
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
@@ -69,19 +68,23 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
  *   `Authorization: Bearer`) once, including the revocation denylist, BEFORE the connection is
  *   accepted — so no message can race the authentication. A refused client gets `connect_error`
  *   whose `data` is the problem details (`code` MISSING_TOKEN / TOKEN_EXPIRED / …).
- * - Connection: the socket joins room `user:<id>`.
+ * - Connection: the socket joins exactly one room, `t:<tenantId>:u:<userId>` (`tenantUserRoom`),
+ *   both from the token it authenticated with. It never changes room: another tenant needs a new
+ *   connection with that tenant's token. No message handler joins or leaves a room.
  * - Session lifetime: tokens are short-lived but sockets are not. The socket is sent an
  *   `exception` (TOKEN_EXPIRED) and disconnected when its access token expires, and every
- *   `WS_REVOCATION_SWEEP_INTERVAL_MS` each replica disconnects its sockets whose token was
- *   revoked (logout → denylist; `exception` TOKEN_REVOKED). Clients reconnect with a fresh token,
- *   so pushes stop reaching a session that HTTP would already reject.
+ *   `WS_REVOCATION_SWEEP_INTERVAL_MS` (`authConfig`) this replica's `RevocationSweeper`
+ *   (`socket.io`) disconnects its sockets whose token was revoked (logout or tenant switch →
+ *   denylist; `exception` TOKEN_REVOKED). Clients reconnect with a fresh token, so pushes stop
+ *   reaching a session that HTTP would already reject.
  * - Messages: the global guards run per message (`JwtAuthGuard` checks `socket.data.user` is
  *   still unexpired, then RBAC), then `WsSessionGuard` (denylist, like HTTP) and per-message
  *   throttling (`WsThrottlerGuard`, Redis-backed).
  *   Errors (429 included) come back as `{ ok: false, error }` acks or `exception` events
  *   (`@UseWsExceptionFilter`).
- * - Pushes: `NotificationPushConsumer` calls `pushToUser`; with `RedisIoAdapter` the room emit
- *   reaches the user's sockets on every replica.
+ * - Pushes: `NotificationPushConsumer` calls `pushToUser(tenantId, userId, …)` with the envelope
+ *   tenant; with `RedisIoAdapter` the room emit reaches that (tenant, user)'s sockets on every
+ *   replica.
  */
 @UseWsExceptionFilter()
 @UseGuards(WsSessionGuard, WsThrottlerGuard)
@@ -95,8 +98,9 @@ export class NotificationsGateway
 {
   private readonly logger = new Logger(NotificationsGateway.name);
   private readonly expiryTimers = new WeakMap<NotificationsSocket, NodeJS.Timeout>();
-  private revocationSweep: NodeJS.Timeout | undefined;
-  private sweeping = false;
+  /** Removes a socket from the sweeper; set at connection, called at disconnect. */
+  private readonly untrackers = new WeakMap<NotificationsSocket, () => void>();
+  private readonly sweeper: RevocationSweeper;
 
   @WebSocketServer()
   private readonly server: NotificationsNamespace;
@@ -105,21 +109,23 @@ export class NotificationsGateway
     private readonly tokens: TokenService,
     private readonly denylist: AccessTokenDenylist,
     private readonly notifications: NotificationsPort,
-  ) {}
+    @Inject(authConfig.KEY) auth: AuthConfig,
+  ) {
+    this.sweeper = new RevocationSweeper(denylist, {
+      name: 'socket.io',
+      intervalMs: auth.wsRevocationSweepIntervalMs,
+    });
+  }
 
   afterInit(namespace: NotificationsNamespace): void {
     namespace.use((socket, next) => {
       void this.authenticate(socket).then(next);
     });
-    this.revocationSweep = setInterval(() => {
-      void this.disconnectRevokedSockets();
-    }, WS_REVOCATION_SWEEP_INTERVAL_MS);
-    this.revocationSweep.unref();
+    this.sweeper.start();
   }
 
   onModuleDestroy(): void {
-    clearInterval(this.revocationSweep);
-    this.revocationSweep = undefined;
+    this.sweeper.stop();
   }
 
   /** Resolves `undefined` (accept) or the error to refuse the handshake with. */
@@ -145,51 +151,36 @@ export class NotificationsGateway
       client.disconnect(true);
       return;
     }
-    await client.join(userRoom(user.id));
+    // Tracked before the await, so a socket that drops while joining is untracked too.
+    this.untrackers.set(
+      client,
+      this.sweeper.track({
+        jti: user.jti,
+        end: () => {
+          this.endSession(client, AuthErrorCode.TOKEN_REVOKED, 'Token has been revoked');
+        },
+      }),
+    );
     this.scheduleExpiry(client, user.exp);
+    await client.join(tenantUserRoom(user.tenantId, user.id));
   }
 
   handleDisconnect(client: NotificationsSocket): void {
     clearTimeout(this.expiryTimers.get(client));
     this.expiryTimers.delete(client);
+    this.untrackers.get(client)?.();
+    this.untrackers.delete(client);
   }
 
   /**
-   * Disconnects this replica's sockets whose access token is on the denylist (each replica sweeps
-   * its own sockets, so it works the same in every topology: logout may run in identity-service).
-   * One EXISTS per distinct token, auto-pipelined. If Redis cannot answer, sockets are kept until
-   * the next sweep (messages still fail closed in `WsSessionGuard`). Resolves the number of
-   * sockets disconnected.
+   * Disconnects this replica's sockets whose access token is on the denylist (logout, tenant
+   * switch); each replica sweeps its own sockets, so it works the same in every topology. Runs
+   * every `WS_REVOCATION_SWEEP_INTERVAL_MS`; delegates to the shared `RevocationSweeper` (one
+   * EXISTS per distinct token; a denylist error keeps every socket until the next sweep while
+   * `WsSessionGuard` still refuses its messages). Resolves the number of sockets disconnected.
    */
-  async disconnectRevokedSockets(): Promise<number> {
-    if (this.sweeping || !this.denylist.enabled) return 0;
-    this.sweeping = true;
-    try {
-      const byJti = new Map<string, NotificationsSocket[]>();
-      for (const socket of this.server.sockets.values()) {
-        const jti = socket.data.user?.jti;
-        if (jti !== undefined) byJti.set(jti, [...(byJti.get(jti) ?? []), socket]);
-      }
-      const jtis = [...byJti.keys()];
-      const denied = await Promise.all(jtis.map((jti) => this.denylist.isDenied(jti)));
-      const revoked = jtis
-        .filter((_, index) => denied[index])
-        .flatMap((jti) => byJti.get(jti) ?? []);
-      for (const socket of revoked) {
-        this.endSession(socket, AuthErrorCode.TOKEN_REVOKED, 'Token has been revoked');
-      }
-      if (revoked.length > 0) {
-        this.logger.debug(`Disconnected ${revoked.length} socket(s) with a revoked access token`);
-      }
-      return revoked.length;
-    } catch (error) {
-      this.logger.warn(
-        `Revocation sweep skipped: ${error instanceof Error ? error.message : String(error)}`,
-      );
-      return 0;
-    } finally {
-      this.sweeping = false;
-    }
+  disconnectRevokedSockets(): Promise<number> {
+    return this.sweeper.sweep();
   }
 
   /** Marks a notification read; the return value is the socket.io ack. */
@@ -198,9 +189,14 @@ export class NotificationsGateway
   @RateLimit(NOTIFICATIONS_RATE_LIMITS.MARK_READ)
   async markRead(
     @MessageBody({ schema: markReadMessageSchema }) body: MarkReadMessage,
-    @CurrentUser('id') userId: string,
+    @CurrentUser() user: AuthUser,
   ): Promise<MarkReadAck> {
-    await this.notifications.markRead({ userId, notificationId: body.id });
+    // The (tenant, user) inbox of the token this socket authenticated with.
+    await this.notifications.markRead({
+      tenantId: user.tenantId,
+      userId: user.id,
+      notificationId: body.id,
+    });
     return { ok: true };
   }
 
@@ -210,9 +206,14 @@ export class NotificationsGateway
     return { event: NOTIFICATIONS_WS_EVENTS.PONG, data: { ts: new Date().toISOString() } };
   }
 
-  /** Emits `notification.created` to every socket of `userId` (all tabs, all replicas). */
-  pushToUser(userId: string, notification: NotificationResponse): void {
-    this.server.to(userRoom(userId)).emit(NOTIFICATIONS_WS_EVENTS.CREATED, notification);
+  /**
+   * Emits `notification.created` to every socket of `userId` signed in to `tenantId` (all tabs,
+   * all replicas); the same user's sockets in another tenant receive nothing.
+   */
+  pushToUser(tenantId: string, userId: string, notification: NotificationResponse): void {
+    this.server
+      .to(tenantUserRoom(tenantId, userId))
+      .emit(NOTIFICATIONS_WS_EVENTS.CREATED, notification);
   }
 
   /** Mirrors graphql-ws (`scheduleExpiry`): the socket ends when its access token does. */

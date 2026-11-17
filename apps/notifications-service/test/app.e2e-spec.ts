@@ -1,11 +1,15 @@
-import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
+import {
+  MEMBERSHIP_CREATED_EVENT,
+  MEMBERSHIP_REMOVED_EVENT,
+  USER_REGISTERED_EVENT,
+} from '@domain/identity-contracts';
 import {
   NOTIFICATION_CREATED_EVENT,
   NOTIFICATIONS_GRPC_PACKAGE,
   type NotificationPage,
   type NotificationsServiceClient,
 } from '@domain/notifications-contracts';
-import { type ServiceError, status } from '@grpc/grpc-js';
+import { Metadata, type ServiceError, status } from '@grpc/grpc-js';
 import { getQueueToken } from '@nestjs/bullmq';
 import { ClientGrpcProxy } from '@nestjs/microservices';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -20,6 +24,7 @@ import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import {
   createGrpcClientOptions,
+  createOutgoingMetadata,
   GrpcCircuitBreakers,
   grpcCall,
   KafkaProducer,
@@ -43,6 +48,11 @@ import { startServiceTestApp } from './support/service-test-app.js';
  */
 
 const USER_ID = '01920000-0000-7000-8000-000000000001';
+const TENANT_ID = '01920000-0000-7000-8000-0000000000a1';
+const OTHER_TENANT_ID = '01920000-0000-7000-8000-0000000000b2';
+/** Caller metadata of the principal (TENANT_ID, USER_ID), as the gateway adapter sends it. */
+const asOwner = (): Metadata =>
+  createOutgoingMetadata({ userId: USER_ID, tenantId: TENANT_ID, roles: ['member'] });
 // A live uuidv7: markRead skips ids whose embedded time is past the 90-day inbox TTL.
 const WELCOME_ID = generateId();
 const RECEIPT_ID = '01920000-0000-7000-8000-00000000000b';
@@ -53,6 +63,7 @@ const uuid = (id: string): cassandra.types.Uuid => cassandra.types.Uuid.fromStri
 /** Inbox rows as the driver returns them (uuid cells are `types.Uuid`, an empty map is null). */
 const INBOX_ROWS = [
   {
+    tenant_id: uuid(TENANT_ID),
     user_id: uuid(USER_ID),
     notification_id: uuid(RECEIPT_ID),
     type: 'payment_receipt',
@@ -63,6 +74,7 @@ const INBOX_ROWS = [
     created_at: RECEIPT_AT,
   },
   {
+    tenant_id: uuid(TENANT_ID),
     user_id: uuid(USER_ID),
     notification_id: uuid(WELCOME_ID),
     type: 'welcome',
@@ -78,11 +90,13 @@ const store = createFakeCassandra((cql, params) => {
   if (cql.startsWith('SELECT release_version FROM system.local')) {
     return { rows: [{ release_version: '5.0.4' }] };
   }
-  if (cql.includes('FROM notifications_by_user WHERE user_id = ?')) {
-    return params[0] === USER_ID ? { rows: INBOX_ROWS, pageState: 'c0ffee' } : {};
+  if (cql.includes('FROM notifications_by_tenant_user WHERE tenant_id = ? AND user_id = ?')) {
+    return params[0] === TENANT_ID && params[1] === USER_ID
+      ? { rows: INBOX_ROWS, pageState: 'c0ffee' }
+      : {};
   }
-  if (cql.startsWith('UPDATE notifications_by_user USING TTL ? SET read = true')) {
-    return { applied: params[2] === WELCOME_ID }; // LWT: IF EXISTS (params: ttl, user, id)
+  if (cql.startsWith('UPDATE notifications_by_tenant_user USING TTL ? SET read = true')) {
+    return { applied: params[3] === WELCOME_ID }; // LWT: IF EXISTS (params: ttl, tenant, user, id)
   }
   return {}; // inserts / upserts
 });
@@ -199,7 +213,10 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
 
     it('ListNotifications reads one Cassandra page; Timestamp → Date, map + bool defaults', async () => {
       const page: NotificationPage = await call(
-        notifications.listNotifications({ userId: USER_ID, limit: 2 }),
+        notifications.listNotifications(
+          { tenantId: TENANT_ID, userId: USER_ID, limit: 2 },
+          asOwner(),
+        ),
         'NotificationsService.ListNotifications',
       );
 
@@ -208,6 +225,7 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
       const [receipt, welcome] = page.items;
       expect(receipt).toMatchObject({
         id: RECEIPT_ID,
+        tenantId: TENANT_ID,
         userId: USER_ID,
         type: 'payment_receipt',
         read: true,
@@ -218,22 +236,58 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
       expect(welcome?.createdAt).toBeInstanceOf(Date);
       expect(welcome?.createdAt?.toISOString()).toBe(WELCOME_AT.toISOString());
 
+      // The executed CQL binds the (tenant, user) partition of the caller.
       expect(store.executed.at(-1)).toMatchObject({
-        params: [USER_ID],
+        cql: expect.stringContaining('FROM notifications_by_tenant_user'),
+        params: [TENANT_ID, USER_ID],
         options: { prepare: true, fetchSize: 2 },
       });
     });
 
+    it('PERMISSION_DENIED TENANT_MISMATCH when the body names another tenant; no CQL runs', async () => {
+      const before = store.executed.length;
+      for (const invoke of [
+        () =>
+          notifications.listNotifications(
+            { tenantId: OTHER_TENANT_ID, userId: USER_ID, limit: 2 },
+            asOwner(),
+          ),
+        () =>
+          notifications.markNotificationRead(
+            { tenantId: OTHER_TENANT_ID, userId: USER_ID, notificationId: WELCOME_ID },
+            asOwner(),
+          ),
+      ]) {
+        const raw = await lastValueFrom<unknown>(invoke()).catch((e: unknown) => e);
+        expect(raw).toMatchObject({ code: status.PERMISSION_DENIED });
+        expect((raw as ServiceError).metadata.get('x-error-code')).toEqual(['TENANT_MISMATCH']);
+      }
+      expect(store.executed).toHaveLength(before);
+    });
+
+    it('UNAUTHENTICATED without principal metadata; no CQL runs', async () => {
+      const before = store.executed.length;
+      const raw = await lastValueFrom(
+        notifications.listNotifications(
+          { tenantId: TENANT_ID, userId: USER_ID, limit: 2 },
+          new Metadata(),
+        ),
+      ).catch((e: unknown) => e);
+      expect(raw).toMatchObject({ code: status.UNAUTHENTICATED });
+      expect((raw as ServiceError).metadata.get('x-error-code')).toEqual(['PRINCIPAL_MISSING']);
+      expect(store.executed).toHaveLength(before);
+    });
+
     it('ListNotifications with a malformed page state → INVALID_ARGUMENT before any CQL', async () => {
       const before = store.executed.length;
-      const request = { userId: USER_ID, limit: 5, pageState: 'not hex!' };
-      const raw = await lastValueFrom(notifications.listNotifications(request)).catch(
+      const request = { tenantId: TENANT_ID, userId: USER_ID, limit: 5, pageState: 'not hex!' };
+      const raw = await lastValueFrom(notifications.listNotifications(request, asOwner())).catch(
         (e: unknown) => e,
       );
       expect(raw).toMatchObject({ code: status.INVALID_ARGUMENT });
 
       const error = await call(
-        notifications.listNotifications(request),
+        notifications.listNotifications(request, asOwner()),
         'NotificationsService.ListNotifications',
       ).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(DomainValidationException);
@@ -243,13 +297,17 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
     it('MarkNotificationRead: LWT applied → Empty; unknown id → NOT_FOUND with its domain code', async () => {
       await expect(
         call(
-          notifications.markNotificationRead({ userId: USER_ID, notificationId: WELCOME_ID }),
+          notifications.markNotificationRead(
+            { tenantId: TENANT_ID, userId: USER_ID, notificationId: WELCOME_ID },
+            asOwner(),
+          ),
           'NotificationsService.MarkNotificationRead',
         ),
       ).resolves.toEqual({});
+      expect(store.executed.at(-1)?.params.slice(1)).toEqual([TENANT_ID, USER_ID, WELCOME_ID]);
 
-      const request = { userId: USER_ID, notificationId: generateId() };
-      const raw = await lastValueFrom(notifications.markNotificationRead(request)).catch(
+      const request = { tenantId: TENANT_ID, userId: USER_ID, notificationId: generateId() };
+      const raw = await lastValueFrom(notifications.markNotificationRead(request, asOwner())).catch(
         (e: unknown) => e,
       );
       expect(raw).toMatchObject({ code: status.NOT_FOUND });
@@ -258,7 +316,7 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
       ]);
 
       const error = await call(
-        notifications.markNotificationRead(request),
+        notifications.markNotificationRead(request, asOwner()),
         'NotificationsService.MarkNotificationRead',
       ).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(EntityNotFoundException);
@@ -276,8 +334,8 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
       kafka.producer.send.mockClear();
     });
 
-    it('identity.user-registered.v1 → recipient + inbox rows, welcome mail queued, event published', async () => {
-      const userId = generateId();
+    it('identity.user-registered.v1 → inbox row in the envelope tenant, mail, event', async () => {
+      const [tenantId, userId] = [generateId(), generateId()];
       const envelope = createEventEnvelope(
         USER_REGISTERED_EVENT,
         {
@@ -286,16 +344,17 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
           displayName: 'Grace',
           registeredAt: '2026-09-29T09:00:00.000Z',
         },
-        { id: generateId(), source: 'identity-service', tenantId: generateId() },
+        { id: generateId(), source: 'identity-service', tenantId },
       );
 
       await kafka.deliver(USER_REGISTERED_EVENT.topic, envelope, userId);
 
-      const writes = store.executed.filter(({ params }) => params[0] === userId).map((q) => q.cql);
-      expect(writes).toEqual([
-        expect.stringContaining('INSERT INTO notification_recipients'),
-        expect.stringContaining('INSERT INTO notifications_by_user'),
+      const writes = store.executed.filter(({ params }) => params.includes(userId));
+      // Recipients follow memberships (identity.membership-created.v1), not registrations.
+      expect(writes.map((q) => q.cql)).toEqual([
+        expect.stringContaining('INSERT INTO notifications_by_tenant_user'),
       ]);
+      expect(writes[0]?.params.slice(0, 2)).toEqual([tenantId, userId]);
       expect(mailQueue.add).toHaveBeenCalledWith(
         'welcome',
         expect.objectContaining({ to: 'grace@example.com', template: 'welcome' }),
@@ -307,10 +366,122 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
       );
       expect(kafkaProducer.envelopes(NOTIFICATION_CREATED_EVENT)[0]).toMatchObject({
         source: 'notifications-service',
+        tenantId,
         payload: { userId, type: 'welcome' },
       });
       expect(kafka.deadLetters()).toEqual([]);
     });
+
+    it('identity.user-registered.v1 without tenantId lands on the .dlq topic; no INSERT runs', async () => {
+      const userId = generateId();
+      const { tenantId: _tenantId, ...legacyEnvelope } = createEventEnvelope(
+        USER_REGISTERED_EVENT,
+        {
+          userId,
+          email: 'legacy@example.com',
+          displayName: 'Legacy',
+          registeredAt: '2026-09-29T09:00:00.000Z',
+        },
+        { id: generateId(), source: 'identity-service', tenantId: generateId() },
+      );
+
+      await kafka.deliver(USER_REGISTERED_EVENT.topic, legacyEnvelope, userId);
+
+      expect(store.executed.filter(({ params }) => params.includes(userId))).toEqual([]);
+      expect(kafka.deadLetters()).toEqual([
+        expect.objectContaining({ topic: `${USER_REGISTERED_EVENT.topic}.dlq` }),
+      ]);
+      expect(kafkaProducer.records).toEqual([]);
+    });
+
+    /** The recipient statements this test run executed for `userId`. */
+    const recipientWrites = (userId: string) =>
+      store.executed.filter(
+        ({ cql, params }) =>
+          cql.includes('notification_recipients_by_tenant') && params.includes(userId),
+      );
+
+    it('identity.membership-created.v1 → recipient INSERT bound to the envelope tenant', async () => {
+      const [tenantId, userId] = [generateId(), generateId()];
+      const envelope = createEventEnvelope(
+        MEMBERSHIP_CREATED_EVENT,
+        {
+          userId,
+          email: 'grace@example.com',
+          displayName: 'Grace',
+          createdAt: '2026-09-29T09:00:00.000Z',
+        },
+        { id: generateId(), source: 'identity-service', tenantId, actorId: userId },
+      );
+
+      await kafka.deliver(MEMBERSHIP_CREATED_EVENT.topic, envelope, userId);
+
+      const [insert, ...rest] = recipientWrites(userId);
+      expect(rest).toEqual([]);
+      expect(insert?.cql).toMatch(/^INSERT INTO notification_recipients_by_tenant /);
+      expect(insert?.params.slice(0, 4)).toEqual([tenantId, userId, 'grace@example.com', 'Grace']);
+      expect(kafka.deadLetters()).toEqual([]);
+    });
+
+    it('identity.membership-removed.v1 → recipient DELETE bound to the envelope tenant', async () => {
+      const [tenantId, userId] = [generateId(), generateId()];
+      const envelope = createEventEnvelope(
+        MEMBERSHIP_REMOVED_EVENT,
+        { userId, removedAt: '2026-09-29T10:00:00.000Z' },
+        { id: generateId(), source: 'identity-service', tenantId, actorId: userId },
+      );
+
+      await kafka.deliver(MEMBERSHIP_REMOVED_EVENT.topic, envelope, userId);
+
+      const [remove, ...rest] = recipientWrites(userId);
+      expect(rest).toEqual([]);
+      expect(remove?.cql).toMatch(/^DELETE FROM notification_recipients_by_tenant /);
+      expect(remove?.params.slice(1)).toEqual([tenantId, userId]);
+      expect(kafka.deadLetters()).toEqual([]);
+    });
+
+    /** A tenant-scoped envelope as a pre-B2-24 producer sent it: no `tenantId`. */
+    const legacy = <T extends { tenantId?: string | undefined }>(envelope: T) => {
+      const { tenantId: _tenantId, ...rest } = envelope;
+      return rest;
+    };
+    const meta = () => ({ id: generateId(), source: 'identity-service', tenantId: generateId() });
+
+    it.each([
+      [
+        MEMBERSHIP_CREATED_EVENT.topic,
+        (userId: string) =>
+          createEventEnvelope(
+            MEMBERSHIP_CREATED_EVENT,
+            {
+              userId,
+              email: 'x@example.com',
+              displayName: 'X',
+              createdAt: '2026-09-29T09:00:00.000Z',
+            },
+            meta(),
+          ),
+      ],
+      [
+        MEMBERSHIP_REMOVED_EVENT.topic,
+        (userId: string) =>
+          createEventEnvelope(
+            MEMBERSHIP_REMOVED_EVENT,
+            { userId, removedAt: '2026-09-29T10:00:00.000Z' },
+            meta(),
+          ),
+      ],
+    ])(
+      '%s without tenantId lands on the .dlq topic and touches no recipient row',
+      async (topic, build) => {
+        const userId = generateId();
+
+        await kafka.deliver(topic, legacy(build(userId)), userId);
+
+        expect(recipientWrites(userId)).toEqual([]);
+        expect(kafka.deadLetters()).toEqual([expect.objectContaining({ topic: `${topic}.dlq` })]);
+      },
+    );
 
     it('a malformed envelope is dead-lettered (offset commits; the consumer never throws)', async () => {
       await expect(

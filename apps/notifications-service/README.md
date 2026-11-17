@@ -6,8 +6,9 @@ reacts to other services' integration events:
 - **gRPC** `notifications.v1.NotificationsService` (list the inbox with Cassandra paging, mark as
   read) for the gateway's `NotificationsApiModule.forRemote()`;
 - **Kafka consumers** (group `notifications-service`): `identity.user-registered.v1` → welcome
-  notification + welcome mail, `billing.payment-succeeded.v1` → receipt notification + receipt
-  mail;
+  notification + welcome mail, `identity.membership-created.v1` / `identity.membership-removed.v1`
+  → the `(tenant, user)` mail recipients, `billing.payment-succeeded.v1` → receipt notification +
+  receipt mail in the payment's tenant;
 - produces `notifications.notification-created.v1` (saga), which the gateway pushes to the user
   over Socket.IO and GraphQL subscriptions;
 - the BullMQ `mail` worker (SMTP) and the daily digest cron (09:00 UTC, `@WithLock`).

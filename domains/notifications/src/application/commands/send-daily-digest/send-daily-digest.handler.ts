@@ -20,15 +20,16 @@ import { type DailyDigestResult, SendDailyDigestCommand } from './send-daily-dig
 
 type DigestOutcome = 'enqueued' | 'skipped' | 'failed';
 
-/** `2026-09-29` (UTC) — the day component of the per-recipient idempotency key. */
+/** `2026-09-29` (UTC) — the day component of the per-pair idempotency key. */
 const utcDay = (date: Date): string => date.toISOString().slice(0, 10);
 
 /**
- * Bounded demo of a batch job over Cassandra: pages through the recipients projection (token
- * order, `maxRecipients` cap), reads each recipient's newest notifications (one partition read,
- * at most `DIGEST_CONCURRENCY` in flight) and queues a digest for those with unread items. The
- * idempotency key `digest-<user>-<day>` makes a re-run on the same day (another replica after a
- * lock expiry, a manual trigger) a no-op in the mail queue.
+ * Bounded demo of a batch job over Cassandra: pages through the recipients projection, one item
+ * per `(tenant, user)` (token order, `maxRecipients` cap), reads each pair's own newest
+ * notifications (one `(tenant, user)` partition read, at most `DIGEST_CONCURRENCY` in flight) and queues a digest
+ * for those with unread items. The idempotency key `digest-<tenant>-<user>-<day>` makes a re-run
+ * on the same day (another replica after a lock expiry, a manual trigger) a no-op in the mail
+ * queue, and keeps the digests of one user's two tenants apart.
  */
 @CommandHandler(SendDailyDigestCommand)
 export class SendDailyDigestHandler implements ICommandHandler<SendDailyDigestCommand> {
@@ -66,7 +67,9 @@ export class SendDailyDigestHandler implements ICommandHandler<SendDailyDigestCo
 
   private async digest(recipient: NotificationRecipient, day: string): Promise<DigestOutcome> {
     try {
+      // This pair's own inbox: a user's unread items in another tenant belong to that digest.
       const recent = await this.notifications.findRecentByUser(
+        recipient.tenantId,
         recipient.userId,
         DIGEST_SCAN_PER_USER,
       );
@@ -86,14 +89,14 @@ export class SendDailyDigestHandler implements ICommandHandler<SendDailyDigestCo
               createdAt: createdAt.toISOString(),
             })),
           },
-          idempotencyKey: `digest-${recipient.userId}-${day}`,
+          idempotencyKey: `digest-${recipient.tenantId}-${recipient.userId}-${day}`,
         }),
       );
       return 'enqueued';
     } catch (error) {
       // One broken recipient must not abort the whole run.
       this.logger.warn(
-        `Daily digest for user ${recipient.userId} failed: ${error instanceof Error ? error.message : String(error)}`,
+        `Daily digest for user ${recipient.userId} in tenant ${recipient.tenantId} failed: ${error instanceof Error ? error.message : String(error)}`,
       );
       return 'failed';
     }

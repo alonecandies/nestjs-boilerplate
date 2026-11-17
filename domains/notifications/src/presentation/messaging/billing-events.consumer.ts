@@ -8,11 +8,13 @@ import {
   ParseEventEnvelopePipe,
 } from '@platform/transport';
 import { SendPaymentReceiptCommand } from '../../application/commands/send-payment-receipt/send-payment-receipt.command.js';
+import { requireEventTenant } from './event-tenant.js';
 
 type PaymentSucceededEnvelope = EventEnvelopeOf<typeof PAYMENT_SUCCEEDED_EVENT>;
 
 /**
  * billing → notifications: a receipt notification + receipt mail per succeeded payment.
+ * The receipt is mailed to the payer's recipient row in the envelope tenant (the payment's).
  * Dead-lettering and idempotency as in `IdentityEventsConsumer` (keyed by payment id).
  */
 @KafkaConsumerController()
@@ -24,9 +26,11 @@ export class BillingEventsConsumer {
     @Payload(new ParseEventEnvelopePipe(PAYMENT_SUCCEEDED_EVENT))
     event: PaymentSucceededEnvelope,
   ): Promise<void> {
+    const tenantId = requireEventTenant(event);
     const { paymentId, userId, amountTotal, currency, paidAt } = event.payload;
     await this.commandBus.execute(
       new SendPaymentReceiptCommand({
+        tenantId,
         paymentId,
         userId,
         amountTotal,

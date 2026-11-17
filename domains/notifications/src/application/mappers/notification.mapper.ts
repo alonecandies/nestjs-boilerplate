@@ -29,6 +29,7 @@ export const KIND_BY_TYPE: Readonly<Record<NotificationType, NotificationKind>> 
 export function toNotificationContract(props: Readonly<NotificationProps>): Notification {
   return {
     id: props.id,
+    tenantId: props.tenantId,
     userId: props.userId,
     type: TYPE_BY_KIND[props.type],
     title: props.title,
@@ -61,8 +62,13 @@ export function toNotificationCreatedPayload(
   };
 }
 
-/** Kafka payload → contract shape (what the edge pushes; a new notification is unread). */
-export function notificationFromCreatedPayload(payload: NotificationCreatedPayload): Notification {
+/**
+ * Kafka payload → contract shape (what the edge pushes; a new notification is unread). The payload
+ * carries no tenant (it travels in the envelope), so neither does the result.
+ */
+export function notificationFromCreatedPayload(
+  payload: NotificationCreatedPayload,
+): Omit<Notification, 'tenantId'> {
   return {
     id: payload.notificationId,
     userId: payload.userId,

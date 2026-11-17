@@ -1,4 +1,4 @@
-import { parseEventEnvelope, topicVersion } from '@platform/contracts';
+import { createEventEnvelope, parseEventEnvelope, topicVersion } from '@platform/contracts';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
@@ -17,12 +17,15 @@ const payload: NotificationCreatedPayload = {
   createdAt: '2026-09-29T10:00:00.000Z',
 };
 
+const TENANT_ID = '0199a1b2-c3d4-7e5f-8a9b-000000000009';
+
 const envelope = (value: unknown) => ({
   id: '0199a1b2-c3d4-7e5f-8a9b-000000000001',
   type: NOTIFICATION_CREATED_EVENT.topic,
   version: 1,
   occurredAt: '2026-09-29T10:00:00.123Z',
   source: 'notifications-service',
+  tenantId: TENANT_ID,
   payload: value,
 });
 
@@ -41,6 +44,17 @@ describe('NOTIFICATION_CREATED_EVENT', () => {
   it('keeps its wire name (consumer offsets and docker/kafka/topics.txt depend on it)', () => {
     expect(NOTIFICATION_CREATED_EVENT.topic).toBe('notifications.notification-created.v1');
     expect(topicVersion(NOTIFICATION_CREATED_EVENT.topic)).toBe(1);
+  });
+
+  it('is tenant-scoped: an envelope is only created with the inbox tenant (B4-1)', () => {
+    const meta = { id: '0199a1b2-c3d4-7e5f-8a9b-000000000001', source: 'notifications' };
+    expect(NOTIFICATION_CREATED_EVENT.tenantScoped).toBe(true);
+    expect(() => createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, meta)).toThrow(
+      /tenantId/,
+    );
+    expect(
+      createEventEnvelope(NOTIFICATION_CREATED_EVENT, payload, { ...meta, tenantId: TENANT_ID }),
+    ).toMatchObject({ tenantId: TENANT_ID, payload });
   });
 
   it('parses every notification type', () => {

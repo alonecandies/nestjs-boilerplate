@@ -18,10 +18,11 @@ export {
   NOTIFICATION_CREATED_TRIGGER,
   NOTIFICATIONS_WS_EVENTS,
   NOTIFICATIONS_WS_NAMESPACE,
+  type NotificationCreatedPush,
   notificationCreatedTrigger,
   PAGE_STATE_MAX_LENGTH,
   PAGE_STATE_PATTERN,
-  userRoom,
+  tenantUserRoom,
 } from '../notifications.constants.js';
 export { NOTIFICATIONS_RBAC, NotificationsPermission } from '../notifications.permissions.js';
 export { NotificationsApiModule } from '../notifications-api.module.js';
@@ -57,7 +58,6 @@ export {
   type NotificationsNamespace,
   type NotificationsSocket,
   type NotificationsSocketData,
-  WS_REVOCATION_SWEEP_INTERVAL_MS,
 } from '../presentation/ws/notifications.gateway.js';
 export {
   type NotificationsRateLimitConfig,

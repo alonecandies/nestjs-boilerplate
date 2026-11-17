@@ -6,24 +6,32 @@ export interface NotificationsSlice {
   pageState: string | null;
 }
 
-/** Persistence of the inbox (one partition per user, newest first). */
+/**
+ * Persistence of the inbox: one partition per (tenant, user), newest first. Every read and write
+ * names both, so a user in two tenants has two inboxes that never mix.
+ */
 export abstract class NotificationsRepository {
   /**
-   * Upsert by (user, id). Never writes `read`, so re-inserting a notification (Kafka redelivery
-   * with a derived id) cannot flip an already-read notification back to unread.
+   * Upsert by (tenant, user, id). Never writes `read`, so re-inserting a notification (Kafka
+   * redelivery with a derived id) cannot flip an already-read notification back to unread.
    */
   abstract insert(notification: Readonly<NotificationProps>): Promise<void>;
 
-  /** One page of a user's inbox, newest first. */
+  /** One page of a (tenant, user) inbox, newest first. */
   abstract listByUser(
+    tenantId: string,
     userId: string,
     limit: number,
     pageState?: string,
   ): Promise<NotificationsSlice>;
 
-  /** The `limit` newest notifications of a user (read and unread). */
-  abstract findRecentByUser(userId: string, limit: number): Promise<NotificationProps[]>;
+  /** The `limit` newest notifications of a (tenant, user) inbox (read and unread). */
+  abstract findRecentByUser(
+    tenantId: string,
+    userId: string,
+    limit: number,
+  ): Promise<NotificationProps[]>;
 
-  /** Marks one notification read. Resolves `false` when it is not in the user's inbox. */
-  abstract markRead(userId: string, notificationId: string): Promise<boolean>;
+  /** Marks one notification read. Resolves `false` when it is not in the (tenant, user) inbox. */
+  abstract markRead(tenantId: string, userId: string, notificationId: string): Promise<boolean>;
 }

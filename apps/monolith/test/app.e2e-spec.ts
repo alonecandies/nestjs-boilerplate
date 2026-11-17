@@ -416,9 +416,13 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
       });
       expect(response.statusCode, response.body).toBe(200);
       expect(response.json()).toEqual({ items: [], nextPageState: null });
-      expect(e2e.cassandra.executed.some(({ cql }) => /notifications_by_user/i.test(cql))).toBe(
-        true,
+      // The token's (tenant, user) inbox partition (B4-1).
+      const [, claims = ''] = tokens.accessToken.split('.');
+      const { tid } = JSON.parse(Buffer.from(claims, 'base64url').toString()) as { tid: string };
+      const read = e2e.cassandra.executed.find(({ cql }) =>
+        /FROM notifications_by_tenant_user/i.test(cql),
       );
+      expect(read?.params).toEqual([tid, tokens.user.id]);
     });
 
     it('GET /v1/billing/payments → the payments table through drizzle (empty)', async () => {

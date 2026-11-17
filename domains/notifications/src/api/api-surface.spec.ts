@@ -25,7 +25,6 @@ const API_VALUES = [
   'PAGE_STATE_MAX_LENGTH',
   'PAGE_STATE_PATTERN',
   'PUSH_DEDUPE_TTL_SEC',
-  'WS_REVOCATION_SWEEP_INTERVAL_MS',
   'isOwnNotification',
   'listNotificationsQuerySchema',
   'notificationCreatedTrigger',
@@ -35,16 +34,22 @@ const API_VALUES = [
   'notificationResponseSchema',
   'notificationsGrpcClientConfig',
   'notificationsGrpcClientEnvSchema',
+  'tenantUserRoom',
   'toCreatedNotificationModel',
   'toNotificationConnection',
   'toNotificationPageResponse',
   'toNotificationResponse',
-  'userRoom',
 ];
 
 describe('@domain/notifications entry points', () => {
   it('./api exports exactly the edge surface', () => {
     expect(Object.keys(api).sort()).toEqual([...API_VALUES].sort());
+  });
+
+  it('./api has tenantUserRoom and no longer userRoom or WS_REVOCATION_SWEEP_INTERVAL_MS', () => {
+    expect(api).toHaveProperty('tenantUserRoom');
+    expect(api).not.toHaveProperty('userRoom');
+    expect(api).not.toHaveProperty('WS_REVOCATION_SWEEP_INTERVAL_MS');
   });
 
   it('the root entry re-exports ./api and keeps core, Cassandra and mail', () => {

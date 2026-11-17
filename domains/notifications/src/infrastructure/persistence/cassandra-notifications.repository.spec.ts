@@ -4,7 +4,12 @@ import { createMock } from '@platform/testing';
 import cassandra from 'cassandra-driver';
 import { v4, v7 } from 'uuid';
 import { describe, expect, it } from 'vitest';
-import { asClass, makeNotificationProps, USER_ID } from '../../../test/support/fixtures.js';
+import {
+  asClass,
+  makeNotificationProps,
+  TENANT_ID,
+  USER_ID,
+} from '../../../test/support/fixtures.js';
 import {
   CassandraNotificationsRepository,
   isGhostRow,
@@ -36,6 +41,7 @@ const DAY_MS = 86_400_000;
 
 // What an UPDATE leaves behind once the inserted cells expired: keys + `read`, nothing else.
 const ghostRow = row({
+  tenant_id: Uuid.fromString(TENANT_ID),
   user_id: Uuid.fromString(USER_ID),
   notification_id: Uuid.fromString(v7()),
   type: null,
@@ -47,6 +53,7 @@ const ghostRow = row({
 });
 
 const storedRow = row({
+  tenant_id: Uuid.fromString(stored.tenantId),
   user_id: Uuid.fromString(stored.userId),
   notification_id: Uuid.fromString(stored.id),
   type: stored.type,
@@ -62,6 +69,25 @@ function setup(rs: cassandra.types.ResultSet = resultSet([])) {
   return { client, repository: new CassandraNotificationsRepository(asClass(client)) };
 }
 
+const COLUMNS = 'tenant_id, user_id, notification_id, type, title, body, data, read, created_at';
+
+describe('NOTIFICATIONS_CQL', () => {
+  it('addresses one (tenant, user) partition of notifications_by_tenant_user in every statement', () => {
+    expect(NOTIFICATIONS_CQL).toEqual({
+      insert:
+        'INSERT INTO notifications_by_tenant_user (tenant_id, user_id, notification_id, type, title, body, data, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      listByUser: `SELECT ${COLUMNS} FROM notifications_by_tenant_user WHERE tenant_id = ? AND user_id = ?`,
+      recentByUser: `SELECT ${COLUMNS} FROM notifications_by_tenant_user WHERE tenant_id = ? AND user_id = ? LIMIT ?`,
+      markRead:
+        'UPDATE notifications_by_tenant_user USING TTL ? SET read = true WHERE tenant_id = ? AND user_id = ? AND notification_id = ? IF EXISTS',
+    });
+    for (const cql of Object.values(NOTIFICATIONS_CQL)) {
+      expect(cql).not.toMatch(/ALLOW FILTERING/i);
+      expect(cql).not.toContain('notifications_by_user');
+    }
+  });
+});
+
 describe('CassandraNotificationsRepository', () => {
   it('inserts with a prepared, idempotent statement and never writes `read`', async () => {
     const { client, repository } = setup();
@@ -73,6 +99,7 @@ describe('CassandraNotificationsRepository', () => {
     expect(client.execute).toHaveBeenCalledWith(
       NOTIFICATIONS_CQL.insert,
       [
+        notification.tenantId,
         notification.userId,
         notification.id,
         notification.type,
@@ -88,20 +115,19 @@ describe('CassandraNotificationsRepository', () => {
   it('lists one partition page with the driver page state (single-partition query)', async () => {
     const { client, repository } = setup(resultSet([storedRow], { pageState: 'cafe' }));
 
-    const slice = await repository.listByUser(USER_ID, 20, 'beef');
+    const slice = await repository.listByUser(TENANT_ID, USER_ID, 20, 'beef');
 
     expect(slice).toEqual({ items: [stored], pageState: 'cafe' });
-    expect(NOTIFICATIONS_CQL.listByUser).toMatch(/WHERE user_id = \?$/);
     expect(client.execute).toHaveBeenCalledWith(
       NOTIFICATIONS_CQL.listByUser,
-      [USER_ID],
+      [TENANT_ID, USER_ID],
       expect.objectContaining({ prepare: true, fetchSize: 20, pageState: 'beef' }),
     );
   });
 
   it('rejects a forged page state before querying (422 INVALID_PAGE_STATE)', async () => {
     const { client, repository } = setup();
-    await expect(repository.listByUser(USER_ID, 20, 'not-hex')).rejects.toMatchObject({
+    await expect(repository.listByUser(TENANT_ID, USER_ID, 20, 'not-hex')).rejects.toMatchObject({
       code: 'INVALID_PAGE_STATE',
     });
     expect(client.execute).not.toHaveBeenCalled();
@@ -109,33 +135,36 @@ describe('CassandraNotificationsRepository', () => {
 
   it('reads the newest notifications with a bound LIMIT', async () => {
     const { client, repository } = setup(resultSet([storedRow]));
-    await expect(repository.findRecentByUser(USER_ID, 50)).resolves.toEqual([stored]);
-    expect(client.execute).toHaveBeenCalledWith(NOTIFICATIONS_CQL.recentByUser, [USER_ID, 50], {
-      prepare: true,
-      isIdempotent: true,
-    });
+    await expect(repository.findRecentByUser(TENANT_ID, USER_ID, 50)).resolves.toEqual([stored]);
+    expect(client.execute).toHaveBeenCalledWith(
+      NOTIFICATIONS_CQL.recentByUser,
+      [TENANT_ID, USER_ID, 50],
+      { prepare: true, isIdempotent: true },
+    );
   });
 
   it('marks read with a conditional update and reports whether the row existed', async () => {
     const found = setup(resultSet([], { applied: true }));
-    await expect(found.repository.markRead(USER_ID, stored.id)).resolves.toBe(true);
+    await expect(found.repository.markRead(TENANT_ID, USER_ID, stored.id)).resolves.toBe(true);
     expect(found.client.execute).toHaveBeenCalledWith(
       NOTIFICATIONS_CQL.markRead,
-      [expect.any(Number), USER_ID, stored.id],
+      [expect.any(Number), TENANT_ID, USER_ID, stored.id],
       { prepare: true },
     );
     expect(NOTIFICATIONS_CQL.markRead).toMatch(/IF EXISTS$/);
 
     const missing = setup(resultSet([], { applied: false }));
-    await expect(missing.repository.markRead(USER_ID, stored.id)).resolves.toBe(false);
+    await expect(missing.repository.markRead(TENANT_ID, USER_ID, stored.id)).resolves.toBe(false);
   });
 
   it('writes `read` with the row’s remaining lifetime, never a fresh 90-day TTL', async () => {
-    expect(NOTIFICATIONS_CQL.markRead).toMatch(/^UPDATE notifications_by_user USING TTL \? SET /);
+    expect(NOTIFICATIONS_CQL.markRead).toMatch(
+      /^UPDATE notifications_by_tenant_user USING TTL \? SET /,
+    );
     const tenDaysOld = v7({ msecs: Date.now() - 10 * DAY_MS });
     const { client, repository } = setup(resultSet([], { applied: true }));
 
-    await repository.markRead(USER_ID, tenDaysOld);
+    await repository.markRead(TENANT_ID, USER_ID, tenDaysOld);
 
     const params: unknown = client.execute.mock.calls[0]?.[1];
     const ttl = Array.isArray(params) ? Number(params[0]) : Number.NaN;
@@ -147,21 +176,23 @@ describe('CassandraNotificationsRepository', () => {
     const { client, repository } = setup(resultSet([], { applied: true }));
 
     await expect(
-      repository.markRead(USER_ID, v7({ msecs: Date.now() - 91 * DAY_MS })),
+      repository.markRead(TENANT_ID, USER_ID, v7({ msecs: Date.now() - 91 * DAY_MS })),
     ).resolves.toBe(false);
-    await expect(repository.markRead(USER_ID, v4())).resolves.toBe(false);
+    await expect(repository.markRead(TENANT_ID, USER_ID, v4())).resolves.toBe(false);
     expect(client.execute).not.toHaveBeenCalled();
   });
 
   it('skips ghost rows (only `read` left) in listings and the digest scan', async () => {
     const list = setup(resultSet([ghostRow, storedRow], { pageState: 'cafe' }));
-    await expect(list.repository.listByUser(USER_ID, 20)).resolves.toEqual({
+    await expect(list.repository.listByUser(TENANT_ID, USER_ID, 20)).resolves.toEqual({
       items: [stored],
       pageState: 'cafe',
     });
 
     const recent = setup(resultSet([storedRow, ghostRow]));
-    await expect(recent.repository.findRecentByUser(USER_ID, 50)).resolves.toEqual([stored]);
+    await expect(recent.repository.findRecentByUser(TENANT_ID, USER_ID, 50)).resolves.toEqual([
+      stored,
+    ]);
   });
 });
 
@@ -195,6 +226,7 @@ describe('toNotificationProps', () => {
     const id = makeNotificationProps().id;
     const props = toNotificationProps(
       row({
+        tenant_id: Uuid.fromString(TENANT_ID),
         user_id: Uuid.fromString(USER_ID),
         notification_id: Uuid.fromString(id),
         type: 'from-the-future',
@@ -207,6 +239,7 @@ describe('toNotificationProps', () => {
     );
     expect(props).toMatchObject({
       id,
+      tenantId: TENANT_ID,
       userId: USER_ID,
       type: 'system',
       body: '',

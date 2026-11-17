@@ -1,5 +1,6 @@
 import { NOTIFICATION_CREATED_EVENT, NOTIFICATION_TYPES } from '@domain/notifications-contracts';
 import { parseEventEnvelope } from '@platform/contracts';
+import { omit } from 'lodash-es';
 import { describe, expect, it } from 'vitest';
 import { makeNotificationProps } from '../../../test/support/fixtures.js';
 import { NOTIFICATION_KINDS } from '../../domain/notification.types.js';
@@ -22,6 +23,7 @@ describe('notification mapper', () => {
     const contract = toNotificationContract(props);
     expect(contract).toEqual({
       id: props.id,
+      tenantId: props.tenantId,
       userId: props.userId,
       type: 'payment_receipt',
       title: props.title,
@@ -54,15 +56,17 @@ describe('notification mapper', () => {
       version: 1,
       occurredAt: props.createdAt.toISOString(),
       source: 'test',
+      tenantId: props.tenantId,
       payload,
     };
     expect(parseEventEnvelope(NOTIFICATION_CREATED_EVENT, envelope).payload).toEqual(payload);
   });
 
-  it('round-trips a Kafka payload back into an unread contract notification', () => {
+  it('round-trips a Kafka payload back into an unread contract notification (minus the tenant)', () => {
+    // The payload has no tenant (it travels in the envelope), so the edge's view has none either.
     const props = makeNotificationProps();
     expect(notificationFromCreatedPayload(toNotificationCreatedPayload(props))).toEqual(
-      toNotificationContract(props),
+      omit(toNotificationContract(props), 'tenantId'),
     );
   });
 });

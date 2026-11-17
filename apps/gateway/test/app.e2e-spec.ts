@@ -17,7 +17,7 @@ import {
 } from '@domain/billing';
 import { passwordConfig, refreshTokenConfig } from '@domain/identity';
 import { ConfigService } from '@nestjs/config';
-import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
+import { generateId, HTTP_HEADERS, isUuidV7 } from '@platform/common';
 import { MetricsListener } from '@platform/observability';
 import { PARAMS_PROVIDER_TOKEN, type Params } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -330,7 +330,20 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
 
   describe('other contexts', () => {
     it('notifications: list the inbox and mark one read through the remote port', async () => {
+      // The inbox is the token's (tenant, user) pair (B4-1); the same user's inbox in another
+      // tenant is never listed.
+      const [, claims = ''] = tokens.accessToken.split('.');
+      const { tid } = JSON.parse(Buffer.from(claims, 'base64url').toString()) as { tid: string };
+      e2e.notifications.add({
+        tenantId: generateId(),
+        userId: tokens.user.id,
+        type: 'system',
+        title: 'Elsewhere',
+        body: 'In another workspace.',
+        data: {},
+      });
       const seeded = e2e.notifications.add({
+        tenantId: tid,
         userId: tokens.user.id,
         type: 'welcome',
         title: 'Welcome, Grace',
@@ -355,7 +368,7 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
         headers: bearer(tokens.accessToken),
       });
       expect(read.statusCode, read.body).toBe(204);
-      expect(e2e.notifications.inbox.get(tokens.user.id)?.[0]?.read).toBe(true);
+      expect(e2e.notifications.inbox.get(`${tid}/${tokens.user.id}`)?.[0]?.read).toBe(true);
 
       const missing = await inject({
         method: 'POST',
