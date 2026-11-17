@@ -74,11 +74,20 @@ x-env-auth: &env-auth
 x-env-identity: &env-identity
   JWT_REFRESH_SECRET: ${DOCKER_JWT_REFRESH_SECRET:-compose-local-refresh-secret-not-for-production-0002}
 
+# The three roles of docker/postgres/init/02-roles.sql (dev passwords = role names; sharding design
+# section 5). Requests and the system pool go through PgBouncer (transaction pooling, port 6432);
+# the migrator and the operator CLIs connect as app_owner straight to the coordinator. Only the
+# runtime role is NOBYPASSRLS: there is no URL fallback, so a missing value fails where it is used.
+# The roles exist only on a data directory created after B3: `docker compose down -v` once.
 x-env-postgres: &env-postgres
-  DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}
+  DATABASE_URL: postgres://app_runtime:app_runtime@pgbouncer:6432/${POSTGRES_DB:-app}
+  DATABASE_SYSTEM_URL: postgres://app_system:app_system@pgbouncer:6432/${POSTGRES_DB:-app}
+  DATABASE_MIGRATION_URL: postgres://app_owner:app_owner@postgres:5432/${POSTGRES_DB:-app}
+  DATABASE_POOLER: pgbouncer # PgBouncer rejects statement_timeout as a startup parameter: the roles carry it
+  DATABASE_BOOT_GUARD: enforce # refuses to boot on a superuser/BYPASSRLS runtime role or unforced RLS
   # Advisory-locked, so concurrent replicas/services are safe. Each app applies the platform set plus
-  # its own domain sets. Production: run them as a job per app image
-  # (`docker compose run --rm --no-deps identity-service dist/migrate.js`).
+  # its own domain sets, as app_owner over DATABASE_MIGRATION_URL. Production: run them as a job per
+  # app image (`docker compose run --rm --no-deps identity-service dist/migrate.js`).
   DATABASE_RUN_MIGRATIONS: "true"
 
 x-env-cassandra: &env-cassandra
@@ -226,6 +235,33 @@ services:
     deploy:
       resources:
         limits: { cpus: "1.5", memory: 512M }
+
+  # PgBouncer 1.26, transaction pooling, in front of the coordinator (sharding design section 5).
+  # The mounted ini and userlist hold two users (app_runtime, app_system capped at 5); the entrypoint
+  # is overridden so the image does not generate its own config. Local passwords: docker/pgbouncer.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.26.1-p0
+    entrypoint: ["/usr/bin/pgbouncer", "/etc/pgbouncer/pgbouncer.ini"]
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    volumes:
+      - ./docker/pgbouncer:/etc/pgbouncer:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+    ports: ["127.0.0.1:${PGBOUNCER_HOST_PORT:-6432}:6432"]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - PGPASSWORD=app_runtime psql -h 127.0.0.1 -p 6432 -U app_runtime -d "${POSTGRES_DB:-app}" -tAc 'select 1'
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+      start_interval: 1s
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 64M }
 
   redis:
     image: redis:8.10.2-alpine3.23
@@ -584,6 +620,7 @@ services:
         aliases: [api] # k6 and docs target http://api:3000 whichever topology runs
     depends_on:
       postgres: { condition: service_healthy }
+      pgbouncer: { condition: service_healthy }
       redis: { condition: service_healthy }
       mailpit: { condition: service_healthy }
       kafka-init: { condition: service_completed_successfully }
@@ -666,6 +703,7 @@ services:
     ports: ["127.0.0.1:${IDENTITY_GRPC_HOST_PORT:-50051}:50051"]
     depends_on:
       postgres: { condition: service_healthy }
+      pgbouncer: { condition: service_healthy }
       redis: { condition: service_healthy }
       kafka-init: { condition: service_completed_successfully }
     deploy:
@@ -731,6 +769,7 @@ services:
     ports: ["127.0.0.1:${BILLING_GRPC_HOST_PORT:-50053}:50051"]
     depends_on:
       postgres: { condition: service_healthy }
+      pgbouncer: { condition: service_healthy }
       redis: { condition: service_healthy }
       kafka-init: { condition: service_completed_successfully }
     deploy:

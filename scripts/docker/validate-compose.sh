@@ -39,4 +39,29 @@ for topology in monolith microservices; do
   printf 'ok    profile %-13s -> api alias: %s\n' "${topology}" "${api}"
   [ -n "${api}" ] && [[ "${api}" != *,* ]] || { echo "expected exactly one 'api' service" >&2; status=1; }
 done
+# B3: PgBouncer is infra (no profile), and every app that runs the database connects as the three
+# roles (SH section 5): runtime and system pooled, owner direct, no URL shared between them.
+config="$(COMPOSE_PROFILES='*' docker compose -f "${FILE}" config --format json)"
+if ! node -e '
+  const c = JSON.parse(require("fs").readFileSync(0, "utf8"));
+  const bad = [];
+  const pooler = c.services.pgbouncer;
+  if (!pooler) bad.push("service pgbouncer missing");
+  else if ((pooler.profiles ?? []).length > 0) bad.push("pgbouncer must have no profile");
+  for (const name of ["monolith", "identity-service", "billing-service"]) {
+    const e = c.services[name]?.environment ?? {};
+    const user = (key) => (e[key] ?? "").replace(/^postgres:\/\/([^:]+):.*@([^/]+)\/.*$/, "$1@$2");
+    if (user("DATABASE_URL") !== "app_runtime@pgbouncer:6432") bad.push(name + ": DATABASE_URL");
+    if (user("DATABASE_SYSTEM_URL") !== "app_system@pgbouncer:6432") bad.push(name + ": DATABASE_SYSTEM_URL");
+    if (user("DATABASE_MIGRATION_URL") !== "app_owner@postgres:5432") bad.push(name + ": DATABASE_MIGRATION_URL");
+    if (e.DATABASE_POOLER !== "pgbouncer") bad.push(name + ": DATABASE_POOLER");
+    if (e.DATABASE_BOOT_GUARD !== "enforce") bad.push(name + ": DATABASE_BOOT_GUARD");
+    if (!c.services[name]?.depends_on?.pgbouncer) bad.push(name + ": depends_on pgbouncer");
+  }
+  if (bad.length) { console.error("three-role wiring: " + bad.join("; ")); process.exit(1); }
+' <<<"${config}"; then
+  status=1
+else
+  echo "ok    three-role wiring (pgbouncer, DATABASE_URL / _SYSTEM_URL / _MIGRATION_URL)"
+fi
 exit "${status}"

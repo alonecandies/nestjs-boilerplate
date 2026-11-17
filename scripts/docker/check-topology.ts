@@ -1,7 +1,8 @@
 // Topology smoke test (E-4). Boots one compose topology (monolith | microservices) with the app
 // images in an ISOLATED compose project on shifted host ports, waits until every container is
 // healthy and every app answers GET /health/ready, runs one REST journey through the edge API
-// (register, then GET /v1/auth/me with the returned token) and removes the project.
+// (register, then GET /v1/auth/me with the returned token), proves that an app whose DATABASE_URL
+// is the superuser refuses to start (the boot guard in `enforce`), and removes the project.
 //
 //   node scripts/docker/check-topology.ts up <monolith|microservices>     # builds the images
 //   NO_BUILD=1 TAG=ci node scripts/docker/check-topology.ts up monolith    # CI: images loaded
@@ -37,8 +38,11 @@ const COMPOSE_FILE = join(REPO_ROOT, 'docker-compose.yml');
 const HOST_PORT_KNOB = /\$\{([A-Z][A-Z0-9_]*_HOST_PORT):-(\d+)\}/g;
 
 export interface ComposeConfig {
-  services: Record<string, { profiles?: string[] }>;
+  services: Record<string, { profiles?: string[]; environment?: Record<string, string | null> }>;
 }
+
+/** Marker of the boot guard's refusal of a superuser runtime connection (libs/database boot-guard). */
+export const SUPERUSER_REFUSAL = 'runtime.not-superuser';
 
 export interface SmokeResult {
   readonly email: string;
@@ -81,6 +85,45 @@ export function appServices(config: ComposeConfig, topology: Topology): string[]
     .filter(([, service]) => service.profiles?.includes(topology) === true)
     .map(([name]) => name)
     .sort();
+}
+
+/** App services of the topology that run the database (a DATABASE_URL in their compose env). */
+export function databaseApps(config: ComposeConfig, topology: Topology): string[] {
+  return appServices(config, topology).filter(
+    (name) => config.services[name]?.environment?.DATABASE_URL != null,
+  );
+}
+
+const URL_USER_HOST = /^postgres:\/\/([^:@/]+):[^@/]*@([^/]+)\//;
+
+/**
+ * The SH section 5 wiring of one app's compose env: runtime and system roles through PgBouncer,
+ * the owner straight to the coordinator, the pooler flag on and the boot guard enforcing.
+ * Returns what is wrong (empty when the app is wired as required).
+ */
+export function threeRoleProblems(
+  name: string,
+  environment: Record<string, string | null> | undefined,
+): string[] {
+  const env = environment ?? {};
+  const userHost = (key: string): string => {
+    const match = URL_USER_HOST.exec(env[key] ?? '');
+    const [, user, host] = match ?? [];
+    return user === undefined || host === undefined ? '<missing>' : `${user}@${host}`;
+  };
+  const expected: Record<string, string> = {
+    DATABASE_URL: 'app_runtime@pgbouncer:6432',
+    DATABASE_SYSTEM_URL: 'app_system@pgbouncer:6432',
+    DATABASE_MIGRATION_URL: 'app_owner@postgres:5432',
+  };
+  const problems = Object.entries(expected)
+    .filter(([key, want]) => userHost(key) !== want)
+    .map(([key, want]) => `${name}: ${key} is ${userHost(key)}, want ${want}`);
+  if (env.DATABASE_POOLER !== 'pgbouncer')
+    problems.push(`${name}: DATABASE_POOLER is not pgbouncer`);
+  if (env.DATABASE_BOOT_GUARD !== 'enforce')
+    problems.push(`${name}: DATABASE_BOOT_GUARD is not enforce`);
+  return problems;
 }
 
 async function readJson(
@@ -195,6 +238,57 @@ async function waitReady(
   }
 }
 
+/**
+ * A one-off container of `service` whose DATABASE_URL is the superuser, straight to the coordinator.
+ * The boot guard (`enforce`) must refuse it: a non-zero exit that names the superuser check. A
+ * process that keeps running is killed after `timeoutMs` and fails the probe.
+ */
+function superuserRefusal(
+  compose: (...argv: string[]) => string[],
+  service: string,
+  env: NodeJS.ProcessEnv,
+  timeoutMs: number,
+): string {
+  const user = env.POSTGRES_USER || 'app';
+  const password = env.POSTGRES_PASSWORD || 'app';
+  const database = env.POSTGRES_DB || 'app';
+  const result = spawnSync(
+    'docker',
+    compose(
+      'run',
+      '--rm',
+      '--no-deps',
+      '-T',
+      '-e',
+      `DATABASE_URL=postgres://${user}:${password}@postgres:5432/${database}`,
+      '-e',
+      // Both URLs go straight to the coordinator, so the client may send its timeouts as startup
+      // parameters (PgBouncer would refuse them): DATABASE_POOLER=none.
+      `DATABASE_SYSTEM_URL=postgres://app_system:app_system@postgres:5432/${database}`,
+      '-e',
+      'DATABASE_POOLER=none',
+      '-e',
+      'DATABASE_RUN_MIGRATIONS=false',
+      service,
+    ),
+    { env, encoding: 'utf8', timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
+  );
+  const output = `${result.stdout}${result.stderr}`;
+  if (result.error !== undefined || result.status === 0 || result.status === null) {
+    throw new Error(
+      `${service} with a superuser DATABASE_URL did not exit non-zero within ${timeoutMs} ms ` +
+        `(status ${String(result.status)}): ${output.slice(-500)}`,
+    );
+  }
+  if (!output.includes(SUPERUSER_REFUSAL)) {
+    throw new Error(
+      `${service} with a superuser DATABASE_URL exited ${result.status} without the boot guard's ` +
+        `${SUPERUSER_REFUSAL} finding: ${output.slice(-800)}`,
+    );
+  }
+  return `exit ${result.status}`;
+}
+
 async function up(topology: Topology): Promise<void> {
   const project = projectName(topology);
   const env: NodeJS.ProcessEnv = {
@@ -213,6 +307,13 @@ async function up(topology: Topology): Promise<void> {
   const config = JSON.parse(run(compose('config', '--format', 'json'), env, true)) as ComposeConfig;
   const services = appServices(config, topology);
   if (services.length === 0) throw new Error(`no compose service has the profile ${topology}`);
+  const databaseServices = databaseApps(config, topology);
+  const wiring = databaseServices.flatMap((name) =>
+    threeRoleProblems(name, config.services[name]?.environment),
+  );
+  if (databaseServices.length === 0 || wiring.length > 0) {
+    throw new Error(`three-role wiring of ${topology}: ${wiring.join('; ') || 'no database app'}`);
+  }
   const apiPort = env.API_HOST_PORT || '3000';
   console.info(
     `[check-topology] ${topology}: project ${project}, apps ${services.join(', ')}, API 127.0.0.1:${apiPort}`,
@@ -232,6 +333,16 @@ async function up(topology: Topology): Promise<void> {
     );
     await waitReady(project, services, env, Number(env.READY_TIMEOUT_MS ?? '180000'));
     const result = await smokeJourney(`http://127.0.0.1:${apiPort}`);
+    const [probed] = databaseServices;
+    if (probed !== undefined) {
+      const outcome = superuserRefusal(
+        compose,
+        probed,
+        env,
+        Number(env.REFUSAL_TIMEOUT_MS ?? '180000'),
+      );
+      console.info(`  ${probed}: superuser DATABASE_URL refused by the boot guard (${outcome})`);
+    }
     console.info(
       `[check-topology] OK: ${topology} registered ${result.email} and read it back in ${Math.round((Date.now() - started) / 1000)}s`,
     );

@@ -30,34 +30,35 @@ Budget: the stack is sized for **4 CPUs / 4 GB** of Docker Desktop memory (see [
 
 ## Stack map
 
-| Service                 | Image                                             | Host port (127.0.0.1)        | Profile             | Purpose                                                                          |
-| ----------------------- | ------------------------------------------------- | ---------------------------- | ------------------- | -------------------------------------------------------------------------------- |
-| `postgres`              | `citusdata/citus:14.2.0` (PostgreSQL 18.4, amd64) | 5432                         | —                   | identity + billing (Drizzle), Citus single node, db/user/pw `app`                |
-| `redis`                 | `redis:8.10.2-alpine3.23`                         | 6379                         | —                   | cache, locks, throttling, BullMQ, pub/sub                                        |
-| `cassandra`             | `cassandra:5.0.9`                                 | 9042                         | —                   | notifications inbox (DC `datacenter1`)                                           |
-| `cassandra-init`        | `cassandra:5.0.9` (cqlsh)                         | —                            | —                   | one-shot: keyspace `$CASSANDRA_KEYSPACE`                                         |
-| `immudb`                | `codenotary/immudb:1.11.2` (distroless)           | 3322 (gRPC)                  | —                   | ledger store (append-only, verifiable SQL); pg-wire off; metrics 9497 in-network |
-| `immudb-init`           | `redis:8.10.2-alpine3.23` (busybox)               | —                            | —                   | one-shot: waits for immudb `/readyz`                                             |
-| `kafka`                 | `apache/kafka:4.3.1` (KRaft, single node)         | 9094 (EXTERNAL listener)     | —                   | integration events                                                               |
-| `kafka-init`            | `apache/kafka:4.3.1` (CLI)                        | —                            | —                   | one-shot: topics from `docker/kafka/topics.txt`                                  |
-| `mailpit`               | `axllent/mailpit:v1.31.3`                         | 1025 (SMTP), 8025 (UI)       | —                   | catches every mail                                                               |
-| `rustfs`                | `rustfs/rustfs:1.0.0`                             | 9000 (S3), 9001 (console)    | —                   | S3-compatible storage, `rustfsadmin`/`rustfsadmin`                               |
-| `gcs`                   | `fsouza/fake-gcs-server:1.56.1`                   | 4443                         | —                   | GCS emulator (`STORAGE_DRIVER=gcs`)                                              |
-| `storage-init`          | `rustfs/rustfs:1.0.0` (curl)                      | —                            | —                   | one-shot: bucket `uploads` in both                                               |
-| `infra-ready`           | `redis:8.10.2-alpine3.23` (idle `sleep`)          | —                            | —                   | sentinel for `up --wait` (see below)                                             |
-| `monolith`              | built (`APP=monolith`)                            | 3000                         | monolith            | everything in one process, alias `api`                                           |
-| `gateway`               | built (`APP=gateway`)                             | 3000                         | microservices       | edge (REST/GraphQL/WS), alias `api`                                              |
-| `identity-service`      | built (`APP=identity-service`)                    | 50051 (gRPC)                 | microservices       | AuthService + UsersService                                                       |
-| `notifications-service` | built (`APP=notifications-service`)               | 50052 (gRPC)                 | microservices       | NotificationsService + Kafka consumers + mail                                    |
-| `billing-service`       | built (`APP=billing-service`)                     | 50053 (gRPC)                 | microservices       | BillingService (Stripe)                                                          |
-| `prometheus`            | `prom/prometheus:v3.15.0`                         | 9090                         | observability       | scrapes every app's `/metrics` + exporters                                       |
-| `grafana`               | `grafana/grafana:13.2.2`                          | **3300**                     | observability, logs | dashboards (admin/admin, anonymous viewer)                                       |
-| `jaeger`                | `jaegertracing/jaeger:2.20.0`                     | 16686 (UI), 4317/4318 (OTLP) | observability       | traces (in-memory)                                                               |
-| `postgres-exporter`     | `prometheuscommunity/postgres-exporter:v0.20.1`   | —                            | observability       | Postgres metrics                                                                 |
-| `redis-exporter`        | `oliver006/redis_exporter:v1.92.1-alpine`         | —                            | observability       | Redis metrics                                                                    |
-| `loki` / `alloy`        | `grafana/loki:3.7.8` / `grafana/alloy:v1.20.0`    | 3100 / 12345                 | logs                | container logs → Loki (Grafana → Explore)                                        |
-| `kafka-ui`              | `kafbat/kafka-ui:v1.5.0`                          | 8080                         | tools               | topics, consumer groups, lag                                                     |
-| `k6`                    | `grafana/k6:2.3.0`                                | 5665 (live dashboard)        | loadtest            | load test, HTML report in `docker/k6/reports/`                                   |
+| Service                 | Image                                             | Host port (127.0.0.1)        | Profile             | Purpose                                                                                    |
+| ----------------------- | ------------------------------------------------- | ---------------------------- | ------------------- | ------------------------------------------------------------------------------------------ |
+| `postgres`              | `citusdata/citus:14.2.0` (PostgreSQL 18.4, amd64) | 5432                         | —                   | identity + billing (Drizzle), Citus single node, superuser/db `app`, three app roles       |
+| `pgbouncer`             | `edoburu/pgbouncer:v1.26.1-p0`                    | 6432                         | —                   | transaction pooling for `app_runtime` and `app_system` (cap 5); mounted `docker/pgbouncer` |
+| `redis`                 | `redis:8.10.2-alpine3.23`                         | 6379                         | —                   | cache, locks, throttling, BullMQ, pub/sub                                                  |
+| `cassandra`             | `cassandra:5.0.9`                                 | 9042                         | —                   | notifications inbox (DC `datacenter1`)                                                     |
+| `cassandra-init`        | `cassandra:5.0.9` (cqlsh)                         | —                            | —                   | one-shot: keyspace `$CASSANDRA_KEYSPACE`                                                   |
+| `immudb`                | `codenotary/immudb:1.11.2` (distroless)           | 3322 (gRPC)                  | —                   | ledger store (append-only, verifiable SQL); pg-wire off; metrics 9497 in-network           |
+| `immudb-init`           | `redis:8.10.2-alpine3.23` (busybox)               | —                            | —                   | one-shot: waits for immudb `/readyz`                                                       |
+| `kafka`                 | `apache/kafka:4.3.1` (KRaft, single node)         | 9094 (EXTERNAL listener)     | —                   | integration events                                                                         |
+| `kafka-init`            | `apache/kafka:4.3.1` (CLI)                        | —                            | —                   | one-shot: topics from `docker/kafka/topics.txt`                                            |
+| `mailpit`               | `axllent/mailpit:v1.31.3`                         | 1025 (SMTP), 8025 (UI)       | —                   | catches every mail                                                                         |
+| `rustfs`                | `rustfs/rustfs:1.0.0`                             | 9000 (S3), 9001 (console)    | —                   | S3-compatible storage, `rustfsadmin`/`rustfsadmin`                                         |
+| `gcs`                   | `fsouza/fake-gcs-server:1.56.1`                   | 4443                         | —                   | GCS emulator (`STORAGE_DRIVER=gcs`)                                                        |
+| `storage-init`          | `rustfs/rustfs:1.0.0` (curl)                      | —                            | —                   | one-shot: bucket `uploads` in both                                                         |
+| `infra-ready`           | `redis:8.10.2-alpine3.23` (idle `sleep`)          | —                            | —                   | sentinel for `up --wait` (see below)                                                       |
+| `monolith`              | built (`APP=monolith`)                            | 3000                         | monolith            | everything in one process, alias `api`                                                     |
+| `gateway`               | built (`APP=gateway`)                             | 3000                         | microservices       | edge (REST/GraphQL/WS), alias `api`                                                        |
+| `identity-service`      | built (`APP=identity-service`)                    | 50051 (gRPC)                 | microservices       | AuthService + UsersService                                                                 |
+| `notifications-service` | built (`APP=notifications-service`)               | 50052 (gRPC)                 | microservices       | NotificationsService + Kafka consumers + mail                                              |
+| `billing-service`       | built (`APP=billing-service`)                     | 50053 (gRPC)                 | microservices       | BillingService (Stripe)                                                                    |
+| `prometheus`            | `prom/prometheus:v3.15.0`                         | 9090                         | observability       | scrapes every app's `/metrics` + exporters                                                 |
+| `grafana`               | `grafana/grafana:13.2.2`                          | **3300**                     | observability, logs | dashboards (admin/admin, anonymous viewer)                                                 |
+| `jaeger`                | `jaegertracing/jaeger:2.20.0`                     | 16686 (UI), 4317/4318 (OTLP) | observability       | traces (in-memory)                                                                         |
+| `postgres-exporter`     | `prometheuscommunity/postgres-exporter:v0.20.1`   | —                            | observability       | Postgres metrics                                                                           |
+| `redis-exporter`        | `oliver006/redis_exporter:v1.92.1-alpine`         | —                            | observability       | Redis metrics                                                                              |
+| `loki` / `alloy`        | `grafana/loki:3.7.8` / `grafana/alloy:v1.20.0`    | 3100 / 12345                 | logs                | container logs → Loki (Grafana → Explore)                                                  |
+| `kafka-ui`              | `kafbat/kafka-ui:v1.5.0`                          | 8080                         | tools               | topics, consumer groups, lag                                                               |
+| `k6`                    | `grafana/k6:2.3.0`                                | 5665 (live dashboard)        | loadtest            | load test, HTML report in `docker/k6/reports/`                                             |
 
 Every host port binds **127.0.0.1 only** and can be moved with a `*_HOST_PORT` variable (shell or root `.env`; also
 listed at the bottom of [`.env.example`](../.env.example)), e.g. `POSTGRES_HOST_PORT=15432 docker compose up -d` when
@@ -66,7 +67,8 @@ listed at the bottom of [`.env.example`](../.env.example)), e.g. `POSTGRES_HOST_
 | Variable                                                                              | Default               | Service                         |
 | ------------------------------------------------------------------------------------- | --------------------- | ------------------------------- |
 | `API_HOST_PORT`                                                                       | 3000                  | `monolith` or `gateway` (`api`) |
-| `POSTGRES_HOST_PORT` · `REDIS_HOST_PORT` · `CASSANDRA_HOST_PORT`                      | 5432 · 6379 · 9042    | postgres · redis · cassandra    |
+| `POSTGRES_HOST_PORT` · `PGBOUNCER_HOST_PORT`                                          | 5432 · 6432           | postgres · pgbouncer            |
+| `REDIS_HOST_PORT` · `CASSANDRA_HOST_PORT`                                             | 6379 · 9042           | redis · cassandra               |
 | `KAFKA_HOST_PORT`                                                                     | 9094                  | kafka EXTERNAL listener         |
 | `MAILPIT_SMTP_HOST_PORT` · `MAILPIT_UI_HOST_PORT`                                     | 1025 · 8025           | mailpit                         |
 | `S3_HOST_PORT` · `S3_CONSOLE_HOST_PORT` · `GCS_HOST_PORT`                             | 9000 · 9001 · 4443    | rustfs (S3, console) · gcs      |
@@ -148,47 +150,49 @@ Env names are exactly those of the platform and domain config namespaces (all do
 containers only goes in an optional `.env.docker` at the repo root (gitignored by the `.env.*` rule). Notable compose
 choices:
 
-| Setting                                    | Value                                   | Why                                                                                                                                                 |
-| ------------------------------------------ | --------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `NODE_ENV`                                 | `production` (`DOCKER_NODE_ENV`)        | same code paths as prod (docs stay on via `DOCKER_DOCS_ENABLED=true`)                                                                               |
-| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` | `compose-local-…` (`DOCKER_JWT_*`)      | production mode rejects the dev-default secrets; these are NOT secret; only the token issuers (monolith, identity-service) get `JWT_REFRESH_SECRET` |
-| `OTEL_SDK_DISABLED`                        | `true` (`DOCKER_OTEL_SDK_DISABLED`)     | set `false` **and** start `observability` to send traces to `http://jaeger:4318`                                                                    |
-| `DATABASE_RUN_MIGRATIONS`                  | `true`                                  | advisory-locked; see [Migrations](#bootstrap-jobs--migrations)                                                                                      |
-| `KAFKA_GROUP_ID`                           | `monolith`, `gateway-push`, `<service>` | explicit consumer groups                                                                                                                            |
-| `S3_PUBLIC_ENDPOINT`                       | `http://localhost:${S3_HOST_PORT}`      | presigned URLs must be reachable from the host, not `rustfs:9000`                                                                                   |
-| `IDENTITY/NOTIFICATIONS/BILLING_GRPC_URL`  | `<service>:50051`                       | grpc-js resolves every A record of a scaled service (round robin)                                                                                   |
-| `CLUSTER_WORKERS`                          | `1`                                     | scale with replicas (`--scale`), not `node:cluster`, in containers                                                                                  |
-| `NODE_OPTIONS`                             | `--max-old-space-size=…`                | ≈ 70–75 % of the container memory limit; the rest is off-heap (see budget below)                                                                    |
-| `SHUTDOWN_TIMEOUT_MS`                      | `15000`                                 | below `stop_grace_period: 20s`, so graceful shutdown finishes before SIGKILL                                                                        |
-| `GRPC_ALLOW_INSECURE` / `GRPC_REFLECTION`  | `true` / `true`                         | production mode refuses plaintext gRPC; local opt-out (see [below](#what-is-local-only-dont-ship-this-compose-file))                                |
-| `TRUST_PROXY` (edge apps)                  | `uniquelocal` (`DOCKER_TRUST_PROXY`)    | k6 sends `X-Forwarded-For` from the private network; local only                                                                                     |
-| `DOCS_ENABLED` (edge apps)                 | `true` (`DOCKER_DOCS_ENABLED`)          | `/docs` + `/openapi.json` + `/openapi.yaml` despite `NODE_ENV=production`                                                                           |
-| `STORAGE_DRIVER`                           | `s3` (`DOCKER_STORAGE_DRIVER`)          | `gcs` switches to fake-gcs (`GCS_API_ENDPOINT=http://gcs:4443`)                                                                                     |
-| `LOG_LEVEL` / `LOG_PRETTY`                 | `info` (`DOCKER_LOG_LEVEL`) / `false`   | JSON logs, so Alloy/Loki can parse them                                                                                                             |
+| Setting                                           | Value                                                                              | Why                                                                                                                                                 |
+| ------------------------------------------------- | ---------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                                        | `production` (`DOCKER_NODE_ENV`)                                                   | same code paths as prod (docs stay on via `DOCKER_DOCS_ENABLED=true`)                                                                               |
+| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET`        | `compose-local-…` (`DOCKER_JWT_*`)                                                 | production mode rejects the dev-default secrets; these are NOT secret; only the token issuers (monolith, identity-service) get `JWT_REFRESH_SECRET` |
+| `OTEL_SDK_DISABLED`                               | `true` (`DOCKER_OTEL_SDK_DISABLED`)                                                | set `false` **and** start `observability` to send traces to `http://jaeger:4318`                                                                    |
+| `DATABASE_RUN_MIGRATIONS`                         | `true`                                                                             | advisory-locked; see [Migrations](#bootstrap-jobs--migrations)                                                                                      |
+| `DATABASE_URL` / `_SYSTEM_URL` / `_MIGRATION_URL` | `app_runtime` / `app_system` via `pgbouncer:6432`; `app_owner` via `postgres:5432` | the three roles, [PgBouncer and the three roles](#pgbouncer-and-the-three-roles); `DATABASE_POOLER=pgbouncer`, `DATABASE_BOOT_GUARD=enforce`        |
+| `KAFKA_GROUP_ID`                                  | `monolith`, `gateway-push`, `<service>`                                            | explicit consumer groups                                                                                                                            |
+| `S3_PUBLIC_ENDPOINT`                              | `http://localhost:${S3_HOST_PORT}`                                                 | presigned URLs must be reachable from the host, not `rustfs:9000`                                                                                   |
+| `IDENTITY/NOTIFICATIONS/BILLING_GRPC_URL`         | `<service>:50051`                                                                  | grpc-js resolves every A record of a scaled service (round robin)                                                                                   |
+| `CLUSTER_WORKERS`                                 | `1`                                                                                | scale with replicas (`--scale`), not `node:cluster`, in containers                                                                                  |
+| `NODE_OPTIONS`                                    | `--max-old-space-size=…`                                                           | ≈ 70–75 % of the container memory limit; the rest is off-heap (see budget below)                                                                    |
+| `SHUTDOWN_TIMEOUT_MS`                             | `15000`                                                                            | below `stop_grace_period: 20s`, so graceful shutdown finishes before SIGKILL                                                                        |
+| `GRPC_ALLOW_INSECURE` / `GRPC_REFLECTION`         | `true` / `true`                                                                    | production mode refuses plaintext gRPC; local opt-out (see [below](#what-is-local-only-dont-ship-this-compose-file))                                |
+| `TRUST_PROXY` (edge apps)                         | `uniquelocal` (`DOCKER_TRUST_PROXY`)                                               | k6 sends `X-Forwarded-For` from the private network; local only                                                                                     |
+| `DOCS_ENABLED` (edge apps)                        | `true` (`DOCKER_DOCS_ENABLED`)                                                     | `/docs` + `/openapi.json` + `/openapi.yaml` despite `NODE_ENV=production`                                                                           |
+| `STORAGE_DRIVER`                                  | `s3` (`DOCKER_STORAGE_DRIVER`)                                                     | `gcs` switches to fake-gcs (`GCS_API_ENDPOINT=http://gcs:4443`)                                                                                     |
+| `LOG_LEVEL` / `LOG_PRETTY`                        | `info` (`DOCKER_LOG_LEVEL`) / `false`                                              | JSON logs, so Alloy/Loki can parse them                                                                                                             |
 
 ### Compose-only variables
 
 Read by Compose for `${VAR}` interpolation (shell or root `.env`). They are compose-only, never read by the apps on the host, **except** the rows marked _pass-through_ (`CASSANDRA_KEYSPACE`, `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`), which are also app variables:
 
-| Variable                                                 | Default                                                                               | Effect                                                                                                                                                             |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `COMPOSE_PROFILES`                                       | —                                                                                     | profiles to start without `--profile`                                                                                                                              |
-| `APP_TARGET`                                             | `runtime`                                                                             | app build target: `runtime` (distroless), `runtime-alpine`, `dev`                                                                                                  |
-| `TAG`                                                    | `local`                                                                               | app image tag (`boilerplate/<app>:${TAG}`)                                                                                                                         |
-| `DOCKER_NODE_ENV` / `DOCKER_LOG_LEVEL`                   | `production` / `info`                                                                 | app `NODE_ENV` / `LOG_LEVEL`                                                                                                                                       |
-| `DOCKER_OTEL_SDK_DISABLED` / `DOCKER_OTEL_SAMPLER_RATIO` | `true` / `1.0`                                                                        | tracing on/off, head-sampling ratio                                                                                                                                |
-| `DOCKER_DOCS_ENABLED` / `DOCKER_STORAGE_DRIVER`          | `true` / `s3`                                                                         | see table above                                                                                                                                                    |
-| `DOCKER_JWT_ACCESS_SECRET` / `DOCKER_JWT_REFRESH_SECRET` | `compose-local-…`                                                                     | local JWT secrets (≥ 32 chars, not secret); the refresh one reaches only the token issuers (monolith, identity-service)                                            |
-| `DOCKER_TRUST_PROXY`                                     | `uniquelocal`                                                                         | edge apps' `TRUST_PROXY`                                                                                                                                           |
-| `DOCKER_S3_CORS_ORIGINS`                                 | `http://localhost:3000,http://localhost:5173`                                         | RustFS `RUSTFS_CORS_ALLOWED_ORIGINS` (browser presigned PUT/GET)                                                                                                   |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`    | `app` / `app` / `app`                                                                 | Postgres + the containers' `DATABASE_URL` + postgres-exporter                                                                                                      |
-| `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY`                | `rustfsadmin` / `rustfsadmin`                                                         | RustFS + the containers' `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`                                                                                                 |
-| `CASSANDRA_DC` / `CASSANDRA_HEAP` / `CASSANDRA_KEYSPACE` | `datacenter1` / `512M` / `app`                                                        | node DC (= apps' `CASSANDRA_LOCAL_DC`), `MAX_HEAP_SIZE`, keyspace (_pass-through_)                                                                                 |
-| `KAFKA_CLUSTER_ID`                                       | `5L6g3nShT-eMCtK--X86sw`                                                              | KRaft cluster id                                                                                                                                                   |
-| `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`          | `admin` / `admin`                                                                     | Grafana admin login                                                                                                                                                |
-| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`            | `sk_test_compose_local_not_for_production` / `whsec_compose_local_not_for_production` | _pass-through_ to monolith/billing (put a real **test** key in `.env`); the fallbacks are compose-local because `NODE_ENV=production` rejects the dev placeholders |
-| `K6_*`, `K6_UID` / `K6_GID`                              | see [Load testing](#load-testing-k6)                                                  | k6 parameters and container user                                                                                                                                   |
-| `*_HOST_PORT`                                            | see [Stack map](#stack-map)                                                           | host port bindings                                                                                                                                                 |
+| Variable                                                 | Default                                                                               | Effect                                                                                                                                                                                 |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `COMPOSE_PROFILES`                                       | —                                                                                     | profiles to start without `--profile`                                                                                                                                                  |
+| `APP_TARGET`                                             | `runtime`                                                                             | app build target: `runtime` (distroless), `runtime-alpine`, `dev`                                                                                                                      |
+| `TAG`                                                    | `local`                                                                               | app image tag (`boilerplate/<app>:${TAG}`)                                                                                                                                             |
+| `DOCKER_NODE_ENV` / `DOCKER_LOG_LEVEL`                   | `production` / `info`                                                                 | app `NODE_ENV` / `LOG_LEVEL`                                                                                                                                                           |
+| `DOCKER_OTEL_SDK_DISABLED` / `DOCKER_OTEL_SAMPLER_RATIO` | `true` / `1.0`                                                                        | tracing on/off, head-sampling ratio                                                                                                                                                    |
+| `DOCKER_DOCS_ENABLED` / `DOCKER_STORAGE_DRIVER`          | `true` / `s3`                                                                         | see table above                                                                                                                                                                        |
+| `DOCKER_JWT_ACCESS_SECRET` / `DOCKER_JWT_REFRESH_SECRET` | `compose-local-…`                                                                     | local JWT secrets (≥ 32 chars, not secret); the refresh one reaches only the token issuers (monolith, identity-service)                                                                |
+| `DOCKER_TRUST_PROXY`                                     | `uniquelocal`                                                                         | edge apps' `TRUST_PROXY`                                                                                                                                                               |
+| `DOCKER_S3_CORS_ORIGINS`                                 | `http://localhost:3000,http://localhost:5173`                                         | RustFS `RUSTFS_CORS_ALLOWED_ORIGINS` (browser presigned PUT/GET)                                                                                                                       |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`    | `app` / `app` / `app`                                                                 | the Postgres superuser + database name (also in the containers' three `DATABASE_*URL`s) + postgres-exporter; the app roles' passwords are fixed in `docker/postgres/init/02-roles.sql` |
+| `PGBOUNCER_HOST_PORT`                                    | `6432`                                                                                | host port of PgBouncer (127.0.0.1)                                                                                                                                                     |
+| `RUSTFS_ACCESS_KEY` / `RUSTFS_SECRET_KEY`                | `rustfsadmin` / `rustfsadmin`                                                         | RustFS + the containers' `S3_ACCESS_KEY_ID`/`S3_SECRET_ACCESS_KEY`                                                                                                                     |
+| `CASSANDRA_DC` / `CASSANDRA_HEAP` / `CASSANDRA_KEYSPACE` | `datacenter1` / `512M` / `app`                                                        | node DC (= apps' `CASSANDRA_LOCAL_DC`), `MAX_HEAP_SIZE`, keyspace (_pass-through_)                                                                                                     |
+| `KAFKA_CLUSTER_ID`                                       | `5L6g3nShT-eMCtK--X86sw`                                                              | KRaft cluster id                                                                                                                                                                       |
+| `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`          | `admin` / `admin`                                                                     | Grafana admin login                                                                                                                                                                    |
+| `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET`            | `sk_test_compose_local_not_for_production` / `whsec_compose_local_not_for_production` | _pass-through_ to monolith/billing (put a real **test** key in `.env`); the fallbacks are compose-local because `NODE_ENV=production` rejects the dev placeholders                     |
+| `K6_*`, `K6_UID` / `K6_GID`                              | see [Load testing](#load-testing-k6)                                                  | k6 parameters and container user                                                                                                                                                       |
+| `*_HOST_PORT`                                            | see [Stack map](#stack-map)                                                           | host port bindings                                                                                                                                                                     |
 
 Tracing end to end:
 `DOCKER_OTEL_SDK_DISABLED=false docker compose --profile monolith --profile observability up -d --wait`, then open
@@ -219,7 +223,8 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   Use Grant allows production use unless the product offers immudb to third parties, hosted or
   embedded, in competition with Codenotary's paid versions (internal use is not competitive). The
   repo's verification port comes from Apache-2.0 `v1.9DOM.1` (`libs/immudb/THIRD_PARTY_NOTICES.md`).
-- **Postgres**: `docker/postgres/init/01-extensions.sql` (first start only) adds `pg_stat_statements` and `pg_trgm`.
+- **Postgres**: `docker/postgres/init/01-extensions.sql` (first start only) adds `pg_stat_statements` and `pg_trgm`;
+  `02-roles.sql` creates the three roles (below).
   Tables come from the Drizzle migration sets, applied at boot under one advisory lock
   (`DATABASE_RUN_MIGRATIONS=true`): `@platform/database`'s platform set (schema `app`, `pg_trgm`), then the app's own
   domain histories (identity-service: `identity`; billing-service: `billing`; monolith: both). In production, run
@@ -232,9 +237,48 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   with `kafka-init exited (0)`. This idle 1 MB container depends on the four init jobs, and so means "infra bootstrapped".
 
 `scripts/docker/check-infra.sh` boots the infra in an isolated project (`bp-infra-check`), asserts all of the above
-(topics + partitions + auto-create off, keyspace + DC, Citus + extensions + `uuidv7()`, password-less Redis from another
-container + `noeviction`, both buckets, every host port), prints `docker compose stats` and removes the project.
-CI runs it on every pipeline (push to master, pull requests).
+(topics + partitions + auto-create off, keyspace + DC, Citus + extensions + `uuidv7()`, the three roles, PgBouncer
+as below, password-less Redis from another container + `noeviction`, both buckets, every host port), prints
+`docker compose stats` and removes the project. CI runs it on every pipeline (push to master, pull requests).
+
+### PgBouncer and the three roles
+
+Every app that runs the database connects as in the sharding design section 5. The roles and their dev passwords
+(equal to the names) come from `docker/postgres/init/02-roles.sql`; PgBouncer's two-user list is
+`docker/pgbouncer/userlist.txt`.
+
+| Env var                  | Role          | Through                                        |
+| ------------------------ | ------------- | ---------------------------------------------- |
+| `DATABASE_URL`           | `app_runtime` | `pgbouncer:6432` (NOSUPERUSER NOBYPASSRLS)     |
+| `DATABASE_SYSTEM_URL`    | `app_system`  | `pgbouncer:6432` (BYPASSRLS; pool capped at 5) |
+| `DATABASE_MIGRATION_URL` | `app_owner`   | `postgres:5432`, direct (no fallback)          |
+
+`DATABASE_POOLER=pgbouncer` stops the client sending `statement_timeout` and `idle_in_transaction_session_timeout` as
+startup parameters; the two pooled roles carry them (`ALTER ROLE ... SET`, 15 s and 60 s). `DATABASE_BOOT_GUARD=enforce`
+makes an app refuse to start on a superuser or BYPASSRLS runtime role, or on a domain table without forced RLS.
+
+`docker/pgbouncer/pgbouncer.ini` pools per transaction (`max_prepared_statements = 200`, so server-side prepared
+statements keep working), authenticates with SCRAM from the mounted userlist and ignores the startup parameter
+`extra_float_digits` only. Do not add `statement_timeout` to `ignore_startup_parameters`: the migration runner treats
+PgBouncer's refusal (08P01) as its pooler detector. `app_owner` is not in the userlist, so it cannot log in on 6432; the
+migrator holds a session advisory lock and goes straight to the coordinator. `stats_users = app_system` allows
+`SHOW POOLS` and the other read-only console commands on the `pgbouncer` database; nobody is an admin.
+
+Production does not mount a userlist: PgBouncer logs in as `pgbouncer_auth` (`auth_user`) and verifies clients with
+`auth_query = SELECT usename, passwd FROM pgbouncer.get_auth($1)`
+(`docker/postgres/init/03-pgbouncer-auth.sql`; [SECURITY.md](SECURITY.md)).
+
+A host app against the compose stack uses `127.0.0.1:${PGBOUNCER_HOST_PORT}` for `DATABASE_URL` and
+`DATABASE_SYSTEM_URL`, and `127.0.0.1:${POSTGRES_HOST_PORT}` for `DATABASE_MIGRATION_URL`; the root
+[`.env.example`](../.env.example) has exactly that.
+
+**Existing volumes.** The roles are created by the init folder, which runs only on an empty data directory. A volume
+from before B3 has no `app_owner`, `app_runtime` or `app_system`, and the apps fail to log in: run
+`docker compose down -v` once (this deletes the local database; the migrations rebuild it).
+
+`check-infra.sh` asserts: both roles show in `SHOW POOLS` after a connection, `pool_mode = transaction`,
+`ignore_startup_parameters = extra_float_digits`, the 15 s `statement_timeout` through the pool, a `PGOPTIONS='-c
+statement_timeout=0'` connection through 6432 is rejected, and `app_owner` cannot log in through 6432.
 
 ### Postgres runs Citus
 
@@ -481,7 +525,10 @@ topology with the app images in an isolated project (`bp-topology-<topology>`). 
 `*_HOST_PORT` knob 20000 up (so the API is on `127.0.0.1:23000`) unless you set it, so your own
 stack keeps running. It waits for every healthcheck, then for `GET /health/ready` of every app from
 inside the compose network. Then it registers a user through the API and reads it back with
-`GET /v1/auth/me`, and removes the project. `KEEP=1` keeps it running, `NO_BUILD=1 TAG=<tag>`
+`GET /v1/auth/me`, runs one throw-away container of the first database app (`monolith`, or `identity-service`) with
+`DATABASE_URL` set to the superuser, directly on `postgres:5432` (the boot guard in `enforce` must make it exit
+non-zero with a `runtime.not-superuser` finding), and removes the project. Before booting it checks that every
+database app is wired as in the table above. `KEEP=1` keeps it running, `NO_BUILD=1 TAG=<tag>`
 reuses built images, and `node scripts/docker/check-topology.ts smoke --base-url <url>` runs only
 the REST journey against a running API. CI runs it for both topologies from the images the `image`
 job built. The script never uses the `boilerplate` project.

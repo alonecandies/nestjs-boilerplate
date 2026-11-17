@@ -693,7 +693,8 @@ What the containers get regardless of your `.env` (local-only conveniences):
 | Variable                       | Default  | Service                                                |
 | ------------------------------ | -------- | ------------------------------------------------------ |
 | `API_HOST_PORT`                | 3000     | `api` (monolith or gateway)                            |
-| `POSTGRES_HOST_PORT`           | 5432     | Postgres                                               |
+| `POSTGRES_HOST_PORT`           | 5432     | Postgres (the coordinator, `DATABASE_MIGRATION_URL`)   |
+| `PGBOUNCER_HOST_PORT`          | 6432     | PgBouncer (`DATABASE_URL`, `DATABASE_SYSTEM_URL`)      |
 | `REDIS_HOST_PORT`              | 6379     | Redis                                                  |
 | `CASSANDRA_HOST_PORT`          | 9042     | Cassandra                                              |
 | `KAFKA_HOST_PORT`              | 9094     | Kafka EXTERNAL listener                                |

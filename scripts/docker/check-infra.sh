@@ -84,6 +84,47 @@ version="$(psql_app "select current_setting('server_version') || ' uuidv7=' || u
   || ' shard_count=' || current_setting('citus.shard_count') || ' ' || citus_version()")"
 echo "  preload: ${preload}; extensions: ${exts}; ${version}"
 
+log "postgres roles: app_owner / app_runtime / app_system"
+roles="$(psql_app "select string_agg(rolname || ':' || rolsuper::int || rolbypassrls::int, ',' order by rolname) \
+  from pg_roles where rolname in ('app_owner','app_runtime','app_system')")"
+[ "${roles}" = "app_owner:00,app_runtime:00,app_system:01" ] || fail "roles (name:super,bypassrls): ${roles}"
+echo "  ${roles}"
+
+log "pgbouncer: transaction pooling, two users, 6432 only for the pooled roles"
+# bounce <user> <db> <sql> [PGOPTIONS]: psql inside the pgbouncer container, through its own port.
+bounce() {
+  compose exec -T -e "PGPASSWORD=$1" -e "PGOPTIONS=${4:-}" pgbouncer \
+    psql -h 127.0.0.1 -p 6432 -U "$1" -d "$2" -tAc "$3"
+}
+db="${POSTGRES_DB:-app}"
+[ "$(bounce app_runtime "${db}" 'select current_user')" = app_runtime ] || fail "app_runtime through 6432"
+[ "$(bounce app_system "${db}" 'select current_user')" = app_system ] || fail "app_system through 6432"
+pools="$(bounce app_system pgbouncer 'show pools' | cut -d'|' -f1-2 | tr '\n' ' ')"
+for user in app_runtime app_system; do
+  [[ "${pools}" == *"${db}|${user}"* ]] || fail "SHOW POOLS lacks ${user} (have: ${pools})"
+done
+echo "  SHOW POOLS: ${pools}"
+config="$(bounce app_system pgbouncer 'show config')"
+mode="$(awk -F'|' '$1=="pool_mode"{print $2}' <<<"${config}")"
+[ "${mode}" = transaction ] || fail "pool_mode=${mode}"
+ignored="$(awk -F'|' '$1=="ignore_startup_parameters"{print $2}' <<<"${config}")"
+[ "${ignored}" = extra_float_digits ] || fail "ignore_startup_parameters=${ignored}"
+echo "  pool_mode=${mode} ignore_startup_parameters=${ignored}"
+# The roles carry the timeouts (ALTER ROLE ... SET), so the pooler never needs them as parameters.
+st="$(bounce app_runtime "${db}" 'show statement_timeout')"
+[ "${st}" = 15s ] || fail "app_runtime statement_timeout through PgBouncer is ${st}, want 15s"
+# A statement_timeout startup parameter must be refused: it is how the migration runner tells that
+# DATABASE_MIGRATION_URL points at a pooler (08P01), so PgBouncer must not be told to ignore it.
+if out="$(bounce app_runtime "${db}" 'select 1' '-c statement_timeout=0' 2>&1)"; then
+  fail "a statement_timeout startup parameter was accepted through PgBouncer: ${out}"
+fi
+[[ "${out}" == *"unsupported startup parameter"* ]] || fail "unexpected refusal: ${out}"
+echo "  startup parameter statement_timeout refused: $(tr -d '\r' <<<"${out}" | head -1)"
+if out="$(bounce app_owner "${db}" 'select 1' 2>&1)"; then
+  fail "app_owner logged in through PgBouncer: ${out}"
+fi
+echo "  app_owner through 6432 refused: $(tr -d '\r' <<<"${out}" | head -1)"
+
 log "redis: reachable from another container WITHOUT a password; BullMQ-safe eviction policy"
 network="$(docker network ls -q --filter "label=com.docker.compose.project=${PROJECT}" | head -1)"
 [ -n "${network}" ] || fail "compose network not found"
@@ -110,7 +151,7 @@ echo "  s3 CORS preflight: ${cors}"
 
 log "host ports (127.0.0.1) accept TCP connections"
 for pair in "postgres:${POSTGRES_HOST_PORT:-5432}" "redis:${REDIS_HOST_PORT:-6379}" \
-  "cassandra:${CASSANDRA_HOST_PORT:-9042}" "kafka:${KAFKA_HOST_PORT:-9094}" \
+  "pgbouncer:${PGBOUNCER_HOST_PORT:-6432}" "cassandra:${CASSANDRA_HOST_PORT:-9042}" "kafka:${KAFKA_HOST_PORT:-9094}" \
   "mailpit-smtp:${MAILPIT_SMTP_HOST_PORT:-1025}" "mailpit-ui:${MAILPIT_UI_HOST_PORT:-8025}" \
   "s3:${S3_HOST_PORT:-9000}" "gcs:${GCS_HOST_PORT:-4443}" "immudb:${IMMUDB_HOST_PORT:-3322}"; do
   (exec 3<>"/dev/tcp/127.0.0.1/${pair#*:}") 2>/dev/null || fail "${pair%%:*} not reachable on 127.0.0.1:${pair#*:}"
