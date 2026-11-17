@@ -435,15 +435,15 @@ gateway, monolith
 | `IDENTITY_LOCKOUT_THRESHOLD`  | `10`     | Consecutive attempts per account (any IP) since the last success before the account is refused. |
 | `IDENTITY_LOCKOUT_MS`         | `900000` | How long a locked account is refused (429, like any rate limit).                                |
 
-### `notificationsRateLimit` — Socket.IO message policies (notifications)
+### `notificationsRateLimit` — mark-read policy (notifications)
 
 [`notifications-rate-limit.config.ts`](../domains/notifications/src/presentation/ws/notifications-rate-limit.config.ts) ·
 gateway, monolith
 
-| Variable                         | Default | Description                              |
-| -------------------------------- | ------- | ---------------------------------------- |
-| `NOTIFICATIONS_MARK_READ_LIMIT`  | `30`    | `markRead` messages per user per window. |
-| `NOTIFICATIONS_MARK_READ_TTL_MS` | `10000` | Its window.                              |
+| Variable                         | Default | Description                                                                           |
+| -------------------------------- | ------- | ------------------------------------------------------------------------------------- |
+| `NOTIFICATIONS_MARK_READ_LIMIT`  | `30`    | Mark-read calls per user per window, Socket.IO `markRead`, REST and GraphQL together. |
+| `NOTIFICATIONS_MARK_READ_TTL_MS` | `10000` | Its window.                                                                           |
 
 ### `cache` — L1 in-process LRU + L2 Redis
 

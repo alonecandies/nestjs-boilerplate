@@ -20,11 +20,14 @@ import {
   ApiOperation,
   ApiParam,
   ApiTags,
+  ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
 import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
+import { RateLimit } from '@platform/redis';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
 import { NotificationsPermission } from '../../notifications.permissions.js';
+import { NOTIFICATIONS_RATE_LIMITS } from '../ws/notifications-rate-limit.js';
 import {
   type ListNotificationsQueryParams,
   listNotificationsQuerySchema,
@@ -78,11 +81,16 @@ export class NotificationsController {
   @Post(':id/read')
   @HttpCode(HttpStatus.NO_CONTENT)
   @RequirePermissions(NotificationsPermission.Read)
+  @RateLimit(NOTIFICATIONS_RATE_LIMITS.MARK_READ)
   @ApiOperation({ summary: 'Mark one of my notifications read', description: 'Idempotent.' })
   @ApiParam({ name: 'id', format: 'uuid', description: 'Notification id.' })
   @ApiNoContentResponse({ description: 'Marked read (or already read).' })
   @ApiBadRequestResponse({ description: '`id` is not a UUID.' })
   @ApiNotFoundResponse({ description: 'No such notification in the caller’s inbox.' })
+  @ApiTooManyRequestsResponse({
+    description:
+      'Over `NOTIFICATIONS_MARK_READ_LIMIT` marks per window (`notifications.mark-read`, per user).',
+  })
   async markRead(
     @Param('id', { schema: notificationIdParamSchema }) id: string,
     @CurrentUser() user: AuthUser,
