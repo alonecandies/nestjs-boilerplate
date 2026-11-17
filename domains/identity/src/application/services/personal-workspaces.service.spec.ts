@@ -35,6 +35,19 @@ describe('PersonalWorkspaces', () => {
     });
   });
 
+  it('uses the tenant id the caller chose (register hands it to UserRegisteredEvent too)', async () => {
+    const persistence = createInMemoryIdentityPersistence();
+    const tenantId = '0190f3b2-0000-7000-8000-0000000000a1';
+    const membership = await new PersonalWorkspaces(
+      persistence.tenants,
+      persistence.memberships,
+    ).create(ada, NOW, tenantId);
+
+    expect(membership.tenantId).toBe(tenantId);
+    expect(persistence.store.tenants.get(tenantId)).toMatchObject({ personal: true });
+    await expect(persistence.memberships.find(tenantId, ada.id)).resolves.not.toBeNull();
+  });
+
   it('gives the same local part on two domains two slugs, and slug-less local parts a valid one', async () => {
     const persistence = createInMemoryIdentityPersistence();
     const workspaces = new PersonalWorkspaces(persistence.tenants, persistence.memberships);

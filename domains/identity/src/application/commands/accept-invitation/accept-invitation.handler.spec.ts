@@ -1,5 +1,7 @@
 import { createPrincipal, generateId, runWithPrincipal } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { recordingEventBus } from '../../../../test/cqrs-fakes.js';
+import { MembershipCreatedEvent } from '../../../domain/events/membership-created.event.js';
 import { generateInvitationToken, INVITATION_TTL_MS } from '../../../domain/invitation-token.js';
 import { UserAggregate } from '../../../domain/user.aggregate.js';
 import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
@@ -10,6 +12,7 @@ import { AcceptInvitationHandler } from './accept-invitation.handler.js';
 describe('AcceptInvitationHandler', () => {
   let p: ReturnType<typeof createInMemoryIdentityPersistence>;
   let handler: AcceptInvitationHandler;
+  let events: ReturnType<typeof recordingEventBus>;
   const tenantId = generateId();
   const home = generateId();
   const bob = generateId();
@@ -52,12 +55,14 @@ describe('AcceptInvitationHandler', () => {
         now: new Date(),
       }),
     );
+    events = recordingEventBus();
     handler = new AcceptInvitationHandler(
       p.invitations,
       p.memberships,
       p.users,
       p.transactions,
       new TenantAuditLog(p.auditEvents),
+      events.eventBus,
     );
     token = await invite('bob@example.com');
   });
@@ -73,7 +78,18 @@ describe('AcceptInvitationHandler', () => {
       actorId: bob,
       type: 'invitation.accepted',
     });
+    // One membership-created for (the invitation's tenant, the invitee), never the caller's home.
+    expect(events.published).toHaveLength(1);
+    expect(events.published[0]).toBeInstanceOf(MembershipCreatedEvent);
+    expect(events.published[0]).toMatchObject({
+      tenantId,
+      userId: bob,
+      email: 'bob@example.com',
+      displayName: 'Bob',
+      actorId: bob,
+    });
     await expect(accept(bob, token)).rejects.toMatchObject({ code: 'INVITATION_INVALID' });
+    expect(events.published).toHaveLength(1);
   });
 
   it('403 INVITATION_EMAIL_MISMATCH for another account; the invitation stays usable', async () => {
@@ -102,6 +118,7 @@ describe('AcceptInvitationHandler', () => {
     await p.memberships.insert({ tenantId, userId: bob, roles: ['member'], lastActiveAt: null });
     await expect(accept(bob, token)).rejects.toMatchObject({ code: 'MEMBERSHIP_EXISTS' });
     expect([...p.store.invitations.values()].every((i) => i.acceptedAt === null)).toBe(true);
+    expect(events.published).toEqual([]);
   });
 
   it('a staff switch-in token cannot accept invitations', async () => {

@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { recordingPublisher } from '../../../../test/cqrs-fakes.js';
 import { makeAuthTokens, passThroughTransaction } from '../../../../test/fixtures.js';
 import { mockOf } from '../../../../test/mocks.js';
+import { MembershipCreatedEvent } from '../../../domain/events/membership-created.event.js';
 import { UserRegisteredEvent } from '../../../domain/events/user-registered.event.js';
 import { EmailAlreadyTakenException } from '../../../domain/identity.errors.js';
 import type { UserAggregate } from '../../../domain/user.aggregate.js';
@@ -41,10 +42,10 @@ describe('RegisterUserHandler', () => {
     transaction = passThroughTransaction();
     events = recordingPublisher();
     workspaces = mockOf<PersonalWorkspaces>({
-      create: async () => {
+      create: async (_user: unknown, _now: Date, tenantId: string) => {
         order.push('create-workspace');
         return {
-          tenantId: 'tenant-1',
+          tenantId,
           userId: 'user-1',
           roles: ['owner'],
           lastActiveAt: null,
@@ -59,6 +60,7 @@ describe('RegisterUserHandler', () => {
       transaction,
       events.publisher,
       workspaces,
+      events.eventBus,
     );
   });
 
@@ -81,22 +83,35 @@ describe('RegisterUserHandler', () => {
       passwordHash: '$argon2id$hash',
       isPlatformStaff: false,
     });
+    const [registered, created] = events.published as [UserRegisteredEvent, MembershipCreatedEvent];
     expect(workspaces.create).toHaveBeenCalledWith(
       expect.objectContaining({ id: inserted.id, email: 'ada@example.com', displayName: 'Ada' }),
       inserted.toSnapshot().createdAt,
+      registered.tenantId,
     );
     const [input] = sessionTokens.open.mock.calls[0] ?? [];
     expect(input?.user).not.toHaveProperty('passwordHash');
     expect(input).toMatchObject({
       user: { id: inserted.id, email: 'ada@example.com' },
-      tenantId: 'tenant-1',
+      tenantId: registered.tenantId,
       roles: ['owner'],
       client: { userAgent: 'jest' },
     });
 
-    expect(events.published).toHaveLength(1);
-    expect(events.published[0]).toBeInstanceOf(UserRegisteredEvent);
-    expect(events.published[0]).toMatchObject({ userId: inserted.id, email: 'ada@example.com' });
+    // After the commit: the user and their personal-workspace membership, both in that workspace.
+    expect(events.published).toHaveLength(2);
+    expect(registered).toBeInstanceOf(UserRegisteredEvent);
+    expect(registered).toMatchObject({ userId: inserted.id, email: 'ada@example.com' });
+    expect(registered.tenantId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(created).toBeInstanceOf(MembershipCreatedEvent);
+    expect(created).toMatchObject({
+      tenantId: registered.tenantId,
+      userId: inserted.id,
+      email: 'ada@example.com',
+      displayName: 'Ada',
+      actorId: inserted.id,
+      occurredAt: inserted.toSnapshot().createdAt,
+    });
   });
 
   it('rejects a taken email before spending an argon2 hash', async () => {

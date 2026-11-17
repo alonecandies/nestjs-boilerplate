@@ -21,6 +21,7 @@ export {
 } from './cache/cache.constants.js';
 export { AppCacheService } from './cache/cache.service.js';
 export { openRedisStores } from './cache/redis-store.util.js';
+export { tenantCacheKey } from './cache/tenant-cache-key.js';
 export { RedisHealthIndicator } from './health/redis.health.js';
 export { hashTag, joinKey, REDIS_KEY_SEPARATOR, type RedisKeyPart } from './keys/key.util.js';
 export { RedisKeyService } from './keys/redis-key.service.js';

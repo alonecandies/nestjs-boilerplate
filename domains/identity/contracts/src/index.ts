@@ -1,7 +1,7 @@
 /**
  * @domain/identity-contracts — the published language of the identity context: the identity.v1
- * gRPC contract (ts-proto NestJS output + `IDENTITY_GRPC_PACKAGE`) and the user-registered event
- * (`USER_REGISTERED_EVENT`). Other domains and the apps depend on this package to talk to
+ * gRPC contract (ts-proto NestJS output + `IDENTITY_GRPC_PACKAGE`) and the tenant-scoped events
+ * (`USER_REGISTERED_EVENT`, `MEMBERSHIP_CREATED_EVENT`, `MEMBERSHIP_REMOVED_EVENT`). Other domains and the apps depend on this package to talk to
  * identity; only the composition roots import @domain/identity itself.
  *
  * - Generated types are re-exported flat (`User`, `AuthTokens`, …) and as the version-qualified

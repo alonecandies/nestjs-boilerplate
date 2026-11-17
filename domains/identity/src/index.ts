@@ -97,9 +97,20 @@ export {
   type TenantAuditEntry,
   TenantAuditLog,
 } from './application/services/tenant-audit-log.service.js';
-export { TenantSelection } from './application/services/tenant-selection.service.js';
+export {
+  type LoginMembership,
+  TenantSelection,
+} from './application/services/tenant-selection.service.js';
 // Domain.
 export { normalizeEmail } from './domain/email.js';
+export {
+  MembershipCreatedEvent,
+  type MembershipCreatedEventProps,
+} from './domain/events/membership-created.event.js';
+export {
+  MembershipRemovedEvent,
+  type MembershipRemovedEventProps,
+} from './domain/events/membership-removed.event.js';
 export { UserRegisteredEvent } from './domain/events/user-registered.event.js';
 export {
   EmailAlreadyTakenException,

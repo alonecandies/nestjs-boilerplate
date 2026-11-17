@@ -41,6 +41,12 @@ describe('UserAggregate', () => {
       expect((events[0] as UserRegisteredEvent).eventId).toMatch(/^[0-9a-f-]{36}$/);
     });
 
+    it('UserRegisteredEvent carries the personal workspace id the caller chose', () => {
+      const personalTenantId = generateId();
+      const [event] = register({ personalTenantId }).getUncommittedEvents();
+      expect(event).toMatchObject({ tenantId: personalTenantId });
+    });
+
     it('rejects a blank display name, an invalid email and an empty hash (all issues at once)', () => {
       const error = (() => {
         try {

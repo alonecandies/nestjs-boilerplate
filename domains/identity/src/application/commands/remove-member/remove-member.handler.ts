@@ -1,5 +1,6 @@
-import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
+import { CommandHandler, EventBus, type ICommandHandler } from '@nestjs/cqrs';
 import { EntityNotFoundException } from '@platform/common';
+import { MembershipRemovedEvent } from '../../../domain/events/membership-removed.event.js';
 import { LastOwnerException } from '../../../domain/identity.errors.js';
 import { assertCanRemove } from '../../../domain/member-roles.policy.js';
 import { AUDIT_EVENT_TYPES } from '../../persistence/audit-events.repository.js';
@@ -15,6 +16,7 @@ export class RemoveMemberHandler implements ICommandHandler<RemoveMemberCommand>
     private readonly memberships: MembershipsRepository,
     private readonly transactions: TransactionRunner,
     private readonly audit: TenantAuditLog,
+    private readonly events: EventBus,
   ) {}
 
   async execute({ tenantId, actorId, userId }: RemoveMemberCommand): Promise<void> {
@@ -35,5 +37,8 @@ export class RemoveMemberHandler implements ICommandHandler<RemoveMemberCommand>
         data: { userId, roles: [...target.roles] },
       });
     });
+    this.events.publish(
+      new MembershipRemovedEvent({ tenantId, userId, actorId, occurredAt: new Date() }),
+    );
   }
 }

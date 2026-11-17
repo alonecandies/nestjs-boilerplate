@@ -1,12 +1,14 @@
 import { Logger } from '@nestjs/common';
 import { getPrincipal } from '@platform/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { recordingEventBus } from '../../../../test/cqrs-fakes.js';
 import {
   makeAuthTokens,
   makeUserSnapshot,
   passThroughTransaction,
 } from '../../../../test/fixtures.js';
 import { mockOf } from '../../../../test/mocks.js';
+import { MembershipCreatedEvent } from '../../../domain/events/membership-created.event.js';
 import {
   InvalidCredentialsException,
   TenantAccessDeniedException,
@@ -36,6 +38,7 @@ describe('LoginHandler', () => {
   let sessionTokens: ReturnType<typeof mockOf<SessionTokensService>>;
   let selection: ReturnType<typeof mockOf<TenantSelection>>;
   let transaction: ReturnType<typeof passThroughTransaction>;
+  let events: ReturnType<typeof recordingEventBus>;
   let handler: LoginHandler;
 
   beforeEach(() => {
@@ -52,7 +55,15 @@ describe('LoginHandler', () => {
     sessionTokens = mockOf<SessionTokensService>({ open: async () => tokens });
     selection = mockOf<TenantSelection>({ forLogin: async () => membership });
     transaction = passThroughTransaction();
-    handler = new LoginHandler(users, hasher, sessionTokens, transaction, selection);
+    events = recordingEventBus();
+    handler = new LoginHandler(
+      users,
+      hasher,
+      sessionTokens,
+      transaction,
+      selection,
+      events.eventBus,
+    );
   });
 
   it('verifies the password, picks the tenant, opens a session there (hash never passed on)', async () => {
@@ -69,6 +80,34 @@ describe('LoginHandler', () => {
     const [input] = sessionTokens.open.mock.calls[0] ?? [];
     expect(input).toEqual({ user, tenantId: TENANT, roles: ['admin'], client });
     expect(transaction.runs).toBe(1);
+    expect(events.published).toEqual([]);
+  });
+
+  it('a login that created the personal workspace publishes its membership after the commit', async () => {
+    const workspace = { ...membership, roles: ['owner' as const], workspaceCreated: true as const };
+    selection.forLogin.mockImplementation(async () => {
+      expect(events.published).toEqual([]); // still inside the unit of work
+      return workspace;
+    });
+
+    await expect(handler.execute(new LoginCommand('ada@example.com', 'pw'))).resolves.toBe(tokens);
+
+    expect(events.published).toHaveLength(1);
+    expect(events.published[0]).toBeInstanceOf(MembershipCreatedEvent);
+    expect(events.published[0]).toMatchObject({
+      tenantId: TENANT,
+      userId: stored.id,
+      email: stored.email,
+      displayName: stored.displayName,
+      actorId: stored.id,
+    });
+  });
+
+  it('publishes nothing when the session cannot be opened', async () => {
+    selection.forLogin.mockResolvedValue({ ...membership, workspaceCreated: true });
+    sessionTokens.open.mockRejectedValue(new Error('db down'));
+    await expect(handler.execute(new LoginCommand('ada@example.com', 'pw'))).rejects.toThrow();
+    expect(events.published).toEqual([]);
   });
 
   it('a tenant the user may not use fails AFTER the password check (a thrown failure: C wave-1 contract)', async () => {

@@ -43,6 +43,7 @@ describe('TenantSelection.forLogin', () => {
       roles: ['admin'],
       lastActiveAt: NOW,
     });
+    expect(picked.workspaceCreated).toBeUndefined();
     await expect(persistence.memberships.find(picked.tenantId, user.id)).resolves.toMatchObject({
       lastActiveAt: NOW,
     });
@@ -85,5 +86,7 @@ describe('TenantSelection.forLogin', () => {
     const picked = await selection.forLogin(user, undefined, NOW);
     expect(picked).toMatchObject({ userId: user.id, roles: ['owner'], lastActiveAt: NOW });
     expect(persistence.store.tenants.get(picked.tenantId)).toMatchObject({ personal: true });
+    // The login handler publishes this membership once its unit of work committed.
+    expect(picked.workspaceCreated).toBe(true);
   });
 });

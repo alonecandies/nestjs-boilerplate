@@ -1,5 +1,7 @@
 import { createPrincipal, generateId, runWithPrincipal, type TenantRole } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { recordingEventBus } from '../../../../test/cqrs-fakes.js';
+import { MembershipRemovedEvent } from '../../../domain/events/membership-removed.event.js';
 import { UserAggregate } from '../../../domain/user.aggregate.js';
 import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
 import { TenantAuditLog } from '../../services/tenant-audit-log.service.js';
@@ -9,6 +11,7 @@ import { RemoveMemberHandler } from './remove-member.handler.js';
 describe('RemoveMemberHandler', () => {
   let p: ReturnType<typeof createInMemoryIdentityPersistence>;
   let handler: RemoveMemberHandler;
+  let events: ReturnType<typeof recordingEventBus>;
   const tenantId = generateId();
   const [ada, bob, eve] = [generateId(), generateId(), generateId()];
 
@@ -34,10 +37,12 @@ describe('RemoveMemberHandler', () => {
     await member(ada, ['owner']);
     await member(bob, ['admin']);
     await member(eve, ['member']);
+    events = recordingEventBus();
     handler = new RemoveMemberHandler(
       p.memberships,
       p.transactions,
       new TenantAuditLog(p.auditEvents),
+      events.eventBus,
     );
   });
 
@@ -48,10 +53,14 @@ describe('RemoveMemberHandler', () => {
       type: 'member.removed',
       data: { userId: eve, roles: ['member'] },
     });
+    expect(events.published).toHaveLength(1);
+    expect(events.published[0]).toBeInstanceOf(MembershipRemovedEvent);
+    expect(events.published[0]).toMatchObject({ tenantId, userId: eve, actorId: bob });
   });
 
   it('403 OWNER_RANK_REQUIRED for an admin removing an owner', async () => {
     await expect(remove(bob, ada)).rejects.toMatchObject({ code: 'OWNER_RANK_REQUIRED' });
+    expect(events.published).toEqual([]);
   });
 
   it('422 LAST_OWNER when the sole owner removes themself', async () => {

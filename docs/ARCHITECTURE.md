@@ -318,6 +318,14 @@ Notes:
   `{ userId, tenantId }` signed into the object's metadata, or as no principal for platform events); and invitation
   acceptance (it joins the tenant as the accepting user). DataLoader batches keep the request context (B2-25), so a
   batched load still sees the principal. No other code may write it.
+- **Cache keys and tenants.** Isolation in Redis is by key: a tenant-scoped cache entry is keyed
+  `tenantCacheKey(scope, tenantId, ...parts)` (`@platform/redis`, stored as `<prefix>:cache:<scope>:<tid>:…`), with
+  the tenant from the principal or a validated envelope, never from a request body. The user cache stays keyed by
+  user (`user:<id>`, 30 s) and serves only the caller's own profile; another user's profile, read from the caller's
+  active tenant, bypasses the cache, so a removed member is a 404 at once (B4 ruling 4). A deployment can opt into
+  caching those reads behind a per-tenant membership marker (`tenantCacheKey('identity', tid, 'member', uid)`,
+  deleted on member remove and leave) and accept that a member removed some other way stays readable for up to 30 s;
+  see the identity README.
 - **WebSocket session lifetime.** A socket is disconnected (after an `exception` with `TOKEN_EXPIRED`) when its access token expires, and every 30 s each replica disconnects sockets whose token was revoked (`TOKEN_REVOKED`).
 
 ```mermaid

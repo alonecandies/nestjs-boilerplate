@@ -6,7 +6,8 @@ import { UserRegisteredEvent } from '../../domain/events/user-registered.event.j
 
 /**
  * Domain event → integration event: publishes `identity.user-registered.v1` (keyed by user id,
- * envelope id = domain event id) for the notifications context (welcome notification + email).
+ * envelope id = domain event id, envelope tenant = the personal workspace) for the notifications
+ * context (welcome notification + email).
  *
  * Failures are logged, never thrown: the registration already committed and the client got its
  * tokens; an exception here would only surface on the CQRS UnhandledExceptionBus. The window
@@ -29,11 +30,18 @@ export class UserRegisteredRelay implements IEventHandler<UserRegisteredEvent> {
           displayName: event.displayName,
           registeredAt: event.occurredAt.toISOString(),
         },
-        { key: event.userId, eventId: event.eventId, occurredAt: event.occurredAt },
+        {
+          key: event.userId,
+          eventId: event.eventId,
+          occurredAt: event.occurredAt,
+          // Explicit, never the CLS default: the personal workspace, and the user registered themself.
+          tenantId: event.tenantId,
+          actorId: event.userId,
+        },
       );
     } catch (error) {
       this.logger.error(
-        { err: error, userId: event.userId, eventId: event.eventId },
+        { err: error, tenantId: event.tenantId, userId: event.userId, eventId: event.eventId },
         `Failed to publish ${USER_REGISTERED_EVENT.topic}`,
       );
     }

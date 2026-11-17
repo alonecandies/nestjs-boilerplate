@@ -1,4 +1,5 @@
-import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
+import { CommandHandler, EventBus, type ICommandHandler } from '@nestjs/cqrs';
+import { MembershipRemovedEvent } from '../../../domain/events/membership-removed.event.js';
 import {
   LastOwnerException,
   TenantAccessDeniedException,
@@ -16,6 +17,7 @@ export class LeaveTenantHandler implements ICommandHandler<LeaveTenantCommand> {
     private readonly memberships: MembershipsRepository,
     private readonly transactions: TransactionRunner,
     private readonly audit: TenantAuditLog,
+    private readonly events: EventBus,
   ) {}
 
   async execute({ tenantId, userId }: LeaveTenantCommand): Promise<void> {
@@ -35,5 +37,8 @@ export class LeaveTenantHandler implements ICommandHandler<LeaveTenantCommand> {
         data: { roles: [...self.roles] },
       });
     });
+    this.events.publish(
+      new MembershipRemovedEvent({ tenantId, userId, actorId: userId, occurredAt: new Date() }),
+    );
   }
 }

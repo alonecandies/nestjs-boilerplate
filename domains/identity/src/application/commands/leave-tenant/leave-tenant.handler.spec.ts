@@ -1,5 +1,7 @@
 import { createPrincipal, generateId, runWithPrincipal, type TenantRole } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { recordingEventBus } from '../../../../test/cqrs-fakes.js';
+import { MembershipRemovedEvent } from '../../../domain/events/membership-removed.event.js';
 import { UserAggregate } from '../../../domain/user.aggregate.js';
 import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
 import { TenantAuditLog } from '../../services/tenant-audit-log.service.js';
@@ -9,6 +11,7 @@ import { LeaveTenantHandler } from './leave-tenant.handler.js';
 describe('LeaveTenantHandler', () => {
   let p: ReturnType<typeof createInMemoryIdentityPersistence>;
   let handler: LeaveTenantHandler;
+  let events: ReturnType<typeof recordingEventBus>;
   const tenantId = generateId();
   const [ada, eve] = [generateId(), generateId()];
 
@@ -33,10 +36,12 @@ describe('LeaveTenantHandler', () => {
     p = createInMemoryIdentityPersistence();
     await member(ada, ['owner']);
     await member(eve, ['member']);
+    events = recordingEventBus();
     handler = new LeaveTenantHandler(
       p.memberships,
       p.transactions,
       new TenantAuditLog(p.auditEvents),
+      events.eventBus,
     );
   });
 
@@ -48,10 +53,14 @@ describe('LeaveTenantHandler', () => {
       actorId: eve,
       data: { roles: ['member'] },
     });
+    expect(events.published).toHaveLength(1);
+    expect(events.published[0]).toBeInstanceOf(MembershipRemovedEvent);
+    expect(events.published[0]).toMatchObject({ tenantId, userId: eve, actorId: eve });
   });
 
   it('422 LAST_OWNER for the sole owner', async () => {
     await expect(leave(ada)).rejects.toMatchObject({ code: 'LAST_OWNER' });
+    expect(events.published).toEqual([]);
   });
 
   it('403 TENANT_ACCESS_DENIED for a staff switch-in principal (no membership to leave)', async () => {
