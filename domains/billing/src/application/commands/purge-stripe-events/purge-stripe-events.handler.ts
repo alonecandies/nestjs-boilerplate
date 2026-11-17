@@ -7,7 +7,9 @@ import { PurgeStripeEventsCommand } from './purge-stripe-events.command.js';
  * `LIMIT` subquery cannot be pushed down once `stripe_events` is distributed). The role's
  * `statement_timeout` bounds it; the hourly schedule keeps each run's backlog to about an hour of
  * events. Only rows far past Stripe's redelivery window go, so deduplication is unaffected.
- * Principal-less and cross-tenant: system method `stripeEvents.deleteProcessedBefore`.
+ * Principal-less and cross-tenant: system method `stripeEvents.deleteProcessedBefore`, which runs
+ * only inside the `SystemContext` that `PurgeStripeEventsCron` opens (elsewhere it is refused with
+ * SYSTEM_CONTEXT_REQUIRED).
  */
 @CommandHandler(PurgeStripeEventsCommand)
 export class PurgeStripeEventsHandler implements ICommandHandler<PurgeStripeEventsCommand> {

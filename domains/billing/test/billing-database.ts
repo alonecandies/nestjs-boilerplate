@@ -1,4 +1,10 @@
-import { type INestApplicationContext, Module, type Provider } from '@nestjs/common';
+import {
+  type DynamicModule,
+  type INestApplicationContext,
+  Module,
+  type Provider,
+  type Type,
+} from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppConfigModule } from '@platform/config';
 import { DatabaseModule, DRIZZLE, type DrizzleDB } from '@platform/database';
@@ -26,14 +32,19 @@ export interface BillingDatabase {
 /**
  * A fresh Citus 14.2 database (`startRlsTestPostgres`: the three roles, local execution off unless
  * `localExecution: true`) with the platform set and billing's history applied by the real
- * `DatabaseModule` (unless `runMigrations: false`), and `providers` on top. The roles are those of
+ * `DatabaseModule` (unless `runMigrations: false`), and `providers` (and `imports`, e.g. the billing
+ * core with its app-level modules) on top. The roles are those of
  * production: migrations as `app_owner` on DATABASE_MIGRATION_URL, the app as `app_runtime` on
  * DATABASE_URL, system methods as `app_system` on DATABASE_SYSTEM_URL; the boot guard enforces that
  * when the migrations run. Seed and assert through `superuser`. Int specs only.
  */
 export async function startBillingDatabase(
   providers: Provider[],
-  options: { runMigrations?: boolean; localExecution?: boolean } = {},
+  options: {
+    runMigrations?: boolean;
+    localExecution?: boolean;
+    imports?: (Type | DynamicModule)[];
+  } = {},
 ): Promise<BillingDatabase> {
   const runMigrations = options.runMigrations ?? true;
   const pg = await startRlsTestPostgres({ localExecution: options.localExecution ?? false });
@@ -58,6 +69,7 @@ export async function startBillingDatabase(
         migrations: [billingMigrations],
         runMigrations,
       }),
+      ...(options.imports ?? []),
     ],
     providers,
   })

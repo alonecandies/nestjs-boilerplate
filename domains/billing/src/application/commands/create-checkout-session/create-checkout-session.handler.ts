@@ -32,7 +32,8 @@ export const checkoutIdempotencyKey = (paymentId: string): string => `checkout-$
  * 3. Bind the session (id, amount, currency) to the payment with an optimistic-locked save.
  *
  * No database transaction spans the Stripe call (it may take seconds); each write is atomic on its
- * own and every step is safe to repeat.
+ * own and every step is safe to repeat. Every write is its own unit of work as the request
+ * principal (`requireTenantPrincipal`, B3-13), so the payments policy admits only the caller's rows.
  */
 @CommandHandler(CreateCheckoutSessionCommand)
 export class CreateCheckoutSessionHandler implements ICommandHandler<CreateCheckoutSessionCommand> {

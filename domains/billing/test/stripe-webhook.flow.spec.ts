@@ -21,6 +21,7 @@ import { BillingPort } from '../src/application/ports/billing.port.js';
 import { PaymentSucceededRelay } from '../src/application/relays/payment-succeeded.relay.js';
 import { PaymentsRepository } from '../src/application/repositories/payments.repository.js';
 import { StripeEventsRepository } from '../src/application/repositories/stripe-events.repository.js';
+import { StripeEventsSystemRepository } from '../src/application/repositories/stripe-events.system-repository.js';
 import {
   AMOUNT_MISMATCH_METRIC,
   API_VERSION_MISMATCH_METRIC,
@@ -32,6 +33,7 @@ import { PaymentStatus } from '../src/domain/payment-status.enum.js';
 import { BillingLocalAdapter } from '../src/infrastructure/adapters/local/billing-local.adapter.js';
 import { StripeService } from '../src/infrastructure/stripe/stripe.service.js';
 import { BillingController } from '../src/presentation/http/billing.controller.js';
+import { InMemoryStripeEventsSystemRepository } from '../src/testing/in-memory-stripe-events-system-repository.js';
 import { FakeRedisModule } from './billing-http-test.utils.js';
 import {
   createTestStripeService,
@@ -93,6 +95,10 @@ describe('Stripe webhook flow (raw body → signature → exactly-once → Kafka
         { provide: StripeService, useValue: createTestStripeService() },
         { provide: PaymentsRepository, useValue: new InMemoryPaymentsRepository(store) },
         { provide: StripeEventsRepository, useValue: new InMemoryStripeEventsRepository(store) },
+        {
+          provide: StripeEventsSystemRepository,
+          useValue: new InMemoryStripeEventsSystemRepository(),
+        },
         { provide: KafkaProducer, useValue: kafka },
         ...provideCommonEnhancers({ exposeInternalErrors: true }),
       ],

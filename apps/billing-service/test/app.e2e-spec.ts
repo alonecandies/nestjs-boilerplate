@@ -14,7 +14,12 @@ import { Metadata, type ServiceError, status } from '@grpc/grpc-js';
 import { ClientGrpcProxy } from '@nestjs/microservices';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
-import { DomainValidationException, ExternalServiceException, generateId } from '@platform/common';
+import {
+  DomainValidationException,
+  ExternalServiceException,
+  generateId,
+  PLATFORM_TENANT_ID,
+} from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
 import { DRIZZLE } from '@platform/database';
 import { MetricsListener } from '@platform/observability';
@@ -149,6 +154,8 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
   let client: ClientGrpcProxy;
   let billing: BillingServiceClient;
   const breakers = new GrpcCircuitBreakers();
+  /** The app_system side of the Stripe events ledger: platform webhooks land here, not in SQL. */
+  const systemEvents = new InMemoryStripeEventsSystemRepository();
 
   /** The caller metadata the gateway adapter derives from its CLS principal (B2-23). */
   const callerOf = (userId: string, tenantId = TENANT_ID) =>
@@ -182,7 +189,7 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
       .overrideProvider(KafkaProducer)
       .useValue(new FakeKafkaProducer({ source: 'billing-service' }))
       .overrideProvider(StripeEventsSystemRepository)
-      .useValue(new InMemoryStripeEventsSystemRepository());
+      .useValue(systemEvents);
     app = await startServiceTestApp(builder, { grpc: [BILLING_GRPC_PACKAGE] });
 
     client = new ClientGrpcProxy(
@@ -376,14 +383,16 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
         call(billing.handleStripeWebhook(request), 'BillingService.HandleStripeWebhook'),
       ).resolves.toMatchObject({ eventId: webhook.id, duplicate: true });
 
-      expect(postgres.executed.slice(before).map((query) => query.sql)).toEqual([
-        'BEGIN',
-        expect.stringContaining('insert into "billing"."stripe_events"'),
-        'COMMIT',
-        'BEGIN',
-        expect.stringContaining('insert into "billing"."stripe_events"'),
-        'COMMIT',
+      // A customer event carries no owner: a platform event, recorded once through the system
+      // method (B3 Task 16); no runtime transaction, so no SQL on the app_runtime pool.
+      expect(systemEvents.events.filter((event) => event.id === webhook.id)).toEqual([
+        expect.objectContaining({
+          tenantId: PLATFORM_TENANT_ID,
+          userId: null,
+          type: 'customer.created',
+        }),
       ]);
+      expect(postgres.executed).toHaveLength(before);
     });
 
     it('HandleStripeWebhook with a forged signature → INVALID_ARGUMENT / INVALID_WEBHOOK_SIGNATURE, no SQL', async () => {

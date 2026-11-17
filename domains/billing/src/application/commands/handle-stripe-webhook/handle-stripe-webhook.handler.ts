@@ -1,7 +1,7 @@
 import type { HandleStripeWebhookResponse } from '@domain/billing-contracts';
 import { Logger } from '@nestjs/common';
 import { CommandHandler, EventPublisher, type ICommandHandler } from '@nestjs/cqrs';
-import { createPrincipal, isUuid, runWithPrincipal } from '@platform/common';
+import { createPrincipal, isUuid, runWithPrincipal, SystemContext } from '@platform/common';
 import { Transactional } from '@platform/database';
 import { InjectMetric } from '@platform/observability';
 import type Stripe from 'stripe';
@@ -17,6 +17,7 @@ import { STRIPE_API_VERSION } from '../../../infrastructure/stripe/stripe.consta
 import { StripeService } from '../../../infrastructure/stripe/stripe.service.js';
 import { PaymentsRepository } from '../../repositories/payments.repository.js';
 import { StripeEventsRepository } from '../../repositories/stripe-events.repository.js';
+import { StripeEventsSystemRepository } from '../../repositories/stripe-events.system-repository.js';
 import { HandleStripeWebhookCommand } from './handle-stripe-webhook.command.js';
 
 interface WebhookOutcome {
@@ -38,11 +39,21 @@ const paymentIdOf = (session: Stripe.Checkout.Session): string | null => {
   return isUuid(candidate) ? candidate : null;
 };
 
+/** The system context of a webhook whose owner has no user (spec §9, method 8). */
+const PLATFORM_WEBHOOK_REASON = 'billing.platform-webhook';
+
 /**
  * Applies a Stripe webhook exactly once:
  * 1. Verify the signature over the raw bytes (422 `INVALID_WEBHOOK_SIGNATURE` before any I/O).
- * 2. In ONE transaction: record `stripe_events(id)` with `ON CONFLICT DO NOTHING` (a duplicate
- *    delivery stops here) and apply the event to the row-locked payment.
+ * 2. Resolve the owner from the signed metadata (`stripeOwnerOf`), then act as that owner
+ *    (B3-13; the principal is final before the unit of work opens):
+ *    - **a user in a tenant**: `runWithPrincipal({ userId, tenantId, roles: [] })` around ONE
+ *      transaction that records `stripe_events(id)` with `ON CONFLICT DO NOTHING` (a duplicate
+ *      delivery stops here) and applies the event to the row-locked payment;
+ *    - **no user** (platform-level objects, metadata that is not a tenant UUID, a user-less
+ *      tenant): `SystemContext.run('billing.platform-webhook')` and the system method
+ *      `stripeEvents.markProcessedAsPlatform` only. No payment is touched: the runtime policies
+ *      need a user, and nothing else in billing may write through the system pool.
  * 3. After COMMIT, publish the aggregate's domain events (`PaymentSucceededEvent` → Kafka relay),
  *    so a rolled-back delivery never announces a payment.
  *
@@ -53,9 +64,9 @@ const paymentIdOf = (session: Stripe.Checkout.Session): string | null => {
  * make Stripe redeliver for days. Infrastructure errors DO throw — the transaction rolls back
  * (forgetting the event id) and Stripe's retry is processed again.
  *
- * A payment is only ever looked up inside the tenant named by the signed metadata: an event naming
- * another tenant finds nothing and is acknowledged. Sessions created before B2 carry no tenant and
- * resolve to the platform tenant, where `0001` moved their payments.
+ * A payment is only ever looked up inside the tenant named by the signed metadata, as its user
+ * (RLS): an event naming another tenant or user finds nothing and is acknowledged. Sessions created
+ * before B2 carry no owner: their events are recorded under the platform tenant, never applied.
  */
 @CommandHandler(HandleStripeWebhookCommand)
 export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeWebhookCommand> {
@@ -64,6 +75,7 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
   constructor(
     private readonly stripe: StripeService,
     private readonly stripeEvents: StripeEventsRepository,
+    private readonly platformEvents: StripeEventsSystemRepository,
     private readonly payments: PaymentsRepository,
     private readonly publisher: EventPublisher,
     @InjectMetric(PAID_WITHOUT_CURRENCY_METRIC)
@@ -85,12 +97,44 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
       );
     }
     const owner = stripeOwnerOf(event.data.object);
-    const work = () => this.process(event, owner);
-    // Spec §9: act as the user and tenant Stripe signed; platform-level events have no user and run
-    // without a principal (B3-11 moves their writes to the system pool).
-    return owner.userId === null
-      ? work()
-      : runWithPrincipal(createPrincipal({ userId: owner.userId, tenantId: owner.tenantId }), work);
+    const { userId, tenantId } = owner;
+    if (userId === null) {
+      return SystemContext.run(PLATFORM_WEBHOOK_REASON, () => this.recordWithoutUser(event, owner));
+    }
+    // Spec §9: act as the user and tenant Stripe signed (stripeOwnerOf only pairs a user with a
+    // real tenant UUID), with no roles: the policies need nothing more for the owner's own rows.
+    return runWithPrincipal(createPrincipal({ userId, tenantId, roles: [] }), () =>
+      this.process(event, owner),
+    );
+  }
+
+  /** Records a user-less event once (system method), and touches nothing else. */
+  private async recordWithoutUser(
+    event: Stripe.Event,
+    owner: StripeOwner,
+  ): Promise<HandleStripeWebhookResponse> {
+    const firstDelivery = await this.platformEvents.markProcessedAsPlatform({
+      tenantId: owner.tenantId,
+      userId: null,
+      id: event.id,
+      type: event.type,
+    });
+    if (!firstDelivery) {
+      this.logger.debug(`Duplicate Stripe event ${event.id} (${event.type}) acknowledged`);
+    } else if (event.type.startsWith('checkout.session.')) {
+      // Checkout always signs the paying user: a session without one is not ours to apply.
+      this.logger.warn(
+        `Stripe event ${event.id} (${event.type}) carries no user: recorded, no payment applied`,
+      );
+    } else {
+      this.logger.debug(`Recorded Stripe event ${event.id} (${event.type}) without a user`);
+    }
+    return {
+      received: true,
+      eventId: event.id,
+      eventType: event.type,
+      duplicate: !firstDelivery,
+    };
   }
 
   private async process(
@@ -109,8 +153,8 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
 
   @Transactional()
   protected async applyOnce(event: Stripe.Event, owner: StripeOwner): Promise<WebhookOutcome> {
-    // `owner` comes from metadata Stripe signed (checkout put it there); events without one are
-    // platform-level and recorded under PLATFORM_TENANT_ID with a NULL user (spec §9, method 8).
+    // `owner` comes from metadata Stripe signed (checkout put it there) and is the principal of
+    // this transaction: the policy accepts the receipt only under that tenant and user.
     const firstDelivery = await this.stripeEvents.markProcessed({
       tenantId: owner.tenantId,
       userId: owner.userId,

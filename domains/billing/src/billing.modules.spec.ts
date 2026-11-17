@@ -5,7 +5,13 @@ import { RbacModule } from '@platform/auth';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { createPrincipal, generateId, runWithPrincipal } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
-import { DRIZZLE, SYSTEM_DATABASE, SystemDatabase, TransactionHost } from '@platform/database';
+import {
+  DRIZZLE,
+  RlsElevation,
+  SYSTEM_DATABASE,
+  SystemDatabase,
+  TransactionHost,
+} from '@platform/database';
 import { KafkaProducer } from '@platform/transport';
 import { FakeKafkaProducer } from '@platform/transport/testing';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -23,7 +29,8 @@ import { BillingGrpcController } from './presentation/grpc/billing-grpc.controll
 
 /**
  * What the apps' global infrastructure modules provide, faked (no Postgres, no Kafka): the real
- * RLS transaction host over a recording client, and a system database without a pool. No Stripe:
+ * RLS transaction host over a recording client, the elevation service (over the RbacModule's
+ * permissions), and a system database without a pool. No Stripe:
  * BillingCoreModule brings its own adapter (a real client from the dev placeholder key, which
  * opens no connection until a call).
  */
@@ -38,8 +45,9 @@ function fakeInfrastructure() {
       { provide: TransactionHost, useValue: host },
       { provide: SYSTEM_DATABASE, useValue: new SystemDatabase(null) },
       { provide: KafkaProducer, useValue: new FakeKafkaProducer() },
+      RlsElevation,
     ],
-    exports: [DRIZZLE, TransactionHost, SYSTEM_DATABASE, KafkaProducer],
+    exports: [DRIZZLE, TransactionHost, SYSTEM_DATABASE, KafkaProducer, RlsElevation],
   })
   class FakeInfrastructureModule {}
 

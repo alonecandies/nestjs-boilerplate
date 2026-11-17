@@ -6,6 +6,7 @@ import {
   generateId,
   getPrincipal,
   PLATFORM_TENANT_ID,
+  SystemContext,
 } from '@platform/common';
 import { beforeAll, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import {
@@ -23,12 +24,14 @@ import {
 import { PaymentSucceededEvent } from '../../../domain/events/payment-succeeded.event.js';
 import type { Payment } from '../../../domain/payment.aggregate.js';
 import { PaymentStatus } from '../../../domain/payment-status.enum.js';
+import { InMemoryStripeEventsSystemRepository } from '../../../testing/in-memory-stripe-events-system-repository.js';
 import { HandleStripeWebhookCommand } from './handle-stripe-webhook.command.js';
 import { HandleStripeWebhookHandler } from './handle-stripe-webhook.handler.js';
 
 describe('HandleStripeWebhookHandler', () => {
   let store: InMemoryBillingStore;
   let payments: InMemoryPaymentsRepository;
+  let systemEvents: InMemoryStripeEventsSystemRepository;
   let tx: TestTransactions;
   let published: IEvent[];
   let publishedDuringTransaction: boolean;
@@ -89,9 +92,13 @@ describe('HandleStripeWebhookHandler', () => {
     paidWithoutAmount = { inc: vi.fn<() => void>() };
     amountMismatch = { inc: vi.fn<() => void>() };
     apiVersionMismatch = { inc: vi.fn<() => void>() };
+    systemEvents = new InMemoryStripeEventsSystemRepository(
+      () => new Date('2026-10-01T00:00:00.000Z'),
+    );
     handler = new HandleStripeWebhookHandler(
       createTestStripeService(),
       new InMemoryStripeEventsRepository(store),
+      systemEvents,
       payments,
       new EventPublisher(eventBus as never),
       paidWithoutCurrency,
@@ -284,7 +291,12 @@ describe('HandleStripeWebhookHandler', () => {
       eventType: 'customer.created',
       duplicate: false,
     });
-    expect(store.state.events.has(`${PLATFORM_TENANT_ID}:evt_other`)).toBe(true);
+    // No owner in the metadata: a platform event, recorded through the system method.
+    expect(systemEvents.events).toEqual([
+      expect.objectContaining({ tenantId: PLATFORM_TENANT_ID, userId: null, id: 'evt_other' }),
+    ]);
+    expect(store.state.events.size).toBe(0);
+    expect(tx.begun).toBe(0);
     expect(store.payment(payment.id)?.version).toBe(0);
   });
 
@@ -411,8 +423,16 @@ describe('HandleStripeWebhookHandler', () => {
         seen = getPrincipal();
         return save(p);
       };
+      const principals: unknown[] = [];
+      const begin = tx.host.withTransaction.bind(tx.host) as (...args: unknown[]) => unknown;
+      vi.spyOn(tx.host, 'withTransaction').mockImplementation(((...args: unknown[]) => {
+        // The principal is final before the unit of work opens (B3 global constraint).
+        principals.push(getPrincipal());
+        return begin(...args);
+      }) as never);
       await deliver(owned(TEST_TENANT_ID, 'evt_principal_1'));
 
+      expect(principals).toEqual([seen]);
       expect(seen).toMatchObject({
         userId: payment.userId,
         tenantId: TEST_TENANT_ID,
@@ -426,7 +446,7 @@ describe('HandleStripeWebhookHandler', () => {
       expect(published).toEqual([expect.objectContaining({ tenantId: TEST_TENANT_ID })]);
     });
 
-    it('treats a nil-UUID user as no user: acknowledged and applied, never retried forever', async () => {
+    it('treats a nil-UUID user as no user: recorded through the system method, never retried forever, no payment touched', async () => {
       const nilUser = (id: string) =>
         completed(
           {
@@ -442,13 +462,22 @@ describe('HandleStripeWebhookHandler', () => {
       const result = await deliver(nilUser('evt_nil_user_1'));
 
       expect(result).toMatchObject({ received: true, duplicate: false });
-      expect(store.state.events.get(`${TEST_TENANT_ID}:evt_nil_user_1`)).toEqual({
-        tenantId: TEST_TENANT_ID,
-        userId: null,
-        id: 'evt_nil_user_1',
-        type: 'checkout.session.completed',
-      });
-      expect(store.payment(payment.id)?.status).toBe(PaymentStatus.Succeeded);
+      // Plan Task 16 flow table: a user-less owner goes through the system method under its
+      // tenant, and no payment is touched (no principal could open a runtime transaction).
+      expect(systemEvents.events).toEqual([
+        {
+          tenantId: TEST_TENANT_ID,
+          userId: null,
+          id: 'evt_nil_user_1',
+          type: 'checkout.session.completed',
+          processedAt: new Date('2026-10-01T00:00:00.000Z'),
+        },
+      ]);
+      expect(store.state.events.size).toBe(0);
+      expect(tx.begun).toBe(0);
+      expect(store.payment(payment.id)?.status).toBe(PaymentStatus.Pending);
+      expect(published).toEqual([]);
+      await expect(deliver(nilUser('evt_nil_user_1'))).resolves.toMatchObject({ duplicate: true });
     });
 
     it('records an event without tenant metadata for the platform tenant with a NULL user', async () => {
@@ -456,12 +485,51 @@ describe('HandleStripeWebhookHandler', () => {
         signedEvent('payout.paid', { id: 'po_1', object: 'payout' }, { id: 'evt_payout_1' }),
       );
 
-      expect(store.state.events.get(`${PLATFORM_TENANT_ID}:evt_payout_1`)).toEqual({
-        tenantId: PLATFORM_TENANT_ID,
-        userId: null,
-        id: 'evt_payout_1',
-        type: 'payout.paid',
+      expect(systemEvents.events).toEqual([
+        {
+          tenantId: PLATFORM_TENANT_ID,
+          userId: null,
+          id: 'evt_payout_1',
+          type: 'payout.paid',
+          processedAt: new Date('2026-10-01T00:00:00.000Z'),
+        },
+      ]);
+      expect(store.state.events.size).toBe(0);
+    });
+
+    it("records a platform event inside SystemContext('billing.platform-webhook'), no principal, no transaction", async () => {
+      let seen: unknown;
+      const mark = systemEvents.markProcessedAsPlatform.bind(systemEvents);
+      systemEvents.markProcessedAsPlatform = async (event) => {
+        seen = { system: SystemContext.current(), principal: getPrincipal() };
+        return mark(event);
+      };
+      const payout = signedEvent('payout.paid', { id: 'po_2' }, { id: 'evt_payout_2' });
+
+      await expect(deliver(payout)).resolves.toMatchObject({ duplicate: false });
+      await expect(deliver(payout)).resolves.toMatchObject({ duplicate: true });
+
+      expect(seen).toEqual({
+        system: { reason: 'billing.platform-webhook' },
+        principal: undefined,
       });
+      expect(tx.begun).toBe(0);
+    });
+
+    it('a failing system method fails the delivery (Stripe retries it)', async () => {
+      vi.spyOn(systemEvents, 'markProcessedAsPlatform').mockRejectedValueOnce(
+        new Error('system pool down'),
+      );
+      await expect(
+        deliver(signedEvent('payout.paid', { id: 'po_3' }, { id: 'evt_payout_3' })),
+      ).rejects.toThrow('system pool down');
+    });
+
+    it('never uses the system method for an owner with a user', async () => {
+      const mark = vi.spyOn(systemEvents, 'markProcessedAsPlatform');
+      await deliver(owned(TEST_TENANT_ID, 'evt_owned_runtime'));
+      expect(mark).not.toHaveBeenCalled();
+      expect(systemEvents.events).toEqual([]);
     });
   });
 });
