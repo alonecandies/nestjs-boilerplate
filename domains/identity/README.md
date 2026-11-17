@@ -271,6 +271,36 @@ set in one transaction with local execution on for its own session, so the shard
 earlier in that transaction are created over the coordinator's own connection. A table added later
 carries its own `app.distribute_*` call right after its `CREATE TABLE`.
 
+**Row-level security** (`0009_rls`, B3; spec §8.2, row-local per the B3 ruling of 2026-11-17). RLS is enabled and
+forced on all six tables, so the owner is filtered too. Grants are explicit per table and role (deny by default, no
+default privileges); `identity.__drizzle_migrations` gets neither RLS nor a grant to an app role. Every policy uses
+only the row's own columns and `app.user_id()`, `app.tenant_id()`, `app.elevated()`, called directly. No policy
+holds a subquery, which Citus refuses (`CREATE POLICY` fails with `XX000 unexpected non-SELECT command in SubLink`).
+No policy calls a function that reads a table, which fails on a shard with local execution off. Policies `TO
+app_runtime`:
+
+| Table          | `app_runtime` grants | Read                                             | Write                                                                                                                                                |
+| -------------- | -------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `users`        | S, I, U (columns)    | `id = user_id()`                                 | insert `id = user_id() AND NOT is_platform_staff`; update `id = user_id()` on `email`, `password_hash`, `display_name`, `updated_at` only; no delete |
+| `tenants`      | S, I, U              | `id = tenant_id()`                               | insert `id = tenant_id()`; update `id = tenant_id() AND elevated()`; no delete                                                                       |
+| `memberships`  | S, I, U, D           | `user_id = user_id() OR tenant_id = tenant_id()` | insert and update `tenant_id = tenant_id() AND elevated()`; delete also your own row unelevated (leaving)                                            |
+| `invitations`  | S, I, U, D           | `tenant_id = tenant_id() AND elevated()`         | the same for every command                                                                                                                           |
+| `sessions`     | S, I, U              | `user_id = user_id()`                            | insert `user_id = user_id() AND tenant_id = tenant_id()`; update `user_id = user_id()`; no delete (the purge is `app_system`)                        |
+| `audit_events` | S, I                 | `tenant_id = tenant_id() AND elevated()`         | insert `tenant_id = tenant_id()`; append-only                                                                                                        |
+
+- **`is_platform_staff`.** `app_runtime` cannot set it. The insert check refuses `true`. INSERT is table-level,
+  because Citus names every defaulted column in the shard INSERT, so a column-list grant would refuse even register.
+  The UPDATE grant lists the other columns. Only `staff:grant` sets it, as `app_owner`, through `users_owner_select`
+  and `users_owner_update` (`USING (true)`).
+- **`app_system`** (BYPASSRLS, the system pool) gets `SELECT` on `users`, `tenants`, `memberships` and `invitations`,
+  and `SELECT, DELETE` on `sessions`.
+- **Reads the policies leave out.** A user reads only its own `users` row and only its session tenant. Two kinds of
+  read go through the system pool instead, with the tenant filter written in their SQL:
+  - co-member reads (the member directory: `users JOIN memberships ON tenant_id = <current tenant>`);
+  - the caller's tenants outside the session tenant (its own memberships first, then those tenant ids).
+
+  The application verifies these, not the database policy. This is the same trust model as the session context.
+
 ## Configuration
 
 Identity's own namespaces, loaded by `IdentityCoreModule` (`infrastructure/security/`): `password` (`ARGON2_MEMORY_COST`, `ARGON2_TIME_COST`, `ARGON2_PARALLELISM`) and `refreshToken` (`JWT_REFRESH_SECRET`, `JWT_REFRESH_TTL_SEC`; it reads `JWT_ACCESS_SECRET` only for the production must-differ check). Also its own, for the gateway: `identityGrpcClient` (`IDENTITY_GRPC_URL`, `infrastructure/adapters/grpc/`), read by `IdentityApiModule.forRemote()`. From `@platform/config`: `auth` (`JWT_ACCESS_*`, `JWT_ISSUER`/`JWT_AUDIENCE`, `AUTH_DENYLIST_ENABLED`),
@@ -311,6 +341,10 @@ the `isPlatformStaff` fresh read, DB defaults, the session FK cascade and compar
 server-side prepared
 statements (`pg_prepared_statements`, one statement for every `findByIds` batch size) and the
 trigram search index (`EXPLAIN` → `Bitmap Index Scan on users_search_trgm_idx`).
+`infrastructure/persistence/identity.rls.int-spec.ts` checks `0009_rls` with local execution off. It runs raw
+postgres.js as `app_runtime`, `app_system` and `app_owner`, one transaction per case opened with `buildRlsContextSql`,
+against two tenants. It checks both paths of every policy with exact rows. A forbidden write leaves the superuser's
+snapshot unchanged. It also covers the grants, the no-context refusals and FORCE RLS on all six tables.
 
 Test doubles for the apps: `@domain/identity/testing` exports `createInMemoryIdentityPersistence`
 (in-memory `UsersRepository`/`SessionsRepository` and an inline `TransactionRunner`, used by the

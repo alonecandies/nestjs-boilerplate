@@ -11,7 +11,7 @@ import {
   type DrizzleDB,
   platformMigrations,
 } from '@platform/database';
-import { startTestPostgres, type TestPostgres } from '@platform/testing/postgres';
+import { readRolesInitSql, startTestPostgres, type TestPostgres } from '@platform/testing/postgres';
 import { sql } from 'drizzle-orm';
 import { ClsModule } from 'nestjs-cls';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -106,8 +106,9 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
   };
 
   beforeAll(async () => {
-    pg = await startTestPostgres();
+    pg = await startTestPostgres({ initSql: readRolesInitSql() }); // the platform set checks for the roles
     vi.stubEnv('DATABASE_URL', pg.url);
+    vi.stubEnv('DATABASE_MIGRATION_URL', pg.url); // the superuser until the role flip (Task 11)
     vi.stubEnv('SERVICE_NAME', 'identity-int');
     app = await boot();
     db = app.get(DRIZZLE);
