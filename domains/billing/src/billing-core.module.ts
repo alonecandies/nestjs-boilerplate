@@ -8,6 +8,7 @@ import { ListPaymentsHandler } from './application/queries/list-payments/list-pa
 import { PaymentSucceededRelay } from './application/relays/payment-succeeded.relay.js';
 import { PaymentsRepository } from './application/repositories/payments.repository.js';
 import { StripeEventsRepository } from './application/repositories/stripe-events.repository.js';
+import { StripeEventsSystemRepository } from './application/repositories/stripe-events.system-repository.js';
 import {
   AMOUNT_MISMATCH_METRIC,
   API_VERSION_MISMATCH_METRIC,
@@ -16,6 +17,7 @@ import {
 } from './billing.constants.js';
 import { DrizzlePaymentsRepository } from './infrastructure/persistence/drizzle-payments.repository.js';
 import { DrizzleStripeEventsRepository } from './infrastructure/persistence/drizzle-stripe-events.repository.js';
+import { DrizzleStripeEventsSystemRepository } from './infrastructure/persistence/drizzle-stripe-events.system-repository.js';
 import { PurgeStripeEventsCron } from './infrastructure/scheduling/purge-stripe-events.cron.js';
 import { stripeConfig } from './infrastructure/stripe/stripe.config.js';
 import { StripeModule } from './infrastructure/stripe/stripe.module.js';
@@ -27,7 +29,8 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
  *
  * Expects these global app-level modules: `AppConfigModule`, `CqrsModule.forRoot()`,
  * `DatabaseModule.forRootAsync({ schema: billingSchema, migrations: [billingMigrations] })`
- * (DRIZZLE + `@Transactional()`), `KafkaProducerModule.forRootAsync()`,
+ * (DRIZZLE + `@Transactional()`, and the system pool: the purge and platform webhooks need
+ * DATABASE_SYSTEM_URL), `KafkaProducerModule.forRootAsync()`,
  * `RedisModule.forRootAsync()` (the purge cron's distributed lock) and — for the cron to be
  * scheduled — `ScheduleModule.forRoot()`. It imports its own Stripe adapter
  * (`StripeModule.forRootAsync()`), so no app imports Stripe.
@@ -60,6 +63,8 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
     }),
     { provide: PaymentsRepository, useClass: DrizzlePaymentsRepository },
     { provide: StripeEventsRepository, useClass: DrizzleStripeEventsRepository },
+    // The only billing door to the app_system pool (BILLING_SYSTEM_METHODS).
+    { provide: StripeEventsSystemRepository, useClass: DrizzleStripeEventsSystemRepository },
   ],
 })
 export class BillingCoreModule {}

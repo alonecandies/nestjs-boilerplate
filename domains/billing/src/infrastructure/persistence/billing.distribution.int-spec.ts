@@ -2,7 +2,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type INestApplicationContext, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { generateId, PLATFORM_TENANT_ID } from '@platform/common';
+import {
+  createPrincipal,
+  generateId,
+  PLATFORM_TENANT_ID,
+  runWithPrincipal,
+  SystemContext,
+} from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { DatabaseModule, DRIZZLE, type DrizzleDB } from '@platform/database';
 import { type RlsTestPostgres, startRlsTestPostgres } from '@platform/testing/postgres';
@@ -13,7 +19,7 @@ import { makePayment } from '../../../test/billing-test.utils.js';
 import { billingMigrations } from './billing.migrations.js';
 import { type BillingSchema, billingSchema } from './billing.schema.js';
 import { DrizzlePaymentsRepository } from './drizzle-payments.repository.js';
-import { DrizzleStripeEventsRepository } from './drizzle-stripe-events.repository.js';
+import { DrizzleStripeEventsSystemRepository } from './drizzle-stripe-events.system-repository.js';
 
 /*
  * Billing's distribution migration (sharding design SH-6) on Citus 14.2, single node, local execution
@@ -21,7 +27,9 @@ import { DrizzleStripeEventsRepository } from './drizzle-stripe-events.repositor
  * The real runner applies the platform set and billing's whole history as app_owner (the migration
  * role), all pending files of a set in one transaction, as on a fresh production database. Data
  * goes through the superuser: under 0003's forced RLS the owner reads and writes no row, and the
- * policies themselves are billing.rls.int-spec.ts's subject.
+ * policies themselves are billing.rls.int-spec.ts's subject. Repository calls still run as a
+ * principal (the unit of work refuses to BEGIN without one), and the purge as the system method on
+ * app_system, in SystemContext.
  * Opt-in (needs Docker):
  *   INTEGRATION=1 bunx vitest run --project billing:int distribution
  */
@@ -36,7 +44,7 @@ import { DrizzleStripeEventsRepository } from './drizzle-stripe-events.repositor
       runMigrations: true,
     }),
   ],
-  providers: [DrizzlePaymentsRepository, DrizzleStripeEventsRepository],
+  providers: [DrizzlePaymentsRepository, DrizzleStripeEventsSystemRepository],
 })
 class BillingDistributionModule {}
 
@@ -102,6 +110,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
     pg = await startRlsTestPostgres();
     vi.stubEnv('DATABASE_URL', pg.url);
     vi.stubEnv('DATABASE_MIGRATION_URL', pg.migrationUrl);
+    vi.stubEnv('DATABASE_SYSTEM_URL', pg.systemUrl);
     vi.stubEnv('SERVICE_NAME', 'billing-distribution-int');
     use(await boot());
   });
@@ -181,14 +190,16 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
       survivors.push(`${tenantId}/evt_at_cutoff_${index}`, `${tenantId}/evt_fresh_${index}`);
     }
 
-    const events = app!.get(DrizzleStripeEventsRepository);
-    await expect(events.deleteProcessedBefore(cutoff)).resolves.toBe(8);
+    const events = app!.get(DrizzleStripeEventsSystemRepository);
+    const purge = (): Promise<number> =>
+      SystemContext.run('billing.distribution-int', () => events.deleteProcessedBefore(cutoff));
+    await expect(purge()).resolves.toBe(8);
 
     const left = await db.execute<{ key: string }>(
       sql`select tenant_id || '/' || id as key from billing.stripe_events`,
     );
     expect(left.map((row) => row.key).toSorted()).toEqual(survivors.toSorted());
-    await expect(events.deleteProcessedBefore(cutoff)).resolves.toBe(0);
+    await expect(purge()).resolves.toBe(0);
   });
 
   it('both uniques of payments still reject duplicates within a tenant, not across tenants', async () => {
@@ -210,9 +221,12 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
   it('a query by (tenant_id, id) is a router query and returns the row', async () => {
     const payments = app!.get(DrizzlePaymentsRepository);
     const payment = makePayment({ tenantId: generateId() });
-    await payments.create(payment);
+    const owner = createPrincipal({ userId: payment.userId, tenantId: payment.tenantId });
+    await runWithPrincipal(owner, () => payments.create(payment));
 
-    await expect(payments.findById(payment.tenantId, payment.id)).resolves.toMatchObject({
+    await expect(
+      runWithPrincipal(owner, () => payments.findById(payment.tenantId, payment.id)),
+    ).resolves.toMatchObject({
       id: payment.id,
       tenantId: payment.tenantId,
     });

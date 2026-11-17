@@ -6,7 +6,10 @@
 import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { type CursorPage, generateId } from '@platform/common';
 import {
+  buildRlsContextSql,
+  DRIZZLE,
   type DrizzleDB,
+  DrizzlePostgresTransactionalAdapter,
   type DrizzleTransactionalAdapter,
   decodeIdCursor,
   keysetFetchLimit,
@@ -28,7 +31,7 @@ import type {
 } from '../src/application/repositories/stripe-events.repository.js';
 import { PaymentConcurrentlyModifiedException } from '../src/domain/billing.errors.js';
 import { Payment, type PaymentSnapshot } from '../src/domain/payment.aggregate.js';
-import { payments } from '../src/infrastructure/persistence/billing.schema.js';
+import { type BillingSchema, payments } from '../src/infrastructure/persistence/billing.schema.js';
 import { toPaymentRow } from '../src/infrastructure/persistence/payment-row.mapper.js';
 import { stripeConfig } from '../src/infrastructure/stripe/stripe.config.js';
 import { createStripeClient } from '../src/infrastructure/stripe/stripe.module.js';
@@ -145,24 +148,11 @@ export class InMemoryPaymentsRepository implements PaymentsRepository {
 export class InMemoryStripeEventsRepository implements StripeEventsRepository {
   constructor(readonly store: InMemoryBillingStore) {}
 
-  /** `processed_at` per `${tenantId}:${id}` (kept apart so `state.events` holds receipts only). */
-  readonly processedAt = new Map<string, Date>();
-
   async markProcessed(event: StripeEventReceipt): Promise<boolean> {
     const k = key(event.tenantId, event.id);
     if (this.store.state.events.has(k)) return false;
     this.store.state.events.set(k, { ...event });
-    this.processedAt.set(k, new Date());
     return true;
-  }
-
-  async deleteProcessedBefore(cutoff: Date): Promise<number> {
-    const expired = [...this.processedAt].filter(([, at]) => at < cutoff).map(([k]) => k);
-    for (const k of expired) {
-      this.store.state.events.delete(k);
-      this.processedAt.delete(k);
-    }
-    return expired.length;
   }
 }
 
@@ -221,25 +211,76 @@ export interface RecordedQuery {
 
 /**
  * A real Drizzle handle (`casing: 'snake_case'`, like `DatabaseModule`) over a fake postgres.js
- * client: every statement is recorded and answered by `respond` (rows as positional arrays, the
- * shape drizzle's postgres-js session reads with `.values()`).
+ * client: every statement drizzle builds is recorded in `queries` and answered by `respond` (rows
+ * as positional arrays, the shape drizzle's postgres-js session reads with `.values()`).
+ * `transcript` holds everything the client saw, in order: `begin` / `commit` / `rollback` around
+ * `sql.begin(fn)`, the RLS context the transactional adapter sends after BEGIN (a parameterless
+ * `unsafe(sql).simple()`, never in `queries`), and each drizzle statement's SQL.
  */
 export function createRecordingDrizzle(respond: (query: RecordedQuery) => unknown[][] = () => []): {
   db: DrizzleDB;
   queries: RecordedQuery[];
+  transcript: string[];
 } {
   const queries: RecordedQuery[] = [];
+  const transcript: string[] = [];
+  const pending = (rows: unknown[][]) =>
+    Object.assign(Promise.resolve(rows), {
+      values: () => Promise.resolve(rows),
+      simple() {
+        return this;
+      },
+    });
   const client = {
     options: { parsers: {}, serializers: {} },
-    unsafe: (sqlText: string, params: unknown[]) => {
+    unsafe: (sqlText: string, params?: unknown[]) => {
+      transcript.push(sqlText);
+      // drizzle always binds a parameter array; only the adapter's context statement has none.
+      if (params === undefined) return pending([]);
       const query = { sql: sqlText, params };
       queries.push(query);
-      const rows = respond(query);
-      return Object.assign(Promise.resolve(rows), { values: () => Promise.resolve(rows) });
+      return pending(respond(query));
+    },
+    // postgres.js runs the callback on a reserved connection; here: the same fake client.
+    begin: async <T>(work: (tx: unknown) => Promise<T>): Promise<T> => {
+      transcript.push('begin');
+      try {
+        const result = await work(client);
+        transcript.push('commit');
+        return result;
+      } catch (error) {
+        transcript.push('rollback');
+        throw error;
+      }
     },
   };
   const db = drizzle({ client: client as never, casing: 'snake_case' }) as unknown as DrizzleDB;
-  return { db, queries };
+  return { db, queries, transcript };
+}
+
+/**
+ * The `TransactionHost` the app gets (the real `DrizzlePostgresTransactionalAdapter`): every
+ * transaction opens with the RLS context of the CLS principal and refuses to BEGIN without one,
+ * so repositories that go through `inUnitOfWork` are tested on the real path. Registers itself as
+ * the default host, like `installTestTransactionHost`.
+ */
+export function installRlsTransactionHost(
+  db: DrizzleDB,
+): TransactionHost<DrizzleTransactionalAdapter<BillingSchema>> {
+  const adapter = new DrizzlePostgresTransactionalAdapter({ drizzleInstanceToken: DRIZZLE });
+  // The adapter is schema-agnostic (bound to DrizzleDB); the repositories type it with their schema.
+  return new TransactionHost<DrizzleTransactionalAdapter<BillingSchema>>({
+    ...adapter.optionsFactory(db),
+    connectionName: undefined,
+    enableTransactionProxy: false,
+    defaultTxOptions: {},
+    extraProviderTokens: [],
+  } as never);
+}
+
+/** What `installRlsTransactionHost` sends after BEGIN for this user and tenant. */
+export function rlsContextStatement(userId: string, tenantId: string | null): string {
+  return buildRlsContextSql({ userId, tenantId });
 }
 
 /** A `payments` row as the positional array postgres.js returns (column declaration order). */

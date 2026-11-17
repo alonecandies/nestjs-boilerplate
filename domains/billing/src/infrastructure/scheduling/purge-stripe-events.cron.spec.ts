@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import type { CommandBus } from '@nestjs/cqrs';
 import { CronExpression } from '@nestjs/schedule';
+import { getPrincipal, SystemContext } from '@platform/common';
 import { redisConfig } from '@platform/config';
 import { DistributedLockService, type LockBackend, RedisKeyService } from '@platform/redis';
 import { createMock } from '@platform/testing';
@@ -59,6 +60,23 @@ describe('PurgeStripeEventsCron', () => {
     expect((command as PurgeStripeEventsCommand).cutoff).toEqual(
       new Date('2026-09-05T12:00:00.000Z'),
     );
+  });
+
+  it("dispatches the purge inside SystemContext('billing.purge-stripe-events'), with no principal", async () => {
+    let seen: unknown;
+    commandBus.execute.mockImplementation(async () => {
+      seen = { system: SystemContext.current(), principal: getPrincipal() };
+      return 0;
+    });
+
+    await cron.run();
+
+    expect(seen).toEqual({
+      system: { reason: 'billing.purge-stripe-events' },
+      principal: undefined,
+    });
+    // The system context ends with the run.
+    expect(SystemContext.isActive()).toBe(false);
   });
 
   it('skips the run when another replica holds the lock', async () => {
