@@ -28,7 +28,6 @@ import { type IdentitySchema, identitySchema } from './identity.schema.js';
  * real DatabaseModule, which applies the platform set and identity's REAL generated history
  * (./migrations, schema `identity`) at boot, like identity-service. Opt-in (needs Docker):
  *   INTEGRATION=1 bunx vitest run --project identity:int
- * Set INTEGRATION_DATABASE_URL to use an existing throwaway database instead of testcontainers.
  * The container is Citus 14.2 on PostgreSQL 18, single node (@platform/testing/postgres).
  * Rows use unique emails/search tokens, so reruns against the same database do not collide.
  */
@@ -310,6 +309,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
 
     const plan = await db.transaction(async (tx) => {
       // A handful of rows: force the planner off the sequential/PK scans it would rightly pick.
+      // users is a Citus reference table: the plan is the shard's, so the settings must reach it.
+      await tx.execute(sql`set local citus.propagate_set_commands = 'local'`);
       await tx.execute(sql`set local enable_seqscan = off`);
       await tx.execute(sql`set local enable_indexscan = off`);
       const rows = await tx.execute<{ 'QUERY PLAN': string }>(sql`

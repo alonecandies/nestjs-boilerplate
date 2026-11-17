@@ -62,8 +62,6 @@ export const userCacheKey = (id: string): string => `user:${id}`;
 /** Hourly purge of expired sessions, on one replica only (`@WithLock`). */
 export const PURGE_SESSIONS_LOCK = 'identity:purge-sessions';
 export const PURGE_SESSIONS_LOCK_TTL_MS = 60_000;
-/** Rows deleted per statement: keeps each DELETE short (row locks, WAL bursts, replication lag). */
-export const PURGE_SESSIONS_BATCH_SIZE = 5_000;
 
 /** `AuthTokens.tokenType` (OAuth2 `token_type`). */
 export const BEARER_TOKEN_TYPE = 'Bearer';

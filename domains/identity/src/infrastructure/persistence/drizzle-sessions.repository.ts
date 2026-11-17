@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { type DrizzleTransactionalAdapter, TransactionHost } from '@platform/database';
-import { and, eq, gt, inArray, isNull, lte } from 'drizzle-orm';
+import { and, eq, gt, isNull, lte } from 'drizzle-orm';
 import type {
   NewSession,
   RotateSessionInput,
@@ -77,21 +77,15 @@ export class DrizzleSessionsRepository implements SessionsRepository {
     return result.count;
   }
 
-  /** `DELETE … WHERE id IN (SELECT id … LIMIT n)`: bounded batches (sessions_expires_at_idx). */
-  async deleteExpired(now: Date, limit: number): Promise<number> {
-    const tx = this.txHost.tx;
-    const result = await tx
-      .delete(sessions)
-      .where(
-        inArray(
-          sessions.id,
-          tx
-            .select({ id: sessions.id })
-            .from(sessions)
-            .where(lte(sessions.expiresAt, now))
-            .limit(limit),
-        ),
-      );
+  /**
+   * `DELETE … WHERE expires_at <= $now`: one multi-shard statement (Citus runs it on every shard
+   * of the user-distributed table, each using sessions_expires_at_idx). No `LIMIT`ed sub-select:
+   * Citus cannot push one down once sessions are distributed. The run is bounded by the role's
+   * `statement_timeout` instead of a batch size.
+   */
+  async deleteExpired(now: Date): Promise<number> {
+    // No RETURNING: postgres.js reports the affected row count (`RowList.count`).
+    const result = await this.txHost.tx.delete(sessions).where(lte(sessions.expiresAt, now));
     return result.count;
   }
 }

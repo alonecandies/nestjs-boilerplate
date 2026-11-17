@@ -50,6 +50,10 @@ export abstract class SessionsRepository {
   /** Revokes every active session of the user; returns how many. */
   abstract revokeAllForUser(userId: string, now: Date): Promise<number>;
 
-  /** Deletes at most `limit` sessions whose `expiresAt <= now`; returns how many. */
-  abstract deleteExpired(now: Date, limit: number): Promise<number>;
+  /**
+   * Deletes every session whose `expiresAt <= now` in one statement; returns how many. Sessions are
+   * distributed by `user_id`, so this is a multi-shard DELETE without row locks (a `LIMIT`ed
+   * sub-select cannot be pushed down to the shards).
+   */
+  abstract deleteExpired(now: Date): Promise<number>;
 }

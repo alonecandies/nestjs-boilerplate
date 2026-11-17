@@ -131,8 +131,10 @@ revoked_at IS NULL AND expires_at > now RETURNING id` (compare-and-set: concurre
 - **Logout**: denylist the access `jti` in Redis for its remaining lifetime, then revoke the
   session of `refreshToken`, or every session when it is omitted ("sign out everywhere").
 - **Purge**: hourly `PurgeExpiredSessionsCron` (`@WithLock('identity:purge-sessions', 60 s)`)
-  deletes expired sessions in batches of 5 000. Revoked-but-unexpired sessions are kept on
-  purpose: they make reuse detectable until the token itself expires.
+  deletes every expired session with one multi-shard `DELETE … WHERE expires_at <= $now` (no
+  `LIMIT`ed batches: Citus cannot push one down on the user-distributed `sessions`), bounded by the
+  role's `statement_timeout`. Revoked-but-unexpired sessions are kept on purpose: they make reuse
+  detectable until the token itself expires.
 
 ## REST (URI version `v1`, problem+json errors)
 
@@ -261,6 +263,14 @@ drizzle-kit can load it. Identity owns its migration history: `drizzle.config.ts
 `src/infrastructure/persistence/migrations` (`bun run --filter @domain/identity db:generate`), bookkeeping in
 `identity.__drizzle_migrations`, and `identityMigrations` applies it after the platform set.
 
+**Citus distribution** (`0008_distribute`, SH-5; only `SELECT app.*` calls, no-ops without Citus):
+`users`, `tenants`, `memberships` are reference tables (parents first); `invitations` and
+`audit_events` are distributed by `tenant_id`, colocated with `app.tenant_colocation`; `sessions` is
+distributed by `user_id` in its own colocation group. The runner applies a fresh database's whole
+set in one transaction with local execution on for its own session, so the shards of tables created
+earlier in that transaction are created over the coordinator's own connection. A table added later
+carries its own `app.distribute_*` call right after its `CREATE TABLE`.
+
 ## Configuration
 
 Identity's own namespaces, loaded by `IdentityCoreModule` (`infrastructure/security/`): `password` (`ARGON2_MEMORY_COST`, `ARGON2_TIME_COST`, `ARGON2_PARALLELISM`) and `refreshToken` (`JWT_REFRESH_SECRET`, `JWT_REFRESH_TTL_SEC`; it reads `JWT_ACCESS_SECRET` only for the production must-differ check). Also its own, for the gateway: `identityGrpcClient` (`IDENTITY_GRPC_URL`, `infrastructure/adapters/grpc/`), read by `IdentityApiModule.forRemote()`. From `@platform/config`: `auth` (`JWT_ACCESS_*`, `JWT_ISSUER`/`JWT_AUDIENCE`, `AUTH_DENYLIST_ENABLED`),
@@ -293,8 +303,8 @@ locks, denylist and cache).
   (`Payment.user` through the `users` loader).
 
 Integration (Docker): `INTEGRATION=1 bunx vitest run --project identity:int` runs
-`infrastructure/persistence/users.repository.int-spec.ts` on PostgreSQL 18 (testcontainers, or an
-existing throwaway database via `INTEGRATION_DATABASE_URL`). It boots the real `DatabaseModule`, which
+`infrastructure/persistence/users.repository.int-spec.ts` on PostgreSQL 18 (a fresh Citus 14.2
+testcontainer per spec; `INTEGRATION_DATABASE_URL` is not used). It boots the real `DatabaseModule`, which
 applies the platform set and identity's own history (schema `identity`), then covers the repositories: the hash-free
 projection, `users_email_unique` → `EMAIL_TAKEN`, `findByIds`, keyset + literal ILIKE search,
 the `isPlatformStaff` fresh read, DB defaults, the session FK cascade and compare-and-set rotation,

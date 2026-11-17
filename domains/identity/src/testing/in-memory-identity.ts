@@ -179,10 +179,10 @@ export class InMemorySessionsRepository extends SessionsRepository {
     return revoked;
   }
 
-  async deleteExpired(now: Date, limit: number): Promise<number> {
-    const expired = [...this.store.sessions.values()]
-      .filter((session) => session.expiresAt.getTime() <= now.getTime())
-      .slice(0, limit);
+  async deleteExpired(now: Date): Promise<number> {
+    const expired = [...this.store.sessions.values()].filter(
+      (session) => session.expiresAt.getTime() <= now.getTime(),
+    );
     for (const session of expired) this.store.sessions.delete(session.id);
     return expired.length;
   }
