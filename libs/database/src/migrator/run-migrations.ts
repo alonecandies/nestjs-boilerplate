@@ -8,12 +8,14 @@ import { noop, sumBy } from 'lodash-es';
 import postgres, { type Sql } from 'postgres';
 import { z } from 'zod';
 import type { DatabaseMigrationSet } from '../database.types.js';
+import { assertMigrationSets } from './migration-sets.js';
 import { MIGRATIONS_ADVISORY_LOCK_ID } from './migrations.constants.js';
 
 export interface RunMigrationsOptions {
   /**
-   * The sets to apply, in this order, exactly as given. `DatabaseModule` and `runMigrationsCli`
-   * pass `withPlatformMigrations(appSets)`, so the platform set comes first.
+   * The sets to apply, in this order, exactly as given: the platform set first, each set with its
+   * own bookkeeping table and journal (`assertMigrationSets`). `DatabaseModule` and
+   * `runMigrationsCli` pass `withPlatformMigrations(appSets)`.
    */
   migrations: readonly DatabaseMigrationSet[];
   logger?: LoggerService;
@@ -28,7 +30,7 @@ export interface RunMigrationsOptions {
 export interface MigrationSetSummary {
   name: string;
   folder: string;
-  /** Migrations listed in the set's journal (0 when the folder has no journal yet). */
+  /** Migrations listed in the set's journal. */
   total: number;
   /** Applied by THIS run — 0 when the set was already current (e.g. another replica won). */
   applied: number;
@@ -68,10 +70,14 @@ const journalSchema = z.object({
     }),
 });
 
-/** Number of journal entries, or `null` when the folder has no drizzle journal yet. */
-function readJournalSize(folder: string): number | null {
-  const journalPath = join(folder, 'meta', '_journal.json');
-  if (!existsSync(journalPath)) return null;
+/** Number of journal entries; a set whose folder has no drizzle journal fails the run. */
+function readJournalSize(set: DatabaseMigrationSet): number {
+  const journalPath = join(set.folder, 'meta', '_journal.json');
+  if (!existsSync(journalPath)) {
+    throw new Error(
+      `Migration set "${set.name}" has no drizzle journal (${journalPath}): generate its first migration, or leave the set out`,
+    );
+  }
   const journal = journalSchema.safeParse(JSON.parse(readFileSync(journalPath, 'utf8')));
   if (!journal.success) {
     throw new Error(
@@ -148,6 +154,42 @@ const summarize = (sets: MigrationSetSummary[]): MigrationRunSummary => ({
   applied: sumBy(sets, 'applied'),
 });
 
+/** SQLSTATE protocol_violation: how PgBouncer refuses a startup parameter it does not ignore. */
+const STARTUP_PARAMETER_REJECTED = '08P01';
+
+/**
+ * The first query on the new connection: is this Citus and, if so, the coordinator? A connect error
+ * surfaces here (postgres.js connects lazily). PgBouncer refuses the session's `statement_timeout`
+ * startup parameter with 08P01, which is how a `DATABASE_MIGRATION_URL` pointing at the pooler shows
+ * up; it is rethrown naming the variable. The coordinator is the node that `citus_is_coordinator()`
+ * names, or a node not yet in any cluster (`pg_dist_node` empty: a fresh single node, on which that
+ * function is false until the first distributed table); a worker is refused, fail closed.
+ */
+async function inspectServer(sql: Sql): Promise<{ citus: boolean }> {
+  let row: { citus: boolean } | undefined;
+  try {
+    [row] = await sql<{ citus: boolean }[]>`
+      select exists (select 1 from pg_extension where extname = 'citus') as citus`;
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code !== STARTUP_PARAMETER_REJECTED) throw error;
+    throw new Error(
+      'DATABASE_MIGRATION_URL must connect directly to Postgres (the Citus coordinator), never ' +
+        `through PgBouncer: the server refused the migration session at startup (${STARTUP_PARAMETER_REJECTED}: ${(error as Error).message})`,
+      { cause: error },
+    );
+  }
+  if (row?.citus !== true) return { citus: false };
+  const [node] = await sql<{ coordinator: boolean }[]>`
+    select citus_is_coordinator() or not exists (select 1 from pg_dist_node) as coordinator`;
+  if (node?.coordinator !== true) {
+    throw new Error(
+      'The migration connection reached a node that is not the Citus coordinator ' +
+        '(citus_is_coordinator() is false): DATABASE_MIGRATION_URL must point at the coordinator directly',
+    );
+  }
+  return { citus: true };
+}
+
 /**
  * drizzle applies a set's pending files in ONE transaction; on Citus two settings make that work:
  * - local execution on: with it off (a `localExecution: false` test server, or a role default),
@@ -158,12 +200,9 @@ const summarize = (sets: MigrationSetSummary[]): MigrationRunSummary => ({
  *   any parallel shard operation in the same transaction (shards on workers), so one file can
  *   distribute tables and then add their foreign keys only in this mode (sharding design P-10).
  * Session `SET`s are safe: this client is private (`max: 1`) and must reach the coordinator
- * directly, never through a transaction pooler. Without the citus extension nothing is sent.
+ * directly, never through a transaction pooler. Called only on Citus (`inspectServer`).
  */
 async function configureCitusSession(sql: Sql, logger: LoggerService): Promise<void> {
-  const [row] = await sql<{ citus: boolean }[]>`
-    select exists (select 1 from pg_extension where extname = 'citus') as citus`;
-  if (row?.citus !== true) return;
   await sql`set citus.enable_local_execution to on`;
   await sql`set citus.multi_shard_modify_mode to 'sequential'`;
   logger.log(
@@ -173,11 +212,17 @@ async function configureCitusSession(sql: Sql, logger: LoggerService): Promise<v
 
 /**
  * Applies the pending drizzle-kit migrations of several sets, in order, safely under concurrency:
+ * - the sets must start with the platform set, each with its own bookkeeping table and journal
+ *   (`assertMigrationSets`): checked before connecting, whoever calls;
+ * - it must reach Postgres directly: on Citus the coordinator (a worker is refused), never PgBouncer
+ *   (the 08P01 startup refusal is rethrown naming `DATABASE_MIGRATION_URL`);
  * - ONE advisory lock around every set, so different services sharing a database migrate one
  *   after the other;
  * - a dedicated `max: 1` client so the session-level lock and every `migrate()` share ONE
  *   connection (`max_lifetime: null` — a recycled socket would silently drop the lock);
- * - `statement_timeout: 0` for this session only: DDL / backfills may legitimately run long;
+ * - `statement_timeout: '0'` for this session only: DDL / backfills may legitimately run long. A
+ *   string, because postgres.js leaves falsy values out of the startup message; sent, it is also
+ *   what PgBouncer refuses (08P01) when the URL points at the pooler;
  * - on Citus (the `citus` extension is installed), `citus.enable_local_execution = on` and
  *   `citus.multi_shard_modify_mode = 'sequential'` for this session, so a set can create a schema
  *   or enum, distribute tables and add their foreign keys in one transaction;
@@ -189,33 +234,17 @@ async function configureCitusSession(sql: Sql, logger: LoggerService): Promise<v
  * - a failing set stops the run (the sets after it are not attempted) with an error that names it
  *   and carries the driver's error as `cause`.
  *
- * Every journal is read before connecting: a malformed one (an entry without a string `tag`, a
- * positive integer `when` or a boolean `breakpoints`, or a `when` that does not grow) fails the run
- * up front, naming the entry. A set whose folder has no `meta/_journal.json` yet is skipped with a
- * warning; when no set has one, nothing connects.
+ * Every journal is read before connecting: a missing one, or a malformed one (an entry without a
+ * string `tag`, a positive integer `when` or a boolean `breakpoints`, or a `when` that does not
+ * grow) fails the run up front, naming the set or the entry.
  */
 export async function runMigrations(
   url: string,
   options: RunMigrationsOptions,
 ): Promise<MigrationRunSummary> {
   const logger = options.logger ?? new Logger('DatabaseMigrations');
-  const plan = options.migrations.map((set) => ({ set, total: readJournalSize(set.folder) }));
-  const skipped = (set: DatabaseMigrationSet): MigrationSetSummary => ({
-    name: set.name,
-    folder: set.folder,
-    total: 0,
-    applied: 0,
-  });
-  for (const { set, total } of plan) {
-    if (total === null) {
-      logger.warn(
-        `No drizzle migrations for "${set.name}" in ${set.folder} (meta/_journal.json missing) — skipping`,
-      );
-    }
-  }
-  if (plan.every(({ total }) => total === null)) {
-    return summarize(plan.map(({ set }) => skipped(set)));
-  }
+  assertMigrationSets(options.migrations);
+  const plan = options.migrations.map((set) => ({ set, total: readJournalSize(set) }));
 
   const sql = postgres(url, {
     max: 1,
@@ -226,11 +255,13 @@ export async function runMigrations(
     },
     connection: {
       application_name: `${options.applicationName ?? 'app'}:migrate`,
-      statement_timeout: 0,
+      // A string: postgres.js drops falsy startup values, so a number 0 would never be sent.
+      statement_timeout: '0' as unknown as number,
     },
   });
   let locked = false;
   try {
+    const { citus } = await inspectServer(sql);
     await acquireMigrationLock(
       sql,
       options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS,
@@ -238,13 +269,9 @@ export async function runMigrations(
       logger,
     );
     locked = true;
-    await configureCitusSession(sql, logger);
+    if (citus) await configureCitusSession(sql, logger);
     const results: MigrationSetSummary[] = [];
     for (const { set, total } of plan) {
-      if (total === null) {
-        results.push(skipped(set));
-        continue;
-      }
       try {
         results.push(await applySet(sql, set, total, logger));
       } catch (error) {

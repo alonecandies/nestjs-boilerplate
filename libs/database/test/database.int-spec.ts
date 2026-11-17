@@ -6,7 +6,7 @@ import { NestFactory } from '@nestjs/core';
 import { Transactional, TransactionHost } from '@nestjs-cls/transactional';
 import { generateId, isUuidV7 } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
-import { startTestPostgres, type TestPostgres } from '@platform/testing/postgres';
+import { readRolesInitSql, startTestPostgres, type TestPostgres } from '@platform/testing/postgres';
 import { and, eq, sql } from 'drizzle-orm';
 import { noop, sumBy } from 'lodash-es';
 import { ClsModule } from 'nestjs-cls';
@@ -119,7 +119,8 @@ describe('@platform/database against PostgreSQL 18', () => {
 
   beforeAll(async () => {
     // Never INTEGRATION_DATABASE_URL: this spec creates databases (race, sets, …) on the server.
-    pg = await startTestPostgres({ allowExternalUrl: false });
+    // Roles are per server: every database created below can run the platform set's 0002 grants.
+    pg = await startTestPostgres({ allowExternalUrl: false, initSql: readRolesInitSql() });
     admin = postgres(pg.url, { max: 1, onnotice: noop });
   });
 
@@ -131,14 +132,14 @@ describe('@platform/database against PostgreSQL 18', () => {
   describe('runMigrations()', () => {
     it('applies each migration exactly once when replicas race, then releases the lock', async () => {
       const url = await createDatabase('race');
-      const migrations = [widgetsMigrations, gadgetsMigrations];
+      const migrations = [platformMigrations, widgetsMigrations, gadgetsMigrations];
       const runs = await Promise.all(
         [1, 2, 3].map(() =>
           runMigrations(url, { migrations, lockPollIntervalMs: 50, logger: silent }),
         ),
       );
-      expect(sumBy(runs, 'applied')).toBe(3);
-      expect(runs.every((run) => run.total === 3)).toBe(true);
+      expect(sumBy(runs, 'applied')).toBe(6);
+      expect(runs.every((run) => run.total === 6)).toBe(true);
       expect(await migrationRows(url, widgetsMigrations)).toBe(2);
       const [locks] = await admin<{ count: number }[]>`
         select count(*)::int as count from pg_locks
@@ -146,16 +147,17 @@ describe('@platform/database against PostgreSQL 18', () => {
       expect(locks?.count).toBe(0);
 
       const rerun = await runMigrations(url, { migrations, logger: silent });
-      expect(rerun).toMatchObject({ applied: 0, total: 3 });
+      expect(rerun).toMatchObject({ applied: 0, total: 6 });
     });
 
     it('gives each set its own bookkeeping table, so a set with OLDER timestamps still applies', async () => {
       const url = await createDatabase('sets');
       const summary = await runMigrations(url, {
-        migrations: [widgetsMigrations, gadgetsMigrations],
+        migrations: [platformMigrations, widgetsMigrations, gadgetsMigrations],
         logger: silent,
       });
       expect(summary.sets.map(({ name, applied }) => ({ name, applied }))).toEqual([
+        { name: 'platform', applied: 3 },
         { name: 'widgets', applied: 2 },
         { name: 'gadgets', applied: 1 },
       ]);
@@ -170,15 +172,20 @@ describe('@platform/database against PostgreSQL 18', () => {
         name: 'MixedCase',
         migrationsSchema: 'MixedCase_Bookkeeping',
       };
-      await expect(runMigrations(url, { migrations: [mixed], logger: silent })).resolves.toEqual({
-        sets: [{ name: 'MixedCase', folder: mixed.folder, total: 1, applied: 1 }],
-        total: 1,
-        applied: 1,
+      await expect(
+        runMigrations(url, { migrations: [platformMigrations, mixed], logger: silent }),
+      ).resolves.toEqual({
+        sets: [
+          { name: 'platform', folder: platformMigrations.folder, total: 3, applied: 3 },
+          { name: 'MixedCase', folder: mixed.folder, total: 1, applied: 1 },
+        ],
+        total: 4,
+        applied: 4,
       });
       expect(await migrationRows(url, mixed)).toBe(1);
       await expect(
-        runMigrations(url, { migrations: [mixed], logger: silent }),
-      ).resolves.toMatchObject({ total: 1, applied: 0 });
+        runMigrations(url, { migrations: [platformMigrations, mixed], logger: silent }),
+      ).resolves.toMatchObject({ total: 4, applied: 0 });
     });
   });
 
@@ -208,10 +215,10 @@ describe('@platform/database against PostgreSQL 18', () => {
     it('applies the platform set, then the given sets, and exits 0; a second run is a no-op', async () => {
       const url = await createDatabase('cli');
       const first = await cli(url);
-      expect(first.stdout).toContain('Done: 5 applied, 5 total (platform, widgets, gadgets)');
+      expect(first.stdout).toContain('Done: 6 applied, 6 total (platform, widgets, gadgets)');
       const second = await cli(url);
-      expect(second.stdout).toContain('Done: 0 applied, 5 total (platform, widgets, gadgets)');
-      expect(await migrationRows(url, platformMigrations)).toBe(2);
+      expect(second.stdout).toContain('Done: 0 applied, 6 total (platform, widgets, gadgets)');
+      expect(await migrationRows(url, platformMigrations)).toBe(3);
       expect(await migrationRows(url, widgetsMigrations)).toBe(2);
     });
 
