@@ -6,6 +6,7 @@ import type {
   TokenService,
 } from '@platform/auth';
 import { UnauthenticatedException } from '@platform/common';
+import type { ClientIpResolver, ConnectionCaps } from '@platform/redis';
 import { find, isString, trim } from 'lodash-es';
 import type { GqlWsConnectionContext, GqlWsExtra } from '../context/gql-context.js';
 
@@ -73,6 +74,14 @@ export interface GraphqlWsAuthOptions {
    * only at `connection_init`.
    */
   sweeper?: RevocationSweeper;
+  /**
+   * Connection caps (spec §11): handshakes per client IP, checked before the token is verified,
+   * and concurrent sockets per user, taken after it and freed in `onClose`. Both fail open when
+   * Redis is unusable. Without it, connections are uncapped.
+   */
+  caps?: Pick<ConnectionCaps, 'admitHandshake' | 'acquireSocket' | 'releaseSocket'>;
+  /** Client IP of the upgrade request (follows `TRUST_PROXY`). Default: the socket address. */
+  clientIp?: ClientIpResolver;
 }
 
 /** `onConnect` / `onClose` handlers for Nest's `subscriptions['graphql-ws']` options. */
@@ -93,6 +102,9 @@ export interface GraphqlWsAuthHandlers {
  *   that is no longer valid.
  * - With `options.sweeper`, the socket is tracked by its `jti` and closed (4401
  *   `Access token revoked`) by the sweep after that token is revoked; `onClose` untracks it.
+ * - With `options.caps`, a connection over the per-IP handshake budget or the per-user socket cap
+ *   returns `false` too, so to the client a cap refusal looks the same as an auth refusal (4403).
+ *   `onClose` releases the user's slot.
  */
 export function createGraphqlWsAuthHandlers(
   authenticate: SubscriptionAuthenticator,
@@ -101,6 +113,9 @@ export function createGraphqlWsAuthHandlers(
   const logger = new Logger('GraphqlWsAuth');
   const expiryTimers = new WeakMap<GqlWsExtra, NodeJS.Timeout>();
   const untrackers = new WeakMap<GqlWsExtra, () => void>();
+  /** The user whose socket slot (`caps.acquireSocket`) this connection holds. */
+  const acquired = new WeakMap<GqlWsExtra, string>();
+  const resolveIp: ClientIpResolver = options.clientIp ?? ((r) => r?.socket?.remoteAddress);
   // graphql-ws calls onClose even when the socket closes while onConnect is still verifying.
   const closed = new WeakSet<GqlWsExtra>();
 
@@ -129,11 +144,22 @@ export function createGraphqlWsAuthHandlers(
 
   return {
     async onConnect(ctx) {
+      const ip = resolveIp(ctx.extra.request);
+      if (options.caps !== undefined && !(await options.caps.admitHandshake(ip)).ok) return false;
       const token = extractConnectionToken(ctx.connectionParams);
       if (token === undefined) return !(options.requireAuth ?? true);
       try {
         const user = await authenticate(token);
         if (closed.has(ctx.extra)) return false;
+        if (options.caps !== undefined) {
+          if (!(await options.caps.acquireSocket(user.id))) return false;
+          if (closed.has(ctx.extra)) {
+            // Closed while acquiring: onClose already ran and could not see the slot.
+            void options.caps.releaseSocket(user.id);
+            return false;
+          }
+          acquired.set(ctx.extra, user.id);
+        }
         ctx.extra.user = user;
         scheduleExpiry(ctx.extra, user.exp);
         trackRevocation(ctx.extra, user.jti);
@@ -152,6 +178,9 @@ export function createGraphqlWsAuthHandlers(
       const timer = expiryTimers.get(ctx.extra);
       if (timer !== undefined) clearTimeout(timer);
       expiryTimers.delete(ctx.extra);
+      const userId = acquired.get(ctx.extra);
+      acquired.delete(ctx.extra);
+      if (userId !== undefined) void options.caps?.releaseSocket(userId);
     },
   };
 }

@@ -33,6 +33,7 @@ export { LocalAuthGuard } from './guards/local-auth.guard.js';
 export { PermissionsGuard } from './guards/permissions.guard.js';
 export { RolesGuard } from './guards/roles.guard.js';
 export { StaffOnlyGuard } from './guards/staff-only.guard.js';
+export { rememberVerifiedUser, takeVerifiedUser } from './guards/verified-request-user.js';
 export { hasPermissions, type PermissionMatchMode } from './rbac/permission-match.js';
 export { principalPermissions } from './rbac/principal-permissions.js';
 export { RbacModule } from './rbac/rbac.module.js';

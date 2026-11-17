@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import type { Redis } from 'ioredis';
 import { isNumber, isString } from 'lodash-es';
+import { CONN_COUNT_COMMAND } from '../throttler/conn-count.command.js';
 import { THROTTLE_COMMAND, type ThrottleReply } from '../throttler/throttle.command.js';
 
 type Entry = { value: string; expiresAt: number | undefined };
@@ -46,8 +47,25 @@ function throttleScriptModel(redis: InMemoryRedis, keys: string[], args: string[
   return [hits, hitsTtl, 1, hitsTtl];
 }
 
+/** JS model of `CONN_COUNT_SCRIPT` (conn-count.command.ts), statement by statement. */
+function connCountModel(redis: InMemoryRedis, keys: string[], args: string[]): [number, number] {
+  const [key = ''] = keys;
+  const [delta = 0, cap = 0, ttl = 0] = args.map(Number);
+  let n = Number(redis.getSync(key) ?? 0) + delta;
+  if (n < 0) n = 0;
+  redis.setSync(key, String(n));
+  redis.pexpireSync(key, ttl);
+  if (delta > 0 && n > cap) {
+    redis.setSync(key, String(n - delta));
+    redis.pexpireSync(key, ttl);
+    return [n - delta, 0];
+  }
+  return [n, 1];
+}
+
 const EMULATED_SCRIPTS = new Map<string, ScriptImplementation>([
   [THROTTLE_COMMAND, throttleScriptModel],
+  [CONN_COUNT_COMMAND, connCountModel],
 ]);
 
 /**

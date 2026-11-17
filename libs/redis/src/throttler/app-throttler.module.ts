@@ -8,6 +8,7 @@ import type { Redis } from 'ioredis';
 import { RedisKeyService } from '../keys/redis-key.service.js';
 import { REDIS_CLIENT } from '../redis.constants.js';
 import { AppThrottlerGuard } from './app-throttler.guard.js';
+import { ConnectionCaps } from './connection-caps.js';
 import { LockoutResetInterceptor } from './lockout-reset.interceptor.js';
 import { RateLimitCharger } from './rate-limit-charger.js';
 import { RateLimitPolicyRegistry } from './rate-limit-policy.js';
@@ -51,6 +52,7 @@ export interface AppThrottlerModuleOptions {
  * - tenant: THROTTLE_TENANT_LIMIT per THROTTLE_TENANT_TTL_MS per active tenant (all its members);
  * - `route`: named policies (`@RateLimit`), declared by domains with `RateLimitModule.forFeature`;
  * - `auth`: credentials policies, sha256(email)+IP, with a per-account lockout reset on success;
+ * - `ConnectionCaps`: WebSocket handshakes per IP and concurrent sockets per user (THROTTLE_WS_*);
  * - `@SkipRateLimit()` opts out; ops paths are exempt.
  * Requires `RedisModule` (global). Import `AuthModule` BEFORE this module so `req.user` is set.
  */
@@ -63,6 +65,7 @@ export class AppThrottlerModule {
       WsThrottlerGuard,
       RateLimitPolicyRegistry,
       RateLimitCharger,
+      ConnectionCaps,
       RateLimitPolicyValidator,
       LockoutResetInterceptor,
       { provide: APP_INTERCEPTOR, useExisting: LockoutResetInterceptor },
@@ -106,7 +109,13 @@ export class AppThrottlerModule {
         }),
       ],
       providers,
-      exports: [AppThrottlerGuard, WsThrottlerGuard, RateLimitPolicyRegistry, RateLimitCharger],
+      exports: [
+        AppThrottlerGuard,
+        WsThrottlerGuard,
+        RateLimitPolicyRegistry,
+        RateLimitCharger,
+        ConnectionCaps,
+      ],
     };
   }
 }

@@ -239,13 +239,16 @@ No API can grant staff. A revocation takes effect at the next switch-in (the fla
 [`libs/redis`](../libs/redis/README.md) `AppThrottlerModule` (global `AppThrottlerGuard`, Redis
 storage, one `EVALSHA` per request):
 
-| Setting                                         | Default                                  | Applies to                                                                                                                        |
-| ----------------------------------------------- | ---------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| `THROTTLE_IP_LIMIT` / `_TTL_MS`                 | 600 per 60 s                             | every HTTP and GraphQL request, counted before authentication                                                                     |
-| `THROTTLE_LIMIT` / `_TTL_MS`                    | 300 per 60 s                             | per user (or IP when anonymous), all routes                                                                                       |
-| `IDENTITY_CREDENTIALS_*` / `IDENTITY_LOCKOUT_*` | 10 per 60 s; 10 failed attempts → 15 min | `identity.credentials` routes: register, login (REST and GraphQL)                                                                 |
-| `WsThrottlerGuard`                              | per handler                              | Socket.IO `notifications.markRead`: 30 per 10 s                                                                                   |
-| exempt                                          | —                                        | path prefixes `/health`, `/metrics`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/swagger`; the Stripe webhook (`@SkipRateLimit`) |
+| Setting                                         | Default                                            | Applies to                                                                                                                        |
+| ----------------------------------------------- | -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `THROTTLE_IP_LIMIT` / `_TTL_MS`                 | 600 per 60 s                                       | every HTTP and GraphQL request, counted before authentication                                                                     |
+| `THROTTLE_LIMIT` / `_TTL_MS`                    | 300 per 60 s                                       | per user (or IP when anonymous), all routes                                                                                       |
+| `THROTTLE_TENANT_LIMIT` / `_TTL_MS`             | 3000 per 60 s                                      | per active tenant, all its members together (authenticated requests and Socket.IO messages)                                       |
+| `THROTTLE_GRAPHQL_COST_LIMIT` / `_TTL_MS`       | 20000 points per 60 s                              | GraphQL: one charge per operation, weighted by complexity, per user (else IP); graphql-ws subscriptions too; HTTP 429             |
+| `THROTTLE_WS_*`                                 | 30 handshakes per 60 s per IP; 10 sockets per user | Socket.IO and graphql-ws connections: per-IP handshake budget, per-user concurrent sockets (429 `TOO_MANY_CONNECTIONS` / 4403)    |
+| `IDENTITY_CREDENTIALS_*` / `IDENTITY_LOCKOUT_*` | 10 per 60 s; 10 failed attempts → 15 min           | `identity.credentials` routes: register, login (REST and GraphQL)                                                                 |
+| `WsThrottlerGuard`                              | per handler                                        | Socket.IO `notifications.markRead`: 30 per 10 s                                                                                   |
+| exempt                                          | —                                                  | path prefixes `/health`, `/metrics`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/swagger`; the Stripe webhook (`@SkipRateLimit`) |
 
 - Tracker: `user:<id>` for authenticated requests (fair per account, NAT-proof), otherwise
   `ip:<address>` with IPv6 collapsed to its /64. `AuthModule` is imported **before**

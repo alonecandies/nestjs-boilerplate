@@ -291,3 +291,58 @@ describe('createGraphqlWsAuthHandlers with a revocation sweeper', () => {
     expect(ctx.extra.socket.close).not.toHaveBeenCalled();
   });
 });
+
+describe('connection caps (C-9)', () => {
+  const jane = user();
+
+  it('refuses the connection past the per-user socket cap, and releases the slot on close', async () => {
+    const caps = {
+      admitHandshake: vi.fn(async () => ({ ok: true as const })),
+      acquireSocket: vi.fn(async () => false),
+      releaseSocket: vi.fn(async () => undefined),
+    };
+    const handlers = createGraphqlWsAuthHandlers(async () => jane, { caps });
+    await expect(handlers.onConnect(wsContext({ token: 'ok' }))).resolves.toBe(false);
+    expect(caps.admitHandshake).toHaveBeenCalledWith(undefined);
+    caps.acquireSocket.mockResolvedValue(true);
+    const ctx = wsContext({ token: 'ok' });
+    await expect(handlers.onConnect(ctx)).resolves.toBe(true);
+    handlers.onClose(ctx);
+    await vi.waitFor(() => expect(caps.releaseSocket).toHaveBeenCalledWith(jane.id));
+  });
+
+  it('refuses a connection from an IP over the handshake limit before authenticating', async () => {
+    const authenticate = vi.fn(async () => jane);
+    const caps = {
+      admitHandshake: vi.fn(async () => ({ ok: false as const, retryAfterSeconds: 5 })),
+      acquireSocket: vi.fn(async () => true),
+      releaseSocket: vi.fn(async () => undefined),
+    };
+    const handlers = createGraphqlWsAuthHandlers(authenticate, { caps });
+    await expect(handlers.onConnect(wsContext({ token: 'ok' }))).resolves.toBe(false);
+    expect(authenticate).not.toHaveBeenCalled();
+    expect(caps.acquireSocket).not.toHaveBeenCalled();
+  });
+
+  it('releases the slot when the socket closes while the cap is being acquired', async () => {
+    let grant: (admitted: boolean) => void = () => undefined;
+    const caps = {
+      admitHandshake: vi.fn(async () => ({ ok: true as const })),
+      acquireSocket: vi.fn(
+        () =>
+          new Promise<boolean>((done) => {
+            grant = done;
+          }),
+      ),
+      releaseSocket: vi.fn(async () => undefined),
+    };
+    const handlers = createGraphqlWsAuthHandlers(async () => jane, { caps });
+    const ctx = wsContext({ token: 'ok' });
+    const connecting = handlers.onConnect(ctx);
+    await vi.waitFor(() => expect(caps.acquireSocket).toHaveBeenCalled());
+    handlers.onClose(ctx);
+    grant(true);
+    await expect(connecting).resolves.toBe(false);
+    expect(caps.releaseSocket).toHaveBeenCalledWith(jane.id);
+  });
+});

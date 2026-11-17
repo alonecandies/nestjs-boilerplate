@@ -13,6 +13,8 @@ export const THROTTLER = {
   LOCKOUT: 'lockout',
   /** GraphQL cost budget, charged per operation by `OperationRateLimitPlugin` (not a guard throttler). */
   GRAPHQL: 'graphql',
+  /** Socket handshakes per client IP, charged by `ConnectionCaps` (not a guard throttler). */
+  WS_HANDSHAKE: 'ws-handshake',
 } as const;
 
 export type ThrottlerName = (typeof THROTTLER)[keyof typeof THROTTLER];

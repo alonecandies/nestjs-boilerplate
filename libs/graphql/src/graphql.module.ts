@@ -10,6 +10,7 @@ import {
   graphqlConfig,
   throttleConfig,
 } from '@platform/config';
+import { ConnectionCaps, createClientIpResolver } from '@platform/redis';
 import { createApolloDriverConfig } from './apollo-config.factory.js';
 import {
   GRAPHQL_WS_REVOCATION_SWEEPER,
@@ -83,6 +84,7 @@ export class AppGraphqlModule {
             TokenService,
             AccessTokenDenylist,
             GRAPHQL_WS_REVOCATION_SWEEPER,
+            { token: ConnectionCaps, optional: true },
           ],
           useFactory: (
             graphql: GraphqlConfig,
@@ -91,6 +93,7 @@ export class AppGraphqlModule {
             tokens: TokenService,
             denylist: AccessTokenDenylist,
             sweeper: RevocationSweeper,
+            caps: ConnectionCaps | undefined,
           ): ApolloDriverConfig =>
             createApolloDriverConfig({
               graphql,
@@ -101,6 +104,8 @@ export class AppGraphqlModule {
                 {
                   requireAuth: options.requireSubscriptionAuth ?? true,
                   sweeper,
+                  ...(caps ? { caps } : {}),
+                  clientIp: createClientIpResolver(app.trustProxy),
                 },
               ),
               buildSchemaOptions: options.buildSchemaOptions,

@@ -2,7 +2,7 @@ import type { ApolloServerPlugin, BaseContext, GraphQLRequestListener } from '@a
 import { Plugin } from '@nestjs/apollo';
 import { Inject, Optional } from '@nestjs/common';
 import { GraphQLSchemaHost } from '@nestjs/graphql';
-import { AccessTokenDenylist, TokenService } from '@platform/auth';
+import { AccessTokenDenylist, rememberVerifiedUser, TokenService } from '@platform/auth';
 import { getHeaderValue } from '@platform/common';
 import { type ThrottleConfig, throttleConfig } from '@platform/config';
 import {
@@ -46,7 +46,9 @@ interface HeaderReply {
  * not set yet: the bearer token is verified here with the checks of `JwtStrategy` (signature, iss,
  * aud, exp, typ, denylist) to key the budget by user. A missing or invalid token is charged to the
  * client IP (IPv6 collapsed to its subnet, like the guards); the guard then rejects it as usual.
- * A `req.user` that is already set is used as is.
+ * A `req.user` that is already set is used as is. The user verified here is remembered for the
+ * request (`rememberVerifiedUser`), and `JwtAuthGuard` reuses it, so each HTTP operation verifies
+ * its token and reads the denylist once.
  */
 @Plugin()
 export class OperationRateLimitPlugin implements ApolloServerPlugin<BaseContext> {
@@ -69,7 +71,11 @@ export class OperationRateLimitPlugin implements ApolloServerPlugin<BaseContext>
     const token = BEARER.exec(getHeaderValue(req.headers, 'authorization') ?? '')?.[1];
     if (token === undefined) return undefined;
     try {
-      return await this.authenticate(token);
+      const user = await this.authenticate(token);
+      // JwtAuthGuard runs next for the same request: hand it the verified user so the JWT is not
+      // verified and the denylist not read a second time for this operation.
+      rememberVerifiedUser(req, user);
+      return user;
     } catch {
       // Invalid, expired or revoked (or the denylist is unreachable): JwtAuthGuard answers it.
       return undefined;

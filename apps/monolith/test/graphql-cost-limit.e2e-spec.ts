@@ -7,6 +7,7 @@ await vi.hoisted(async () => {
   Object.assign(process.env, MONOLITH_E2E_ENV, { THROTTLE_GRAPHQL_COST_LIMIT: '30' });
 });
 
+import { AccessTokenDenylist } from '@platform/auth';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bearer, graphql } from './support/http.js';
 import { createMonolithE2eApp, type MonolithE2e } from './support/monolith-e2e-app.js';
@@ -63,6 +64,20 @@ describe('GraphQL cost budget per user (monolith)', () => {
     expect(other.statusCode, other.body).toBe(200);
     expect(other.json<GraphqlBody>().errors).toBeUndefined();
     expect(String(other.headers['ratelimit'])).toContain('"graphql:cost";r=18;');
+    expect(String(other.headers['ratelimit-policy'])).toContain('"graphql:cost";q=30;w=60');
+  });
+
+  it('verifies the bearer token and reads the denylist once per HTTP operation', async () => {
+    // The plugin verifies the token to key the budget; JwtAuthGuard reuses that user.
+    const isDenied = vi.spyOn(e2e.app.get(AccessTokenDenylist), 'isDenied');
+    try {
+      const me = await e2e.app.inject(graphql('{ me { id } }', undefined, bearer(alice)));
+      expect(me.statusCode, me.body).toBe(200);
+      expect(me.json<GraphqlBody>().errors, me.body).toBeUndefined();
+      expect(isDenied).toHaveBeenCalledTimes(1);
+    } finally {
+      isDenied.mockRestore();
+    }
   });
 
   it('charges an anonymous operation to the IP, apart from the users behind it', async () => {

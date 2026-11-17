@@ -6,13 +6,15 @@ await vi.hoisted(async () => {
     IDENTITY_CREDENTIALS_LIMIT: '100',
     IDENTITY_LOCKOUT_THRESHOLD: '3',
     IDENTITY_LOCKOUT_MS: '900000',
+    THROTTLE_TENANT_LIMIT: '3',
   });
 });
 
-import type { ProblemDetails } from '@platform/common';
+import { signTestAccessToken } from '@platform/auth/testing';
+import { generateId, type ProblemDetails } from '@platform/common';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createGatewayE2eApp, type GatewayE2e } from './support/gateway-e2e-app.js';
-import { expectProblem } from './support/http.js';
+import { bearer, expectProblem } from './support/http.js';
 
 const PASSWORD = 'correct horse battery staple';
 const WRONG = 'wrong password!!';
@@ -78,5 +80,26 @@ describe('gateway rate limits: account lockout across IPs (spec §11, wave 1)', 
     expect((await login('gina@example.com', PASSWORD)).statusCode).toBe(200);
     for (let i = 0; i < 3; i += 1)
       expect((await login('gina@example.com', WRONG)).statusCode).toBe(401);
+  });
+
+  it('two members of one tenant share the tenant budget; another tenant is unaffected (wave 2)', async () => {
+    const member = (email: string, tenantId: string) =>
+      signTestAccessToken({ id: generateId(), email, tenantId, roles: ['member'] });
+    // Tenant ids are uuidv7 claims; anything else fails authentication before any budget.
+    const [tenant1, tenant2] = [generateId(), generateId()];
+    const alice = await member('a@t1.io', tenant1);
+    const bob = await member('b@t1.io', tenant1);
+    const carol = await member('c@t2.io', tenant2);
+    // A token-only user may answer 404 (FakeUsersPort): only 429 versus not-429 matters, because
+    // the guard answers before the handler runs.
+    const me = (token: string) =>
+      e2e.app.inject({ method: 'GET', url: '/v1/auth/me', headers: bearer(token) });
+    for (const token of [alice.token, bob.token, alice.token])
+      expect((await me(token)).statusCode).not.toBe(429);
+    const limited = await me(bob.token);
+    expectProblem(limited, 429, 'RATE_LIMITED');
+    expect(Number(limited.headers['retry-after'])).toBeGreaterThan(0);
+    expect(String(limited.headers['ratelimit-policy'])).toContain('"tenant";q=3;w=60');
+    expect((await me(carol.token)).statusCode).not.toBe(429);
   });
 });

@@ -14,6 +14,7 @@ import { writePrincipal } from '../context/principal-context.js';
 import { isAuthUser } from '../tokens/token-claims.js';
 import type { AuthUser } from '../types/auth-user.js';
 import { passportFailure } from './auth-errors.js';
+import { takeVerifiedUser } from './verified-request-user.js';
 
 const missingToken = (): UnauthenticatedException =>
   new UnauthenticatedException('Missing bearer token', { code: AuthErrorCode.MISSING_TOKEN });
@@ -35,7 +36,8 @@ const authenticatedGraphqlRequests = new WeakMap<object, AuthUser>();
  *   `socket.data.user`); here we only require that user and reject it once the token expired.
  * - `http` / `graphql`: passport `jwt` strategy on the request (`ctx.req` for GraphQL, including
  *   subscriptions whose request is synthesized from connection params). For GraphQL, the result
- *   is reused by the other root fields of the same operation while the token has not expired.
+ *   is reused by the other root fields of the same operation while the token has not expired, and
+ *   a user the operation rate limiter already verified for this request is taken as is.
  */
 @Injectable()
 export class JwtAuthGuard extends AuthGuard(JWT_STRATEGY) {
@@ -53,7 +55,18 @@ export class JwtAuthGuard extends AuthGuard(JWT_STRATEGY) {
         code: AuthErrorCode.MISSING_TOKEN,
       });
     }
-    if (type === 'graphql' && isAlreadyAuthenticated(req)) return true;
+    if (type === 'graphql') {
+      if (isAlreadyAuthenticated(req)) return true;
+      const verified = takeVerifiedUser(req);
+      if (verified !== undefined && verified.exp * 1_000 > Date.now()) {
+        // The operation rate limiter already verified this request's token (signature, claims,
+        // denylist); do not repeat it. Same bookkeeping as after a passport verification.
+        req.user = verified;
+        authenticatedGraphqlRequests.set(req, verified);
+        writePrincipal(verified);
+        return true;
+      }
+    }
     const result = super.canActivate(context);
     const allowed = isObservable(result) ? await firstValueFrom(result) : await result;
     if (allowed && isAuthUser(req.user)) {
