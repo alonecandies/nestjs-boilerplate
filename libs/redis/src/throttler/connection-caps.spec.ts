@@ -7,7 +7,7 @@ import { ConnectionCaps } from './connection-caps.js';
 import { RateLimitCharger } from './rate-limit-charger.js';
 import { RedisThrottlerStorage } from './redis-throttler.storage.js';
 
-function setup(env: Record<string, string> = {}) {
+function setup(env: Record<string, string> = {}, ipv6SubnetPrefix?: number) {
   const redis = new InMemoryRedis();
   const keys = new RedisKeyService(redisConfig.parse({}));
   const storage = new RedisThrottlerStorage(redis.asRedis(), keys);
@@ -15,7 +15,10 @@ function setup(env: Record<string, string> = {}) {
     redis.asRedis(),
     keys,
     throttleConfig.parse(env),
-    new RateLimitCharger(storage),
+    new RateLimitCharger(
+      storage,
+      ipv6SubnetPrefix === undefined ? undefined : { throttlers: [], ipv6SubnetPrefix },
+    ),
   );
   return { redis, caps, keys };
 }
@@ -50,6 +53,21 @@ describe('ConnectionCaps', () => {
     const refused = await caps.admitHandshake('1.2.3.4');
     expect(refused.ok).toBe(false);
     expect(await caps.admitHandshake('5.6.7.8')).toEqual({ ok: true });
+  });
+
+  it('collapses IPv6 handshakes to the configured subnet prefix, not a fixed /64 (F7)', async () => {
+    const { caps } = setup({ THROTTLE_WS_HANDSHAKE_LIMIT: '1' }, 48);
+    // Same /48, different /64s: one bucket.
+    expect(await caps.admitHandshake('2001:db8:1:1::1')).toEqual({ ok: true });
+    expect((await caps.admitHandshake('2001:db8:1:2::1')).ok).toBe(false);
+    expect(await caps.admitHandshake('2001:db8:2::1')).toEqual({ ok: true });
+  });
+
+  it('defaults to the /64 the guards use', async () => {
+    const { caps } = setup({ THROTTLE_WS_HANDSHAKE_LIMIT: '1' });
+    expect(await caps.admitHandshake('2001:db8:1:1::1')).toEqual({ ok: true });
+    expect((await caps.admitHandshake('2001:db8:1:1::2')).ok).toBe(false);
+    expect(await caps.admitHandshake('2001:db8:1:2::1')).toEqual({ ok: true });
   });
 
   it('fails open when Redis is down', async () => {
