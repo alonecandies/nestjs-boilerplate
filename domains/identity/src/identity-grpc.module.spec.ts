@@ -4,7 +4,13 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { AuthModule, TokenService } from '@platform/auth';
 import { createPrincipal, runWithPrincipal } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
-import { DRIZZLE, SYSTEM_DATABASE, SystemDatabase, TransactionHost } from '@platform/database';
+import {
+  DRIZZLE,
+  RlsElevation,
+  SYSTEM_DATABASE,
+  SystemDatabase,
+  TransactionHost,
+} from '@platform/database';
 import { MailService } from '@platform/mailer';
 import { KafkaProducer } from '@platform/transport';
 import { FakeKafkaProducer } from '@platform/transport/testing';
@@ -42,11 +48,13 @@ const database = createFakePostgres((sql) =>
     // production, and the system ports run on the same fake through SystemDatabase.
     { provide: TransactionHost, useValue: fakeTransactionHost(database.db) },
     { provide: SYSTEM_DATABASE, useValue: new SystemDatabase(database.db) },
+    // DatabaseModule's RlsElevation: justified elevation sends SET LOCAL on the fake transaction.
+    RlsElevation,
     { provide: KafkaProducer, useValue: new FakeKafkaProducer() },
     // AppMailerModule's global MailService (the invitation mail is queued through it).
     { provide: MailService, useValue: { enqueue: vi.fn() } },
   ],
-  exports: [DRIZZLE, TransactionHost, SYSTEM_DATABASE, KafkaProducer, MailService],
+  exports: [DRIZZLE, TransactionHost, SYSTEM_DATABASE, RlsElevation, KafkaProducer, MailService],
 })
 class FakeInfrastructureModule {}
 

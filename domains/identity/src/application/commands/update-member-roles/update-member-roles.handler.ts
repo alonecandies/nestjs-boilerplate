@@ -1,8 +1,10 @@
 import type { Member } from '@domain/identity-contracts';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { EntityNotFoundException, SystemContext } from '@platform/common';
+import { RlsElevation } from '@platform/database';
 import { LastOwnerException } from '../../../domain/identity.errors.js';
 import { assertCanAssignRoles, parseTenantRoles } from '../../../domain/member-roles.policy.js';
+import { IdentityPermission } from '../../../identity.permissions.js';
 import { toMemberContract } from '../../mappers/member.mapper.js';
 import { AUDIT_EVENT_TYPES } from '../../persistence/audit-events.repository.js';
 import { MembershipsRepository } from '../../persistence/memberships.repository.js';
@@ -20,12 +22,15 @@ export class UpdateMemberRolesHandler implements ICommandHandler<UpdateMemberRol
     private readonly membershipsSystem: MembershipsSystemRepository,
     private readonly transactions: TransactionRunner,
     private readonly audit: TenantAuditLog,
+    private readonly elevation: RlsElevation,
   ) {}
 
   async execute({ tenantId, actorId, userId, roles }: UpdateMemberRolesCommand): Promise<Member> {
     const principal = requireTenantActor(tenantId, actorId);
     const next = parseTenantRoles(roles);
     await this.transactions.run(async () => {
+      // Route permission MembersManage: elevated (this tenant only) for the whole unit of work.
+      await this.elevation.elevate(IdentityPermission.MembersManage);
       // Lock first: every owner change in this tenant is serialised from here to COMMIT.
       const owners = await this.memberships.countOwnersLocked(tenantId);
       // Read the actor's roles AFTER the lock: an owner demoted by a concurrent request that

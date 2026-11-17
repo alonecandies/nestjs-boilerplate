@@ -35,9 +35,12 @@ import { GetUsersByIdsHandler } from './application/queries/get-users-by-ids/get
 import { ListMembersHandler } from './application/queries/list-members/list-members.handler.js';
 import { ListMyTenantsHandler } from './application/queries/list-my-tenants/list-my-tenants.handler.js';
 import { ListUsersHandler } from './application/queries/list-users/list-users.handler.js';
+import { InvitationAcceptance } from './application/services/invitation-acceptance.elevated.js';
+import { MembershipActivity } from './application/services/membership-activity.elevated.js';
 import { PersonalWorkspaces } from './application/services/personal-workspaces.service.js';
 import { SessionTokensService } from './application/services/session-tokens.service.js';
 import { TenantAuditLog } from './application/services/tenant-audit-log.service.js';
+import { TenantBootstrap } from './application/services/tenant-bootstrap.elevated.js';
 import { TenantSelection } from './application/services/tenant-selection.service.js';
 import { QueuedInvitationMailer } from './infrastructure/mail/queued-invitation.mailer.js';
 import { DrizzleAuditEventsRepository } from './infrastructure/persistence/drizzle-audit-events.repository.js';
@@ -141,6 +144,10 @@ const PERSISTENCE: Provider[] = [
     PersonalWorkspaces,
     TenantSelection,
     TenantAuditLog,
+    // Justified RLS elevation (spec §9), one service per reason: the only `*.elevated.ts` files.
+    TenantBootstrap,
+    InvitationAcceptance,
+    MembershipActivity,
     PurgeExpiredSessionsCron,
   ],
 })

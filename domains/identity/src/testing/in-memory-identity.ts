@@ -1,5 +1,11 @@
-import type { CursorPage } from '@platform/common';
-import { decodeIdCursor, keysetPage, RowCountMismatchError } from '@platform/database';
+import { type CursorPage, requirePrincipal } from '@platform/common';
+import {
+  decodeIdCursor,
+  type ElevationReason,
+  keysetPage,
+  RlsElevation,
+  RowCountMismatchError,
+} from '@platform/database';
 import type { UserAggregate } from '../index.js';
 import {
   type AuditEventRecord,
@@ -219,6 +225,31 @@ export class InlineTransactionRunner extends TransactionRunner {
   }
 }
 
+/**
+ * `RlsElevation` without a database: the in-memory store has no policies and the inline runner no
+ * transaction, so the real service (which needs an open runtime transaction) is replaced. It keeps
+ * the precondition every elevation has (a principal with a tenant) and records each call; the
+ * permission itself is checked by the route guards in e2e (and by the real service in the int specs).
+ */
+export class InMemoryRlsElevation extends RlsElevation {
+  readonly calls: { kind: 'permission' | 'justified'; name: string; tenantId: string }[] = [];
+
+  override async elevate(permission: string): Promise<void> {
+    this.calls.push({ kind: 'permission', name: permission, tenantId: this.tenantOfPrincipal() });
+  }
+
+  override async justified<T>(reason: ElevationReason, work: () => Promise<T>): Promise<T> {
+    this.calls.push({ kind: 'justified', name: reason, tenantId: this.tenantOfPrincipal() });
+    return work();
+  }
+
+  private tenantOfPrincipal(): string {
+    const { tenantId } = requirePrincipal();
+    if (tenantId === null) throw new Error('InMemoryRlsElevation: elevation needs a tenant');
+    return tenantId;
+  }
+}
+
 /** Every identity persistence binding (runtime and system ports), sharing one store. */
 export function createInMemoryIdentityPersistence(store = new InMemoryIdentityStore()) {
   return {
@@ -234,5 +265,6 @@ export function createInMemoryIdentityPersistence(store = new InMemoryIdentitySt
     sessionsSystem: new InMemorySessionsSystemRepository(store),
     membershipsSystem: new InMemoryMembershipsSystemRepository(store),
     invitationsSystem: new InMemoryInvitationsSystemRepository(store),
+    elevation: new InMemoryRlsElevation(),
   };
 }

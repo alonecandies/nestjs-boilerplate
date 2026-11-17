@@ -1,5 +1,5 @@
 import type { AuthTokens, User } from '@domain/identity-contracts';
-import { generateId } from '@platform/common';
+import { generateId, getPrincipal, type Principal } from '@platform/common';
 import type { UserRecord } from '../src/application/persistence/users.repository.js';
 import type { UserSnapshot } from '../src/domain/user.aggregate.js';
 
@@ -50,15 +50,21 @@ export function makeAuthTokens(overrides: Partial<AuthTokens> = {}): AuthTokens 
   };
 }
 
-/** A pass-through `TransactionRunner` that records how often a transaction was opened. */
+/**
+ * A pass-through `TransactionRunner` that records how often a transaction was opened, and the CLS
+ * principal each one opened with (`principals`: the principal is final before BEGIN).
+ */
 export function passThroughTransaction(): {
   run: <T>(work: () => Promise<T>) => Promise<T>;
   runs: number;
+  principals: (Principal | undefined)[];
 } {
   const runner = {
     runs: 0,
+    principals: [] as (Principal | undefined)[],
     run: <T>(work: () => Promise<T>): Promise<T> => {
       runner.runs += 1;
+      runner.principals.push(getPrincipal());
       return work();
     },
   };

@@ -7,8 +7,11 @@ import {
 } from '@platform/common';
 import { ClsServiceManager } from 'nestjs-cls';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { makeUserRecord } from '../../../test/fixtures.js';
+import { createFakePostgres, fakeTransactionHost } from '../../../test/fake-postgres.js';
+import { makeUserRecord, passThroughTransaction } from '../../../test/fixtures.js';
 import { mockOf } from '../../../test/mocks.js';
+import { DrizzleSessionsRepository } from '../../infrastructure/persistence/drizzle-sessions.repository.js';
+import { DrizzleTransactionRunner } from '../../infrastructure/persistence/drizzle-transaction.runner.js';
 import type { TokenIssuer } from '../../infrastructure/security/token-issuer.service.js';
 import type { SessionsRepository } from '../persistence/sessions.repository.js';
 import { SessionTokensService } from './session-tokens.service.js';
@@ -19,6 +22,7 @@ describe('SessionTokensService', () => {
   const expiresAt = new Date('2026-10-06T12:00:00.000Z');
   let tokens: ReturnType<typeof mockOf<TokenIssuer>>;
   let sessions: ReturnType<typeof mockOf<SessionsRepository>>;
+  let transaction: ReturnType<typeof passThroughTransaction>;
   let service: SessionTokensService;
 
   beforeEach(() => {
@@ -27,7 +31,8 @@ describe('SessionTokensService', () => {
       issueAccessToken: async () => ({ token: 'access-jwt', jti: 'jti', expiresIn: 900, exp: 1 }),
     });
     sessions = mockOf<SessionsRepository>({ create: async () => undefined });
-    service = new SessionTokensService(tokens, sessions);
+    transaction = passThroughTransaction();
+    service = new SessionTokensService(tokens, sessions, transaction);
   });
 
   it('opens a tenant-bound session (sha256 of the refresh token only) and returns the tenant with the pair', async () => {
@@ -82,14 +87,73 @@ describe('SessionTokensService', () => {
     expect(session).toMatchObject({ tenantId: TENANT, userAgent: null, ip: null });
   });
 
-  it('sets the principal of the opened session inside a CLS context (and nothing outside one)', async () => {
+  it('runs ONE unit of work as { user, tenant, roles }: `before` first, then the insert; the caller keeps its principal', async () => {
     const user = makeUserRecord();
-    const seen = await ClsServiceManager.getClsService().run(async () => {
-      await service.open({ user, tenantId: TENANT, roles: ['owner'] });
+    const order: string[] = [];
+    const caller = createPrincipal({ userId: user.id, tenantId: null });
+    sessions.create.mockImplementation(async () => {
+      order.push('insert');
+      expect(getPrincipal()).toEqual({
+        userId: user.id,
+        tenantId: TENANT,
+        roles: ['owner'],
+        staff: false,
+      });
+    });
+    const seen = await runWithPrincipal(caller, async () => {
+      await service.open({ user, tenantId: TENANT, roles: ['owner'] }, async () => {
+        order.push('before');
+        expect(getPrincipal()).toMatchObject({ userId: user.id, tenantId: TENANT });
+      });
       return getPrincipal();
     });
-    expect(seen).toEqual({ userId: user.id, tenantId: TENANT, roles: ['owner'], staff: false });
-    await expect(service.open({ user, tenantId: TENANT, roles: ['owner'] })).resolves.toBeDefined();
+    expect(order).toEqual(['before', 'insert']);
+    expect(transaction.runs).toBe(1);
+    expect(transaction.principals).toEqual([
+      { userId: user.id, tenantId: TENANT, roles: ['owner'], staff: false },
+    ]);
+    expect(seen).toBe(caller);
+    // Both tokens are signed before the unit of work opens.
+    expect(tokens.issueRefreshToken).toHaveBeenCalledBefore(sessions.create);
+  });
+
+  it('openIf: `before` returning false ends the unit of work without a session (null)', async () => {
+    const result = await service.openIf(
+      { user: makeUserRecord(), tenantId: TENANT, roles: ['member'] },
+      async () => false,
+    );
+    expect(result).toBeNull();
+    expect(sessions.create).not.toHaveBeenCalled();
+    expect(transaction.runs).toBe(1);
+  });
+
+  it('never changes the principal inside an open transaction (real adapter: RLS_CONTEXT_STALE, nothing sent)', async () => {
+    const pg = createFakePostgres();
+    const host = fakeTransactionHost(pg.db);
+    const runner = new DrizzleTransactionRunner(host);
+    const real = new SessionTokensService(tokens, new DrizzleSessionsRepository(host), runner);
+    const user = makeUserRecord({ id: '0190f3b2-0000-7000-8000-00000000a001' });
+    const otherTenant = createPrincipal({
+      userId: user.id,
+      tenantId: '0190f3b2-0000-7000-8000-0000000000bb',
+      roles: ['member'],
+    });
+    await expect(
+      runWithPrincipal(otherTenant, () =>
+        runner.run(() => real.open({ user, tenantId: TENANT, roles: ['owner'] })),
+      ),
+    ).rejects.toMatchObject({ code: 'RLS_CONTEXT_STALE' });
+    expect(pg.executed).toEqual([]);
+
+    // The same user in the same tenant joins the caller's transaction (register: one transaction).
+    const same = createPrincipal({ userId: user.id, tenantId: TENANT, roles: ['owner'] });
+    await runWithPrincipal(same, () =>
+      runner.run(() => real.open({ user, tenantId: TENANT, roles: ['owner'] })),
+    );
+    expect(pg.transactions.filter((entry) => entry === 'begin')).toHaveLength(2);
+    expect(pg.executed.map((query) => query.sql.split(' (')[0])).toEqual([
+      'insert into "identity"."sessions"',
+    ]);
   });
 
   it("refuses to open a session for a user other than the unit of work's principal (fail closed)", async () => {
@@ -104,5 +168,7 @@ describe('SessionTokensService', () => {
         ),
       ),
     ).rejects.toBeInstanceOf(UnauthenticatedException);
+    expect(transaction.runs).toBe(0);
+    expect(tokens.issueRefreshToken).not.toHaveBeenCalled();
   });
 });

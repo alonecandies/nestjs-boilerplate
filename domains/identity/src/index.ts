@@ -87,10 +87,13 @@ export { ListMembersQuery } from './application/queries/list-members/list-member
 export { ListMyTenantsHandler } from './application/queries/list-my-tenants/list-my-tenants.handler.js';
 export { ListMyTenantsQuery } from './application/queries/list-my-tenants/list-my-tenants.query.js';
 export { ListUsersQuery } from './application/queries/list-users/list-users.query.js';
+export { InvitationAcceptance } from './application/services/invitation-acceptance.elevated.js';
+export { MembershipActivity } from './application/services/membership-activity.elevated.js';
 export { PersonalWorkspaces } from './application/services/personal-workspaces.service.js';
 export {
   type OpenSessionInput,
   SessionTokensService,
+  sessionPrincipal,
 } from './application/services/session-tokens.service.js';
 export {
   actorTenantRoles,
@@ -101,6 +104,7 @@ export {
   type TenantAuditEntry,
   TenantAuditLog,
 } from './application/services/tenant-audit-log.service.js';
+export { TenantBootstrap } from './application/services/tenant-bootstrap.elevated.js';
 export { TenantSelection } from './application/services/tenant-selection.service.js';
 // Domain.
 export { normalizeEmail } from './domain/email.js';

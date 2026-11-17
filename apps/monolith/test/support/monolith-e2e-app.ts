@@ -21,7 +21,7 @@ import { Test } from '@nestjs/testing';
 import { buildFastifyOptions, configureHttpApp, setupApiDocs } from '@platform/bootstrap';
 import { CASSANDRA_CLIENT } from '@platform/cassandra';
 import { appConfig } from '@platform/config';
-import { DRIZZLE } from '@platform/database';
+import { DRIZZLE, RlsElevation } from '@platform/database';
 import { GRAPHQL_PUB_SUB } from '@platform/graphql';
 import { MAIL_QUEUE, MailProcessor } from '@platform/mailer';
 import { REDIS_CLIENT } from '@platform/redis';
@@ -55,6 +55,7 @@ export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
  * | `DRIZZLE`                                  | real drizzle over a fake postgres.js client (rows: `options.postgresRows`) |
  * | identity repositories + TransactionRunner  | in-memory (the handlers above them are real) |
  * | identity tenancy repositories                | in-memory (same store as users and sessions) |
+ * | `RlsElevation`                             | `InMemoryRlsElevation` (no transaction to elevate) |
  * | `CASSANDRA_CLIENT`                         | empty result sets                            |
  * | BullMQ `mail` queue / `MailProcessor`      | recording queue / no worker                  |
  * | `CACHE_MANAGER`                            | real L1 tier only (L2 is node-redis)         |
@@ -110,6 +111,9 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     .useValue(identity.invitationsSystem)
     .overrideProvider(SessionsSystemRepository)
     .useValue(identity.sessionsSystem)
+    // The real RlsElevation needs an open runtime transaction; the inline runner opens none.
+    .overrideProvider(RlsElevation)
+    .useValue(identity.elevation)
     .overrideProvider(CASSANDRA_CLIENT)
     .useValue(cassandra.client)
     .overrideProvider(getQueueToken(MAIL_QUEUE))

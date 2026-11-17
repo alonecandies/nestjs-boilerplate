@@ -1,4 +1,11 @@
-import { Global, type INestApplicationContext, Module, type Provider } from '@nestjs/common';
+import {
+  type DynamicModule,
+  Global,
+  type INestApplicationContext,
+  Module,
+  type Provider,
+  type Type,
+} from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { type Principal, PrincipalPermissions, runWithPrincipal } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
@@ -62,11 +69,18 @@ export interface IdentityDatabase {
  * default: every shard statement runs over a remote connection, as on a cluster). The real
  * `DatabaseModule` migrates as `app_owner` (`DATABASE_MIGRATION_URL`), runs as `app_runtime`
  * (`DATABASE_URL`) and opens the system pool as `app_system` (`DATABASE_SYSTEM_URL`); `admin`
- * seeds through the superuser `url`. `providers` (repositories under test) sit on top. Int specs only.
+ * seeds through the superuser `url`. `providers` (repositories under test) and `imports` sit on top.
+ * `testPermissions: false` leaves `PrincipalPermissions` to an import (`RbacModule.forRoot()`, as the
+ * apps bind it); `elevated()` then needs a principal the real RBAC grants `TEST_ELEVATION_PERMISSION`
+ * to, so it is for the default harness only. Int specs only.
  */
 export async function startIdentityDatabase(
   providers: Provider[],
-  options: { localExecution?: boolean } = {},
+  options: {
+    localExecution?: boolean;
+    imports?: (Type | DynamicModule)[];
+    testPermissions?: boolean;
+  } = {},
 ): Promise<IdentityDatabase> {
   const pg = await startRlsTestPostgres({ localExecution: options.localExecution ?? false });
   vi.stubEnv('DATABASE_URL', pg.runtimeUrl);
@@ -81,12 +95,13 @@ export async function startIdentityDatabase(
     imports: [
       AppConfigModule.forRoot(),
       ClsModule.forRoot({ global: true }),
-      TestPrincipalPermissionsModule,
+      ...(options.testPermissions === false ? [] : [TestPrincipalPermissionsModule]),
       DatabaseModule.forRootAsync({
         schema: identitySchema,
         migrations: [identityMigrations],
         runMigrations: true,
       }),
+      ...(options.imports ?? []),
     ],
     providers,
   })

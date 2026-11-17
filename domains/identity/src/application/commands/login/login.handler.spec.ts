@@ -1,26 +1,37 @@
 import { Logger } from '@nestjs/common';
-import { getPrincipal } from '@platform/common';
+import { getPrincipal, runWithPrincipal } from '@platform/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  makeAuthTokens,
-  makeUserSnapshot,
-  passThroughTransaction,
-} from '../../../../test/fixtures.js';
+import { makeAuthTokens, makeUserSnapshot } from '../../../../test/fixtures.js';
 import { mockOf } from '../../../../test/mocks.js';
+import { principalLog } from '../../../../test/principal-log.js';
 import {
   InvalidCredentialsException,
   TenantAccessDeniedException,
 } from '../../../domain/identity.errors.js';
 import type { PasswordHasher } from '../../../infrastructure/security/password-hasher.service.js';
 import type { MembershipRecord } from '../../persistence/memberships.repository.js';
+import type { NewTenant } from '../../persistence/tenants.repository.js';
 import type { UsersRepository } from '../../persistence/users.repository.js';
 import type { UsersSystemRepository } from '../../persistence/users.system-repository.js';
-import type { SessionTokensService } from '../../services/session-tokens.service.js';
+import type { MembershipActivity } from '../../services/membership-activity.elevated.js';
+import type { PersonalWorkspaces } from '../../services/personal-workspaces.service.js';
+import {
+  type OpenSessionInput,
+  type SessionTokensService,
+  sessionPrincipal,
+} from '../../services/session-tokens.service.js';
+import type { TenantBootstrap } from '../../services/tenant-bootstrap.elevated.js';
 import type { TenantSelection } from '../../services/tenant-selection.service.js';
 import { LoginCommand } from './login.command.js';
 import { LoginHandler } from './login.handler.js';
 
 const TENANT = '0190f3b2-0000-7000-8000-0000000000aa';
+const WORKSPACE: NewTenant = {
+  id: '0190f3b2-0000-7000-8000-0000000000cc',
+  slug: 'ada-000000cc',
+  name: "Ada's workspace",
+  personal: true,
+};
 
 describe('LoginHandler', () => {
   const tokens = makeAuthTokens();
@@ -37,7 +48,10 @@ describe('LoginHandler', () => {
   let hasher: ReturnType<typeof mockOf<PasswordHasher>>;
   let sessionTokens: ReturnType<typeof mockOf<SessionTokensService>>;
   let selection: ReturnType<typeof mockOf<TenantSelection>>;
-  let transaction: ReturnType<typeof passThroughTransaction>;
+  let workspaces: ReturnType<typeof mockOf<PersonalWorkspaces>>;
+  let bootstrap: ReturnType<typeof mockOf<TenantBootstrap>>;
+  let activity: ReturnType<typeof mockOf<MembershipActivity>>;
+  let log: ReturnType<typeof principalLog>;
   let handler: LoginHandler;
 
   beforeEach(() => {
@@ -49,13 +63,32 @@ describe('LoginHandler', () => {
       needsRehash: () => false,
       hash: async () => '$argon2id$new',
     });
-    sessionTokens = mockOf<SessionTokensService>({ open: async () => tokens });
+    // The real service runs `before` in its unit of work, as the session's principal (its spec).
+    sessionTokens = mockOf<SessionTokensService>({
+      open: (input: OpenSessionInput, before?: () => Promise<void>) =>
+        runWithPrincipal(sessionPrincipal(input), async () => {
+          await before?.();
+          return tokens;
+        }),
+    });
     selection = mockOf<TenantSelection>({ forLogin: async () => membership });
-    transaction = passThroughTransaction();
-    handler = new LoginHandler(users, usersSystem, hasher, sessionTokens, transaction, selection);
+    workspaces = mockOf<PersonalWorkspaces>({ plan: () => WORKSPACE });
+    bootstrap = mockOf<TenantBootstrap>({ create: async () => undefined });
+    activity = mockOf<MembershipActivity>({ touch: async () => undefined });
+    log = principalLog();
+    handler = new LoginHandler(
+      log.track('users', users),
+      log.track('usersSystem', usersSystem),
+      hasher,
+      log.track('sessionTokens', sessionTokens),
+      log.track('selection', selection),
+      workspaces,
+      log.track('bootstrap', bootstrap),
+      log.track('activity', activity),
+    );
   });
 
-  it('verifies the password, picks the tenant, opens a session there (hash never passed on)', async () => {
+  it('verifies the password, picks the tenant, then touches and opens the session there', async () => {
     const client = { ip: '10.0.0.9' };
     await expect(
       handler.execute(new LoginCommand(' Ada@Example.com ', 'pw', client, TENANT)),
@@ -68,7 +101,37 @@ describe('LoginHandler', () => {
     expect(tenantId).toBe(TENANT);
     const [input] = sessionTokens.open.mock.calls[0] ?? [];
     expect(input).toEqual({ user, tenantId: TENANT, roles: ['admin'], client });
-    expect(transaction.runs).toBe(1);
+    expect(activity.touch).toHaveBeenCalledWith(TENANT, stored.id, expect.any(Date));
+    expect(bootstrap.create).not.toHaveBeenCalled();
+  });
+
+  it('runs each call under the principal of its unit of work (flow table: pre-auth → {user, null} → session)', async () => {
+    hasher.needsRehash.mockReturnValue(true);
+    await handler.execute(new LoginCommand('ada@example.com', 'pw'));
+    expect(log.summary()).toEqual([
+      ['usersSystem.findCredentialsByEmail', null, null],
+      ['users.updatePasswordHash', stored.id, null],
+      ['selection.forLogin', stored.id, null],
+      ['sessionTokens.open', null, null],
+      // `before` of the session's unit of work: as { user, tenant, roles }.
+      ['activity.touch', stored.id, TENANT],
+    ]);
+  });
+
+  it('a pre-tenancy account: the workspace id is planned first, then bootstrapped in the session unit', async () => {
+    selection.forLogin.mockResolvedValue(null);
+    await handler.execute(new LoginCommand('ada@example.com', 'pw', undefined));
+    expect(workspaces.plan).toHaveBeenCalledBefore(sessionTokens.open);
+    const [input] = sessionTokens.open.mock.calls[0] ?? [];
+    expect(input).toMatchObject({ tenantId: WORKSPACE.id, roles: ['owner'] });
+    expect(bootstrap.create).toHaveBeenCalledWith(WORKSPACE, stored.id, expect.any(Date));
+    expect(log.calls.find((c) => c.call === 'bootstrap.create')?.principal).toEqual({
+      userId: stored.id,
+      tenantId: WORKSPACE.id,
+      roles: ['owner'],
+      staff: false,
+    });
+    expect(activity.touch).not.toHaveBeenCalled();
   });
 
   it('a tenant the user may not use fails AFTER the password check (a thrown failure: C wave-1 contract)', async () => {
@@ -78,6 +141,7 @@ describe('LoginHandler', () => {
     ).rejects.toBeInstanceOf(TenantAccessDeniedException);
     expect(hasher.verify).toHaveBeenCalled();
     expect(sessionTokens.open).not.toHaveBeenCalled();
+    expect(activity.touch).not.toHaveBeenCalled();
   });
 
   it('unknown email: burns a dummy verification, then the same 401 as a wrong password', async () => {
@@ -89,13 +153,12 @@ describe('LoginHandler', () => {
     expect(selection.forLogin).not.toHaveBeenCalled();
   });
 
-  it('wrong password → InvalidCredentialsException, no tenant picked, no session', async () => {
+  it('wrong password → InvalidCredentialsException, no tenant picked, nothing written', async () => {
     hasher.verify.mockResolvedValue(false);
     await expect(
       handler.execute(new LoginCommand('ada@example.com', 'bad')),
     ).rejects.toBeInstanceOf(InvalidCredentialsException);
-    expect(selection.forLogin).not.toHaveBeenCalled();
-    expect(sessionTokens.open).not.toHaveBeenCalled();
+    expect(log.summary()).toEqual([['usersSystem.findCredentialsByEmail', null, null]]);
   });
 
   it('re-hashes with the current argon2 parameters; a failure there never fails the login', async () => {

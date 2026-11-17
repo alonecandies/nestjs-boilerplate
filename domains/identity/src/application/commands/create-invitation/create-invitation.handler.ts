@@ -3,9 +3,11 @@ import { Inject } from '@nestjs/common';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { EntityNotFoundException, generateId } from '@platform/common';
 import { type MailConfig, mailConfig } from '@platform/config';
+import { RlsElevation } from '@platform/database';
 import { normalizeEmail } from '../../../domain/email.js';
 import { generateInvitationToken, INVITATION_TTL_MS } from '../../../domain/invitation-token.js';
 import { assertCanAssignRoles, parseTenantRoles } from '../../../domain/member-roles.policy.js';
+import { IdentityPermission } from '../../../identity.permissions.js';
 import { toInvitationContract } from '../../mappers/invitation.mapper.js';
 import { AUDIT_EVENT_TYPES } from '../../persistence/audit-events.repository.js';
 import {
@@ -32,6 +34,7 @@ export class CreateInvitationHandler implements ICommandHandler<CreateInvitation
     private readonly audit: TenantAuditLog,
     private readonly mailer: InvitationMailer,
     @Inject(mailConfig.KEY) private readonly mail: Pick<MailConfig, 'appUrl'>,
+    private readonly elevation: RlsElevation,
   ) {}
 
   async execute({ tenantId, actorId, email, roles }: CreateInvitationCommand): Promise<Invitation> {
@@ -51,6 +54,8 @@ export class CreateInvitationHandler implements ICommandHandler<CreateInvitation
       expiresAt: new Date(now.getTime() + INVITATION_TTL_MS),
     };
     const tenant = await this.transactions.run(async () => {
+      // Route permission MembersManage: elevated (this tenant only) for the whole unit of work.
+      await this.elevation.elevate(IdentityPermission.MembersManage);
       const found = await this.tenants.findById(tenantId);
       if (found === null) throw new EntityNotFoundException('Tenant', tenantId);
       await this.invitations.insert(record);

@@ -20,19 +20,20 @@ import { classifyRefreshRejection } from '../../../domain/session.js';
 import { TokenIssuer } from '../../../infrastructure/security/token-issuer.service.js';
 import { MembershipsRepository } from '../../persistence/memberships.repository.js';
 import { SessionsRepository } from '../../persistence/sessions.repository.js';
-import { TransactionRunner } from '../../persistence/transaction-runner.js';
 import { UsersRepository } from '../../persistence/users.repository.js';
+import { MembershipActivity } from '../../services/membership-activity.elevated.js';
 import { SessionTokensService } from '../../services/session-tokens.service.js';
+import { requireSelf } from '../../services/tenant-actor.js';
 import { SwitchTenantCommand } from './switch-tenant.command.js';
 
 /**
- * Switch tenant = a refresh rotation that lands in another tenant:
+ * Switch tenant = a refresh rotation that lands in another tenant (plan B3 Task 12 flow table):
  * 1. verify the refresh JWT; it must belong to the caller;
- * 2. the target membership must exist (else 403, nothing touched);
+ * 2. as the caller: the target membership must exist (else 403, nothing touched);
  * 3. denylist the current access token (it names the old tenant);
- * 4. in ONE transaction: conditionally revoke the presented session, touch the membership and open
- *    the successor session in the target tenant. A failed rotation is classified like refresh
- *    (reuse → every session revoked).
+ * 4. ONE unit of work as `{ user, target, roles }`: conditionally revoke the presented session,
+ *    touch the target membership (`membership-activity`) and open the successor session there. A
+ *    failed rotation is classified like refresh, as the caller (reuse → every session revoked).
  */
 @CommandHandler(SwitchTenantCommand)
 export class SwitchTenantHandler implements ICommandHandler<SwitchTenantCommand> {
@@ -44,14 +45,16 @@ export class SwitchTenantHandler implements ICommandHandler<SwitchTenantCommand>
     private readonly sessions: SessionsRepository,
     private readonly memberships: MembershipsRepository,
     private readonly sessionTokens: SessionTokensService,
-    private readonly transaction: TransactionRunner,
+    private readonly activity: MembershipActivity,
     private readonly denylist: AccessTokenDenylist,
   ) {}
 
   async execute(command: SwitchTenantCommand): Promise<AuthTokens> {
+    requireSelf(command.userId);
     const claims = await this.verify(command.refreshToken);
     if (claims.sub !== command.userId) throw new InvalidRefreshTokenException();
 
+    // As the caller: the memberships policy shows the caller's own rows in every tenant.
     const membership =
       isUuid(command.tenantId) && !isPlatformTenantId(command.tenantId)
         ? await this.memberships.find(command.tenantId, command.userId)
@@ -66,24 +69,27 @@ export class SwitchTenantHandler implements ICommandHandler<SwitchTenantCommand>
     const refreshTokenHash = sha256Hex(command.refreshToken);
     const now = new Date();
     const successorId = generateId();
-    const tokens = await this.transaction.run(async () => {
-      const rotated = await this.sessions.revokeForRotation({
-        id: claims.jti,
-        userId: claims.sub,
-        refreshTokenHash,
-        replacedById: successorId,
-        now,
-      });
-      if (!rotated) return undefined;
-      await this.memberships.touch(membership.tenantId, user.id, now);
-      return this.sessionTokens.open({
+    const tokens = await this.sessionTokens.openIf(
+      {
         user,
         tenantId: membership.tenantId,
         roles: membership.roles,
         client: command.client,
         sessionId: successorId,
-      });
-    });
+      },
+      async () => {
+        const rotated = await this.sessions.revokeForRotation({
+          id: claims.jti,
+          userId: claims.sub,
+          refreshTokenHash,
+          replacedById: successorId,
+          now,
+        });
+        if (!rotated) return false;
+        await this.activity.touch(membership.tenantId, user.id, now);
+        return true;
+      },
+    );
     if (tokens) return tokens;
     throw await this.rejection(claims, refreshTokenHash, now);
   }

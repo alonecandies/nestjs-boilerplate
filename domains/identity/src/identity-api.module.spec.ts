@@ -4,7 +4,13 @@ import { CqrsModule } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { provideCommonEnhancers } from '@platform/common';
-import { DRIZZLE, SYSTEM_DATABASE, SystemDatabase, TransactionHost } from '@platform/database';
+import {
+  DRIZZLE,
+  RlsElevation,
+  SYSTEM_DATABASE,
+  SystemDatabase,
+  TransactionHost,
+} from '@platform/database';
 import { MailService } from '@platform/mailer';
 import { AppCacheService } from '@platform/redis';
 import { createFastifyTestApp } from '@platform/testing';
@@ -83,12 +89,22 @@ const kafka = new FakeKafkaProducer({ source: 'monolith' });
     // production, and the system ports run on the same fake through SystemDatabase.
     { provide: TransactionHost, useValue: fakeTransactionHost(database.db) },
     { provide: SYSTEM_DATABASE, useValue: new SystemDatabase(database.db) },
+    // DatabaseModule's RlsElevation: justified elevation sends SET LOCAL on the fake transaction.
+    RlsElevation,
     { provide: KafkaProducer, useValue: kafka },
     { provide: AppCacheService, useValue: new InMemoryAppCache() },
     // AppMailerModule's global MailService (the invitation mail is queued through it).
     { provide: MailService, useValue: { enqueue: vi.fn() } },
   ],
-  exports: [DRIZZLE, TransactionHost, SYSTEM_DATABASE, KafkaProducer, AppCacheService, MailService],
+  exports: [
+    DRIZZLE,
+    TransactionHost,
+    SYSTEM_DATABASE,
+    RlsElevation,
+    KafkaProducer,
+    AppCacheService,
+    MailService,
+  ],
 })
 class FakeInfrastructureModule {}
 

@@ -1,13 +1,16 @@
 import { createPrincipal, generateId, runWithPrincipal } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { principalLog } from '../../../../test/principal-log.js';
 import { TENANT_SLUG_PATTERN } from '../../../domain/tenant-slug.js';
 import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
+import { TenantBootstrap } from '../../services/tenant-bootstrap.elevated.js';
 import { CreateTenantCommand } from './create-tenant.command.js';
 import { CreateTenantHandler } from './create-tenant.handler.js';
 
 describe('CreateTenantHandler', () => {
   let persistence: ReturnType<typeof createInMemoryIdentityPersistence>;
   let handler: CreateTenantHandler;
+  let log: ReturnType<typeof principalLog>;
   const userId = generateId();
   const self = createPrincipal({ userId, tenantId: generateId(), roles: ['owner'] });
   const run = (command: CreateTenantCommand) =>
@@ -15,10 +18,16 @@ describe('CreateTenantHandler', () => {
 
   beforeEach(() => {
     persistence = createInMemoryIdentityPersistence();
+    log = principalLog();
+    const memberships = log.track('memberships', persistence.memberships);
     handler = new CreateTenantHandler(
-      persistence.tenants,
-      persistence.memberships,
+      memberships,
       persistence.transactions,
+      new TenantBootstrap(
+        log.track('tenants', persistence.tenants),
+        memberships,
+        persistence.elevation,
+      ),
     );
   });
 
@@ -34,6 +43,20 @@ describe('CreateTenantHandler', () => {
     await expect(persistence.memberships.find(created.tenant!.id, userId)).resolves.toMatchObject({
       roles: ['owner'],
     });
+  });
+
+  it('every write and the read-back run as { user, newTenant, [owner] } (id generated first)', async () => {
+    const created = await run(new CreateTenantCommand(userId, 'Acme'));
+    const tenantId = created.tenant!.id;
+    expect(log.summary()).toEqual([
+      ['tenants.insert', userId, tenantId],
+      ['memberships.insert', userId, tenantId],
+      ['memberships.listForUser', userId, tenantId],
+    ]);
+    expect(log.calls.every((c) => c.principal?.roles.join() === 'owner')).toBe(true);
+    expect(persistence.elevation.calls).toEqual([
+      { kind: 'justified', name: 'tenant-bootstrap', tenantId },
+    ]);
   });
 
   it.each(['', '   ', 'x'.repeat(101)])(

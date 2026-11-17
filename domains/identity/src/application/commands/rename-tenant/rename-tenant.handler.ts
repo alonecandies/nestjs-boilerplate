@@ -5,6 +5,8 @@ import {
   PermissionDeniedException,
   satisfiesTenantRole,
 } from '@platform/common';
+import { RlsElevation } from '@platform/database';
+import { IdentityPermission } from '../../../identity.permissions.js';
 import { normalizeTenantName, toTenantContract } from '../../mappers/tenancy.mapper.js';
 import { AUDIT_EVENT_TYPES } from '../../persistence/audit-events.repository.js';
 import { MembershipsRepository } from '../../persistence/memberships.repository.js';
@@ -21,6 +23,7 @@ export class RenameTenantHandler implements ICommandHandler<RenameTenantCommand>
     private readonly memberships: MembershipsRepository,
     private readonly transactions: TransactionRunner,
     private readonly audit: TenantAuditLog,
+    private readonly elevation: RlsElevation,
   ) {}
 
   async execute({ tenantId, actorId, name }: RenameTenantCommand): Promise<Tenant> {
@@ -32,6 +35,8 @@ export class RenameTenantHandler implements ICommandHandler<RenameTenantCommand>
       });
     }
     return this.transactions.run(async () => {
+      // Route permission TenantManage: elevated (this tenant only) for the whole unit of work.
+      await this.elevation.elevate(IdentityPermission.TenantManage);
       const tenant = await this.tenants.findById(tenantId);
       if (tenant === null) throw new EntityNotFoundException('Tenant', tenantId);
       await this.tenants.rename(tenantId, to);

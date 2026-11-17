@@ -1,5 +1,6 @@
 import { createPrincipal, generateId, runWithPrincipal, type TenantRole } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { principalLog } from '../../../../test/principal-log.js';
 import { UserAggregate } from '../../../domain/user.aggregate.js';
 import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
 import { TenantAuditLog } from '../../services/tenant-audit-log.service.js';
@@ -9,6 +10,7 @@ import { UpdateMemberRolesHandler } from './update-member-roles.handler.js';
 describe('UpdateMemberRolesHandler', () => {
   let p: ReturnType<typeof createInMemoryIdentityPersistence>;
   let handler: UpdateMemberRolesHandler;
+  let log: ReturnType<typeof principalLog>;
   const tenantId = generateId();
   const [ada, bob, eve] = [generateId(), generateId(), generateId()];
 
@@ -36,11 +38,13 @@ describe('UpdateMemberRolesHandler', () => {
     await member(ada, ['owner']);
     await member(bob, ['admin']);
     await member(eve, ['member']);
+    log = principalLog();
     handler = new UpdateMemberRolesHandler(
-      p.memberships,
+      log.track('memberships', p.memberships),
       p.membershipsSystem,
       p.transactions,
       new TenantAuditLog(p.auditEvents),
+      log.track('elevation', p.elevation),
     );
   });
 
@@ -85,5 +89,16 @@ describe('UpdateMemberRolesHandler', () => {
 
   it('403 FORBIDDEN for a member', async () => {
     await expect(as(eve, eve, ['admin'])).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+  it('elevates with members:manage first in its unit of work, before any repository call there', async () => {
+    await as(bob, eve, ['admin']);
+    const calls = log.calls.map((c) => c.call);
+    const elevate = calls.indexOf('elevation.elevate');
+    expect(elevate).toBeGreaterThan(-1);
+    expect(calls.indexOf('memberships.countOwnersLocked')).toBeGreaterThan(elevate);
+    expect(p.elevation.calls[0]).toMatchObject({ kind: 'permission', name: 'members:manage' });
+    // Only reads of the actor's own roles may run before (as the request principal, outside it).
+    expect(calls.slice(0, elevate).every((c) => c === 'memberships.find')).toBe(true);
+    expect(log.calls.every((c) => c.principal?.tenantId === tenantId)).toBe(true);
   });
 });
