@@ -725,6 +725,7 @@
       "dependencies": {
         "@nestjs-cls/transactional": "catalog:",
         "@nestjs/common": "catalog:",
+        "@nestjs/config": "catalog:",
         "@platform/common": "workspace:*",
         "@platform/config": "workspace:*",
         "@platform/contracts": "workspace:*",
@@ -742,6 +743,7 @@
         "@types/lodash-es": "catalog:",
         "lodash-es": "catalog:",
         "postgres": "catalog:",
+        "testcontainers": "catalog:",
       },
     },
     "libs/redis": {
