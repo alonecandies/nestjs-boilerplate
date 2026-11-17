@@ -2,11 +2,42 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { PLATFORM_TENANT_ID } from '@platform/common';
 import { MIGRATIONS_TABLE } from '@platform/database';
+import { describeOutboxTable } from '@platform/outbox/testing';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import drizzleConfig from '../../../drizzle.config.js';
 import { billingMigrations } from './billing.migrations.js';
-import { billingPgSchema, paymentStatusEnum, payments, stripeEvents } from './billing.schema.js';
+import {
+  billingPgSchema,
+  billingSchema,
+  outbox,
+  paymentStatusEnum,
+  payments,
+  stripeEvents,
+} from './billing.schema.js';
+
+describeOutboxTable(outbox, 'billing');
+
+/** A migration file's statements: comments dropped, whitespace collapsed, one entry per breakpoint. */
+const statementsOf = (file: string): string[] =>
+  readFileSync(join(billingMigrations.folder, file), 'utf8')
+    .split('--> statement-breakpoint')
+    .map((statement) =>
+      statement
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('--'))
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    )
+    .filter((statement) => statement !== '');
+
+const journalTags = (): string[] =>
+  (
+    JSON.parse(readFileSync(join(billingMigrations.folder, 'meta', '_journal.json'), 'utf8')) as {
+      entries: { idx: number; tag: string }[];
+    }
+  ).entries.map((entry) => entry.tag);
 
 describe('billingMigrations', () => {
   it("is billing's own history: ./migrations, bookkeeping in billing.__drizzle_migrations", () => {
@@ -20,11 +51,17 @@ describe('billingMigrations', () => {
 
   it('keeps every billing table and enum in the billing Postgres schema', () => {
     expect(billingPgSchema.schemaName).toBe(billingMigrations.migrationsSchema);
-    expect([payments, stripeEvents].map((table) => getTableConfig(table).schema)).toEqual([
+    expect([payments, stripeEvents, outbox].map((table) => getTableConfig(table).schema)).toEqual([
+      'billing',
       'billing',
       'billing',
     ]);
     expect(paymentStatusEnum.schema).toBe('billing');
+  });
+
+  it('registers the outbox as billingOutbox: the monolith spreads every schema into one object', () => {
+    expect(billingSchema.billingOutbox).toBe(outbox);
+    expect(Object.keys(billingSchema)).not.toContain('outbox');
   });
 
   it('matches drizzle.config.ts: output folder, schema filter, bookkeeping table', () => {
@@ -123,8 +160,8 @@ describe('billingMigrations', () => {
       )
       .filter((statement) => statement !== '');
 
-    it('is the fourth and last journal entry', () => {
-      expect(journal.entries.map((entry) => entry.tag)).toEqual([
+    it('is the fourth journal entry', () => {
+      expect(journal.entries.map((entry) => entry.tag).slice(0, 4)).toEqual([
         '0000_init',
         '0001_tenant_columns',
         '0002_distribute',
@@ -170,6 +207,32 @@ describe('billingMigrations', () => {
         'GRANT SELECT, INSERT, UPDATE ON TABLE billing.payments TO app_runtime;',
         'GRANT SELECT, INSERT ON TABLE billing.stripe_events TO app_runtime;',
         'GRANT SELECT, INSERT, DELETE ON TABLE billing.stripe_events TO app_system;',
+      ]);
+    });
+  });
+
+  describe('0004_outbox (outbox plan Task 6: the "Outbox table" SQL, in migration order)', () => {
+    it('is the fifth and last journal entry: the first billing migration after B3', () => {
+      expect(journalTags()).toEqual([
+        '0000_init',
+        '0001_tenant_columns',
+        '0002_distribute',
+        '0003_rls',
+        '0004_outbox',
+      ]);
+    });
+
+    it('is the plan SQL for billing.outbox, one statement each: CREATE, distribution, indexes, RLS, grants, policy', () => {
+      expect(statementsOf('0004_outbox.sql')).toEqual([
+        'CREATE TABLE "billing"."outbox" ( "tenant_id" uuid NOT NULL, "id" uuid NOT NULL, "topic" text NOT NULL, "key" text, "envelope" jsonb NOT NULL, "created_at" timestamp (3) with time zone DEFAULT now() NOT NULL, "published_at" timestamp (3) with time zone, CONSTRAINT "outbox_tenant_id_id_pk" PRIMARY KEY("tenant_id","id") );',
+        "SELECT app.distribute_by_tenant('billing.outbox');",
+        'CREATE INDEX "outbox_unpublished_idx" ON "billing"."outbox" USING btree ("created_at","id") WHERE "billing"."outbox"."published_at" IS NULL;',
+        'CREATE INDEX "outbox_published_at_idx" ON "billing"."outbox" USING btree ("published_at") WHERE "billing"."outbox"."published_at" IS NOT NULL;',
+        'ALTER TABLE "billing"."outbox" ENABLE ROW LEVEL SECURITY;',
+        'ALTER TABLE "billing"."outbox" FORCE ROW LEVEL SECURITY;',
+        'GRANT INSERT ON "billing"."outbox" TO app_runtime;',
+        'GRANT SELECT, INSERT, UPDATE, DELETE ON "billing"."outbox" TO app_system;',
+        'CREATE POLICY "outbox_insert" ON "billing"."outbox" FOR INSERT TO app_runtime WITH CHECK (tenant_id = app.tenant_id());',
       ]);
     });
   });

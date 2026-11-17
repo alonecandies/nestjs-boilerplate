@@ -1,4 +1,7 @@
-import type { HandleStripeWebhookResponse } from '@domain/billing-contracts';
+import {
+  type HandleStripeWebhookResponse,
+  PAYMENT_SUCCEEDED_EVENT,
+} from '@domain/billing-contracts';
 import { Logger } from '@nestjs/common';
 import { CommandHandler, EventPublisher, type ICommandHandler } from '@nestjs/cqrs';
 import { createPrincipal, isUuid, runWithPrincipal, SystemContext } from '@platform/common';
@@ -11,10 +14,13 @@ import {
   PAID_WITHOUT_AMOUNT_METRIC,
   PAID_WITHOUT_CURRENCY_METRIC,
 } from '../../../billing.constants.js';
+import { PaymentSucceededEvent } from '../../../domain/events/payment-succeeded.event.js';
 import { normalizeCurrency, type Payment } from '../../../domain/payment.aggregate.js';
 import { type StripeOwner, stripeOwnerOf } from '../../../domain/stripe-owner.js';
+import { BillingOutbox } from '../../../infrastructure/persistence/billing-outbox.js';
 import { STRIPE_API_VERSION } from '../../../infrastructure/stripe/stripe.constants.js';
 import { StripeService } from '../../../infrastructure/stripe/stripe.service.js';
+import { toPaymentSucceededPayload } from '../../mappers/payment.mapper.js';
 import { PaymentsRepository } from '../../repositories/payments.repository.js';
 import { StripeEventsRepository } from '../../repositories/stripe-events.repository.js';
 import { StripeEventsSystemRepository } from '../../repositories/stripe-events.system-repository.js';
@@ -22,7 +28,7 @@ import { HandleStripeWebhookCommand } from './handle-stripe-webhook.command.js';
 
 interface WebhookOutcome {
   duplicate: boolean;
-  /** Payment whose uncommitted events must be published once the transaction committed. */
+  /** Payment whose uncommitted events go to the in-process bus once the transaction committed. */
   payment: Payment | null;
 }
 
@@ -49,13 +55,17 @@ const PLATFORM_WEBHOOK_REASON = 'billing.platform-webhook';
  *    (B3-13; the principal is final before the unit of work opens):
  *    - **a user in a tenant**: `runWithPrincipal({ userId, tenantId, roles: [] })` around ONE
  *      transaction that records `stripe_events(id)` with `ON CONFLICT DO NOTHING` (a duplicate
- *      delivery stops here) and applies the event to the row-locked payment;
+ *      delivery stops here), applies the event to the row-locked payment and, when that completes
+ *      the payment, enqueues `billing.payment-succeeded.v1` on `billing.outbox` (G-1: the event
+ *      commits or rolls back with the payment; a failing enqueue fails the delivery, so Stripe
+ *      retries it);
  *    - **no user** (platform-level objects, metadata that is not a tenant UUID, a user-less
  *      tenant): `SystemContext.run('billing.platform-webhook')` and the system method
  *      `stripeEvents.markProcessedAsPlatform` only. No payment is touched: the runtime policies
  *      need a user, and nothing else in billing may write through the system pool.
- * 3. After COMMIT, publish the aggregate's domain events (`PaymentSucceededEvent` → Kafka relay),
- *    so a rolled-back delivery never announces a payment.
+ * 3. After COMMIT, publish the aggregate's domain events on the in-process bus, so a rolled-back
+ *    delivery never announces a payment. Kafka is reached only through the outbox relay
+ *    (`OutboxModule`, at least once), never from the request path.
  *
  * Handled: `checkout.session.completed` / `async_payment_succeeded` → `succeeded` (only once the
  * session is actually paid), `async_payment_failed` → `failed`, `expired` → `expired`. Every other
@@ -77,6 +87,7 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
     private readonly stripeEvents: StripeEventsRepository,
     private readonly platformEvents: StripeEventsSystemRepository,
     private readonly payments: PaymentsRepository,
+    private readonly outbox: BillingOutbox,
     private readonly publisher: EventPublisher,
     @InjectMetric(PAID_WITHOUT_CURRENCY_METRIC)
     private readonly paidWithoutCurrency: { inc(): void },
@@ -223,6 +234,7 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
           }
           return applied;
         });
+        if (payment !== null) await this.enqueueSucceeded(payment, owner);
         return { duplicate: false, payment };
       }
       case 'checkout.session.async_payment_failed':
@@ -234,6 +246,25 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
       default:
         this.logger.debug(`Ignoring Stripe event ${event.id} (${event.type})`);
         return { duplicate: false, payment: null };
+    }
+  }
+
+  /**
+   * `billing.payment-succeeded.v1` for the `PaymentSucceededEvent` that `complete()` applied, in
+   * this unit of work (after `markProcessed` and `save`, before COMMIT): key = the user id,
+   * envelope id = the domain event id, `occurredAt` = `paidAt`, tenant and actor = the signed owner
+   * (the unit of work's principal; the payment was found under that tenant, as that user).
+   */
+  private async enqueueSucceeded(payment: Payment, owner: StripeOwner): Promise<void> {
+    for (const event of payment.getUncommittedEvents()) {
+      if (!(event instanceof PaymentSucceededEvent)) continue;
+      await this.outbox.enqueue(PAYMENT_SUCCEEDED_EVENT, toPaymentSucceededPayload(event), {
+        key: event.userId,
+        eventId: event.eventId,
+        occurredAt: event.paidAt,
+        tenantId: owner.tenantId,
+        actorId: owner.userId,
+      });
     }
   }
 

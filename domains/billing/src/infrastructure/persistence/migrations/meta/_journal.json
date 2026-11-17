@@ -29,6 +29,13 @@
       "when": 1794900055539,
       "tag": "0003_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1794942410609,
+      "tag": "0004_outbox",
+      "breakpoints": true
     }
   ]
 }

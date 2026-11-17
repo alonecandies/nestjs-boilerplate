@@ -12,6 +12,7 @@ import {
   bigint,
   index,
   integer,
+  jsonb,
   pgSchema,
   primaryKey,
   text,
@@ -100,10 +101,44 @@ export const stripeEvents = billingPgSchema.table(
   ],
 );
 
+// citus: tenant. The transactional outbox (@platform/outbox; outbox plan Task 6): billing's integration
+// events, inserted by the runtime role in the unit of work that changes the state they report (the
+// webhook's payment completion), and published by the relay on the system pool. The runtime role may
+// only INSERT its own tenant's rows (0004_outbox: no SELECT grant, one insert policy); app_system
+// polls, marks, purges and is the only writer of PLATFORM_TENANT_ID rows (`outbox.insertAsPlatform`).
+// Declared by hand with the exact shape of the shared outbox table (`describeOutboxTable` pins it):
+// this file cannot import @platform/outbox (drizzle-kit loads it without workspace packages).
+export const outbox = billingPgSchema.table(
+  'outbox',
+  {
+    tenantId: uuid().notNull(),
+    /** = the envelope id (the domain event's id). */
+    id: uuid().notNull(),
+    topic: text().notNull(),
+    key: text(),
+    envelope: jsonb().notNull(),
+    createdAt: timestamptz().notNull().defaultNow(),
+    publishedAt: timestamptz(),
+  },
+  (t) => [
+    primaryKey({ name: 'outbox_tenant_id_id_pk', columns: [t.tenantId, t.id] }),
+    // The relay's poll: the oldest unpublished rows by (created_at, id).
+    index('outbox_unpublished_idx').on(t.createdAt, t.id).where(sql`${t.publishedAt} IS NULL`),
+    // The retention purge of published rows.
+    index('outbox_published_at_idx').on(t.publishedAt).where(sql`${t.publishedAt} IS NOT NULL`),
+  ],
+);
+
 export type PaymentRow = typeof payments.$inferSelect;
 export type NewPaymentRow = typeof payments.$inferInsert;
 export type StripeEventRow = typeof stripeEvents.$inferSelect;
 
 /** Everything `DatabaseModule.forRootAsync({ schema })` needs from billing (monolith: spread it). */
-export const billingSchema = { paymentStatusEnum, payments, stripeEvents };
+export const billingSchema = {
+  paymentStatusEnum,
+  payments,
+  stripeEvents,
+  // Not `outbox`: the monolith spreads every context's schema into one object (identity has one too).
+  billingOutbox: outbox,
+};
 export type BillingSchema = typeof billingSchema;

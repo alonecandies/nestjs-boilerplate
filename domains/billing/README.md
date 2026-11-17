@@ -11,20 +11,20 @@ Layers follow the hexagonal/CQRS layout of the monorepo:
 src/
   domain/          Payment aggregate (status machine), PaymentSucceededEvent, errors, PaymentStatus
   application/     commands (CreateCheckoutSession, HandleStripeWebhook), query (ListPayments),
-                   PaymentSucceededRelay (→ Kafka), BillingPort, repository abstractions, mapper
-  infrastructure/  billing.schema.ts (Drizzle), Drizzle repositories, local + gRPC port adapters, the Stripe adapter (stripe/)
+                   BillingPort, repository abstractions, mappers (contract, payment-succeeded payload)
+  infrastructure/  billing.schema.ts (Drizzle), Drizzle repositories, billing's outbox (BillingOutbox, its system repository), local + gRPC port adapters, the Stripe adapter (stripe/)
   presentation/    REST BillingController, GraphQL BillingResolver, gRPC BillingGrpcController
   billing-core.module.ts · billing-grpc.module.ts · billing-api.module.ts
 ```
 
 ## Modules and wiring
 
-| Module                         | Contents                                                                                                                                         | Used by          |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------- |
-| `BillingCoreModule`            | CQRS handlers, `PaymentSucceededRelay`, Drizzle repositories, the Stripe adapter (`StripeModule.forRootAsync()`)                                 | (via the others) |
-| `BillingGrpcModule`            | `BillingCoreModule` + `BillingGrpcController` (`billing.v1.BillingService`)                                                                      | billing-service  |
-| `BillingApiModule.forLocal()`  | `BillingController` + `BillingResolver` + `BillingPort → BillingLocalAdapter` (the app imports `BillingCoreModule` too)                          | monolith         |
-| `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule.register({ spec: BILLING_GRPC_PACKAGE, url })` | gateway          |
+| Module                         | Contents                                                                                                                                            | Used by          |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `BillingCoreModule`            | CQRS handlers, Drizzle repositories, billing's outbox and its relay (`OutboxModule.forFeature`), the Stripe adapter (`StripeModule.forRootAsync()`) | (via the others) |
+| `BillingGrpcModule`            | `BillingCoreModule` + `BillingGrpcController` (`billing.v1.BillingService`)                                                                         | billing-service  |
+| `BillingApiModule.forLocal()`  | `BillingController` + `BillingResolver` + `BillingPort → BillingLocalAdapter` (the app imports `BillingCoreModule` too)                             | monolith         |
+| `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule.register({ spec: BILLING_GRPC_PACKAGE, url })`    | gateway          |
 
 Entry points: `@domain/billing/api` (edge: `BillingApiModule`, `BillingPort` and its adapters, gRPC client config,
 GraphQL/REST presentation, log-redaction paths; what the gateway imports) and `@domain/billing` (everything in
@@ -246,7 +246,9 @@ failure marks the payment `failed`; a retry with the same key reopens it and get
 3. The whole delivery runs as the `{ userId, tenantId }` signed into the session and PaymentIntent metadata, so it can touch
    only that tenant's rows. An event without a usable owner (payouts, unattributed fees, pre-tenancy sessions) is recorded
    for the platform tenant through the `markProcessedAsPlatform` system method and nothing else.
-4. After COMMIT the aggregate's events are published; `PaymentSucceededRelay` sends the Kafka event.
+4. In the same unit of work, after `markProcessed` and `save`, a completed payment enqueues
+   `billing.payment-succeeded.v1` on `billing.outbox` (`BillingOutbox`). After COMMIT the aggregate's events go to
+   the in-process event bus; the outbox relay publishes the row to Kafka.
 
 Unknown payments and impossible transitions are acknowledged with a warning (a retry could never succeed).
 A paid session with no usable currency (none in the event, none stored) is one of them: the payment stays
@@ -272,10 +274,15 @@ the role's `statement_timeout` (a timed-out one is retried at half the span), so
 method refuses outside the context). It needs `ScheduleModule.forRoot()` and `RedisModule` in the
 app (billing-service and the monolith import both).
 
-**Consistency.** The relay publishes after commit and only logs failures, so a crash between COMMIT and the Kafka
-ack loses the event. Guaranteed delivery needs a transactional outbox (a `billing_outbox` row written inside the
-webhook transaction, relayed by a poller); the envelope id is already the stable domain event id, so consumers
-dedupe replays either way.
+**Consistency.** `billing.payment-succeeded.v1` goes through a transactional outbox (`@platform/outbox`, G-1):
+the webhook's unit of work inserts the row into `billing.outbox` (a plain `INSERT` as the signed owner: key = user
+id, envelope id = the `PaymentSucceededEvent` id, `occurredAt` = `paidAt`, tenant and actor = the owner), so the
+event commits or rolls back with the payment. A failing enqueue fails the delivery: no receipt, no transition,
+and Stripe retries it. The outbox relay (one leader per process set, Redis lock `outbox-relay:billing`) polls the
+table on the `app_system` pool, publishes each row with `KafkaProducer.publishStored` and marks it only after the
+broker acknowledged it: delivery is at least once, and consumers dedupe on the stable envelope id. Nothing in
+billing publishes to Kafka from a request path. `outbox.insertAsPlatform` is the only way a `PLATFORM_TENANT_ID`
+row enters the table (the runtime policy refuses the nil tenant).
 
 ## Data model (`billingSchema`, `infrastructure/persistence/billing.schema.ts`)
 
@@ -350,8 +357,10 @@ transaction would carry no RLS context.
 - Handlers: checkout (mocked `StripeService`: idempotency per user, key reuse 409, failure → `failed` → retry,
   missing URL), webhook (real signature verification with `stripe.webhooks.generateTestHeaderString`: valid,
   duplicate, ignored type, invalid/missing/tampered signature, async payments, expiry, unknown payment, rollback on
-  infrastructure error, events published only after the transaction), list (limit normalisation).
-- Mappers (contract + row), relay (`FakeKafkaProducer`, failure swallowed), local adapter (bus mapping), gRPC
+  infrastructure error, events published only after the transaction, the outbox record enqueued after
+  `markProcessed` and `save` and before COMMIT, nothing enqueued otherwise, a failing enqueue rolling back), list
+  (limit normalisation).
+- Mappers (contract, row, the payment-succeeded payload), local adapter (bus mapping), gRPC
   adapter (null normalisation, metadata, error mapping), gRPC controller (bus mapping, zod payload schemas).
 - Drizzle repositories: real Drizzle SQL generation on a recording postgres.js fake (ON CONFLICT targets,
   `FOR UPDATE`, optimistic lock, prepared list statements).
@@ -359,12 +368,14 @@ transaction would carry no RLS context.
   every table and enum in the `billing` schema, the match with `drizzle.config.ts`, the baseline's
   `CREATE SCHEMA IF NOT EXISTS "billing";` first statement, `0002_distribute` holding only the two
   `app.distribute_by_tenant` calls, and `0003_rls` holding exactly the forced RLS, the five policies (no subquery)
-  and one grant per table and role.
+  and one grant per table and role, and `0004_outbox` holding the plan's outbox SQL in order
+  (`describeOutboxTable` pins the table's shape).
 - `infrastructure/stripe/*.spec.ts` — the Stripe adapter: SDK error mapping, signature verification (valid, forged, stale, re-serialised, missing, not JSON), Checkout params and idempotency key, module wiring and the invalid-key boot failure.
 - `billing.controller.spec.ts` — Fastify app with the real `AuthModule` guards (tokens from `signTestAccessToken`, `@platform/auth/testing`):
   401/403, 400 validation (body, query, `Idempotency-Key`), serialisation, raw-body webhook, OpenAPI document.
 - `billing.resolver.spec.ts` — Apollo on Fastify: payments (owner as `userId`; billing defines no `user` field), RBAC, input validation.
-- `test/stripe-webhook.flow.spec.ts` — raw body → controller → local adapter → handler → relay → Kafka fake.
+- `test/stripe-webhook.flow.spec.ts` — raw body → controller → local adapter → handler → outbox (in memory) → one
+  relay tick → Kafka fake.
 - `billing.modules.spec.ts` — DI wiring of `BillingGrpcModule`, `BillingApiModule.forLocal()` / `.forRemote()`.
 - `Payment.user` is tested where it is composed: `apps/monolith/test/payment-user.e2e-spec.ts` (local ports, ONE
   batched `GetUsersByIds`) and `apps/gateway/test/payment-user.e2e-spec.ts` (remote ports, ONE `GetUsersByIds` RPC).
@@ -391,7 +402,8 @@ nothing; metadata naming another tenant's payment touches neither tenant; a malf
 event through `markProcessedAsPlatform` with no runtime transaction; a failing save rolls the receipt back and the retry
 applies it; checkout calls Stripe with no applied RLS context; a member lists only their own payments, an admin lists the
 tenant's (elevated, ending with the transaction); the purge deletes the old events of every tenant and the platform
-tenant. Across the file the system methods used are exactly the two pinned ones.
+tenant. Across the file the system methods used are exactly the two pinned ones (the outbox relay is off there:
+`OUTBOX_RELAY_ENABLED=false`).
 `infrastructure/persistence/billing.distribution.int-spec.ts` (`startRlsTestPostgres()`: local execution off, the
 history applied as `app_owner`): both tables distributed by `tenant_id` and colocated with `app.tenant_colocation`,
 `0002` re-applied without change, the purge removing exactly the old events of tenants on every shard and of the
@@ -405,6 +417,16 @@ own Stripe events only, UPDATE and DELETE `42501`), platform rows invisible to e
 by `app_system`, no context returning or changing nothing, forced RLS (the owner reads nothing), the exact grants and
 policies, and nothing on `billing.__drizzle_migrations`. A superuser snapshot after every case proves that no
 forbidden write changed a row.
+`infrastructure/persistence/billing.outbox.rls.int-spec.ts` (`0004_outbox`, local execution off): `billing.outbox`
+distributed by `tenant_id` and colocated, RLS enabled and forced, exactly `INSERT` for `app_runtime` and `SELECT,
+INSERT, UPDATE, DELETE` for `app_system`, the one `outbox_insert` policy; a principal inserts only its own tenant's
+rows (another tenant's, the nil tenant's and a tenant-less principal's are refused); runtime reads and writes are
+`42501`; the system repository polls and marks; a row written by `insertAsPlatform` is invisible to and unchangeable
+by every runtime principal, elevated or not, and is returned by the poll.
+`test/webhook-outbox.int-spec.ts` (the real core on the three URLs, the module's relay off): a paid webhook for tenant
+A leaves the payment succeeded, the receipt and one outbox row under A; a replay adds no row; one tick of a real
+`OutboxRelay` publishes an envelope that parses with `PAYMENT_SUCCEEDED_EVENT` and marks the row; with the row's id
+pre-seeded through the system pool, the delivery fails and leaves the payment pending and no receipt.
 
 ## Ledger (immudb)
 

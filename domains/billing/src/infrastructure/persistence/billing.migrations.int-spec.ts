@@ -95,6 +95,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing migrations on Postg
       'app.__drizzle_migrations',
       'app.tenant_colocation',
       'billing.__drizzle_migrations',
+      'billing.outbox',
       'billing.payments',
       'billing.stripe_events',
     ]);

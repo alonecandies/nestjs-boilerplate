@@ -246,12 +246,14 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         ]);
       });
 
-      it('has exactly the five app_runtime policies, none for any other role', async () => {
+      it('has exactly the five app_runtime policies and the outbox insert policy, none for any other role', async () => {
         const rows = await admin<{ name: string; command: string; roles: string }[]>`
           select tablename || '.' || policyname as name, cmd as command,
             array_to_string(roles, ',') as roles
           from pg_policies where schemaname = 'billing' order by 1`;
         expect([...rows]).toEqual([
+          // 0004_outbox (outbox plan Task 6); billing.outbox.rls.int-spec.ts covers it.
+          { name: 'outbox.outbox_insert', command: 'INSERT', roles: 'app_runtime' },
           { name: 'payments.payments_insert', command: 'INSERT', roles: 'app_runtime' },
           { name: 'payments.payments_select', command: 'SELECT', roles: 'app_runtime' },
           { name: 'payments.payments_update', command: 'UPDATE', roles: 'app_runtime' },

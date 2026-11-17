@@ -277,6 +277,7 @@
         "@platform/graphql": "workspace:*",
         "@platform/immudb": "workspace:*",
         "@platform/observability": "workspace:*",
+        "@platform/outbox": "workspace:*",
         "@platform/redis": "workspace:*",
         "@platform/transport": "workspace:*",
         "class-validator": "catalog:",

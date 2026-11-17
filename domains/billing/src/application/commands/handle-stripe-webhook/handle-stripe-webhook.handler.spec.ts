@@ -1,3 +1,4 @@
+import { PAYMENT_SUCCEEDED_EVENT } from '@domain/billing-contracts';
 import { Logger } from '@nestjs/common';
 import { EventPublisher, type IEvent } from '@nestjs/cqrs';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
@@ -8,6 +9,10 @@ import {
   PLATFORM_TENANT_ID,
   SystemContext,
 } from '@platform/common';
+import { parseEventEnvelope } from '@platform/contracts';
+import type { OutboxRecord } from '@platform/outbox';
+import { InMemoryOutbox } from '@platform/outbox/testing';
+import { FakeKafkaProducer } from '@platform/transport/testing';
 import { beforeAll, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import {
   createTestStripeService,
@@ -24,9 +29,33 @@ import {
 import { PaymentSucceededEvent } from '../../../domain/events/payment-succeeded.event.js';
 import type { Payment } from '../../../domain/payment.aggregate.js';
 import { PaymentStatus } from '../../../domain/payment-status.enum.js';
+import { BILLING_OUTBOX } from '../../../infrastructure/persistence/billing-outbox.js';
 import { InMemoryStripeEventsSystemRepository } from '../../../testing/in-memory-stripe-events-system-repository.js';
 import { HandleStripeWebhookCommand } from './handle-stripe-webhook.command.js';
 import { HandleStripeWebhookHandler } from './handle-stripe-webhook.handler.js';
+
+/**
+ * The in-memory billing outbox over the test transaction host (so `enqueue` refuses outside the
+ * unit of work, like the real writer): each INSERT is logged in `order` with whether the unit of
+ * work was open, or fails when told to.
+ */
+class OrderedOutbox extends InMemoryOutbox {
+  failWith: Error | undefined;
+
+  constructor(
+    private readonly order: string[],
+    private readonly tx: TestTransactions,
+    kafka: FakeKafkaProducer,
+  ) {
+    super(BILLING_OUTBOX, { kafka, txHost: tx.host });
+  }
+
+  protected override async insert(record: OutboxRecord): Promise<void> {
+    this.order.push(`enqueue:${record.topic}:${this.tx.active ? 'in-tx' : 'no-tx'}`);
+    if (this.failWith !== undefined) throw this.failWith;
+    await super.insert(record);
+  }
+}
 
 describe('HandleStripeWebhookHandler', () => {
   let store: InMemoryBillingStore;
@@ -41,6 +70,10 @@ describe('HandleStripeWebhookHandler', () => {
   let paidWithoutAmount: { inc: Mock<() => void> };
   let amountMismatch: { inc: Mock<() => void> };
   let apiVersionMismatch: { inc: Mock<() => void> };
+  let kafka: FakeKafkaProducer;
+  let outbox: OrderedOutbox;
+  /** markProcessed, save, the outbox INSERT and the post-commit publish, in call order. */
+  let order: string[];
 
   /** The metadata checkout signs into the session (B2-26): what the webhook resolves the tenant from. */
   const signedMetadata = () => ({
@@ -81,11 +114,15 @@ describe('HandleStripeWebhookHandler', () => {
     tx = installTestTransactionHost(store);
     published = [];
     publishedDuringTransaction = false;
+    order = [];
+    kafka = new FakeKafkaProducer({ source: 'billing-test' });
+    outbox = new OrderedOutbox(order, tx, kafka);
     const eventBus = {
       publish: vi.fn(),
       publishAll: vi.fn((events: IEvent[]) => {
         publishedDuringTransaction ||= tx.active;
         published.push(...events);
+        order.push(`publish:${tx.active ? 'in-tx' : 'after-commit'}`);
       }),
     };
     paidWithoutCurrency = { inc: vi.fn<() => void>() };
@@ -95,11 +132,23 @@ describe('HandleStripeWebhookHandler', () => {
     systemEvents = new InMemoryStripeEventsSystemRepository(
       () => new Date('2026-10-01T00:00:00.000Z'),
     );
+    const stripeEvents = new InMemoryStripeEventsRepository(store);
+    const markProcessed = stripeEvents.markProcessed.bind(stripeEvents);
+    stripeEvents.markProcessed = async (event) => {
+      order.push('markProcessed');
+      return markProcessed(event);
+    };
+    const save = payments.save.bind(payments);
+    payments.save = async (p) => {
+      order.push('save');
+      return save(p);
+    };
     handler = new HandleStripeWebhookHandler(
       createTestStripeService(),
-      new InMemoryStripeEventsRepository(store),
+      stripeEvents,
       systemEvents,
       payments,
+      outbox,
       new EventPublisher(eventBus as never),
       paidWithoutCurrency,
       amountMismatch,
@@ -351,6 +400,7 @@ describe('HandleStripeWebhookHandler', () => {
     expect(tx.rolledBack).toBe(1);
     expect(store.state.events.has(`${TEST_TENANT_ID}:evt_retry`)).toBe(false);
     expect(published).toEqual([]);
+    expect(outbox.records).toEqual([]);
 
     saveSpy.mockRestore();
     await expect(deliver(webhook)).resolves.toMatchObject({ duplicate: false });
@@ -390,6 +440,136 @@ describe('HandleStripeWebhookHandler', () => {
     );
     expect(apiVersionMismatch.inc).toHaveBeenCalledTimes(1);
     expect(store.payment(payment.id)).toMatchObject({ status: PaymentStatus.Expired });
+  });
+
+  describe('billing.payment-succeeded.v1 on the outbox (G-1: in the unit of work, never Kafka)', () => {
+    const outboxRows = () =>
+      outbox.records.filter((row) => row.topic === PAYMENT_SUCCEEDED_EVENT.topic);
+
+    it('a paid session enqueues one record after markProcessed and save, before the commit', async () => {
+      await deliver(completed({}, 'evt_outbox_paid_1'));
+
+      expect(order).toEqual([
+        'markProcessed',
+        'save',
+        `enqueue:${PAYMENT_SUCCEEDED_EVENT.topic}:in-tx`,
+        'publish:after-commit',
+      ]);
+      const [event] = published as [PaymentSucceededEvent];
+      expect(event).toBeInstanceOf(PaymentSucceededEvent);
+      // key = user id, envelope id = the domain event id, tenant and actor = the signed owner.
+      expect(outbox.records).toHaveLength(1);
+      expect(outboxRows()[0]).toMatchObject({
+        tenantId: TEST_TENANT_ID,
+        id: event.eventId,
+        topic: PAYMENT_SUCCEEDED_EVENT.topic,
+        key: payment.userId,
+        publishedAt: null,
+      });
+      // The envelope the deleted relay built, field for field (occurredAt = paidAt).
+      expect(parseEventEnvelope(PAYMENT_SUCCEEDED_EVENT, outboxRows()[0]?.envelope)).toEqual({
+        id: event.eventId,
+        type: PAYMENT_SUCCEEDED_EVENT.topic,
+        version: 1,
+        source: 'billing-test',
+        occurredAt: new Date(1_790_000_000 * 1_000).toISOString(),
+        tenantId: TEST_TENANT_ID,
+        actorId: payment.userId,
+        payload: {
+          paymentId: payment.id,
+          userId: payment.userId,
+          stripeCheckoutSessionId: 'cs_paid_1',
+          stripePaymentIntentId: 'pi_1',
+          amountTotal: 2_500,
+          currency: 'usd',
+          paidAt: new Date(1_790_000_000 * 1_000).toISOString(),
+        },
+      });
+      expect(kafka.records).toEqual([]);
+    });
+
+    it('async_payment_succeeded enqueues the record too', async () => {
+      await deliver(completed({ payment_status: 'unpaid' }, 'evt_outbox_unpaid'));
+      expect(outbox.records).toEqual([]);
+      await deliver(
+        signedEvent(
+          'checkout.session.async_payment_succeeded',
+          makeCheckoutSession({
+            id: 'cs_paid_1',
+            client_reference_id: payment.id,
+            payment_status: 'paid',
+            metadata: signedMetadata(),
+          }),
+          { id: 'evt_outbox_async_paid' },
+        ),
+      );
+      expect(outboxRows()).toHaveLength(1);
+      expect(outboxRows()[0]?.id).toBe((published[0] as PaymentSucceededEvent).eventId);
+    });
+
+    it('a duplicate delivery enqueues nothing', async () => {
+      const webhook = completed({}, 'evt_outbox_dup');
+      await deliver(webhook);
+      await expect(deliver(webhook)).resolves.toMatchObject({ duplicate: true });
+      expect(outbox.records).toHaveLength(1);
+    });
+
+    it('an unpaid completion, a failed and an expired session enqueue nothing', async () => {
+      await deliver(completed({ payment_status: 'unpaid' }, 'evt_outbox_unpaid_only'));
+      await deliver(
+        signedEvent(
+          'checkout.session.async_payment_failed',
+          makeCheckoutSession({
+            id: 'cs_paid_1',
+            client_reference_id: payment.id,
+            metadata: signedMetadata(),
+          }),
+        ),
+      );
+      expect(store.payment(payment.id)?.status).toBe(PaymentStatus.Failed);
+      await deliver(
+        signedEvent(
+          'checkout.session.expired',
+          makeCheckoutSession({ id: 'cs_paid_1', status: 'expired', metadata: signedMetadata() }),
+        ),
+      );
+      expect(store.payment(payment.id)?.status).toBe(PaymentStatus.Expired);
+      expect(outbox.records).toEqual([]);
+      expect(order.filter((step) => step.startsWith('enqueue'))).toEqual([]);
+    });
+
+    it('an impossible transition and a platform event enqueue nothing', async () => {
+      await deliver(completed({}, 'evt_outbox_first'));
+      await deliver(completed({}, 'evt_outbox_second'));
+      await deliver(signedEvent('payout.paid', { id: 'po_outbox' }, { id: 'evt_outbox_payout' }));
+      expect(outbox.records).toHaveLength(1);
+    });
+
+    it('a failing enqueue rejects and leaves no receipt, no transition and nothing published', async () => {
+      outbox.failWith = new Error('outbox insert failed');
+
+      await expect(deliver(completed({}, 'evt_outbox_fail'))).rejects.toThrow(
+        'outbox insert failed',
+      );
+
+      expect(tx.rolledBack).toBe(1);
+      expect(store.state.events.has(`${TEST_TENANT_ID}:evt_outbox_fail`)).toBe(false);
+      expect(store.payment(payment.id)).toMatchObject({
+        status: PaymentStatus.Pending,
+        version: 0,
+      });
+      expect(published).toEqual([]);
+      expect(outbox.records).toEqual([]);
+      expect(kafka.records).toEqual([]);
+
+      // Stripe's retry is applied in full once the outbox accepts the row.
+      outbox.failWith = undefined;
+      await expect(deliver(completed({}, 'evt_outbox_fail'))).resolves.toMatchObject({
+        duplicate: false,
+      });
+      expect(store.payment(payment.id)?.status).toBe(PaymentStatus.Succeeded);
+      expect(outbox.records).toHaveLength(1);
+    });
   });
 
   describe('tenancy (signed metadata)', () => {
@@ -441,9 +621,10 @@ describe('HandleStripeWebhookHandler', () => {
       });
     });
 
-    it('publishes PaymentSucceededEvent with the payment tenant', async () => {
+    it('publishes PaymentSucceededEvent with the payment tenant, and enqueues it under that tenant', async () => {
       await deliver(owned(TEST_TENANT_ID, 'evt_tenant_event_1'));
       expect(published).toEqual([expect.objectContaining({ tenantId: TEST_TENANT_ID })]);
+      expect(outbox.records.map((row) => row.tenantId)).toEqual([TEST_TENANT_ID]);
     });
 
     it('treats a nil-UUID user as no user: recorded through the system method, never retried forever, no payment touched', async () => {

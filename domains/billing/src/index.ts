@@ -5,7 +5,8 @@
  *
  * Entry points: `@domain/billing/api` (edge surface, re-exported here) and this root entry (adds
  * core, persistence, the Stripe adapter, commands, queries and domain types).
- * Wiring: `BillingCoreModule` + `BillingGrpcModule` (billing-service), `BillingCoreModule` +
+ * Wiring: `BillingCoreModule` (handlers, repositories, outbox and its relay, cron) +
+ * `BillingGrpcModule` (billing-service), `BillingCoreModule` +
  * `BillingApiModule.forLocal()` (monolith), `BillingApiModule.forRemote()` from
  * `@domain/billing/api` (gateway). `billingSchema` and the migration set `billingMigrations` go into
  * `DatabaseModule.forRootAsync({ schema, migrations })`.
@@ -50,6 +51,7 @@ export { billingMigrations } from './infrastructure/persistence/billing.migratio
 export {
   type BillingSchema,
   billingSchema,
+  outbox,
   type PaymentRow,
   paymentStatusEnum,
   payments,
@@ -57,6 +59,10 @@ export {
   stripeEvents,
 } from './infrastructure/persistence/billing.schema.js';
 export { BILLING_SYSTEM_METHODS } from './infrastructure/persistence/billing.system-methods.js';
+// Billing's outbox (G-1): the writer token, the feature and the system repository (the e2e apps
+// bind `@domain/billing/testing`'s createInMemoryBillingOutbox() in their place).
+export { BILLING_OUTBOX, BillingOutbox } from './infrastructure/persistence/billing-outbox.js';
+export { BillingOutboxSystemRepository } from './infrastructure/persistence/drizzle-outbox.system-repository.js';
 // Stripe adapter (imported by BillingCoreModule; public for custom wiring / tests)
 export * from './infrastructure/stripe/stripe.config.js';
 export * from './infrastructure/stripe/stripe.constants.js';

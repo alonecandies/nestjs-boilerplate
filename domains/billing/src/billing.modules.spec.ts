@@ -12,6 +12,7 @@ import {
   SystemDatabase,
   TransactionHost,
 } from '@platform/database';
+import { DistributedLockService } from '@platform/redis';
 import { KafkaProducer } from '@platform/transport';
 import { FakeKafkaProducer } from '@platform/transport/testing';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -24,13 +25,16 @@ import { BillingCoreModule } from './billing-core.module.js';
 import { BillingGrpcModule } from './billing-grpc.module.js';
 import { BillingGrpcAdapter } from './infrastructure/adapters/grpc/billing-grpc.adapter.js';
 import { BillingLocalAdapter } from './infrastructure/adapters/local/billing-local.adapter.js';
+import { BillingOutbox } from './infrastructure/persistence/billing-outbox.js';
+import { BillingOutboxSystemRepository } from './infrastructure/persistence/drizzle-outbox.system-repository.js';
 import { StripeService } from './infrastructure/stripe/stripe.service.js';
 import { BillingGrpcController } from './presentation/grpc/billing-grpc.controller.js';
 
 /**
  * What the apps' global infrastructure modules provide, faked (no Postgres, no Kafka): the real
  * RLS transaction host over a recording client, the elevation service (over the RbacModule's
- * permissions), and a system database without a pool. No Stripe:
+ * permissions), a system database without a pool (so the outbox relay does not start) and a lock
+ * service the relay injects (it never asks for a lock here). No Stripe:
  * BillingCoreModule brings its own adapter (a real client from the dev placeholder key, which
  * opens no connection until a call).
  */
@@ -45,9 +49,20 @@ function fakeInfrastructure() {
       { provide: TransactionHost, useValue: host },
       { provide: SYSTEM_DATABASE, useValue: new SystemDatabase(null) },
       { provide: KafkaProducer, useValue: new FakeKafkaProducer() },
+      {
+        provide: DistributedLockService,
+        useValue: { using: () => Promise.reject(new Error('no lock in a wiring spec')) },
+      },
       RlsElevation,
     ],
-    exports: [DRIZZLE, TransactionHost, SYSTEM_DATABASE, KafkaProducer, RlsElevation],
+    exports: [
+      DRIZZLE,
+      TransactionHost,
+      SYSTEM_DATABASE,
+      KafkaProducer,
+      DistributedLockService,
+      RlsElevation,
+    ],
   })
   class FakeInfrastructureModule {}
 
@@ -82,6 +97,11 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
     expect(context.get(BillingGrpcController)).toBeInstanceOf(BillingGrpcController);
     // The Stripe adapter comes with the core, not from an app-level module.
     expect(context.get(StripeService, { strict: false })).toBeInstanceOf(StripeService);
+    // So does billing's outbox: the writer token and its system repository (OutboxModule).
+    expect(context.get(BillingOutbox, { strict: false })).toBeInstanceOf(BillingOutbox);
+    expect(context.get(BillingOutboxSystemRepository, { strict: false })).toBeInstanceOf(
+      BillingOutboxSystemRepository,
+    );
     await expect(
       asMember(() =>
         context

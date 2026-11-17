@@ -1,11 +1,11 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { makeCounterProvider } from '@platform/observability';
+import { OutboxModule } from '@platform/outbox';
 import { CreateCheckoutSessionHandler } from './application/commands/create-checkout-session/create-checkout-session.handler.js';
 import { HandleStripeWebhookHandler } from './application/commands/handle-stripe-webhook/handle-stripe-webhook.handler.js';
 import { PurgeStripeEventsHandler } from './application/commands/purge-stripe-events/purge-stripe-events.handler.js';
 import { ListPaymentsHandler } from './application/queries/list-payments/list-payments.handler.js';
-import { PaymentSucceededRelay } from './application/relays/payment-succeeded.relay.js';
 import { PaymentsRepository } from './application/repositories/payments.repository.js';
 import { StripeEventsRepository } from './application/repositories/stripe-events.repository.js';
 import { StripeEventsSystemRepository } from './application/repositories/stripe-events.system-repository.js';
@@ -15,6 +15,8 @@ import {
   PAID_WITHOUT_AMOUNT_METRIC,
   PAID_WITHOUT_CURRENCY_METRIC,
 } from './billing.constants.js';
+import { BILLING_OUTBOX, BillingOutbox } from './infrastructure/persistence/billing-outbox.js';
+import { BillingOutboxSystemRepository } from './infrastructure/persistence/drizzle-outbox.system-repository.js';
 import { DrizzlePaymentsRepository } from './infrastructure/persistence/drizzle-payments.repository.js';
 import { DrizzleStripeEventsRepository } from './infrastructure/persistence/drizzle-stripe-events.repository.js';
 import { DrizzleStripeEventsSystemRepository } from './infrastructure/persistence/drizzle-stripe-events.system-repository.js';
@@ -23,25 +25,35 @@ import { stripeConfig } from './infrastructure/stripe/stripe.config.js';
 import { StripeModule } from './infrastructure/stripe/stripe.module.js';
 
 /**
- * The billing core: CQRS handlers, the Kafka relay and the Drizzle repositories. Imported by the
- * process that owns the billing tables (billing-service via `BillingGrpcModule`; the monolith
- * imports it directly, next to `BillingApiModule.forLocal()`).
+ * The billing core: CQRS handlers, the Drizzle repositories and billing's outbox
+ * (`OutboxModule.forFeature`: the `BillingOutbox` writer the webhook enqueues
+ * `billing.payment-succeeded.v1` with, in its unit of work, and the relay that publishes
+ * `billing.outbox` to Kafka; `outbox` namespace). Imported by the process that owns the billing
+ * tables (billing-service via `BillingGrpcModule`; the monolith imports it directly, next to
+ * `BillingApiModule.forLocal()`).
  *
  * Expects these global app-level modules: `AppConfigModule`, `CqrsModule.forRoot()`,
  * `DatabaseModule.forRootAsync({ schema: billingSchema, migrations: [billingMigrations] })`
- * (DRIZZLE + `@Transactional()`, and the system pool: the purge and platform webhooks need
- * DATABASE_SYSTEM_URL), `KafkaProducerModule.forRootAsync()`,
- * `RedisModule.forRootAsync()` (the purge cron's distributed lock) and — for the cron to be
- * scheduled — `ScheduleModule.forRoot()`. It imports its own Stripe adapter
+ * (DRIZZLE + `@Transactional()`, and the system pool: the purge, platform webhooks and the outbox
+ * relay need DATABASE_SYSTEM_URL), `KafkaProducerModule.forRootAsync()`,
+ * `RedisModule.forRootAsync()` (the purge cron's and the relay's distributed locks) and — for the
+ * cron to be scheduled — `ScheduleModule.forRoot()`. It imports its own Stripe adapter
  * (`StripeModule.forRootAsync()`), so no app imports Stripe.
  */
 @Module({
-  imports: [ConfigModule.forFeature(stripeConfig), StripeModule.forRootAsync()],
+  imports: [
+    ConfigModule.forFeature(stripeConfig),
+    StripeModule.forRootAsync(),
+    OutboxModule.forFeature({
+      feature: BILLING_OUTBOX,
+      writer: BillingOutbox,
+      systemRepository: BillingOutboxSystemRepository,
+    }),
+  ],
   providers: [
     CreateCheckoutSessionHandler,
     HandleStripeWebhookHandler,
     ListPaymentsHandler,
-    PaymentSucceededRelay,
     PurgeStripeEventsHandler,
     PurgeStripeEventsCron,
     // Registered in prom-client's default registry; works with or without the /metrics module.
@@ -63,7 +75,7 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
     }),
     { provide: PaymentsRepository, useClass: DrizzlePaymentsRepository },
     { provide: StripeEventsRepository, useClass: DrizzleStripeEventsRepository },
-    // The only billing door to the app_system pool (BILLING_SYSTEM_METHODS).
+    // Billing's doors to the app_system pool (BILLING_SYSTEM_METHODS): this one and the outbox's.
     { provide: StripeEventsSystemRepository, useClass: DrizzleStripeEventsSystemRepository },
   ],
 })

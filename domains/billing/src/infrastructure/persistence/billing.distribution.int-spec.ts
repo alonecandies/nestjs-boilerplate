@@ -149,7 +149,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
 
   it('re-applying the distribution file changes nothing', async () => {
     const before = await citusTables();
-    expect(before).toHaveLength(3);
+    // payments, stripe_events and outbox (0004_outbox), and the anchor app.tenant_colocation.
+    expect(before).toHaveLength(4);
     for (const statement of statements('0002_distribute.sql')) {
       await db.execute(sql.raw(statement));
     }
@@ -248,7 +249,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
     };
     const before = await citusTables();
     const files = await applied();
-    expect(files).toBe(4);
+    // 0000_init .. 0004_outbox.
+    expect(files).toBe(5);
     const first = app;
     app = undefined; // afterAll then closes only what is open, even if the boot below throws
     await first?.close();
