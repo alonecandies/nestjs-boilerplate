@@ -28,6 +28,7 @@ export async function startBillingDatabase(
 ): Promise<BillingDatabase> {
   const pg = await startTestPostgres({ localExecution: options.localExecution ?? true });
   vi.stubEnv('DATABASE_URL', pg.url);
+  vi.stubEnv('DATABASE_MIGRATION_URL', pg.url); // the superuser until the role flip
   vi.stubEnv('SERVICE_NAME', 'billing-int');
 
   @Module({

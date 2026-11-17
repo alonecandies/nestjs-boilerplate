@@ -24,6 +24,7 @@ code (`DatabaseModule` `postgres.ssl`) wins at runtime, but the boot check only 
 | `DatabaseMigrationSet`                                                                                                                                  | interface        | `{ name; folder; migrationsSchema; migrationsTable }`: one migration history with its own bookkeeping table                                                                                                                       |
 | `platformMigrations`                                                                                                                                    | const            | The platform set (`src/platform/migrations`, bookkeeping `app.__drizzle_migrations`): always applied first                                                                                                                        |
 | `withPlatformMigrations(sets)`                                                                                                                          | fn               | `[platformMigrations, ...sets]`; throws on a set listed twice or two sets sharing a bookkeeping table                                                                                                                             |
+| `assertMigrationSets(sets)`                                                                                                                             | fn               | Throws unless the platform set is first, no set is listed twice and each set has its own bookkeeping table (`runMigrations` calls it)                                                                                             |
 | `DRIZZLE`, `DATABASE_MODULE_OPTIONS`                                                                                                                    | symbols          | Injection tokens                                                                                                                                                                                                                  |
 | `InjectDrizzle()`                                                                                                                                       | decorator        | `@InjectDrizzle() private readonly db: DrizzleDB<typeof schema>`                                                                                                                                                                  |
 | `DrizzleDB<S>`, `DrizzleTransaction<S>`, `DrizzleExecutor<S>`, `DrizzleSchema`                                                                          | types            | Handle (`PostgresJsDatabase<S> & { $client: Sql }`), tx handle, db-or-tx, schema record                                                                                                                                           |
@@ -102,6 +103,12 @@ async execute(cmd: PlaceOrderCommand) { await this.orders.insert(...); await thi
 - **One bookkeeping table per set** (`<schema>.__drizzle_migrations`). drizzle's migrator compares file timestamps only
   with the newest row of the table it writes to, so two histories in one table would silently skip the older one's
   files. `withPlatformMigrations` rejects a shared table.
+- **The runner checks it too, before it connects.** `runMigrations` refuses sets that do not start with the platform
+  set, two sets sharing a bookkeeping table and a set whose folder has no `meta/_journal.json`, whoever calls it.
+- **Direct coordinator only.** On Citus, `runMigrations` refuses a node that is not the coordinator
+  (`citus_is_coordinator()` false on a node that is in a cluster; a fresh single node counts as the coordinator).
+  Its session sends `statement_timeout = '0'` as a startup parameter, which PgBouncer refuses (`08P01`): the runner
+  rethrows that as an error naming `DATABASE_MIGRATION_URL`, which must never point at the pooler.
 - Each set's pending files run in one transaction (all-or-nothing per set); a set that already ran stays applied when
   a later set fails.
 
@@ -148,7 +155,10 @@ PgBouncer transaction mode / RDS Proxy), `DATABASE_LOG_QUERIES` (false; params a
   `test/fixtures/gadgets/migrations` is hand-written. `test/citus.int-spec.ts` covers the
   Citus helpers (placement, colocation, idempotency, kind changes, the plain-Postgres no-op) and the runner's
   Citus session settings (a set applied while sessions default to remote execution, and the parallel-mode
-  failure they avoid), with the `test/fixtures/citus` set.
+  failure they avoid), with the `test/fixtures/citus` set. `test/platform-rls.int-spec.ts`
+  (`startRlsTestPostgres()`, migrated as `app_owner`, local execution off) covers the 0002 helpers as `app_runtime`,
+  `SET LOCAL` reaching every shard where `set_config()` does not, the grants and the default privilege, and the
+  missing-role stop.
 
 ## Gotchas
 
@@ -200,6 +210,25 @@ When the database has the `citus` extension, `runMigrations` sets `citus.enable_
 distribute tables and add their foreign keys in one transaction, also on a server whose sessions default to
 remote execution. The migration URL must reach the coordinator directly, never a transaction pooler.
 
+`0002_rls_helpers.sql` adds the RLS context helpers every policy calls (program spec 8.1, sharding design 7.1):
+
+| Helper            | Returns   | Value                                                                            |
+| ----------------- | --------- | -------------------------------------------------------------------------------- |
+| `app.user_id()`   | `uuid`    | `app.user_id`; raises `42501` `app.user_id is not set` when it is unset or empty |
+| `app.tenant_id()` | `uuid`    | `app.tenant_id`, or `NULL` when unset or empty                                   |
+| `app.elevated()`  | `boolean` | true only when `app.elevated` is the literal `on`                                |
+
+All three are `STABLE` and read `current_setting(…, true)`. The context is set with `SET LOCAL` on `BEGIN`, never
+`set_config()` (Citus propagates only `SET LOCAL` to shard connections), and policies call the helpers directly,
+never in a subquery. The file also holds the platform half of the grant model (deny by default): `USAGE` on schema
+`app` and `EXECUTE` on the three helpers and `app.citus_enabled()` for `app_runtime` and `app_system`, nothing for
+`PUBLIC` on any function in `app` (the 0001 distribution helpers are for migrations only), no grant on
+`app.__drizzle_migrations`, and `ALTER DEFAULT PRIVILEGES FOR ROLE app_owner REVOKE EXECUTE ON FUNCTIONS FROM
+PUBLIC`, so every later function is granted explicitly. Roles never come from a migration: on a server without
+`app_owner`, `app_runtime` and `app_system` (`docker/postgres/init/02-roles.sql`) the file stops with
+`database role(s) missing: …`. Every spec that applies the platform set therefore starts Postgres with
+`initSql: readRolesInitSql()` or `startRlsTestPostgres()`.
+
 The files are hand-written: drizzle-kit has nothing to diff here, and `drizzle-kit generate --custom` refuses to run
 without a schema file. The runtime migrator reads only `meta/_journal.json` and the `.sql` files. To add a file:
 
@@ -208,4 +237,5 @@ without a schema file. The runtime migrator reads only `meta/_journal.json` and 
    `src/platform/migrations/meta/_journal.json`. `when` must be larger than the previous entry's: drizzle applies only
    files newer than the last applied one;
 3. never edit an applied file. `platform.migrations.spec.ts` checks the journal against the folder, and the runner
-   rejects a malformed journal before it connects.
+   rejects a malformed journal before it connects. Grant what a new function needs in the same file: the default
+   privilege leaves it unexecutable by anyone but its owner.

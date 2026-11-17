@@ -232,7 +232,7 @@ bun run --filter @domain/identity staff:grant you@example.com           # grant
 bun run --filter @domain/identity staff:grant you@example.com --revoke  # revoke
 ```
 
-It connects with `DATABASE_MIGRATION_URL` when set, else `DATABASE_URL`, and exits 1 when no user has that email.
+It connects with `DATABASE_MIGRATION_URL` only (never `DATABASE_URL`), and exits 1 when no user has that email.
 No API can grant staff. A revocation takes effect at the next switch-in (the flag is re-read every time).
 
 ## Rate limiting
