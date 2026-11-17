@@ -262,8 +262,10 @@ processed again. Old receipts are purged: see **Retention** below.
 `payments_tenant_id_user_id_id_idx` (the whole-tenant listing uses the `(tenant_id, id)` primary key). Cursors are opaque; a forged one is a 422 `INVALID_CURSOR`, never SQL.
 
 **Retention.** `PurgeStripeEventsCron` (hourly, `@WithLock('billing:purge-stripe-events')` so one replica runs
-it) deletes `stripe_events` older than `STRIPE_EVENTS_RETENTION_DAYS` (30; Stripe redelivers for ≤ 3 days) in
-batches of 5,000 via `PurgeStripeEventsCommand`. It needs `ScheduleModule.forRoot()` and `RedisModule` in the
+it) deletes `stripe_events` older than `STRIPE_EVENTS_RETENTION_DAYS` (30; Stripe redelivers for ≤ 3 days) via
+`PurgeStripeEventsCommand`: one multi-shard `DELETE … WHERE processed_at < $cutoff` per run, in every tenant (the
+platform tenant included), without a `LIMIT` subquery, which Citus cannot push down on a distributed table. The
+role's `statement_timeout` bounds it; the hourly schedule keeps each run to about an hour of events. It needs `ScheduleModule.forRoot()` and `RedisModule` in the
 app (billing-service and the monolith import both).
 
 **Consistency.** The relay publishes after commit and only logs failures, so a crash between COMMIT and the Kafka
@@ -278,15 +280,18 @@ dedupe replays either way.
 | `payments`      | `tenant_id uuid` (no FK: service boundary), `id uuid` (app uuidv7, DB default `uuidv7()`), `user_id uuid` (no FK), `price_id`, `quantity int`, `amount_total int8` (minor units, NULL until priced), `currency`, `status payment_status`, `stripe_checkout_session_id`, `stripe_payment_intent_id`, `idempotency_key`, `request_hash` (sha256 of the normalized request, NULL before B2), `paid_at`, `version int`, `created_at`, `updated_at` | PK `payments_tenant_id_id_pk (tenant_id, id)`; `payments_tenant_id_user_id_id_idx (tenant_id, user_id, id)` for "my payments in this tenant, newest first"; unique `payments_tenant_id_user_id_idempotency_key_uq (tenant_id, user_id, idempotency_key)`; unique `payments_tenant_id_stripe_checkout_session_id_uq (tenant_id, stripe_checkout_session_id)` |
 | `stripe_events` | `tenant_id uuid`, `id text` (Stripe `evt_…`), `user_id uuid` (NULL for platform events), `type`, `processed_at`                                                                                                                                                                                                                                                                                                                                | PK `stripe_events_tenant_id_id_pk (tenant_id, id)` = the idempotency key; `stripe_events_processed_at_idx` for the retention purge                                                                                                                                                                                                                          |
 
-Both tables are Citus-ready (`// citus: tenant`: the primary key and every unique index start with `tenant_id`, no
-FK to another domain) but not distributed yet (SH-6). Rows created before B2 belong to the platform tenant (nil
+Both tables are distributed by `tenant_id` on Citus, colocated with `app.tenant_colocation` (and so with identity's
+tenant tables): `0002_distribute.sql` (SH-6). The primary key and every unique index start with `tenant_id`, and no
+FK reaches another domain, so a query by `(tenant_id, …)` goes to one shard. Rows created before B2 belong to the platform tenant (nil
 UUID): no tenant can list them.
 
 `payment_status` enum: `pending`, `succeeded`, `failed`, `expired`, `refunded`, `partially_refunded`, `disputed`.
 Constraint and index names are explicit snake_case (`payments_tenant_id_id_pk`). The tables and the enum live in the `billing` Postgres schema
 (`billingPgSchema`); raw SQL qualifies them (`billing.payments`). Billing owns its migration history:
 `drizzle.config.ts` generates `src/infrastructure/persistence/migrations` (`0000_init.sql` holds the original tables and
-indexes; `0001_tenant_columns.sql` adds the tenant columns, the tenant-leading keys and the three ledger statuses), bookkeeping in `billing.__drizzle_migrations`, and
+indexes; `0001_tenant_columns.sql` adds the tenant columns, the tenant-leading keys and the three ledger statuses;
+`0002_distribute.sql` is hand-written and only calls `app.distribute_by_tenant` on both tables; a table added later
+calls it right after its `CREATE TABLE`), bookkeeping in `billing.__drizzle_migrations`, and
 `billingMigrations` applies it after the platform set (the schema file imports only `drizzle-orm` and a
 dependency-free enum file, so drizzle-kit can load it). Every query carries `tenant_id` (`findById(tenantId, id)`, `findForCheckoutSession({ tenantId, … })`, `list({ tenantId, … })`). Reads (`findById`, `list`) use prepared statements on the pool; writes and row locks go
 through `TransactionHost` and join the active transaction.
@@ -311,8 +316,9 @@ through `TransactionHost` and join the active transaction.
 - Drizzle repositories: real Drizzle SQL generation on a recording postgres.js fake (ON CONFLICT targets,
   `FOR UPDATE`, optimistic lock, prepared list statements).
 - `billing.migrations.spec.ts` — the migration set: its folder and `billing.__drizzle_migrations` bookkeeping,
-  every table and enum in the `billing` schema, the match with `drizzle.config.ts`, and the baseline's
-  `CREATE SCHEMA IF NOT EXISTS "billing";` first statement.
+  every table and enum in the `billing` schema, the match with `drizzle.config.ts`, the baseline's
+  `CREATE SCHEMA IF NOT EXISTS "billing";` first statement, and `0002_distribute` holding only the two
+  `app.distribute_by_tenant` calls.
 - `infrastructure/stripe/*.spec.ts` — the Stripe adapter: SDK error mapping, signature verification (valid, forged, stale, re-serialised, missing, not JSON), Checkout params and idempotency key, module wiring and the invalid-key boot failure.
 - `billing.controller.spec.ts` — Fastify app with the real `AuthModule` guards (tokens from `signTestAccessToken`, `@platform/auth/testing`):
   401/403, 400 validation (body, query, `Idempotency-Key`), serialisation, raw-body webhook, OpenAPI document.
@@ -326,8 +332,8 @@ through `TransactionHost` and join the active transaction.
   optionals), webhook bytes arrive untouched, domain codes survive the hop.
 
 Integration (Docker): `INTEGRATION=1 bunx vitest run --project billing:int` runs
-`infrastructure/persistence/billing.migrations.int-spec.ts` on PostgreSQL 18 (testcontainers, or an
-existing throwaway database via `INTEGRATION_DATABASE_URL`). It boots the real `DatabaseModule`, which
+`infrastructure/persistence/billing.migrations.int-spec.ts` on PostgreSQL 18 (always a fresh testcontainers
+Citus container; `INTEGRATION_DATABASE_URL` is not used). It boots the real `DatabaseModule`, which
 applies the platform set and billing's own history (schema `billing`), then checks the result: billing's
 tables and enum in `billing` and none of identity's, nothing in `public`, one bookkeeping row per journal
 entry in each set's own table, every index of the former migrations, the DB defaults (uuidv7 id, `pending`
@@ -335,6 +341,10 @@ status) and a second boot that applies nothing.
 `infrastructure/persistence/billing.repositories.int-spec.ts` runs the repositories on Citus 14.2 (`startBillingDatabase`
 in `test/billing-database.ts`, local execution off): tenant isolation of list, find and lock, Idempotency-Keys per
 (tenant, user), platform events with a NULL user, and migration `0001` applied to a database that already has rows.
+`infrastructure/persistence/billing.distribution.int-spec.ts` (`startRlsTestPostgres()`: local execution off, the
+history applied as `app_owner`): both tables distributed by `tenant_id` and colocated with `app.tenant_colocation`,
+`0002` re-applied without change, the purge removing exactly the old events of tenants on every shard and of the
+platform tenant, both `payments` uniques per tenant, and a `(tenant_id, id)` router query.
 
 ## Ledger (immudb)
 

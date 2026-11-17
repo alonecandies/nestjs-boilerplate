@@ -17,8 +17,9 @@ export abstract class StripeEventsRepository {
   abstract markProcessed(event: StripeEventReceipt): Promise<boolean>;
 
   /**
-   * Deletes at most `limit` events processed before `cutoff` (one short statement, backed by the
-   * `processed_at` index) and returns how many rows went. Callers loop until a partial batch.
+   * Deletes every event processed before `cutoff`, in every tenant (the platform tenant included),
+   * and returns how many rows went: one multi-shard statement (no `FOR UPDATE`), backed by the
+   * `processed_at` index on each shard. Run it once per purge.
    */
-  abstract deleteProcessedBefore(cutoff: Date, limit: number): Promise<number>;
+  abstract deleteProcessedBefore(cutoff: Date): Promise<number>;
 }
