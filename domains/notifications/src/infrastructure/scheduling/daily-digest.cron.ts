@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { CommandBus } from '@nestjs/cqrs';
 import { Cron } from '@nestjs/schedule';
+import { SystemContext } from '@platform/common';
 import { WithLock } from '@platform/redis';
 import type { DailyDigestResult } from '../../application/commands/send-daily-digest/send-daily-digest.command.js';
 import { SendDailyDigestCommand } from '../../application/commands/send-daily-digest/send-daily-digest.command.js';
@@ -16,6 +17,10 @@ import {
  * 09:00 UTC every day. `@Cron` fires on EVERY replica; `@WithLock` lets only the one that wins
  * the Redis lock run it (the others resolve `undefined` immediately). `waitForCompletion` stops a
  * slow run from overlapping the next tick on the same replica.
+ *
+ * The digest is principal-less and spans every tenant's recipients, so the command runs inside
+ * `SystemContext.run('notifications.daily-digest')`. The context is opened here, at the scheduled
+ * entry point, never in the handler: a command dispatched from a request must not gain system status.
  */
 @Injectable()
 export class DailyDigestCron {
@@ -31,8 +36,10 @@ export class DailyDigestCron {
   @WithLock(DAILY_DIGEST_LOCK, DAILY_DIGEST_LOCK_TTL_MS)
   async run(): Promise<DailyDigestResult | undefined> {
     try {
-      const result = await this.commandBus.execute(
-        new SendDailyDigestCommand({ maxRecipients: DIGEST_MAX_RECIPIENTS }),
+      const result = await SystemContext.run(DAILY_DIGEST_JOB_NAME, () =>
+        this.commandBus.execute(
+          new SendDailyDigestCommand({ maxRecipients: DIGEST_MAX_RECIPIENTS }),
+        ),
       );
       this.logger.log(
         `Daily digest: ${result.enqueued} queued, ${result.failed} failed, ${result.scanned} recipients scanned`,

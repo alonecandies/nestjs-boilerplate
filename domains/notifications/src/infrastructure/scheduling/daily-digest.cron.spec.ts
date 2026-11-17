@@ -1,4 +1,5 @@
 import type { CommandBus } from '@nestjs/cqrs';
+import { getPrincipal, SystemContext } from '@platform/common';
 import { redisConfig } from '@platform/config';
 import { DistributedLockService, type LockBackend, RedisKeyService } from '@platform/redis';
 import { createMock } from '@platform/testing';
@@ -70,6 +71,31 @@ describe('DailyDigestCron', () => {
     expect((command as SendDailyDigestCommand).options).toEqual({
       maxRecipients: DIGEST_MAX_RECIPIENTS,
     });
+  });
+
+  it("dispatches the digest inside SystemContext('notifications.daily-digest'), with no principal", async () => {
+    installLock(true);
+    let seen: unknown;
+    const commandBus = createMock<CommandBus>({
+      execute: async () => {
+        seen = {
+          active: SystemContext.isActive(),
+          principal: getPrincipal(),
+          reason: SystemContext.current()?.reason,
+        };
+        return { scanned: 0, enqueued: 0, failed: 0 };
+      },
+    });
+
+    await new DailyDigestCron(asClass(commandBus)).run();
+
+    expect(seen).toEqual({
+      active: true,
+      principal: undefined,
+      reason: 'notifications.daily-digest',
+    });
+    // The system context ends with the run.
+    expect(SystemContext.isActive()).toBe(false);
   });
 
   it('skips on replicas that lose the lock', async () => {

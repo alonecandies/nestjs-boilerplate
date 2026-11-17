@@ -569,8 +569,11 @@ The notifications inbox lives in Cassandra. Its schema is versioned as CQL files
 
 ```text
 domains/notifications/src/infrastructure/persistence/migrations/
-├── 001_create_notifications.cql
-└── 002_create_notification_recipients.cql
+├── 001_create_notifications.cql                      # user-keyed inbox (dropped by 005)
+├── 002_create_notification_recipients.cql            # user-keyed recipients (dropped by 005)
+├── 003_create_notification_recipients_by_tenant.cql  # one recipient per (tenant, user) membership
+├── 004_create_notifications_by_tenant_user.cql       # inbox, one partition per (tenant, user)
+└── 005_drop_user_keyed_tables.cql
 ```
 
 - The file name is `NNN_name.cql`. A file can hold several statements, and **each one must be idempotent** (`CREATE TABLE IF NOT EXISTS …`). `{keyspace}` is substituted if you want fully qualified names.

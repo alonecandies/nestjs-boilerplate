@@ -22,7 +22,7 @@ function invalidKey(reason: string): DomainValidationException {
 
 /**
  * Validates an object key and returns it unchanged. Keys are authorization boundaries here
- * (ownership = key prefix, e.g. `users/{id}/…`), so ambiguous shapes are rejected outright:
+ * (ownership = key prefix, e.g. `tenants/{tid}/users/{id}/…`), so ambiguous shapes are rejected outright:
  * leading `/`, empty or `.`/`..` segments, control characters, backslashes, > 1024 bytes.
  *
  * @throws DomainValidationException `INVALID_STORAGE_KEY`
