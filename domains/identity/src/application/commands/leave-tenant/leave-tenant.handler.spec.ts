@@ -1,5 +1,5 @@
 import { createPrincipal, generateId, runWithPrincipal, type TenantRole } from '@platform/common';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { UserAggregate } from '../../../domain/user.aggregate.js';
 import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
 import { TenantAuditLog } from '../../services/tenant-audit-log.service.js';
@@ -67,5 +67,12 @@ describe('LeaveTenantHandler', () => {
   it('403 TENANT_ACCESS_DENIED when the membership is already gone', async () => {
     await p.memberships.delete(tenantId, eve);
     await expect(leave(eve)).rejects.toMatchObject({ code: 'TENANT_ACCESS_DENIED' });
+  });
+
+  it('a DELETE the policies hide (0 rows) is 403 TENANT_ACCESS_DENIED, with no audit row', async () => {
+    vi.spyOn(p.memberships, 'delete').mockResolvedValue(false);
+    const before = p.store.auditEvents.length;
+    await expect(leave(eve)).rejects.toMatchObject({ code: 'TENANT_ACCESS_DENIED' });
+    expect(p.store.auditEvents).toHaveLength(before);
   });
 });

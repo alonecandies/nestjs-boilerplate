@@ -32,7 +32,10 @@ export class RemoveMemberHandler implements ICommandHandler<RemoveMemberCommand>
       if (target === null) throw new EntityNotFoundException('Member', userId);
       assertCanRemove(actor, target.roles);
       if (target.roles.includes('owner') && owners <= 1) throw new LastOwnerException();
-      await this.memberships.delete(tenantId, userId);
+      // Under RLS a refused DELETE matches no row instead of failing: never audit it as done.
+      if (!(await this.memberships.delete(tenantId, userId))) {
+        throw new EntityNotFoundException('Member', userId);
+      }
       await this.audit.record({
         tenantId,
         actorId,

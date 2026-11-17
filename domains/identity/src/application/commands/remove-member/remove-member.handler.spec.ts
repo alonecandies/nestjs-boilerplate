@@ -1,5 +1,5 @@
 import { createPrincipal, generateId, runWithPrincipal, type TenantRole } from '@platform/common';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { principalLog } from '../../../../test/principal-log.js';
 import { UserAggregate } from '../../../domain/user.aggregate.js';
 import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
@@ -75,5 +75,15 @@ describe('RemoveMemberHandler', () => {
     // Only reads of the actor's own roles may run before (as the request principal, outside it).
     expect(calls.slice(0, elevate).every((c) => c === 'memberships.find')).toBe(true);
     expect(log.calls.every((c) => c.principal?.tenantId === tenantId)).toBe(true);
+  });
+
+  it('a DELETE the policies hide (0 rows) is 404 Member, with no audit row', async () => {
+    vi.spyOn(p.memberships, 'delete').mockResolvedValue(false);
+    const before = p.store.auditEvents.length;
+    await expect(remove(bob, eve)).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      details: { entity: 'Member', id: eve },
+    });
+    expect(p.store.auditEvents).toHaveLength(before);
   });
 });

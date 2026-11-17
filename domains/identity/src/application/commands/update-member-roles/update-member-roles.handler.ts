@@ -42,7 +42,10 @@ export class UpdateMemberRolesHandler implements ICommandHandler<UpdateMemberRol
       if (target.roles.includes('owner') && !next.includes('owner') && owners <= 1) {
         throw new LastOwnerException();
       }
-      await this.memberships.updateRoles(tenantId, userId, next);
+      // Under RLS a refused UPDATE matches no row instead of failing: never audit it as done.
+      if (!(await this.memberships.updateRoles(tenantId, userId, next))) {
+        throw new EntityNotFoundException('Member', userId);
+      }
       await this.audit.record({
         tenantId,
         actorId,

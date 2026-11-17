@@ -39,7 +39,10 @@ export class RenameTenantHandler implements ICommandHandler<RenameTenantCommand>
       await this.elevation.elevate(IdentityPermission.TenantManage);
       const tenant = await this.tenants.findById(tenantId);
       if (tenant === null) throw new EntityNotFoundException('Tenant', tenantId);
-      await this.tenants.rename(tenantId, to);
+      // Under RLS a refused UPDATE matches no row instead of failing: never audit it as done.
+      if (!(await this.tenants.rename(tenantId, to))) {
+        throw new EntityNotFoundException('Tenant', tenantId);
+      }
       await this.audit.record({
         tenantId,
         actorId,
