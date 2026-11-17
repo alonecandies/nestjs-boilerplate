@@ -13,8 +13,14 @@ import {
   Transactional,
   TransactionHost,
 } from '@nestjs-cls/transactional';
-import { createPrincipal, PrincipalPermissions, runWithPrincipal } from '@platform/common';
+import {
+  createPrincipal,
+  PrincipalPermissions,
+  runWithPrincipal,
+  SystemContext,
+} from '@platform/common';
 import { AppConfigModule } from '@platform/config';
+import { sql as drizzleSql } from 'drizzle-orm';
 import { pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { ClsModule } from 'nestjs-cls';
 import postgres from 'postgres';
@@ -29,6 +35,8 @@ import { MIGRATIONS_TABLE } from './migrator/migrations.constants.js';
 import { runMigrations } from './migrator/run-migrations.js';
 import { platformMigrations } from './platform/platform.migrations.js';
 import { RlsElevation } from './rls/rls-elevation.service.js';
+import { SYSTEM_DATABASE, type SystemDatabase } from './system/system-database.js';
+import { defineSystemMethod } from './system/system-method.js';
 
 vi.mock('postgres', () => ({ default: vi.fn() }));
 vi.mock('./migrator/run-migrations.js', () => ({
@@ -68,6 +76,9 @@ const RLS_CONTEXT =
   `SET LOCAL app.elevated = 'off'`;
 /** Runtime units of work always run as a principal. */
 const asPrincipal = <T>(fn: () => T): T => runWithPrincipal(principal, fn);
+const SYSTEM_URL = 'postgres://app_system:s@localhost:5432/app';
+const sweep = defineSystemMethod('items.sweep', 'system');
+const probe = defineSystemMethod('items.probe', 'pre-auth');
 
 @Injectable()
 class ItemsService {
@@ -136,10 +147,15 @@ describe('DatabaseModule', () => {
   });
 
   describe('forRootAsync() definition', () => {
-    it('is global and exports DRIZZLE, the health contributor and RlsElevation', () => {
+    it('is global and exports DRIZZLE, the health contributor, RlsElevation and SYSTEM_DATABASE', () => {
       const mod = DatabaseModule.forRootAsync({ schema, migrations: [] });
       expect(mod).toMatchObject({ module: DatabaseModule, global: true });
-      expect(mod.exports).toEqual([DRIZZLE, DatabaseHealthIndicator, RlsElevation]);
+      expect(mod.exports).toEqual([
+        DRIZZLE,
+        DatabaseHealthIndicator,
+        RlsElevation,
+        SYSTEM_DATABASE,
+      ]);
     });
 
     it('registers the transactional CLS plugin unless disabled', () => {
@@ -253,6 +269,109 @@ describe('DatabaseModule', () => {
       await app.close();
       app = undefined;
       expect(fake.end).toHaveBeenCalledWith({ timeout: 5 });
+    });
+  });
+
+  describe('system pool (B3 Task 7)', () => {
+    let system: FakeSql;
+    /** The runtime pool first (DRIZZLE), then the system pool (SYSTEM_DATABASE). */
+    const useSystemPool = (handler?: FakeSqlHandler): void => {
+      system = createFakeSql(handler);
+      vi.mocked(postgres).mockReset();
+      vi.mocked(postgres)
+        .mockReturnValueOnce(fake as never)
+        .mockReturnValueOnce(system as never);
+    };
+
+    it('opens no system pool without DATABASE_SYSTEM_URL; every run is SYSTEM_DATABASE_UNAVAILABLE', async () => {
+      app = await boot({ schema });
+      expect(postgres).toHaveBeenCalledTimes(1);
+      const database = app.get<SystemDatabase>(SYSTEM_DATABASE);
+      const work = vi.fn(async () => 1);
+      await expect(database.run(probe, work)).rejects.toMatchObject({
+        code: 'SYSTEM_DATABASE_UNAVAILABLE',
+      });
+      await expect(
+        SystemContext.run('items.nightly', () => database.run(sweep, work)),
+      ).rejects.toMatchObject({ code: 'SYSTEM_DATABASE_UNAVAILABLE' });
+      expect(work).not.toHaveBeenCalled();
+      // Never a fallback to the runtime pool.
+      expect(fake.queries).toEqual(['select 1']);
+    });
+
+    it('opens a second pool on DATABASE_SYSTEM_URL (systemPoolMax, :system name) after the runtime pool', async () => {
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      vi.stubEnv('DATABASE_SYSTEM_POOL_MAX', '3');
+      useSystemPool();
+      app = await boot({ schema, postgres: { max: 50 } });
+      expect(postgres).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(postgres).mock.calls[0]?.[0]).toBe('postgres://app:app@localhost:5432/app');
+      expect(postgres).toHaveBeenNthCalledWith(
+        2,
+        SYSTEM_URL,
+        expect.objectContaining({
+          // The overrides apply (TLS, debug), but never lift the system pool past its own max.
+          max: 3,
+          connection: expect.objectContaining({ application_name: 'app:system' }) as unknown,
+        }),
+      );
+      expect(fake.queries).toEqual(['select 1']);
+      expect(system.queries).toEqual(['select 1']);
+    });
+
+    it('runs work on the system pool, never on the runtime pool or its open transaction', async () => {
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      useSystemPool();
+      app = await boot({ schema }, [ItemsService]);
+      const database = app.get<SystemDatabase<typeof schema>>(SYSTEM_DATABASE);
+      const txHost = app.get<TransactionHost<Adapter>>(TransactionHost);
+      await asPrincipal(() =>
+        txHost.withTransaction(async () => {
+          await txHost.tx.insert(items).values({ id: ID_1, name: 'a' });
+          await database.run(probe, (db) => db.execute(drizzleSql`select 7`));
+        }),
+      );
+      await SystemContext.run('items.nightly', () => database.run(sweep, (db) => db.delete(items)));
+      expect(fake.queries.slice(1)).toEqual([
+        'begin',
+        RLS_CONTEXT,
+        'insert into "items" ("id", "name") values ($1, $2)',
+        'commit',
+      ]);
+      // No context statement and no BEGIN on the system pool: it is not a runtime transaction.
+      expect(system.queries).toEqual(['select 1', 'select 7', 'delete from "items"']);
+      expect(system.begin).not.toHaveBeenCalled();
+    });
+
+    it('refuses a system-scope method outside SystemContext, sending nothing', async () => {
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      useSystemPool();
+      app = await boot({ schema });
+      const database = app.get<SystemDatabase<typeof schema>>(SYSTEM_DATABASE);
+      await expect(
+        asPrincipal(() => database.run(sweep, (db) => db.delete(items))),
+      ).rejects.toMatchObject({ code: 'SYSTEM_CONTEXT_REQUIRED' });
+      expect(system.queries).toEqual(['select 1']);
+    });
+
+    it('closes both pools on shutdown', async () => {
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      useSystemPool();
+      app = await boot({ schema });
+      await app.close();
+      app = undefined;
+      expect(fake.end).toHaveBeenCalledWith({ timeout: 5 });
+      expect(system.end).toHaveBeenCalledWith({ timeout: 5 });
+    });
+
+    it('fails boot when the system pool is unreachable, releasing both pools', async () => {
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      useSystemPool(() => {
+        throw Object.assign(new Error('password authentication failed'), { code: '28P01' });
+      });
+      await expect(boot({ schema })).rejects.toThrow(/password authentication failed/);
+      expect(system.end).toHaveBeenCalledWith({ timeout: 0 });
+      expect(fake.end).toHaveBeenCalledWith({ timeout: 0 });
     });
   });
 

@@ -405,4 +405,79 @@ describe('scripts/check-boundaries.mjs', () => {
       expect(status).toBe(0);
     });
   });
+
+  describe('the system database is named only by *.system-repository.ts files (outside libs/database/src)', () => {
+    const SYSTEM: Tree = {
+      ...LAYERED,
+      'domains/orders/package.json': manifest('@domain/orders', {
+        '@domain/orders-contracts': 'workspace:*',
+        '@domain/users-contracts': 'workspace:*',
+        '@platform/database': 'workspace:*',
+        '@platform/kernel': 'workspace:*',
+      }),
+      'apps/api/package.json': manifest('@app/api', {
+        '@domain/orders': 'workspace:*',
+        '@platform/database': 'workspace:*',
+      }),
+      'libs/database/package.json': manifest('@platform/database'),
+      'libs/database/src/system/system-database.ts': [
+        "export const SYSTEM_DATABASE = Symbol('SYSTEM_DATABASE');",
+        'export const InjectSystemDatabase = () => () => undefined;',
+        'export class SystemDatabase {}',
+        '',
+      ].join('\n'),
+    };
+    const injector = [
+      "import { InjectSystemDatabase, type SystemDatabase } from '@platform/database';",
+      'export class DrizzleFooRepository {',
+      '  constructor(@InjectSystemDatabase() private readonly system: SystemDatabase) {}',
+      '}',
+      '',
+    ].join('\n');
+    const WHY =
+      'names SystemDatabase, SYSTEM_DATABASE or InjectSystemDatabase outside libs/database/src: only a *.system-repository.ts file may';
+
+    it('fails for InjectSystemDatabase in drizzle-foo.repository.ts and SYSTEM_DATABASE in an app', () => {
+      const { status, output } = check({
+        ...SYSTEM,
+        'domains/orders/src/drizzle-foo.repository.ts': injector,
+        'domains/orders/src/via-token.ts':
+          "import * as db from '@platform/database';\nexport const token = db.SYSTEM_DATABASE;\n",
+        'apps/api/src/system.ts': "export { SystemDatabase as Db } from '@platform/database';\n",
+        'libs/database/scripts/backdoor.ts':
+          "import { SYSTEM_DATABASE } from '../src/system/system-database.js';\n",
+      });
+      expect(status).toBe(1);
+      expect(output).toContain('Layer boundary violations (4):');
+      for (const file of [
+        'domains/orders/src/drizzle-foo.repository.ts',
+        'domains/orders/src/via-token.ts',
+        'apps/api/src/system.ts',
+        'libs/database/scripts/backdoor.ts',
+      ]) {
+        expect(output).toContain(`${file}: ${WHY}`);
+      }
+    });
+
+    it('passes in drizzle-foo.system-repository.ts, libs/database/src, test code, comments and unrelated packages', () => {
+      const { status, output } = check({
+        ...SYSTEM,
+        'domains/orders/src/drizzle-foo.system-repository.ts': injector,
+        'domains/orders/src/drizzle-foo.system-repository.spec.ts': injector,
+        'domains/orders/src/errors.ts':
+          "import { SystemDatabaseError } from '@platform/database';\nexport const E = SystemDatabaseError;\n",
+        'domains/orders/src/notes.ts': [
+          '// the purge goes through SystemDatabase in drizzle-foo.system-repository.ts',
+          'export const notes = 1;',
+          '',
+        ].join('\n'),
+        'libs/database/test/system-database.int-spec.ts': injector,
+        // A package that cannot reach @platform/database may use the words for its own things.
+        'libs/kernel/src/admin.ts':
+          "const SYSTEM_DATABASE = 'defaultdb';\nexport const db = SYSTEM_DATABASE;\n",
+      });
+      expect(output).toContain('Layer boundaries OK (8 packages');
+      expect(status).toBe(0);
+    });
+  });
 });

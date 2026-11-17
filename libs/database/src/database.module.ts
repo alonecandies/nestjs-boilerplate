@@ -1,5 +1,6 @@
 import {
   type DynamicModule,
+  Inject,
   Injectable,
   Logger,
   Module,
@@ -13,27 +14,54 @@ import { isObject } from 'lodash-es';
 import { ClsModule } from 'nestjs-cls';
 import type { DatabaseModuleOptions, DatabaseTransactionalOptions } from './database.types.js';
 import { DATABASE_MODULE_OPTIONS, DRIZZLE } from './drizzle/drizzle.constants.js';
-import { createDrizzleDatabase } from './drizzle/drizzle.factory.js';
+import { createDrizzleDatabase, createSystemDrizzleDatabase } from './drizzle/drizzle.factory.js';
 import type { DrizzleDB, DrizzleSchema } from './drizzle/drizzle.types.js';
 import { DrizzlePostgresTransactionalAdapter } from './drizzle/drizzle-transactional.adapter.js';
 import { InjectDrizzle } from './drizzle/inject-drizzle.decorator.js';
 import { DatabaseHealthIndicator } from './health/database.health.js';
 import { withPlatformMigrations } from './migrator/migration-sets.js';
 import { RlsElevation } from './rls/rls-elevation.service.js';
+import { SYSTEM_DATABASE, SYSTEM_POOL, SystemDatabase } from './system/system-database.js';
 
 /** How long `end()` lets in-flight queries finish on shutdown before destroying sockets. */
 const POOL_END_TIMEOUT_SEC = 5;
 
-/** Closes the pool when Nest shuts down (requires `app.enableShutdownHooks()`). */
+/** Closes both pools when Nest shuts down (requires `app.enableShutdownHooks()`). */
 @Injectable()
 class DatabaseLifecycle implements OnApplicationShutdown {
   private readonly logger = new Logger('DatabaseModule');
 
-  constructor(@InjectDrizzle() private readonly db: DrizzleDB) {}
+  constructor(
+    @InjectDrizzle() private readonly db: DrizzleDB,
+    @Inject(SYSTEM_POOL) private readonly systemDb: DrizzleDB | null,
+  ) {}
 
   async onApplicationShutdown(signal?: string): Promise<void> {
-    await this.db.$client.end({ timeout: POOL_END_TIMEOUT_SEC });
-    this.logger.log(`Postgres pool closed (${signal ?? 'shutdown'})`);
+    await Promise.all([
+      this.db.$client.end({ timeout: POOL_END_TIMEOUT_SEC }),
+      this.systemDb?.$client.end({ timeout: POOL_END_TIMEOUT_SEC }),
+    ]);
+    this.logger.log(
+      `Postgres ${this.systemDb === null ? 'pool' : 'pools'} closed (${signal ?? 'shutdown'})`,
+    );
+  }
+}
+
+/**
+ * The system pool opens after the runtime pool (after migrations and its warm-up); when it
+ * cannot, the runtime pool is released too, so a failed boot leaves no connection behind.
+ */
+async function openSystemPool<TSchema extends DrizzleSchema>(
+  cfg: DatabaseConfig,
+  app: AppConfig,
+  opts: DatabaseModuleOptions<TSchema>,
+  runtime: DrizzleDB<TSchema>,
+): Promise<DrizzleDB<TSchema> | null> {
+  try {
+    return await createSystemDrizzleDatabase(cfg, app, opts);
+  } catch (error) {
+    await runtime.$client.end({ timeout: 0 });
+    throw error;
   }
 }
 
@@ -67,7 +95,10 @@ const transactionalPlugin = (options: DatabaseTransactionalOptions): ClsPluginTr
 /**
  * PostgreSQL via postgres.js + Drizzle (global). Provides `DRIZZLE` (`@InjectDrizzle()`),
  * `TransactionHost` / `@Transactional()`, `RlsElevation` (elevation of a runtime transaction; it
- * asks the `PrincipalPermissions` that `RbacModule.forRoot()` binds) and `DatabaseHealthIndicator` (register it with
+ * asks the `PrincipalPermissions` that `RbacModule.forRoot()` binds), `SYSTEM_DATABASE`
+ * (`SystemDatabase` over the app_system pool on DATABASE_SYSTEM_URL; inject it with
+ * `@InjectSystemDatabase()`, from `*.system-repository.ts` files only) and
+ * `DatabaseHealthIndicator` (register it with
  * `ObservabilityModule.forRoot({ healthContributors: [DatabaseHealthIndicator] })`).
  * Pool settings come from the `database` config namespace; `application_name` = SERVICE_NAME.
  * With `runMigrations` / DATABASE_RUN_MIGRATIONS, boot applies `platformMigrations` and then
@@ -104,11 +135,28 @@ export class DatabaseModule {
             opts: DatabaseModuleOptions<TSchema>,
           ): Promise<DrizzleDB<TSchema>> => createDrizzleDatabase(cfg, app, opts),
         },
+        {
+          provide: SYSTEM_POOL,
+          inject: [databaseConfig.KEY, appConfig.KEY, DATABASE_MODULE_OPTIONS, DRIZZLE],
+          useFactory: (
+            cfg: DatabaseConfig,
+            app: AppConfig,
+            opts: DatabaseModuleOptions<TSchema>,
+            runtime: DrizzleDB<TSchema>,
+          ): Promise<DrizzleDB<TSchema> | null> => openSystemPool(cfg, app, opts, runtime),
+        },
+        {
+          provide: SYSTEM_DATABASE,
+          inject: [SYSTEM_POOL],
+          useFactory: (db: DrizzleDB<TSchema> | null): SystemDatabase<TSchema> =>
+            new SystemDatabase(db),
+        },
         DatabaseLifecycle,
         DatabaseHealthIndicator,
         RlsElevation,
       ],
-      exports: [DRIZZLE, DatabaseHealthIndicator, RlsElevation],
+      // SYSTEM_POOL (the raw app_system handle) is never exported: SystemDatabase.run is the door.
+      exports: [DRIZZLE, DatabaseHealthIndicator, RlsElevation, SYSTEM_DATABASE],
     };
   }
 }
