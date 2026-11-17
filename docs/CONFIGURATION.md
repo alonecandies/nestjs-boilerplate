@@ -102,6 +102,7 @@ it imports. A process ignores (and does not validate) variables of namespaces it
 | `immudb`                  |          |                   |                  |                         |                 | `ImmudbModule` (`@platform/immudb`); wired into monolith and billing-service in ledger wave 2 (L-12) |
 | `redis`                   |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `RedisModule`, `AppQueueModule`, `AppCacheModule`, GraphQL pub/sub                                   |
 | `kafka`                   |    ✓     | ✓ (consumer only) |   ✓ (producer)   | ✓ (producer + consumer) |  ✓ (producer)   | `KafkaProducerModule`, `connectKafkaConsumer`                                                        |
+| `outbox`                  |          |                   |                  |                         |                 | `OutboxModule` (`@platform/outbox`); wired into the apps with their relays (outbox Task 7)           |
 | `grpc`                    |          |    ✓ (clients)    |    ✓ (server)    |       ✓ (server)        |   ✓ (server)    | `GrpcClientsModule.register()`, app module + `connectGrpcServer`                                     |
 | `identityGrpcClient`      |          |         ✓         |                  |                         |                 | `IdentityApiModule.forRemote()`                                                                      |
 | `notificationsGrpcClient` |          |         ✓         |                  |                         |                 | `NotificationsApiModule.forRemote()`                                                                 |
@@ -310,6 +311,20 @@ consumes)
 > (`NOTIFICATIONS_CONSUMER_GROUP` in `apps/notifications-service/src/notifications-service.constants.ts`);
 > identity-service and billing-service only produce today. Every replica of an app must share its
 > group, and the gateway's group must differ from notifications-service's.
+
+### `outbox` — transactional outbox relay
+
+[`outbox.config.ts`](../libs/config/src/namespaces/outbox.config.ts) · not loaded by any app yet
+(the outbox relays are wired into the apps that own an outbox in outbox Task 7)
+
+| Variable                  | Default | Description                                                                            |
+| ------------------------- | ------- | -------------------------------------------------------------------------------------- |
+| `OUTBOX_RELAY_ENABLED`    | `true`  | Start the relay of each outbox this process owns; it also needs a system pool.         |
+| `OUTBOX_POLL_INTERVAL_MS` | `500`   | `50`–`60000`. Wait after an empty poll; a full batch polls again at once.              |
+| `OUTBOX_BATCH_SIZE`       | `100`   | `1`–`500` rows per poll.                                                               |
+| `OUTBOX_LOCK_TTL_MS`      | `15000` | `1000`–`300000`. TTL of the leader lock `outbox-relay:<name>`, extended while it runs. |
+| `OUTBOX_MAX_BACKOFF_MS`   | `30000` | Cap of the doubling wait after a failed publish; at least `OUTBOX_POLL_INTERVAL_MS`.   |
+| `OUTBOX_RETENTION_HOURS`  | `168`   | `1`–`8760`. Published rows older than this are purged.                                 |
 
 ### `grpc` — internal RPC (server bind, deadline, message limits, TLS)
 

@@ -23,6 +23,7 @@ describe('CONFIG_NAMESPACES', () => {
       'immudb',
       'redis',
       'kafka',
+      'outbox',
       'grpc',
       'auth',
       'throttle',

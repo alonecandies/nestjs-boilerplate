@@ -22,6 +22,7 @@ export * from './namespaces/immudb.config.js';
 export * from './namespaces/kafka.config.js';
 export * from './namespaces/mail.config.js';
 export * from './namespaces/observability.config.js';
+export * from './namespaces/outbox.config.js';
 export * from './namespaces/redis.config.js';
 export * from './namespaces/storage.config.js';
 export * from './namespaces/throttle.config.js';
