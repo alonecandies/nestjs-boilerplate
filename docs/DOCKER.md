@@ -16,6 +16,7 @@ bun run dev                                                  # monolith on the H
 
 docker compose --profile monolith up -d --build --wait       # or: the monolith in a container       -> http://localhost:3000
 docker compose --profile microservices up -d --build --wait  # or: gateway + identity/notifications/billing -> http://localhost:3000
+docker compose --profile citus up -d --wait                  # + one Citus worker; shards live on it (see "Citus worker")
 docker compose --profile observability up -d --wait          # Grafana http://localhost:3300 · Prometheus :9090 · Jaeger :16686
 docker compose --profile loadtest run --rm k6                # k6 against http://api:3000 (whichever topology runs)
 docker compose --profile '*' down -v                         # stop everything, wipe volumes
@@ -34,6 +35,8 @@ Budget: the stack is sized for **4 CPUs / 4 GB** of Docker Desktop memory (see [
 | ----------------------- | ------------------------------------------------- | ---------------------------- | ------------------- | ------------------------------------------------------------------------------------------ |
 | `postgres`              | `citusdata/citus:14.2.0` (PostgreSQL 18.4, amd64) | 5432                         | —                   | identity + billing (Drizzle), Citus single node, superuser/db `app`, three app roles       |
 | `pgbouncer`             | `edoburu/pgbouncer:v1.26.1-p0`                    | 6432                         | —                   | transaction pooling for `app_runtime` and `app_system` (cap 5); mounted `docker/pgbouncer` |
+| `postgres-worker-1`     | `citusdata/citus:14.2.0` (amd64)                  | —                            | citus               | optional Citus worker, trusts the private network, no host port                            |
+| `citus-init`            | `citusdata/citus:14.2.0` (psql)                   | —                            | citus               | one-shot, idempotent: coordinator host, `citus_add_node`, drain the coordinator            |
 | `redis`                 | `redis:8.10.2-alpine3.23`                         | 6379                         | —                   | cache, locks, throttling, BullMQ, pub/sub                                                  |
 | `cassandra`             | `cassandra:5.0.9`                                 | 9042                         | —                   | notifications inbox (DC `datacenter1`)                                                     |
 | `cassandra-init`        | `cassandra:5.0.9` (cqlsh)                         | —                            | —                   | one-shot: keyspace `$CASSANDRA_KEYSPACE`                                                   |
@@ -91,6 +94,8 @@ every app container listens on HTTP **3000** (API or health + metrics) and gRPC 
 - **`monolith`** or **`microservices`**: never both. Each topology's edge app carries the network alias **`api`** and
   publishes host port 3000, so k6, docs and your browser don't care which one runs.
 - **`observability`**, **`logs`**, **`tools`**, **`loadtest`** stack on top of either.
+- **`citus`** also stacks on top of either (or on infra only): one Citus worker and the one-shot `citus-init` that
+  joins it. Without it Postgres stays a single node. See [Citus worker](#citus-worker-profile-citus).
 - `COMPOSE_PROFILES=microservices,observability` (in the shell or the root `.env`) replaces the `--profile` flags.
 - `grafana` belongs to both `observability` and `logs`; `logs` alone gives Loki + Alloy + Grafana (Explore) without
   Prometheus/Jaeger.
@@ -298,6 +303,46 @@ the local database; migrations rebuild the schema at the next app boot):
 
 (`boilerplate` is the compose project name, `docker-compose.yml:21`; with another `COMPOSE_PROJECT_NAME` the
 volume is `<project>_pg-data`.)
+
+### Citus worker (profile `citus`)
+
+Single node is the default and needs no setup. The `citus` profile adds a second node, so that shard queries, the
+RLS context (`SET LOCAL`), reference-table writes and rebalancing cross a real network, as in production
+([sharding design](superpowers/specs/2026-11-09-sharding-citus-pgbouncer-design.md) section 9):
+
+```bash
+docker compose --profile monolith --profile citus up -d --build --wait   # or microservices, or no app profile
+CITUS=1 scripts/docker/check-infra.sh                                    # the same checks plus the cluster ones
+```
+
+- **`postgres-worker-1`** runs the same image, extension and init folder as the coordinator (so the three roles exist
+  on it, which Citus needs to dial it as any of them), keeps its data in the volume `pg-worker-1-data` and publishes
+  no host port. It trusts every peer on the private `backend` network (`POSTGRES_HOST_AUTH_METHOD: trust`): Citus
+  connects between nodes as the calling role, and the dev passwords of the roles are not shared with it. The
+  coordinator keeps its scram rule for everything else.
+- **`citus-init`** (`docker/postgres/citus-init.sh`) is idempotent and exits 0: it registers the coordinator as
+  `postgres` (a single-node coordinator may be registered as `localhost`, which Citus refuses next to workers), adds
+  `postgres-worker-1`, replicates the reference tables, sets `shouldhaveshards = false` on the coordinator and drains
+  whatever shards it still holds to the worker (`block_writes`: the coordinator does not run with
+  `wal_level=logical`). `infra-ready` waits for it under the profile (`required: false` otherwise), so the apps start
+  after the worker has joined and their migrations distribute tables straight onto it. Tables created before the
+  profile was enabled move over on the next run: `docker compose --profile citus run --rm citus-init` (safe to repeat,
+  also after the migrations).
+- **Existing volumes.** Enabling the profile on a `pg-data` volume that ran single node works (the coordinator is
+  re-registered and drained); disabling it again leaves the shards on the worker, so remove the profile **and** the
+  volumes together: `docker compose --profile '*' down -v`.
+- **Direction of trust.** The coordinator dials the worker as any role (trust). The worker dials the coordinator
+  with the image's wildcard `.pgpass` (the superuser password): verified for the superuser, which is what
+  `citus_check_cluster_node_health()` needs, and not relied on for the app roles, whose passwords differ. Every
+  query goes through the coordinator, so nothing in the apps needs that direction.
+- **Policies on Citus.** Probed on 14.2: a policy that contains a `CASE` or a `NULL` test on a function call fails to
+  propagate (`unrecognized node type`). Write `app.user_id() <> '<nil uuid>'` style comparisons, never `IS NOT NULL`
+  on a helper call (`libs/database/test/fixtures/sharding` shows the shapes).
+- `scripts/docker/check-infra.sh` with `CITUS=1` asserts `pg_dist_node` (coordinator without shards, worker with),
+  `citus_check_cluster_node_health()` 4/4, the roles on the worker and that a throwaway distributed table puts all of
+  its shards on the worker. `libs/database/test/sharding.int-spec.ts` proves the mechanism with
+  `startRlsTestPostgres({ workers: 1 })`: a coordinator and one worker on a private Docker network, trust between
+  them, the roles on both, local execution off.
 
 ## Images (Dockerfile)
 

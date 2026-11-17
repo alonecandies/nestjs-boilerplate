@@ -1,5 +1,6 @@
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql';
 import postgres from 'postgres';
+import { Network, type StartedNetwork } from 'testcontainers';
 
 /**
  * PostgreSQL 18.4 + Citus 14.2.0, the image the sharding design probed. amd64 only: on Apple Silicon
@@ -46,6 +47,13 @@ export interface TestPostgresOptions {
    * a spec sees (and a spec that asserts isolation never opts in).
    */
   allowExternalUrl?: boolean;
+  /**
+   * `1` starts a second Citus container as a worker next to the coordinator, on a private network
+   * with trust between the nodes: `initSql` runs on both, then the coordinator host is set and the
+   * worker added, so tenant shards live on the worker. Needs a container (not
+   * `INTEGRATION_DATABASE_URL`). Default `0`, the single node every spec has used so far.
+   */
+  workers?: 0 | 1;
 }
 
 export interface TestPostgres {
@@ -55,6 +63,26 @@ export interface TestPostgres {
   urlFor(role: string, password: string): string;
   /** Stops the container; a no-op for an external database. Safe to call twice. */
   stop(): Promise<void>;
+}
+
+/** Network aliases of the two nodes (also the hosts that Citus stores for them). */
+export const TEST_POSTGRES_COORDINATOR_ALIAS = 'coordinator';
+export const testPostgresWorkerAlias = (index: number): string => `worker${index}`;
+
+/**
+ * What turns a started coordinator and its workers into a cluster, run as the superuser on the
+ * coordinator after the role script reached every node: the coordinator host first (workers and
+ * reference tables reach it by name), then one `citus_add_node` per worker.
+ */
+export function testPostgresClusterSql(workers: number): string[] {
+  if (workers === 0) return [];
+  return [
+    `select citus_set_coordinator_host('${TEST_POSTGRES_COORDINATOR_ALIAS}', 5432)`,
+    ...Array.from(
+      { length: workers },
+      (_, index) => `select citus_add_node('${testPostgresWorkerAlias(index + 1)}', 5432)`,
+    ),
+  ];
 }
 
 /** The server command: Citus' shard count for specs and the local-execution switch. */
@@ -127,16 +155,100 @@ async function prepareDatabase(
   }
 }
 
+/** A started container, or both nodes of a cluster, as `stop()` sees them. */
+async function stopAll(
+  containers: readonly (StartedPostgreSqlContainer | undefined)[],
+  network: StartedNetwork | undefined,
+): Promise<void> {
+  await Promise.allSettled(
+    containers.flatMap((container) => (container === undefined ? [] : [container.stop()])),
+  );
+  await network?.stop();
+}
+
+/**
+ * The coordinator and one worker, started in parallel on a private network. Whatever started is
+ * stopped again when the other node, the role script or the join fails.
+ */
+async function startCluster(
+  options: TestPostgresOptions,
+  workers: number,
+): Promise<{ url: string; stop: () => Promise<void> }> {
+  const network = await new Network().start();
+  const node = (alias: string): Promise<StartedPostgreSqlContainer> =>
+    new PostgreSqlContainer(TEST_POSTGRES_IMAGE)
+      .withPlatform('linux/amd64')
+      .withDatabase('app')
+      .withUsername('app')
+      .withPassword('app')
+      .withNetwork(network)
+      .withNetworkAliases(alias)
+      // Trust between the nodes (Citus dials them as the calling role, with no password). Only the
+      // private network of this one cluster can reach them.
+      .withEnvironment({ POSTGRES_HOST_AUTH_METHOD: 'trust' })
+      .withCommand(testPostgresCommand(options))
+      .withHealthCheck(testPostgresHealthCheck())
+      .withStartupTimeout(testPostgresStartupTimeoutMs())
+      .start();
+  const started = await Promise.allSettled([
+    node(TEST_POSTGRES_COORDINATOR_ALIAS),
+    ...Array.from({ length: workers }, (_, index) => node(testPostgresWorkerAlias(index + 1))),
+  ]);
+  const containers = started.map((result) =>
+    result.status === 'fulfilled' ? result.value : undefined,
+  );
+  const failed = started.find((result) => result.status === 'rejected');
+  if (failed !== undefined) {
+    await stopAll(containers, network);
+    throw failed.reason;
+  }
+  const [coordinator, ...nodes] = containers as StartedPostgreSqlContainer[];
+  const url = (coordinator as StartedPostgreSqlContainer).getConnectionUri();
+  try {
+    for (const container of [coordinator, ...nodes] as StartedPostgreSqlContainer[]) {
+      await prepareDatabase(container.getConnectionUri(), options.initSql ?? [], true);
+    }
+    await prepareDatabase(url, testPostgresClusterSql(workers), false);
+  } catch (error) {
+    await stopAll(containers, network);
+    throw error;
+  }
+  let stopped = false;
+  return {
+    url,
+    stop: async () => {
+      if (stopped) return;
+      stopped = true;
+      await stopAll(containers, network);
+    },
+  };
+}
+
 /**
  * A Postgres for one int spec: a fresh single-node Citus container (database, user and password
- * `app`), or, with `allowExternalUrl: true`, the database at `INTEGRATION_DATABASE_URL` when that is
- * set. The container's
+ * `app`), or, with `workers: 1`, a coordinator plus one worker, or, with `allowExternalUrl: true`,
+ * the database at `INTEGRATION_DATABASE_URL` when that is set. The container's
  * healthcheck probes TCP, which the init-time server does not listen on, so it is ready only after
  * the image's init script created the extension (design P-14 note).
  */
 export async function startTestPostgres(options: TestPostgresOptions = {}): Promise<TestPostgres> {
+  const workers = options.workers ?? 0;
+  if (workers !== 0 && workers !== 1) {
+    throw new Error(`workers must be 0 or 1, got ${String(options.workers)}`);
+  }
   const external =
     options.allowExternalUrl === true ? process.env['INTEGRATION_DATABASE_URL'] : undefined;
+  if (workers === 1) {
+    if (external !== undefined && external !== '') {
+      throw new Error('workers: 1 needs a container; INTEGRATION_DATABASE_URL has no worker');
+    }
+    const cluster = await startCluster(options, workers);
+    return {
+      url: cluster.url,
+      urlFor: (role, password) => urlWithLogin(cluster.url, role, password),
+      stop: cluster.stop,
+    };
+  }
   let container: StartedPostgreSqlContainer | undefined;
   let url: string;
   if (external !== undefined && external !== '') {

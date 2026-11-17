@@ -5,6 +5,7 @@
 #
 #   scripts/docker/check-infra.sh                 # project "bp-infra-check"
 #   PROJECT=my-check KEEP=1 scripts/docker/check-infra.sh   # keep the stack running afterwards
+#   CITUS=1 scripts/docker/check-infra.sh         # the `citus` profile too: coordinator + one worker
 # Host ports can be remapped with the usual *_HOST_PORT variables (see .env.example) when the
 # defaults are taken.
 set -euo pipefail
@@ -12,7 +13,10 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 PROJECT="${PROJECT:-bp-infra-check}"
 WAIT_TIMEOUT="${WAIT_TIMEOUT:-420}"
-compose() { COMPOSE_PROFILES='' docker compose -p "${PROJECT}" "$@"; }
+# The infra-only stack, or with CITUS=1 the `citus` profile on top (postgres-worker-1, citus-init).
+PROFILES=''
+[ "${CITUS:-0}" = 1 ] && PROFILES='citus'
+compose() { COMPOSE_PROFILES="${PROFILES}" docker compose -p "${PROJECT}" "$@"; }
 log() { printf '\n\033[1m[check-infra] %s\033[0m\n' "$*"; }
 fail() { printf '\033[31m[check-infra] FAIL: %s\033[0m\n' "$*" >&2; exit 1; }
 
@@ -39,7 +43,9 @@ compose up -d --wait --wait-timeout "${WAIT_TIMEOUT}"
 log "stack healthy after $(($(date +%s) - start))s"
 
 log "one-shot init containers exited 0"
-for svc in kafka-init cassandra-init storage-init immudb-init; do
+inits=(kafka-init cassandra-init storage-init immudb-init)
+[ "${CITUS:-0}" = 1 ] && inits+=(citus-init)
+for svc in "${inits[@]}"; do
   cid="$(compose ps -a -q "${svc}")"
   [ -n "${cid}" ] || fail "${svc} never ran"
   state="$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' "${cid}")"
@@ -89,6 +95,31 @@ roles="$(psql_app "select string_agg(rolname || ':' || rolsuper::int || rolbypas
   from pg_roles where rolname in ('app_owner','app_runtime','app_system')")"
 [ "${roles}" = "app_owner:00,app_runtime:00,app_system:01" ] || fail "roles (name:super,bypassrls): ${roles}"
 echo "  ${roles}"
+
+if [ "${CITUS:-0}" = 1 ]; then
+  log "citus profile: coordinator + one worker, roles on both, shards on the worker"
+  nodes="$(psql_app "select string_agg(groupid || ':' || nodename || ':' || shouldhaveshards::int, ',' order by groupid) \
+    from pg_dist_node")"
+  [ "${nodes}" = "0:postgres:0,1:postgres-worker-1:1" ] || fail "pg_dist_node (group:host:shouldhaveshards): ${nodes}"
+  echo "  pg_dist_node: ${nodes}"
+  # Every direction of the cluster: coordinator and worker, each to each (4 pairs for 2 nodes).
+  health="$(psql_app "select count(*) filter (where result) || '/' || count(*) from citus_check_cluster_node_health()")"
+  [ "${health}" = 4/4 ] || fail "citus_check_cluster_node_health(): ${health} pairs reachable"
+  echo "  citus_check_cluster_node_health(): ${health}"
+  worker_roles="$(psql_app "select result from run_command_on_workers(\$\$select string_agg(rolname || ':' || rolsuper::int \
+    || rolbypassrls::int, ',' order by rolname) from pg_roles where rolname in ('app_owner','app_runtime','app_system')\$\$)")"
+  [ "${worker_roles}" = "app_owner:00,app_runtime:00,app_system:01" ] || fail "roles on the worker: ${worker_roles}"
+  echo "  roles on the worker: ${worker_roles}"
+  # A throwaway distributed table: all of its shards must land on the worker, none on the coordinator.
+  psql_app "create table public.citus_probe (tenant_id uuid primary key)" >/dev/null
+  psql_app "select create_distributed_table('public.citus_probe', 'tenant_id')" >/dev/null
+  placed="$(psql_app "select string_agg(nodename || '=' || n, ',' order by nodename) from (select nodename, \
+    count(*) n from citus_shards where table_name = 'public.citus_probe'::regclass group by nodename) s")"
+  psql_app "drop table public.citus_probe" >/dev/null
+  shard_count="$(psql_app "show citus.shard_count")"
+  [ "${placed}" = "postgres-worker-1=${shard_count}" ] || fail "citus_probe shards (node=count): ${placed}"
+  echo "  citus_probe shards: ${placed}"
+fi
 
 log "pgbouncer: transaction pooling, two users, 6432 only for the pooled roles"
 # bounce <user> <db> <sql> [PGOPTIONS]: psql inside the pgbouncer container, through its own port.

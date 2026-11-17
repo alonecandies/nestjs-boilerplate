@@ -15,6 +15,9 @@ combos=(
   "logs"
   "tools"
   "loadtest"
+  "citus"
+  "monolith,citus"
+  "microservices,citus"
   "monolith,observability,logs,tools,loadtest"
   "microservices,observability,logs,tools,loadtest"
   "*"
@@ -64,4 +67,29 @@ if ! node -e '
 else
   echo "ok    three-role wiring (pgbouncer, DATABASE_URL / _SYSTEM_URL / _MIGRATION_URL)"
 fi
+# B3 (SH-11): single node is the default. The worker and its one-shot job exist only under the `citus`
+# profile, where infra-ready waits for the job; no host port is published for the worker.
+for profiles in "" citus; do
+  config="$(COMPOSE_PROFILES="${profiles}" docker compose -f "${FILE}" config --format json)"
+  if ! PROFILES="${profiles}" node -e '
+    const c = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    const on = process.env.PROFILES === "citus";
+    const bad = [];
+    for (const name of ["postgres-worker-1", "citus-init"]) {
+      if (on !== (name in c.services)) bad.push(name + (on ? " missing" : " present") + " without the profile");
+    }
+    if (on) {
+      const worker = c.services["postgres-worker-1"];
+      if ((worker.ports ?? []).length > 0) bad.push("the worker publishes a host port");
+      if (!c.services["infra-ready"].depends_on?.["citus-init"]) bad.push("infra-ready must wait for citus-init");
+    } else if (c.services["infra-ready"].depends_on?.["citus-init"]?.required !== false) {
+      bad.push("without the profile infra-ready must treat citus-init as optional (required: false)");
+    }
+    if (bad.length) { console.error("citus profile: " + bad.join("; ")); process.exit(1); }
+  ' <<<"${config}"; then
+    status=1
+  else
+    echo "ok    citus profile ${profiles:-off}: worker and citus-init as expected"
+  fi
+done
 exit "${status}"

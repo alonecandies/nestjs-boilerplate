@@ -783,6 +783,7 @@
         "postgres": "catalog:",
         "reflect-metadata": "catalog:",
         "rxjs": "catalog:",
+        "testcontainers": "catalog:",
         "vitest": "catalog:",
       },
     },

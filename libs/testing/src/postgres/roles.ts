@@ -47,15 +47,16 @@ export interface RlsTestPostgres extends TestPostgres {
  * The Postgres of every spec that asserts isolation: a fresh container (never
  * `INTEGRATION_DATABASE_URL`), local execution off by default (a context that does not reach a shard
  * fails as on a cluster), and the three roles. `url` stays the superuser, for seeding. Dev passwords
- * equal the role names (02-roles.sql).
+ * equal the role names (02-roles.sql). `workers: 1` adds a Citus worker with the roles on it too.
  */
 export async function startRlsTestPostgres(
-  options: { localExecution?: boolean } = {},
+  options: { localExecution?: boolean; workers?: 0 | 1 } = {},
 ): Promise<RlsTestPostgres> {
   const pg = await startTestPostgres({
     localExecution: options.localExecution ?? false,
     allowExternalUrl: false,
     initSql: readRolesInitSql(),
+    ...(options.workers === undefined ? {} : { workers: options.workers }),
   });
   const urlOf = (role: string): string => pg.urlFor(role, role);
   return {
