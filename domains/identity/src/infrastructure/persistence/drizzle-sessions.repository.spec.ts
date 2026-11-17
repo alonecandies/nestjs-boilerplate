@@ -86,13 +86,14 @@ describe('DrizzleSessionsRepository', () => {
     );
   });
 
-  it('deleteExpired deletes one bounded batch through a LIMITed sub-select', async () => {
+  it('deleteExpired is ONE multi-shard DELETE on expires_at: no sub-select, no LIMIT, no row locks', async () => {
     const { repository, executed } = setup(() => affected(12));
-    await expect(repository.deleteExpired(NOW, 500)).resolves.toBe(12);
+    await expect(repository.deleteExpired(NOW)).resolves.toBe(12);
+    expect(executed).toHaveLength(1);
     expect(executed[0]?.sql).toBe(
-      'delete from "identity"."sessions" where "identity"."sessions"."id" in (select "id" from "identity"."sessions" where "identity"."sessions"."expires_at" <= $1 limit $2)',
+      'delete from "identity"."sessions" where "identity"."sessions"."expires_at" <= $1',
     );
-    expect(executed[0]?.params).toEqual([NOW.toISOString(), 500]);
+    expect(executed[0]?.params).toEqual([NOW.toISOString()]);
   });
 
   it('findById maps the row (null when absent)', async () => {

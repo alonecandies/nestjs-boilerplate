@@ -22,12 +22,26 @@ import { DrizzleUsersRepository } from './drizzle-users.repository.js';
 /*
  * identity's tenancy repositories against Citus 14.2 (single node, @platform/testing/postgres) with
  * identity's real migration history. Opt-in: INTEGRATION=1 npx vitest run --project identity:int tenancy
- * The tables are not distributed here (SH-5 adds the distribution calls); every query already carries
- * its distribution column (sharding design §2.1).
+ * The tables are distributed by identity's 0008_distribute (SH-5); every query carries its
+ * distribution column (sharding design §2.1).
  */
 
-const constraintOf = (error: unknown): unknown =>
-  (error as { cause?: { constraint_name?: unknown } } | undefined)?.cause?.constraint_name;
+/**
+ * The constraint the driver error (the drizzle error's `cause`) names. A Citus shard raises it as
+ * `<logical>_<shard id>`; with local execution off (this harness, as on a cluster) the error is
+ * relayed without `constraint_name`, so only the message names it.
+ */
+const constraintOf = (error: unknown): string | undefined => {
+  const cause = (error as { cause?: { constraint_name?: unknown; message?: unknown } } | undefined)
+    ?.cause;
+  if (typeof cause?.constraint_name === 'string') return cause.constraint_name;
+  return typeof cause?.message === 'string'
+    ? /constraint "([^"]+)"/.exec(cause.message)?.[1]
+    : undefined;
+};
+
+/** The logical constraint name, optionally with a Citus shard suffix. */
+const constraintNamed = (logical: string): RegExp => new RegExp(`^${logical}(_\\d+)?$`);
 
 describe.skipIf(process.env['INTEGRATION'] !== '1')(
   'identity tenancy repositories on Citus',
@@ -110,7 +124,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
             () => undefined,
             (error: unknown) => error,
           );
-        expect(constraintOf(failure)).toBe('tenants_id_not_platform');
+        expect(constraintOf(failure)).toMatch(constraintNamed('tenants_id_not_platform'));
       });
 
       it('defaults id (uuidv7) and personal = false for raw SQL inserts', async () => {
@@ -219,7 +233,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
             () => undefined,
             (error: unknown) => error,
           );
-        expect(constraintOf(failure)).toBe('memberships_roles_not_empty');
+        expect(constraintOf(failure)).toMatch(constraintNamed('memberships_roles_not_empty'));
         await memberships.insert({ tenantId, userId, roles: ['owner'], lastActiveAt: null });
         await db.execute(sql`delete from identity.tenants where id = ${tenantId}`);
         await expect(memberships.find(tenantId, userId)).resolves.toBeNull();
@@ -287,7 +301,9 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
             () => undefined,
             (error: unknown) => error,
           );
-        expect(constraintOf(failure)).toBe('invitations_tenant_id_token_hash_uq');
+        expect(constraintOf(failure)).toMatch(
+          constraintNamed('invitations_tenant_id_token_hash_uq'),
+        );
         const [pk] = await (database as IdentityDatabase).db.execute<{ columns: string }>(sql`
           select string_agg(a.attname, ',' order by k.ord) as columns
           from pg_constraint c

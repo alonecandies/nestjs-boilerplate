@@ -80,4 +80,20 @@ describe('identityMigrations', () => {
     expect(drop).toContain('DROP COLUMN "roles"');
     expect(drop).toContain('DROP TYPE "identity"."user_role"');
   });
+
+  it('0008_distribute holds only the app.* distribution calls, references first (sharding design §4.2)', () => {
+    const sql = readFileSync(join(identityMigrations.folder, '0008_distribute.sql'), 'utf8');
+    const statements = sql
+      .split('--> statement-breakpoint')
+      .map((statement) => statement.trim())
+      .filter((statement) => statement !== '');
+    expect(statements).toEqual([
+      "SELECT app.make_reference('identity.users');",
+      "SELECT app.make_reference('identity.tenants');",
+      "SELECT app.make_reference('identity.memberships');",
+      "SELECT app.distribute_by_tenant('identity.invitations');",
+      "SELECT app.distribute_by_tenant('identity.audit_events');",
+      "SELECT app.distribute_by_user('identity.sessions');",
+    ]);
+  });
 });
