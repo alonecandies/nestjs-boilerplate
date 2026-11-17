@@ -4,7 +4,7 @@ import { GraphQLSchemaBuilderModule, GraphQLSchemaFactory, Query, Resolver } fro
 import { Test } from '@nestjs/testing';
 import { PERMISSIONS_KEY, PermissionsGuard } from '@platform/auth';
 import { createTestRbacRegistry, makeAuthUser } from '@platform/auth/testing';
-import { PermissionDeniedException } from '@platform/common';
+import { generateId, PermissionDeniedException } from '@platform/common';
 import { InMemoryStorageService } from '@platform/storage/testing';
 import { validate } from 'class-validator';
 import type { GraphQLSchema } from 'graphql';
@@ -93,13 +93,22 @@ describe('FilesResolver', () => {
       const model = await resolver.createUploadUrl(user, input({ contentType: 'IMAGE/PNG' }));
 
       expect(model).toEqual({
-        key: expect.stringMatching(new RegExp(`^users/${user.id}/[0-9a-f-]{36}-avatar\\.png$`)),
+        key: expect.stringMatching(
+          new RegExp(`^tenants/${user.tenantId}/users/${user.id}/[0-9a-f-]{36}/avatar\\.png$`),
+        ),
         filename: 'avatar.png',
         url: expect.stringContaining('method=PUT'),
         method: 'PUT',
         headers: [{ name: 'content-type', value: 'image/png' }],
         expiresAt: expect.any(Date),
       });
+    });
+
+    it('keys the presigned upload by the caller tenant, never another one', async () => {
+      const tenantId = generateId();
+      const inOther = makeAuthUser({ id: user.id, tenantId, roles: ['admin'] }, rbac);
+      const model = await resolver.createUploadUrl(inOther, input());
+      expect(model.key.startsWith(`tenants/${tenantId}/users/${user.id}/`)).toBe(true);
     });
 
     it('surfaces the domain 413 (GraphQL extensions.code FILE_TOO_LARGE)', async () => {

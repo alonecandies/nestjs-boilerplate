@@ -1,13 +1,15 @@
 # @domain/files
 
-The **files** bounded context: per-user object storage on S3-compatible stores or GCS.
+The **files** bounded context: per-user object storage on S3-compatible stores or GCS, keyed by the caller's
+active tenant.
 
 - streamed multipart uploads: the bytes go from the socket to the bucket without a whole-file buffer, but the
   storage driver holds bounded chunks (S3: up to ~15 MiB per upload), so they are capped per process
   (`STORAGE_MAX_CONCURRENT_UPLOADS`, 503 + `Retry-After` beyond it). Prefer presigned uploads for large files.
 - presigned upload URLs (direct browser → bucket `PUT`) and presigned download URLs
 - deletes
-- ownership by key prefix; `files:manage` (admins) bypasses it
+- ownership by key prefix inside the active tenant; `files:manage` (admins and owners) reaches any file of the active
+  tenant, never another tenant's
 
 The context is **edge-only**. There is no files microservice, so there is no Core/Grpc/Api module
 split and no port pair for the use cases. The gateway and the monolith import the same
@@ -18,7 +20,7 @@ to the S3, GCS or in-memory driver.
 
 ```
 src/
-  files.constants.ts       USER_FILES_ROOT, UPLOAD_FILE_FIELD, content-type allow-list (+ regex), size ceilings
+  files.constants.ts       TENANT_FILES_ROOT, USER_FILES_ROOT, UPLOAD_FILE_FIELD, content-type allow-list (+ regex), size ceilings
   api/index.ts             the ./api entry: FilesModule + its config namespace (what the gateway imports)
   files.module.ts          FilesModule
   domain/                  files.errors.ts (FilesErrorCode + 5 DomainExceptions), file-content-type.ts (allow-list policy)
@@ -95,18 +97,45 @@ are never sent over GraphQL: only the presigned flow is exposed there.
 There is no database. The object key is the record:
 
 ```
-users/{userId}/{uuidv7}-{safeFilename}      e.g. users/01a0…/01a0…-quarterly-report.pdf
+tenants/{tenantId}/users/{userId}/{uuidv7}/{safeFilename}
+  e.g. tenants/0190…/users/01a0…/01a0…/quarterly-report.pdf
 ```
 
+- `buildUserFileKey(tenantId, userId, filename)` is the only builder; `tenantFilesPrefix(tenantId)` and
+  `userFilesPrefix(tenantId, userId)` give the two "directories". The tenant always comes from the token
+  (`AuthUser.tenantId`), never from the request. It must be a UUID (stored lower-cased) and never the platform
+  tenant; the user id must be one non-empty segment without `/`.
 - The uuidv7 makes every upload a new, time-ordered and unguessable object, so nothing is
   overwritten and keys cannot be enumerated. `toSafeFilename` (from @platform/common) strips paths,
-  deburrs and kebab-cases the name, keeps the extension and caps it at 120 characters.
-- Stored metadata: `uploaded-by: {userId}` (`x-amz-meta-uploaded-by` / GCS custom metadata), and
-  the normalized content type.
-- Ownership: `isKeyWithinPrefix(key, 'users/{userId}')`, which does not confuse `users/u1` with
-  `users/u10`. It always runs after `assertStorageKey` (`resolveFileAccess`), so a key such as
-  `users/me/../you/x` is rejected before the prefix test. REST already rejects it with a 400. User
-  ids containing `/` are refused, because such an id would nest one user's prefix inside another's.
+  deburrs and kebab-cases the name, keeps the extension and caps it at 120 characters. The last
+  segment is the download filename (`filenameOfFileKey`).
+- Stored metadata on streamed uploads: `uploaded-by: {userId}` and `tenant-id: {tenantId}`
+  (`x-amz-meta-*` / GCS custom metadata), and the normalized content type. Presigned uploads carry
+  no metadata (the client sends the PUT).
+- Access (`resolveFileAccess(actor, key)`), in this order:
+  1. `assertStorageKey(key)`: a malformed key (`tenants/A/../B/…`) is 422 `INVALID_STORAGE_KEY`
+     (REST already rejects it with a 400);
+  2. a key not strictly under `tenants/{actor.tenantId}` is `denied`, whatever the permissions: every other
+     tenant's key and every legacy `users/…` key;
+  3. a key strictly under `tenants/{actor.tenantId}/users/{actor.id}` is `owner`;
+  4. `files:manage` is `manager` (logged);
+  5. otherwise `denied`.
+     The prefix tests are segment-aware (`users/u1` never matches `users/u10`, nor a tenant id one character
+     longer).
+
+### Keys from before B4 (`users/{userId}/…`)
+
+Objects uploaded before tenant-scoped keys stay in the bucket but are unreachable through the API: every caller,
+`files:manage` included, gets 403. Nothing copies them. In development, empty the bucket with the same reset as the
+other stores (`docker compose down -v`). An adopter who keeps objects moves each user's folder into the tenant it
+belongs to (usually the user's personal workspace), with the provider CLI:
+
+```sh
+aws s3 mv --recursive "s3://$S3_BUCKET/users/$USER_ID/" "s3://$S3_BUCKET/tenants/$TENANT_ID/users/$USER_ID/"   # S3, RustFS (add --endpoint-url)
+gcloud storage mv "gs://$GCS_BUCKET/users/$USER_ID/*" "gs://$GCS_BUCKET/tenants/$TENANT_ID/users/$USER_ID/"    # GCS
+```
+
+A moved object keeps its old last segment (`{uuidv7}-{safeFilename}`), which then becomes its download filename.
 
 ## Security notes
 
@@ -119,14 +148,15 @@ users/{userId}/{uuidv7}-{safeFilename}      e.g. users/01a0…/01a0…-quarterly
   uploads inline.
 - Presigned PUTs sign the content type and the exact `contentLength`. The announced size is
   checked against `STORAGE_MAX_UPLOAD_BYTES` and against the 5 GiB single-PUT ceiling.
-- Access is checked before existence, so users cannot probe other users' keys (403 before 404).
-  Uses of the admin bypass are logged (`files:manage download|delete of <key> by <id>`).
+- Access is checked before existence, so users cannot probe other users' or tenants' keys (403
+  before 404). Uses of `files:manage` are logged
+  (`files:manage download|delete of <key> by <id> in tenant <tenantId>`).
 
 ## Errors (`FilesErrorCode`)
 
 | Class                             | Status | Code                       | When                                                                                                                                                                            |
 | --------------------------------- | ------ | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `FileAccessDeniedException`       | 403    | `FILE_ACCESS_DENIED`       | The key is outside the caller's prefix and the caller lacks `files:manage`. The key is not echoed.                                                                              |
+| `FileAccessDeniedException`       | 403    | `FILE_ACCESS_DENIED`       | The key is outside the caller's active tenant, or outside their own prefix and they lack `files:manage`. The key is not echoed.                                                 |
 | `FileNotFoundException`           | 404    | `FILE_NOT_FOUND`           | Download URL requested for a missing (authorized) key.                                                                                                                          |
 | `FileTooLargeException`           | 413    | `FILE_TOO_LARGE`           | The multipart stream overflowed, or the announced `contentLength` is too big. `errors[0]` (path `file` or `contentLength`) states the limit.                                    |
 | `UnsupportedFileTypeException`    | 415    | `UNSUPPORTED_FILE_TYPE`    | The type is not in the allow-list.                                                                                                                                              |
@@ -149,13 +179,13 @@ driver variables (`STORAGE_DRIVER`, `S3_*`, `GCS_*`).
 
 ## Public API (`src/index.ts`)
 
-- `FilesModule`, `FilesService` (`upload`, `createUploadUrl`, `createDownloadUrl`, `deleteFile`, `maxUploadBytes`), `UPLOADED_BY_METADATA_KEY`, `filesConfig` / `FilesConfig` (the `files` namespace)
+- `FilesModule`, `FilesService` (`upload`, `createUploadUrl`, `createDownloadUrl`, `deleteFile`, `maxUploadBytes`), `UPLOADED_BY_METADATA_KEY`, `TENANT_ID_METADATA_KEY`, `filesConfig` / `FilesConfig` (the `files` namespace)
 - `FilesController`, `FilesResolver`, `CreateUploadUrlInput`, `PresignedUploadModel`, `PresignedUploadHeaderModel`
 - zod schemas and types: `CreatePresignedUploadBodySchema`, `FileKeyQuerySchema`, `UploadedFileResponseSchema`, `PresignedUploadResponseSchema`, `DownloadUrlResponseSchema`
-- key and access helpers: `buildUserFileKey`, `userFilesPrefix`, `isFileKeyOwnedBy`, `isValidFileKey`, `filenameOfFileKey`, `resolveFileAccess`
+- key and access helpers: `buildUserFileKey`, `tenantFilesPrefix`, `userFilesPrefix`, `isFileKeyOwnedBy`, `isValidFileKey`, `filenameOfFileKey`, `resolveFileAccess`
 - content-type policy: `isAllowedContentType`, `assertAllowedContentType`, `normalizeContentType`
 - errors: `FilesErrorCode`, `FileAccessDeniedException`, `FileNotFoundException`, `FileTooLargeException`, `UnsupportedFileTypeException`
-- constants: `USER_FILES_ROOT`, `UPLOAD_FILE_FIELD`, `MAX_FILENAME_LENGTH`, `MAX_PRESIGNED_UPLOAD_BYTES`, `ALLOWED_UPLOAD_CONTENT_TYPES`, `ALLOWED_UPLOAD_CONTENT_TYPE_PATTERN`
+- constants: `TENANT_FILES_ROOT`, `USER_FILES_ROOT`, `UPLOAD_FILE_FIELD`, `MAX_FILENAME_LENGTH`, `MAX_PRESIGNED_UPLOAD_BYTES`, `ALLOWED_UPLOAD_CONTENT_TYPES`, `ALLOWED_UPLOAD_CONTENT_TYPE_PATTERN`
 - types: `FileActor`, `UploadFileParams`, `UploadedFile`, `UploadUrlParams`, `FileUploadUrl`, `FileDownloadUrl`, `FileAccess`
 
 ## Tests (`bunx vitest run --project files`; no infrastructure needed)
@@ -170,9 +200,10 @@ driver variables (`STORAGE_DRIVER`, `S3_*`, `GCS_*`).
   - 503 `UPLOAD_CAPACITY_EXCEEDED` + `Retry-After` over `STORAGE_MAX_CONCURRENT_UPLOADS`, and the slot freed afterwards
   - 401 anonymous or forged, and 403 without `files:write`
   - presign 201, zod 400s (strict body) and 413
-  - download: own file 200, another user's 403, the `u1`/`u10` boundary, admin bypass, 404, and
-    400 for traversal keys
-  - delete: 204, idempotency, 403 with the file kept, admin bypass
+  - download: own file 200, another user's 403, the `u1`/`u10` boundary, an admin of the tenant 200,
+    an admin of another tenant 403, a legacy `users/…` key 403, 404, and 400 for traversal keys
+  - delete: 204, idempotency, 403 with the file kept, an admin of the tenant 204, an admin of another
+    tenant 403
   - a full round trip
   - the generated OpenAPI document (multipart body, zod body `$ref`, `key` query parameter)
 - `files-multipart-limits.spec.ts` covers an adapter that pre-registers `@fastify/multipart` with

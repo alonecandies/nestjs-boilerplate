@@ -1,7 +1,8 @@
 /**
  * @domain/files — the files bounded context (edge-only; no microservice): streamed multipart
  * uploads to S3/GCS, presigned upload/download URLs and deletes, with keys
- * `users/{userId}/{uuidv7}-{safeFilename}` and ownership by key prefix (`files:manage` bypasses).
+ * `tenants/{tenantId}/users/{userId}/{uuidv7}/{safeFilename}` and ownership by key prefix
+ * (`files:manage` reaches any file of the caller's active tenant, never another tenant's).
  * Import `FilesModule` from `@domain/files/api` in the gateway and the monolith.
  */
 export * from './api/index.js';

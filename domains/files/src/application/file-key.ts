@@ -1,9 +1,26 @@
-import { DomainValidationException, generateId, isUuid, toSafeFilename } from '@platform/common';
+import {
+  DomainValidationException,
+  generateId,
+  isPlatformTenantId,
+  isUuid,
+  toSafeFilename,
+} from '@platform/common';
 import { assertStorageKey, buildStorageKey, isKeyWithinPrefix } from '@platform/storage';
 import { includes, isEmpty, last } from 'lodash-es';
-import { USER_FILES_ROOT } from '../files.constants.js';
+import { TENANT_FILES_ROOT, USER_FILES_ROOT } from '../files.constants.js';
 
-const UUID_LENGTH = 36;
+/**
+ * The tenant becomes ONE key segment: a UUID (lower-cased, so one tenant has one prefix) and never
+ * the platform tenant. It must come from the principal (`AuthUser.tenantId`), never from a request.
+ */
+function assertTenantSegment(tenantId: string): string {
+  if (!isUuid(tenantId) || isPlatformTenantId(tenantId)) {
+    throw new DomainValidationException('Invalid tenant id for a file key', {
+      issues: [{ path: 'tenantId', message: 'must be a UUID other than the platform tenant' }],
+    });
+  }
+  return tenantId.toLowerCase();
+}
 
 /**
  * A user id becomes ONE key segment. An id containing `/` would silently nest one user's prefix
@@ -18,30 +35,38 @@ function assertUserSegment(userId: string): string {
   return userId;
 }
 
-/** `users/{userId}` — the "directory" a user owns (no trailing slash). */
-export function userFilesPrefix(userId: string): string {
-  return buildStorageKey(USER_FILES_ROOT, assertUserSegment(userId));
+/** `tenants/{tenantId}` — every object of a tenant lies strictly under it (no trailing slash). */
+export function tenantFilesPrefix(tenantId: string): string {
+  return buildStorageKey(TENANT_FILES_ROOT, assertTenantSegment(tenantId));
+}
+
+/** `tenants/{tenantId}/users/{userId}` — the "directory" a user owns in a tenant (no trailing slash). */
+export function userFilesPrefix(tenantId: string, userId: string): string {
+  return buildStorageKey(tenantFilesPrefix(tenantId), USER_FILES_ROOT, assertUserSegment(userId));
 }
 
 /**
- * `users/{userId}/{uuidv7}-{safeFilename}`: the uuidv7 makes every upload a new, time-ordered,
- * unguessable object (no overwrites, no enumeration), and `toSafeFilename` keeps the tail readable
- * and safe for keys, URLs and `Content-Disposition`.
+ * `tenants/{tenantId}/users/{userId}/{uuidv7}/{safeFilename}`, the only builder of object keys: the
+ * uuidv7 makes every upload a new, time-ordered, unguessable object (no overwrites, no enumeration),
+ * and `toSafeFilename` keeps the last segment readable and safe for keys, URLs and
+ * `Content-Disposition`.
  */
 export function buildUserFileKey(
+  tenantId: string,
   userId: string,
   filename: string,
   id: string = generateId(),
 ): string {
-  return buildStorageKey(userFilesPrefix(userId), `${id}-${toSafeFilename(filename)}`);
+  return buildStorageKey(userFilesPrefix(tenantId, userId), id, toSafeFilename(filename));
 }
 
 /**
- * Prefix ownership. Only meaningful for keys that passed `assertStorageKey` (no `..` segments),
- * which `isKeyWithinPrefix` cannot see through on its own; it does tell `users/u1` from `users/u10`.
+ * Prefix ownership in a tenant. Only meaningful for keys that passed `assertStorageKey` (no `..`
+ * segments), which `isKeyWithinPrefix` cannot see through on its own; it does tell `users/u1` from
+ * `users/u10`.
  */
-export function isFileKeyOwnedBy(key: string, userId: string): boolean {
-  return isKeyWithinPrefix(key, userFilesPrefix(userId));
+export function isFileKeyOwnedBy(key: string, tenantId: string, userId: string): boolean {
+  return isKeyWithinPrefix(key, userFilesPrefix(tenantId, userId));
 }
 
 /** `true` for keys the storage layer would accept (for request validation). */
@@ -54,15 +79,7 @@ export function isValidFileKey(key: string): boolean {
   }
 }
 
-/**
- * The human part of a key built by `buildUserFileKey` (`{uuidv7}-report.pdf` → `report.pdf`), used as
- * the download filename. Keys of another shape yield their last segment.
- */
+/** The download filename: the last key segment (the `safeFilename` of `buildUserFileKey`). */
 export function filenameOfFileKey(key: string): string {
-  const segment = last(key.split('/')) ?? key;
-  const hasIdPrefix =
-    segment.length > UUID_LENGTH + 1 &&
-    segment.charAt(UUID_LENGTH) === '-' &&
-    isUuid(segment.slice(0, UUID_LENGTH));
-  return hasIdPrefix ? segment.slice(UUID_LENGTH + 1) : segment;
+  return last(key.split('/')) ?? key;
 }

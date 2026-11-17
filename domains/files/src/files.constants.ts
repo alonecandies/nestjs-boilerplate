@@ -1,6 +1,15 @@
 import { escapeRegExp } from 'lodash-es';
 
-/** Root "directory" of per-user objects: keys are `users/{userId}/{uuidv7}-{safeFilename}`. */
+/**
+ * Root "directory" of every object: keys are
+ * `tenants/{tenantId}/users/{userId}/{uuidv7}/{safeFilename}` (built by `buildUserFileKey` only).
+ */
+export const TENANT_FILES_ROOT = 'tenants';
+
+/**
+ * The per-user "directory" inside a tenant (`tenants/{tenantId}/users/{userId}`). Pre-B4 keys started
+ * with it (`users/{userId}/…`): those objects are unreachable through the API.
+ */
 export const USER_FILES_ROOT = 'users';
 
 /** Multipart field that carries the file on `POST /v1/files`. */

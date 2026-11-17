@@ -3,7 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import type { FastifyAdapter, NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { AccessTokenDenylist, AuthModule } from '@platform/auth';
-import { signTestAccessToken } from '@platform/auth/testing';
+import { signTestAccessToken, TEST_TENANT_ID } from '@platform/auth/testing';
 import { generateId, provideCommonEnhancers, type TenantRole } from '@platform/common';
 import { type AuthConfig, authConfig, storageConfig } from '@platform/config';
 import { StorageModule, StorageService } from '@platform/storage';
@@ -21,8 +21,8 @@ import { FilesModule } from '../files.module.js';
 export interface FilesTestApp {
   app: NestFastifyApplication;
   storage: InMemoryStorageService;
-  /** A real signed access token (dev secret) for a user with `roles`. */
-  tokenFor(roles: readonly TenantRole[], userId?: string): Promise<string>;
+  /** A real signed access token (dev secret) for a user with `roles` in `tenantId` (default TEST_TENANT_ID). */
+  tokenFor(roles: readonly TenantRole[], userId?: string, tenantId?: string): Promise<string>;
 }
 
 /** Stands in for the Redis-backed denylist: nothing is revoked. */
@@ -80,8 +80,12 @@ export async function createFilesTestApp(options: FilesTestAppOptions = {}): Pro
   return {
     app,
     storage,
-    tokenFor: async (roles, userId = generateId()) =>
-      (await signTestAccessToken({ id: userId, email: `${userId}@example.com`, roles }, { config }))
-        .token,
+    tokenFor: async (roles, userId = generateId(), tenantId = TEST_TENANT_ID) =>
+      (
+        await signTestAccessToken(
+          { id: userId, email: `${userId}@example.com`, tenantId, roles },
+          { config },
+        )
+      ).token,
   };
 }

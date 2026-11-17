@@ -9,7 +9,8 @@ import { PresignedUploadModel } from './presigned-upload.model.js';
 /**
  * GraphQL face of the files context. Only the presigned flow is exposed: GraphQL is a poor
  * transport for file bytes (no streaming multipart here by design). Authentication and
- * `files:write` are enforced by the global, context-aware guards.
+ * `files:write` are enforced by the global, context-aware guards; the key is minted under the
+ * caller's active tenant (`user.tenantId`) and user.
  */
 @Resolver(() => PresignedUploadModel)
 export class FilesResolver {

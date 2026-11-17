@@ -109,16 +109,17 @@ them by default. Role changes take effect on your next token refresh.
 | `billing:read-all`    |          |   yes   |   yes   |
 | `files:read`          |   yes    |   yes   |   yes   |
 | `files:write`         |   yes    |   yes   |   yes   |
-| `files:manage`        |          |         |         |
+| `files:manage`        |          |   yes   |   yes   |
 
-`files:manage` is declared but granted to nobody until files are scoped to the tenant. `billing:read-all` lists every
+`files:manage` reaches every file of your active tenant (never another tenant's). `billing:read-all` lists every
 payment of your active tenant (never another tenant's). Platform staff enter a tenant with a short-lived switch-in
 token (`admin` + `staff`); see [SECURITY.md](SECURITY.md#platform-staff-switch-in).
 
 Some rules depend on ownership rather than on a permission. They are enforced in the handler:
 
 - You can always read your own user record.
-- Files: you can only touch keys under `users/<yourId>/`, unless you hold `files:manage`.
+- Files: you can only touch keys under `tenants/<activeTenantId>/users/<yourId>/`, or, with `files:manage`, any key
+  under `tenants/<activeTenantId>/`. Another tenant's key and a legacy `users/…` key are 403 for everyone.
 - `GET /v1/billing/payments?all=true` requires `billing:read-all` and lists every payment of the active tenant.
 
 See [SECURITY.md](SECURITY.md) for the threat model.
@@ -191,8 +192,8 @@ A bad request returns 400 `VALIDATION_FAILED` with `errors[]`, whichever validat
 | `GET`    | `/v1/billing/payments`                   | Bearer. `all=true` needs `billing:read-all`             | zod             | 200     | My payments in the active tenant (or, with `all=true` and `billing:read-all`, every payment of the active tenant), keyset-paginated. Query: `all`, `limit` (1-100, default 20), `cursor`                                                                                                                 |
 | `POST`   | `/v1/files`                              | `files:write`                                           | multipart       | 201     | Stream one multipart part named `file` to object storage (up to `STORAGE_MAX_UPLOAD_BYTES`, default 25 MiB)                                                                                                                                                                                              |
 | `POST`   | `/v1/files/presigned-uploads`            | `files:write`                                           | zod             | 201     | Presigned PUT URL. Body: `filename`, `contentType`, `contentLength`. Send the returned `headers` exactly as given                                                                                                                                                                                        |
-| `GET`    | `/v1/files/download-url?key=`            | `files:read` or `files:manage`                          | zod             | 200     | Presigned GET URL that downloads as an attachment. Only your own keys unless you hold `files:manage`                                                                                                                                                                                                     |
-| `DELETE` | `/v1/files?key=`                         | `files:write` or `files:manage`                         | zod             | 204     | Delete a file. Idempotent. Only your own keys unless you hold `files:manage`                                                                                                                                                                                                                             |
+| `GET`    | `/v1/files/download-url?key=`            | `files:read` or `files:manage`                          | zod             | 200     | Presigned GET URL that downloads as an attachment. Your own keys, or any key of your active tenant with `files:manage`                                                                                                                                                                                   |
+| `DELETE` | `/v1/files?key=`                         | `files:write` or `files:manage`                         | zod             | 204     | Delete a file. Idempotent. Your own keys, or any key of your active tenant with `files:manage`                                                                                                                                                                                                           |
 | `GET`    | `/health/live`                           | Public                                                  | none            | 200     | Liveness. Always `ok` while the process is up                                                                                                                                                                                                                                                            |
 | `GET`    | `/health/ready`                          | Public                                                  | none            | 200/503 | Readiness of the app's own stores: Postgres, Cassandra, Redis (+ Kafka on notifications-service; the gateway checks only Redis). Failure details are hidden in production                                                                                                                                |
 | `GET`    | `/metrics`                               | Public. Bearer `METRICS_BEARER_TOKEN` when it is set    | none            | 200     | Prometheus metrics. Returns 404 when `METRICS_ENABLED=false` or the token is wrong or missing                                                                                                                                                                                                            |
@@ -230,11 +231,14 @@ curl -s "$API/v1/billing/checkout-sessions" -H "authorization: Bearer $TOKEN" \
 curl -s "$API/v1/files" -H "authorization: Bearer $TOKEN" -F 'file=@./report.pdf;type=application/pdf'
 ```
 
-The upload answers 201 `{ key: "users/<userId>/<uuidv7>-<filename>", filename, contentType, size, etag }`.
+The upload answers 201 `{ key: "tenants/<tenantId>/users/<userId>/<uuidv7>/<filename>", filename, contentType, size,
+etag }`, keyed by the active tenant of your token.
 `GET /v1/files/download-url?key=` returns `{ key, filename, url, expiresAt, size, contentType }`, where `url` is a
 presigned GET built from `S3_PUBLIC_ENDPOINT` that downloads as an attachment. `POST /v1/files/presigned-uploads`
 returns `{ key, filename, url, method: "PUT", headers: { "content-type" }, expiresAt }`; content type and length are
-signed. A key outside your own `users/<id>/` prefix gets 403 `FILE_ACCESS_DENIED` unless you hold `files:manage`.
+signed. A key outside your own `tenants/<tenantId>/users/<id>/` prefix gets 403 `FILE_ACCESS_DENIED` unless you hold
+`files:manage`, which reaches any key of your active tenant and never another tenant's. Keys from before B4
+(`users/<id>/…`) are 403 for everyone; see [the files README](../domains/files/README.md#data-model) for moving them.
 
 **Testing the Stripe webhook locally.** Sign the exact payload with the same `STRIPE_WEBHOOK_SECRET` the app (or
 billing-service) uses, then send the bytes unchanged (`--data-binary`, not `-d`):

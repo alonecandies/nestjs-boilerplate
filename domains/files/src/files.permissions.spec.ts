@@ -13,9 +13,12 @@ describe('FILES_RBAC', () => {
     expect(rbac.resolve(['member'])).toEqual([FilesPermission.Read, FilesPermission.Write].sort());
   });
 
-  it('withholds files:manage from every role until B4-3 scopes storage keys to the tenant (I-5)', () => {
-    for (const role of ['member', 'admin', 'owner'] as const) {
-      expect(rbac.resolve([role])).toEqual([FilesPermission.Read, FilesPermission.Write].sort());
+  it('grants files:manage (any file of the active tenant) to admins, not to members', () => {
+    expect(FILES_RBAC.grants.admin).toContain(FilesPermission.Manage);
+    expect(FILES_RBAC.grants.member).not.toContain(FilesPermission.Manage);
+    expect(rbac.resolve(['member'])).not.toContain(FilesPermission.Manage);
+    for (const role of ['admin', 'owner'] as const) {
+      expect(rbac.resolve([role])).toEqual(Object.values(FilesPermission).sort());
     }
   });
 });
