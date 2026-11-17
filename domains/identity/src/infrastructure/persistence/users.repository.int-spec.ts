@@ -104,6 +104,7 @@ const register = (email: string, displayName = 'Integration User'): UserAggregat
     displayName,
     passwordHash: '$argon2id$v=19$m=19456,t=2,p=1$c2FsdA$aGFzaA',
     now: new Date(),
+    personalTenantId: generateId(),
   });
 
 describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on PostgreSQL 18', () => {

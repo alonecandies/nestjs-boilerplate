@@ -270,6 +270,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           displayName: 'Mapped',
           passwordHash: 'hash',
           now: new Date(),
+          personalTenantId: generateId(),
         });
       const email = `mapped-${generateId()}@example.com`;
       const user = register(email);

@@ -16,7 +16,8 @@ describe('CreateTenantHandler', () => {
   let events: ReturnType<typeof recordingEventBus>;
   let log: ReturnType<typeof principalLog>;
   const userId = generateId();
-  const self = createPrincipal({ userId, tenantId: generateId(), roles: ['owner'] });
+  const home = generateId();
+  const self = createPrincipal({ userId, tenantId: home, roles: ['owner'] });
   const run = (command: CreateTenantCommand) =>
     runWithPrincipal(self, () => handler.execute(command));
 
@@ -29,6 +30,7 @@ describe('CreateTenantHandler', () => {
         displayName: 'Ada',
         passwordHash: 'x',
         now: new Date(),
+        personalTenantId: home,
       }),
     );
     events = recordingEventBus();
