@@ -154,7 +154,7 @@ Verified behaviour against warm compose infra:
 - `JWT_ACCESS_SECRET` must be identical on identity-service and the gateway (the dev default works when both leave it
   unset). billing-service needs `STRIPE_WEBHOOK_SECRET`: the gateway forwards the raw webhook bytes and signature over
   gRPC.
-- **Infra on remapped host ports** (for example when 5432 or 6379 are taken): set `DATABASE_URL`, `REDIS_URL`,
+- **Infra on remapped host ports** (for example when 5432 or 6379 are taken): set the three database URLs (`DATABASE_URL` and `DATABASE_SYSTEM_URL` on the PgBouncer port, `DATABASE_MIGRATION_URL` on the Postgres port), `REDIS_URL`,
   `CASSANDRA_CONTACT_POINTS` + `CASSANDRA_PORT` + `CASSANDRA_LOCAL_DC=datacenter1`, `KAFKA_BROKERS` (the EXTERNAL
   listener, which must advertise the same `host:port` the app dials), `SMTP_HOST`/`SMTP_PORT`, `S3_ENDPOINT` **and**
   `S3_PUBLIC_ENDPOINT` (presigned URLs are built from the public one), `GCS_API_ENDPOINT`. `LOG_PRETTY=false` gives
@@ -455,7 +455,7 @@ Each Postgres-backed context owns a Postgres **schema** and its own **migration 
 | `bun run db:generate`                    | `drizzle-kit generate` in every domain that has a config: a new SQL migration from that domain's schema diff. Review the SQL, then commit it with `meta/`.      |
 | `bun run db:migrate`                     | The monolith's `src/migrate.ts` from **sources** (swc-node, `@repo/source`) with the root `.env` and `apps/monolith/.env`: the platform set, identity, billing. |
 | `bun run --filter @app/<app> db:migrate` | The same from the app's `dist/migrate.js` (needs `bun run build`), with that app's sets. This is the production release job. See [DOCKER.md](DOCKER.md).        |
-| `bun run db:studio`                      | Drizzle Studio per domain against `DATABASE_URL`: identity on port 4983, billing on 4984.                                                                       |
+| `bun run db:studio`                      | Drizzle Studio per domain against `DATABASE_MIGRATION_URL` (`app_owner`, so forced RLS shows empty tables): identity on port 4983, billing on 4984.             |
 
 Notes:
 
@@ -474,12 +474,12 @@ rules bind every table a migration creates from B2 on, so that each domain's `di
 later without a rewrite. Background and probes:
 [sharding design](superpowers/specs/2026-11-09-sharding-citus-pgbouncer-design.md), sections 2 and 4.
 
-| Kind               | Use it for                                                                             | Distribution call                                      | Keys                                                                                  |
-| ------------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
-| reference          | global, small, read-mostly tables that policy helpers read or every tenant table joins | `SELECT app.make_reference('<schema>.<table>');`       | any; global uniques work                                                              |
-| tenant-distributed | rows owned by one tenant                                                               | `SELECT app.distribute_by_tenant('<schema>.<table>');` | `tenant_id uuid NOT NULL`; PK `(tenant_id, id)`; every UNIQUE starts with `tenant_id` |
-| user-distributed   | rows looked up by user across tenants                                                  | `SELECT app.distribute_by_user('<schema>.<table>');`   | `user_id uuid NOT NULL`; PK `(user_id, id)`; every UNIQUE starts with `user_id`       |
-| coordinator-local  | bookkeeping and system-only tables (`<schema>.__drizzle_migrations`, …)                | none                                                   | any                                                                                   |
+| Kind               | Use it for                                                                    | Distribution call                                      | Keys                                                                                  |
+| ------------------ | ----------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------- |
+| reference          | global, small, read-mostly tables that every tenant table joins or references | `SELECT app.make_reference('<schema>.<table>');`       | any; global uniques work                                                              |
+| tenant-distributed | rows owned by one tenant                                                      | `SELECT app.distribute_by_tenant('<schema>.<table>');` | `tenant_id uuid NOT NULL`; PK `(tenant_id, id)`; every UNIQUE starts with `tenant_id` |
+| user-distributed   | rows looked up by user across tenants                                         | `SELECT app.distribute_by_user('<schema>.<table>');`   | `user_id uuid NOT NULL`; PK `(user_id, id)`; every UNIQUE starts with `user_id`       |
+| coordinator-local  | bookkeeping and system-only tables (`<schema>.__drizzle_migrations`, …)       | none                                                   | any                                                                                   |
 
 1. **One kind per table.** Note it on the table in `*.schema.ts` (`// citus: reference`, `// citus: tenant`,
    `// citus: user`, `// citus: local`); the domain's `distribute` migration is the source of truth.
@@ -493,14 +493,17 @@ later without a rewrite. Background and probes:
    coordinator-local and local → distributed: never; such a column (for example a run id) is a plain column. No
    foreign key crosses a domain schema: a domain's `tenant_id` or `user_id` that points into another domain is a
    plain column.
-4. **Policies (B3).** No subquery anywhere in a policy: call `app.user_id()`, `app.tenant_id()`, `app.elevated()`
-   directly, never `(select app.x())`. A cross-table check goes through a `STABLE` SQL helper that reads
-   **reference tables only**; one that reads a distributed table fails inside pushed-down queries.
+4. **Policies (B3).** Row-local: a policy uses the row's own columns and `app.user_id()`, `app.tenant_id()`,
+   `app.elevated()`, called directly, never `(select app.x())`. No subquery, and no function that reads a table: Citus
+   rejects subqueries in policies, and a helper that reads another table fails on a shard even when that table is a
+   reference table (`XX000 cannot execute a distributed query from a query on a shard`). A read that needs another
+   table (the members of my tenant) is a system method that filters in its own SQL
+   ([SECURITY.md](SECURITY.md#trust-model)).
 5. **Queries.** Every tenant-scoped repository query carries an explicit `tenant_id = $param` predicate from the
    principal, even where RLS filters too: without it the query fans out to every shard.
 6. **Locks and session state.** No `SELECT … FOR UPDATE` without an equality on the distribution column (Citus
    refuses multi-shard row locks). Use `pg_advisory_xact_lock`, never `pg_advisory_lock`; no session `SET` or
-   `set_config(…, false)` outside the migrator (a transaction pooler arrives with B3).
+   `set_config(…, false)` outside the migrator, no `LISTEN` and no temp tables (PgBouncer runs in transaction mode).
 7. **Cross-shard work** (crons, relays, reconciliation) runs on the system pool as multi-shard statements without
    row locks, or loops per tenant.
 8. **Platform tenant.** Platform-level rows of a tenant-distributed table (for example platform Stripe events and
@@ -527,8 +530,38 @@ and then add their foreign keys in its single transaction (drizzle applies all p
 elsewhere). Set it in the server config before the first `distribute` migration runs in production.
 
 **Tools.** Migrations, `drizzle-kit` and `db:studio` connect to the Citus coordinator directly
-(`DATABASE_MIGRATION_URL` from B3 on), never through a pooler. Citus hides shards from `pg_class` and
+(`DATABASE_MIGRATION_URL`, the `app_owner` role), never through a pooler. Citus hides shards from `pg_class` and
 `information_schema` (`citus.override_table_visibility`), so Studio and `drizzle-kit pull` see each table once.
+
+### Checklist: a new table
+
+The migration that creates the table carries all of it, in this order (the boot guard refuses to start a database that has
+a domain table without forced RLS). Details and the grant model: [libs/database/README.md](../libs/database/README.md#adding-a-table).
+
+1. Pick the kind from the table above and write the schema with its keys (`tenant_id` or `user_id` leading the PK and every
+   UNIQUE); run `bun run --filter @domain/<x> db:generate --name <change>`.
+2. In the generated file, right after `CREATE TABLE`, add the distribution call; then indexes, then foreign keys.
+3. `ENABLE` and `FORCE ROW LEVEL SECURITY`, one statement per table.
+4. The policies `TO app_runtime`, row-local, one per command the runtime role needs. No policy means denied.
+5. Explicit grants: `app_runtime` what the repository uses, and `app_system` only for a system method. One statement per
+   `GRANT`. There are no default privileges, so a missing grant is a `42501` in the first spec.
+6. The repository methods run in `inUnitOfWork`, carry an explicit `tenant_id` predicate, and check the row count of a write
+   that must change one row (`assertRowsAffected`).
+7. Specs: a both-path policy spec on `startRlsTestPostgres()` with exact rows (the allowed case and the forbidden one),
+   the migrations spec, and `bun run db:check` after the merge.
+
+### Checklist: a new policy
+
+1. Use only the row's own columns and `app.user_id()`, `app.tenant_id()`, `app.elevated()`, directly. If the rule needs
+   another table, it is not a policy: make it a system method that asserts the scope in TypeScript and filters in SQL.
+2. `USING` for reads, deletes and the old row of an update; `WITH CHECK` for inserts and the new row of an update. An
+   `UPDATE` policy without `WITH CHECK` would let a row move to another tenant: repeat the check on both.
+3. Name it `<table>_<select|insert|update|delete>`, `TO app_runtime`. Elevation (`app.elevated()`) widens reads to the tenant;
+   only widen a write when a flow needs it, and give that flow `elevate(permission)` or a justified reason.
+4. Never edit an applied migration: a changed policy is `DROP POLICY` and `CREATE POLICY` in a new hand-written file
+   (`db:generate --custom --name <change>`).
+5. Spec both paths with exact rows, with `citus.enable_local_execution=off` (the default of `startRlsTestPostgres()`), and
+   assert the forbidden write left the rows unchanged (a hidden write affects 0 rows; a refused `INSERT` raises `42501`).
 
 ## Cassandra CQL migrations
 

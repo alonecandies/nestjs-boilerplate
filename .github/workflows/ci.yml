@@ -220,8 +220,11 @@ jobs:
       - name: Load the app images (boilerplate/<app>:ci)
         run: for f in "${RUNNER_TEMP}"/images/image-*.tar.gz; do gunzip -c "$f" | docker load; done
 
-      # Isolated project bp-topology-<topology>, host ports +20000; register + /v1/auth/me; down -v.
-      - name: Boot ${{ matrix.topology }}, wait for /health/ready, REST journey, tear down
+      # Isolated project bp-topology-<topology>, host ports +20000; apps on the three roles through
+      # PgBouncer with the boot guard in enforce; register + /v1/auth/me; an app with a superuser
+      # DATABASE_URL must refuse to start; down -v. No job here starts Postgres itself: the roles
+      # SQL comes from docker/postgres/init (compose) or startRlsTestPostgres (int specs).
+      - name: Boot ${{ matrix.topology }}, wait for /health/ready, REST journey, guard refusal, tear down
         env:
           TAG: ci
           NO_BUILD: "1"
@@ -241,5 +244,5 @@ jobs:
       - name: docker compose config (every profile combination)
         run: scripts/docker/validate-compose.sh
 
-      - name: Boot infra, assert topics / keyspace / buckets / extensions, tear down
+      - name: Boot infra, assert topics / keyspace / buckets / extensions / roles / PgBouncer, tear down
         run: scripts/docker/check-infra.sh

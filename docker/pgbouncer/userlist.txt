@@ -1,0 +1,6 @@
+;; LOCAL ONLY (docker-compose.yml): the dev passwords of docker/postgres/init/02-roles.sql, which
+;; equal the role names. PgBouncer derives the SCRAM exchange from a plaintext entry. Exactly the
+;; two pooled roles: app_owner connects to the coordinator directly and must never be listed here.
+;; Production uses auth_query (pgbouncer.get_auth) and no file at all (docs/SECURITY.md).
+"app_runtime" "app_runtime"
+"app_system" "app_system"

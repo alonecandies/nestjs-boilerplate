@@ -4,6 +4,7 @@
 #   docker compose up -d --wait                                   # infra only (no profile)
 #   docker compose --profile monolith up -d --build --wait        # + monolith            :3000
 #   docker compose --profile microservices up -d --build --wait   # + gateway + 3 services :3000
+#   docker compose --profile citus up -d --wait                   # + one Citus worker (postgres-worker-1) and citus-init
 #   docker compose --profile observability up -d                  # + Prometheus, Grafana, Jaeger, exporters
 #   docker compose --profile logs up -d                           # + Loki + Alloy (container logs -> Grafana)
 #   docker compose --profile tools up -d                          # + Kafka UI
@@ -74,11 +75,20 @@ x-env-auth: &env-auth
 x-env-identity: &env-identity
   JWT_REFRESH_SECRET: ${DOCKER_JWT_REFRESH_SECRET:-compose-local-refresh-secret-not-for-production-0002}
 
+# The three roles of docker/postgres/init/02-roles.sql (dev passwords = role names; sharding design
+# section 5). Requests and the system pool go through PgBouncer (transaction pooling, port 6432);
+# the migrator and the operator CLIs connect as app_owner straight to the coordinator. Only the
+# runtime role is NOBYPASSRLS: there is no URL fallback, so a missing value fails where it is used.
+# The roles exist only on a data directory created after B3: `docker compose down -v` once.
 x-env-postgres: &env-postgres
-  DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@postgres:5432/${POSTGRES_DB:-app}
+  DATABASE_URL: postgres://app_runtime:app_runtime@pgbouncer:6432/${POSTGRES_DB:-app}
+  DATABASE_SYSTEM_URL: postgres://app_system:app_system@pgbouncer:6432/${POSTGRES_DB:-app}
+  DATABASE_MIGRATION_URL: postgres://app_owner:app_owner@postgres:5432/${POSTGRES_DB:-app}
+  DATABASE_POOLER: pgbouncer # PgBouncer rejects statement_timeout as a startup parameter: the roles carry it
+  DATABASE_BOOT_GUARD: enforce # refuses to boot on a superuser/BYPASSRLS runtime role or unforced RLS
   # Advisory-locked, so concurrent replicas/services are safe. Each app applies the platform set plus
-  # its own domain sets. Production: run them as a job per app image
-  # (`docker compose run --rm --no-deps identity-service dist/migrate.js`).
+  # its own domain sets, as app_owner over DATABASE_MIGRATION_URL. Production: run them as a job per
+  # app image (`docker compose run --rm --no-deps identity-service dist/migrate.js`).
   DATABASE_RUN_MIGRATIONS: "true"
 
 x-env-cassandra: &env-cassandra
@@ -226,6 +236,109 @@ services:
     deploy:
       resources:
         limits: { cpus: "1.5", memory: 512M }
+
+  # -- profile `citus`: a second node, so shards cross a real network (docs/DOCKER.md "Citus worker") --
+  # Opt-in; single node stays the default. The worker runs the same init folder (extension and the
+  # three roles, so Citus can dial it as any of them) and trusts every peer on the private `backend`
+  # network: Citus connects between nodes as the calling role, and the dev passwords are not shared
+  # with it. No host port: only the other containers reach it. citus-init joins it to the coordinator.
+  postgres-worker-1:
+    image: citusdata/citus:14.2.0
+    platform: linux/amd64
+    profiles: [citus]
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    shm_size: 128mb
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+      POSTGRES_HOST_AUTH_METHOD: trust
+    command:
+      - postgres
+      - -c
+      - max_connections=200
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - work_mem=4MB
+      - -c
+      - jit=off
+      - -c
+      - shared_preload_libraries=citus # the coordinator's list minus pg_stat_statements
+      - -c
+      - citus.shard_count=8
+      - -c
+      - citus.max_shared_pool_size=180
+    volumes:
+      - pg-worker-1-data:/var/lib/postgresql
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -h 127.0.0.1 -p 5432 -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+      start_interval: 1s
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 512M }
+
+  # One-shot and idempotent (docker/postgres/citus-init.sh): coordinator host, citus_add_node, drain
+  # the coordinator's shards to the worker. Re-run it any time: `docker compose --profile citus run --rm citus-init`.
+  citus-init:
+    image: citusdata/citus:14.2.0 # reused for psql
+    platform: linux/amd64
+    profiles: [citus]
+    restart: "no"
+    logging: *logging
+    networks: [backend]
+    depends_on:
+      postgres: { condition: service_healthy }
+      postgres-worker-1: { condition: service_healthy }
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER:-app}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-app}
+      PGDATABASE: ${POSTGRES_DB:-app}
+      COORDINATOR_HOST: postgres
+      WORKER_HOST: postgres-worker-1
+    entrypoint: ["/bin/sh", "/opt/citus-init/citus-init.sh"]
+    volumes:
+      - ./docker/postgres/citus-init.sh:/opt/citus-init/citus-init.sh:ro
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 128M }
+
+  # PgBouncer 1.26, transaction pooling, in front of the coordinator (sharding design section 5).
+  # The mounted ini and userlist hold two users (app_runtime, app_system capped at 5); the entrypoint
+  # is overridden so the image does not generate its own config. Local passwords: docker/pgbouncer.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.26.1-p0
+    entrypoint: ["/usr/bin/pgbouncer", "/etc/pgbouncer/pgbouncer.ini"]
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    volumes:
+      - ./docker/pgbouncer:/etc/pgbouncer:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+    ports: ["127.0.0.1:${PGBOUNCER_HOST_PORT:-6432}:6432"]
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - PGPASSWORD=app_runtime psql -h 127.0.0.1 -p 6432 -U app_runtime -d "${POSTGRES_DB:-app}" -tAc 'select 1'
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+      start_interval: 1s
+    deploy:
+      resources:
+        limits: { cpus: "0.5", memory: 64M }
 
   redis:
     image: redis:8.10.2-alpine3.23
@@ -549,6 +662,8 @@ services:
       cassandra-init: { condition: service_completed_successfully }
       storage-init: { condition: service_completed_successfully }
       immudb-init: { condition: service_completed_successfully }
+      # Only with the `citus` profile on: the apps then start after the worker has joined.
+      citus-init: { condition: service_completed_successfully, required: false }
     deploy:
       resources:
         limits: { cpus: "0.05", memory: 16M }
@@ -584,6 +699,7 @@ services:
         aliases: [api] # k6 and docs target http://api:3000 whichever topology runs
     depends_on:
       postgres: { condition: service_healthy }
+      pgbouncer: { condition: service_healthy }
       redis: { condition: service_healthy }
       mailpit: { condition: service_healthy }
       kafka-init: { condition: service_completed_successfully }
@@ -666,6 +782,7 @@ services:
     ports: ["127.0.0.1:${IDENTITY_GRPC_HOST_PORT:-50051}:50051"]
     depends_on:
       postgres: { condition: service_healthy }
+      pgbouncer: { condition: service_healthy }
       redis: { condition: service_healthy }
       kafka-init: { condition: service_completed_successfully }
     deploy:
@@ -731,6 +848,7 @@ services:
     ports: ["127.0.0.1:${BILLING_GRPC_HOST_PORT:-50053}:50051"]
     depends_on:
       postgres: { condition: service_healthy }
+      pgbouncer: { condition: service_healthy }
       redis: { condition: service_healthy }
       kafka-init: { condition: service_completed_successfully }
     deploy:
@@ -958,6 +1076,7 @@ networks:
 
 volumes:
   pg-data:
+  pg-worker-1-data:
   redis-data:
   cassandra-data:
   immudb-data:

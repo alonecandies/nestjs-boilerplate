@@ -44,3 +44,14 @@ export const guardedMigrations: DatabaseMigrationSet = {
   migrationsSchema: 'guarded',
   migrationsTable: MIGRATIONS_TABLE,
 };
+
+/**
+ * The sharding smoke fixture (B3 Task 18): a reference table and a tenant-distributed table under
+ * forced RLS, with policies that call `app.user_id()`. Runs after platformMigrations.
+ */
+export const shardingMigrations: DatabaseMigrationSet = {
+  name: 'sharding',
+  folder: join(import.meta.dirname, 'sharding', 'migrations'),
+  migrationsSchema: 'sharding',
+  migrationsTable: MIGRATIONS_TABLE,
+};
