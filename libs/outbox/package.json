@@ -36,5 +36,12 @@
     "drizzle-orm": "catalog:",
     "nestjs-cls": "catalog:",
     "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@nestjs/core": "catalog:",
+    "@platform/testing": "workspace:*",
+    "@types/lodash-es": "catalog:",
+    "lodash-es": "catalog:",
+    "postgres": "catalog:"
   }
 }
