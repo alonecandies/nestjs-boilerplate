@@ -264,6 +264,28 @@ Fixtures go through register, invite, accept, login and switch-tenant. The one h
 and the already expired one (`TokenIssuer.issueAccessToken` with a `ttlSec`), because the real flows cannot mint
 them. Not covered: fan-out across replicas through the Redis adapter, and C11's socket caps (C12 owns C's e2e).
 
+### Real graphql-ws suites
+
+`realtime-graphql.e2e-spec.ts` (E-2) does the same for the GraphQL subscription transport: `createClient` from
+`graphql-ws` on Node 24's global `WebSocket` (`GraphqlWsClients` in `@platform/testing/realtime`: the close event
+`{ code, reason }`, a `next` collector and a one-shot `execute`) against the same loopback app. It runs on both
+harnesses (the monolith with the real notifications core, the gateway with the fake notifications-service), with
+`WS_REVOCATION_SWEEP_INTERVAL_MS=200` and `GRAPHQL_MAX_COMPLEXITY=20` set before the app boots. Pushes are driven as in
+the Socket.IO suites; a delivery test first waits until the server's iterator listens on the `(tenant, user)` trigger
+(the in-process `PubSub` loses a message published earlier), so it never races the subscription.
+
+- **Connection.** No token, an invalid, an expired and a denylisted token close 4403; `{ authorization: 'Bearer …' }`
+  and `{ token }` are both acknowledged.
+- **Delivery and filters.** An (A, U) envelope gives exactly one `next`; (B, U) and (A, V) envelopes give none; a (B, U)
+  payload published straight onto the (A, U) trigger gives none; a query sent over the socket reads tenant A's inbox only.
+- **Expiry and sweep.** A 2 s token closes 4401 `Access token expired`; a logout closes 4401 `Access token revoked`
+  within two sweep intervals; a tenant switch closes the old token's socket the same way while the user's second
+  session (another jti) stays open, and a socket on the new token gets (B, U) pushes only.
+- **Complexity.** An operation above `GRAPHQL_MAX_COMPLEXITY` sent on the socket returns `QUERY_TOO_COMPLEX` and the
+  socket serves the next operation.
+
+Not covered: the 10 s `connection_init` timeout (4408) and C11's connection caps (C12 owns C's e2e).
+
 ### Gotchas
 
 - **`clearMocks: true`**: call history is reset before each test. Assert on calls made in the same
