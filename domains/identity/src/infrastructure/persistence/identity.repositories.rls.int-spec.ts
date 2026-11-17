@@ -335,6 +335,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           displayName: 'Registered',
           passwordHash: 'hash-new',
           now,
+          personalTenantId: generateId(),
         });
       const NEW_USER = id('5a0');
       const NEW_TENANT = id('5b0');

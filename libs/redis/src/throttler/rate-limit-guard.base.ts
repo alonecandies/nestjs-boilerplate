@@ -34,7 +34,8 @@ export interface RateLimitBucket {
 }
 
 /**
- * Global budgets charged for one GraphQL request (one operation, many root resolvers), per throttler:
+ * Global budgets charged for one GraphQL request (one operation, many root resolvers), per
+ * `throttler|tracker` (a `@Public` field charges `ip:<addr>`, an authenticated one `user:<id>`):
  * the charge in flight, settling to the refusal to repeat (`ThrottlerLimitDetail`) or `null` when the
  * budget admitted the request. The promise goes in the map BEFORE the storage is awaited: graphql-js
  * starts every root field of a query in one synchronous loop, so a value stored only after the await
@@ -138,10 +139,13 @@ export abstract class RateLimitGuardBase extends ThrottlerGuard {
   /** Increments `bucket`; throws `ThrottlerException` (429, `Retry-After`) when it is blocked. */
   protected async charge(context: ExecutionContext, bucket: RateLimitBucket): Promise<void> {
     const charged = this.graphqlChargesOf(context, bucket);
-    let pending = charged?.get(bucket.throttler);
+    // Keyed by tracker too: a `@Public` root field runs before `req.user` is set, so it charges
+    // `ip:<addr>`; the authenticated fields after it must still charge `user:<id>` once.
+    const chargeKey = `${bucket.throttler}|${bucket.tracker}`;
+    let pending = charged?.get(chargeKey);
     if (pending === undefined) {
       pending = this.chargeStorage(context, bucket);
-      charged?.set(bucket.throttler, pending);
+      charged?.set(chargeKey, pending);
     }
     const refusal = await pending;
     if (refusal === null) return;

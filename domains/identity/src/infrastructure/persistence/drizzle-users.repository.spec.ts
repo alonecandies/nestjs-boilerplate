@@ -116,6 +116,7 @@ describe('DrizzleUsersRepository', () => {
       displayName: 'Ada',
       passwordHash: '$argon2id$h',
       now: NOW,
+      personalTenantId: generateId(),
     });
 
   it('insert writes the snapshot; the email unique violation becomes EmailAlreadyTakenException', async () => {

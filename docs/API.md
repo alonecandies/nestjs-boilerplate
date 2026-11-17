@@ -37,6 +37,8 @@ Conventions that apply to every HTTP response:
   - `tenant`: `THROTTLE_TENANT_LIMIT`/`_TTL_MS`, default 3000/60 s for all members of the active tenant together.
     One noisy tenant cannot starve the others.
   - Named route policies: `@RateLimit('<domain>.<name>')`, with limits from the domain's env.
+  - Mark-read: `notifications.mark-read`, `NOTIFICATIONS_MARK_READ_LIMIT` per user per window, one budget for the
+    Socket.IO message, REST `POST /v1/notifications/:id/read` and GraphQL `markNotificationRead`.
   - Register and login: `identity.credentials`, `IDENTITY_CREDENTIALS_LIMIT` per sha256(email)+IP, shared by REST
     and GraphQL. There is also a per-account lockout after `IDENTITY_LOCKOUT_THRESHOLD` attempts without a success,
     for `IDENTITY_LOCKOUT_MS`, answered exactly like any other 429.

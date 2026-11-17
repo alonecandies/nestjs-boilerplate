@@ -1,5 +1,7 @@
 import { RATE_LIMIT_POLICY_KEY } from '@platform/redis';
 import { describe, expect, it } from 'vitest';
+import { NotificationsResolver } from '../graphql/notifications.resolver.js';
+import { NotificationsController } from '../http/notifications.controller.js';
 import { NotificationsGateway } from './notifications.gateway.js';
 import { notificationsRateLimitConfig } from './notifications-rate-limit.config.js';
 import {
@@ -19,9 +21,15 @@ describe('notifications rate-limit policies', () => {
     expect(notificationsRateLimitPolicies(tuned)[0]).toMatchObject({ limit: 5, ttlMs: 1_000 });
   });
 
-  it('markRead uses the notifications.mark-read policy', () => {
-    expect(
-      Reflect.getMetadata(RATE_LIMIT_POLICY_KEY, NotificationsGateway.prototype.markRead),
-    ).toBe(NOTIFICATIONS_RATE_LIMITS.MARK_READ);
+  it('every mark-read entry point uses the notifications.mark-read policy (Socket.IO, REST, GraphQL)', () => {
+    for (const handler of [
+      NotificationsGateway.prototype.markRead,
+      NotificationsController.prototype.markRead,
+      NotificationsResolver.prototype.markNotificationRead,
+    ]) {
+      expect(Reflect.getMetadata(RATE_LIMIT_POLICY_KEY, handler)).toBe(
+        NOTIFICATIONS_RATE_LIMITS.MARK_READ,
+      );
+    }
   });
 });

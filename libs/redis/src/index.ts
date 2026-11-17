@@ -81,6 +81,7 @@ export {
 export {
   ConnectionCaps,
   type HandshakeVerdict,
+  type SocketSlot,
   TOO_MANY_CONNECTIONS,
 } from './throttler/connection-caps.js';
 export {

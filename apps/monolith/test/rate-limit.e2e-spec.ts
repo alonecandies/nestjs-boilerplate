@@ -8,8 +8,9 @@ await vi.hoisted(async () => {
   });
 });
 
+import { generateId } from '@platform/common';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
-import { expectProblem, graphql } from './support/http.js';
+import { bearer, expectProblem, graphql } from './support/http.js';
 import { createMonolithE2eApp, type MonolithE2e } from './support/monolith-e2e-app.js';
 
 const LOGIN = 'mutation Login($input: LoginInput!) { login(input: $input) { accessToken } }';
@@ -75,6 +76,31 @@ describe('monolith rate limits (spec §11, wave 1)', () => {
     });
     expectProblem(limited, 429, 'RATE_LIMITED');
     expect((await inject({ method: 'GET', url: '/health/live' })).statusCode).toBe(200);
+  });
+
+  it('limits REST mark-read to NOTIFICATIONS_MARK_READ_LIMIT (30) per window per user (F4)', async () => {
+    const registered = await inject({
+      method: 'POST',
+      url: '/v1/auth/register',
+      payload: {
+        email: 'erin@example.com',
+        password: 'correct horse battery',
+        displayName: 'Erin',
+      },
+    });
+    expect(registered.statusCode, registered.body).toBe(201);
+    const { accessToken } = registered.json<{ accessToken: string }>();
+    const mark = () =>
+      inject({
+        method: 'POST',
+        url: `/v1/notifications/${generateId()}/read`,
+        headers: bearer(accessToken),
+      });
+    // The policy is checked before the handler: unknown ids (404) count too.
+    for (let i = 0; i < 30; i += 1) expect((await mark()).statusCode).toBe(404);
+    const limited = await mark();
+    expectProblem(limited, 429, 'RATE_LIMITED');
+    expect(String(limited.headers['ratelimit'])).toContain('"route:notifications.mark-read";r=0');
   });
 
   it('never throttles the Stripe webhook (SkipRateLimit covers every throttler)', async () => {

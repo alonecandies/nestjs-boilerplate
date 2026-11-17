@@ -28,10 +28,11 @@ export interface RegisterUserProps {
   passwordHash: string;
   now: Date;
   /**
-   * The id the caller gives the account's personal workspace (spec §5.2); `UserRegisteredEvent`
-   * carries it as its tenant. Default: a new uuidv7 (callers that create no workspace).
+   * The id of the account's personal workspace (spec §5.2), created with the user;
+   * `UserRegisteredEvent` carries it as its tenant. Required: a made-up id would name a tenant that
+   * does not exist.
    */
-  personalTenantId?: string;
+  personalTenantId: string;
 }
 
 /**
@@ -85,7 +86,7 @@ export class UserAggregate extends AggregateRoot {
         email,
         displayName,
         props.now,
-        props.personalTenantId ?? generateId(),
+        props.personalTenantId,
       ),
     );
     return user;

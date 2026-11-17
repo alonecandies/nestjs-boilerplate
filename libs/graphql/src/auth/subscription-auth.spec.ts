@@ -5,6 +5,7 @@ import {
   type TokenService,
 } from '@platform/auth';
 import { UnauthenticatedException } from '@platform/common';
+import type { SocketSlot } from '@platform/redis';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { GqlWsConnectionContext } from '../context/gql-context.js';
 import {
@@ -292,19 +293,23 @@ describe('createGraphqlWsAuthHandlers with a revocation sweeper', () => {
   });
 });
 
+const HELD: SocketSlot = { admitted: true, held: true };
+const REFUSED: SocketSlot = { admitted: false, held: false };
+const FAILED_OPEN: SocketSlot = { admitted: true, held: false };
+
 describe('connection caps (C-9)', () => {
   const jane = user();
 
   it('refuses the connection past the per-user socket cap, and releases the slot on close', async () => {
     const caps = {
       admitHandshake: vi.fn(async () => ({ ok: true as const })),
-      acquireSocket: vi.fn(async () => false),
+      acquireSocket: vi.fn(async (): Promise<SocketSlot> => REFUSED),
       releaseSocket: vi.fn(async () => undefined),
     };
     const handlers = createGraphqlWsAuthHandlers(async () => jane, { caps });
     await expect(handlers.onConnect(wsContext({ token: 'ok' }))).resolves.toBe(false);
     expect(caps.admitHandshake).toHaveBeenCalledWith(undefined);
-    caps.acquireSocket.mockResolvedValue(true);
+    caps.acquireSocket.mockResolvedValue(HELD);
     const ctx = wsContext({ token: 'ok' });
     await expect(handlers.onConnect(ctx)).resolves.toBe(true);
     handlers.onClose(ctx);
@@ -315,7 +320,7 @@ describe('connection caps (C-9)', () => {
     const authenticate = vi.fn(async () => jane);
     const caps = {
       admitHandshake: vi.fn(async () => ({ ok: false as const, retryAfterSeconds: 5 })),
-      acquireSocket: vi.fn(async () => true),
+      acquireSocket: vi.fn(async () => HELD),
       releaseSocket: vi.fn(async () => undefined),
     };
     const handlers = createGraphqlWsAuthHandlers(authenticate, { caps });
@@ -325,12 +330,12 @@ describe('connection caps (C-9)', () => {
   });
 
   it('releases the slot when the socket closes while the cap is being acquired', async () => {
-    let grant: (admitted: boolean) => void = () => undefined;
+    let grant: (slot: SocketSlot) => void = () => undefined;
     const caps = {
       admitHandshake: vi.fn(async () => ({ ok: true as const })),
       acquireSocket: vi.fn(
         () =>
-          new Promise<boolean>((done) => {
+          new Promise<SocketSlot>((done) => {
             grant = done;
           }),
       ),
@@ -341,8 +346,35 @@ describe('connection caps (C-9)', () => {
     const connecting = handlers.onConnect(ctx);
     await vi.waitFor(() => expect(caps.acquireSocket).toHaveBeenCalled());
     handlers.onClose(ctx);
-    grant(true);
+    grant(HELD);
     await expect(connecting).resolves.toBe(false);
     expect(caps.releaseSocket).toHaveBeenCalledWith(jane.id);
+  });
+
+  it('never releases a slot admitted while Redis was down (nothing was counted, F2)', async () => {
+    const caps = {
+      admitHandshake: vi.fn(async () => ({ ok: true as const })),
+      acquireSocket: vi.fn(async () => FAILED_OPEN),
+      releaseSocket: vi.fn(async () => undefined),
+    };
+    const handlers = createGraphqlWsAuthHandlers(async () => jane, { caps });
+    const ctx = wsContext({ token: 'ok' });
+    await expect(handlers.onConnect(ctx)).resolves.toBe(true);
+    handlers.onClose(ctx);
+    // Closed while a failed-open slot is being taken: nothing to release either.
+    let grant: (slot: SocketSlot) => void = () => undefined;
+    caps.acquireSocket.mockImplementationOnce(
+      () =>
+        new Promise<SocketSlot>((done) => {
+          grant = done;
+        }),
+    );
+    const late = wsContext({ token: 'ok' });
+    const connecting = handlers.onConnect(late);
+    await vi.waitFor(() => expect(caps.acquireSocket).toHaveBeenCalledTimes(2));
+    handlers.onClose(late);
+    grant(FAILED_OPEN);
+    await expect(connecting).resolves.toBe(false);
+    expect(caps.releaseSocket).not.toHaveBeenCalled();
   });
 });

@@ -115,9 +115,11 @@ describe('connection-count Lua script (real Redis) == JS model', () => {
       if (action === 'release') {
         await Promise.all([real.releaseSocket(user), model.releaseSocket(user)]);
       } else {
+        // Redis is up: an admitted slot is always counted (held), a refused one never.
+        const slot = { admitted, held: admitted };
         await expect(
           Promise.all([real.acquireSocket(user), model.acquireSocket(user)]),
-        ).resolves.toEqual([admitted, admitted]);
+        ).resolves.toEqual([slot, slot]);
       }
     }
     const ttl = await redis.pttl(keys.key('wsconn', `{${user}}`));

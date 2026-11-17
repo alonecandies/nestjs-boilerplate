@@ -418,10 +418,10 @@ identity-service (loaded by `IdentityCoreModule`)
 `IDENTITY_CREDENTIALS_LIMIT` / `IDENTITY_CREDENTIALS_TTL_MS` instead. In code, `@AuthThrottle()` became
 `@RateLimit('identity.credentials')`, `AUTH_THROTTLE_KEY` became `RATE_LIMIT_POLICY_KEY`,
 `DEFAULT_THROTTLER_NAME` was removed (throttlers are `ip`, `user`, `route`, `auth`), and `@SkipThrottle()` must
-become `@SkipRateLimit()`. The old names are not accepted: the old variables are ignored, and
-`AuthThrottle`/`AUTH_THROTTLE_KEY`/`DEFAULT_THROTTLER_NAME` no longer compile. `SkipThrottle`/`Throttle` are still
-re-exported and still compile, but with no `default` throttler they have NO effect: use
-`SkipRateLimit()`/`RateLimit()`.
+become `@SkipRateLimit()`. The old names are not accepted: setting an old variable fails config validation at boot
+with a message naming its replacement, and `AuthThrottle`/`AUTH_THROTTLE_KEY`/`DEFAULT_THROTTLER_NAME` no longer
+compile. `SkipThrottle`/`Throttle` are still re-exported and still compile, but with no `default` throttler they have
+NO effect: use `SkipRateLimit()`/`RateLimit()`.
 
 ### `identityRateLimit` — credential endpoints (identity)
 
@@ -435,15 +435,15 @@ gateway, monolith
 | `IDENTITY_LOCKOUT_THRESHOLD`  | `10`     | Consecutive attempts per account (any IP) since the last success before the account is refused. |
 | `IDENTITY_LOCKOUT_MS`         | `900000` | How long a locked account is refused (429, like any rate limit).                                |
 
-### `notificationsRateLimit` — Socket.IO message policies (notifications)
+### `notificationsRateLimit` — mark-read policy (notifications)
 
 [`notifications-rate-limit.config.ts`](../domains/notifications/src/presentation/ws/notifications-rate-limit.config.ts) ·
 gateway, monolith
 
-| Variable                         | Default | Description                              |
-| -------------------------------- | ------- | ---------------------------------------- |
-| `NOTIFICATIONS_MARK_READ_LIMIT`  | `30`    | `markRead` messages per user per window. |
-| `NOTIFICATIONS_MARK_READ_TTL_MS` | `10000` | Its window.                              |
+| Variable                         | Default | Description                                                                           |
+| -------------------------------- | ------- | ------------------------------------------------------------------------------------- |
+| `NOTIFICATIONS_MARK_READ_LIMIT`  | `30`    | Mark-read calls per user per window, Socket.IO `markRead`, REST and GraphQL together. |
+| `NOTIFICATIONS_MARK_READ_TTL_MS` | `10000` | Its window.                                                                           |
 
 ### `cache` — L1 in-process LRU + L2 Redis
 

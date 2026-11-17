@@ -1,19 +1,22 @@
 import { generateId } from '@platform/common';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { NOW } from '../../test/fixtures.js';
 import { UserRegisteredEvent } from './events/user-registered.event.js';
 import { InvalidUserException } from './identity.errors.js';
-import { UserAggregate } from './user.aggregate.js';
+import { type RegisterUserProps, UserAggregate } from './user.aggregate.js';
 
-const register = (overrides: Partial<Parameters<typeof UserAggregate.register>[0]> = {}) =>
-  UserAggregate.register({
-    id: generateId(),
-    email: '  Ada@Example.COM ',
-    displayName: '  Ada Lovelace ',
-    passwordHash: '$argon2id$hash',
-    now: NOW,
-    ...overrides,
-  });
+const props = (overrides: Partial<RegisterUserProps> = {}): RegisterUserProps => ({
+  id: generateId(),
+  email: '  Ada@Example.COM ',
+  displayName: '  Ada Lovelace ',
+  passwordHash: '$argon2id$hash',
+  now: NOW,
+  personalTenantId: generateId(),
+  ...overrides,
+});
+
+const register = (overrides: Partial<RegisterUserProps> = {}) =>
+  UserAggregate.register(props(overrides));
 
 describe('UserAggregate', () => {
   describe('register()', () => {
@@ -45,6 +48,13 @@ describe('UserAggregate', () => {
       const personalTenantId = generateId();
       const [event] = register({ personalTenantId }).getUncommittedEvents();
       expect(event).toMatchObject({ tenantId: personalTenantId });
+    });
+
+    it('requires the personal workspace id: no fallback tenant the event could name (compile time)', () => {
+      expectTypeOf<RegisterUserProps['personalTenantId']>().toEqualTypeOf<string>();
+      const { personalTenantId: _omitted, ...withoutWorkspace } = props();
+      // @ts-expect-error -- registering without the workspace id must not compile
+      expectTypeOf(UserAggregate.register).toBeCallableWith(withoutWorkspace);
     });
 
     it('rejects a blank display name, an invalid email and an empty hash (all issues at once)', () => {
