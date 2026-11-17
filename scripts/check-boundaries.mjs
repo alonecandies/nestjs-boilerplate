@@ -13,6 +13,10 @@
 // Production source must not import a `@<scope>/<pkg>/testing` package subpath or the test-only
 // package `@platform/testing` (tests may). Not covered: relative `./testing/...` imports and deeper
 // `@<scope>/<pkg>/<dir>/testing` subpaths.
+// Justified elevation (B3 Task 6): `RlsElevation.justified()` turns RLS elevation on WITHOUT a
+// permission check, so outside libs/database/src only a `*.elevated.ts` file (small, reviewed on its
+// own) may name `justified` (a call, a property access, a bracket access) or `ELEVATION_REASONS`.
+// Test code is exempt; whole-line comments are ignored.
 //   node scripts/check-boundaries.mjs [--root <repo root>]
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -48,6 +52,11 @@ const WORKSPACE_SCOPE = /^@(?:app|domain|platform)\//;
 const TEST_ONLY = /^@(?:(?:app|domain|platform)\/[^/]+\/testing|platform\/testing)(?:\/|$)/;
 const TEST_CODE =
   /(?:^|[\\/])(?:test|testing)[\\/]|\.(?:spec|e2e-spec|int-spec|test)\.[cm]?[jt]sx?$/;
+// `x.justified`, `justified(` / `justified<T>(`, `x['justified']`, `ELEVATION_REASONS`.
+const JUSTIFIED_ELEVATION =
+  /\.\s*justified\b|\bjustified\s*(?:<[^()]*>)?\s*\(|\[\s*['"`]justified['"`]\s*\]|\bELEVATION_REASONS\b/;
+const ELEVATED_FILE = /\.elevated\.ts$/;
+const ELEVATION_HOME = '@platform/database';
 
 /** Returns why `specifier` is forbidden in a package of `kind` (for domains: of `domain`), or null. */
 function violation(kind, domain, specifier) {
@@ -144,6 +153,17 @@ for (const pkg of packages) {
   }
   for (const file of sourceFiles(pkg.dir)) {
     const source = readFileSync(file, 'utf8').replace(LINE_COMMENT, '');
+    const inPackage = relative(pkg.dir, file);
+    if (
+      JUSTIFIED_ELEVATION.test(source) &&
+      !ELEVATED_FILE.test(file) &&
+      !TEST_CODE.test(inPackage) &&
+      !(pkg.name === ELEVATION_HOME && inPackage.startsWith(`src${sep}`))
+    ) {
+      problems.push(
+        `${relative(root, file)}: names RlsElevation.justified or ELEVATION_REASONS outside libs/database/src: only a *.elevated.ts file may (justified elevation skips the permission check)`,
+      );
+    }
     for (const [, specifier] of source.matchAll(SPECIFIER)) {
       if (specifier.startsWith('.')) {
         if (ownerOf(resolve(dirname(file), specifier)) !== pkg) {

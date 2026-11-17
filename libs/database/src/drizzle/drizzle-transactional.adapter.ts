@@ -14,6 +14,7 @@ import {
   recordAppliedRlsContext,
   rlsContextOf,
 } from '../rls/rls-context.js';
+import { transactionClientOf } from '../rls/transaction-client.js';
 import type { DrizzleDB } from './drizzle.types.js';
 
 /**
@@ -26,23 +27,6 @@ export function normalizeTxConfig(
   if (isNil(config)) return undefined;
   const effective = omitBy(config, isNil) as PgTransactionConfig;
   return isEmpty(effective) ? undefined : effective;
-}
-
-/** The slice of the postgres.js transaction client the context statement needs. */
-interface SimpleQueryClient {
-  unsafe(query: string): { simple(): PromiseLike<unknown> };
-}
-
-/**
- * drizzle's postgres-js transaction keeps its postgres.js transaction client on
- * `tx.session.client` (the reserved connection, wrapped by `preferPreparedStatements`).
- */
-function transactionClientOf(tx: unknown): SimpleQueryClient {
-  const client: unknown = (tx as { session?: { client?: unknown } } | undefined)?.session?.client;
-  if (typeof (client as Partial<SimpleQueryClient> | undefined)?.unsafe !== 'function') {
-    throw new Error('RLS context: the drizzle transaction exposes no postgres.js client');
-  }
-  return client as SimpleQueryClient;
 }
 
 /** The CLS principal's context and its SQL; throws before any SQL is sent. */

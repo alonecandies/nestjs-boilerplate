@@ -4,7 +4,8 @@
  * platform set first, then each domain's own drizzle-kit history) applied by an advisory-locked
  * runner at boot or by each app's `migrate.ts` (`runMigrationsCli`), a readiness contributor and
  * uuidv7 keyset-pagination helpers. Every runtime transaction opens with the RLS context of the CLS
- * principal (`SET LOCAL`, refused without one); repositories reach it through `inUnitOfWork`.
+ * principal (`SET LOCAL`, refused without one); repositories reach it through `inUnitOfWork`, and
+ * `RlsElevation` turns `app.elevated` on inside it (after a permission check, or a justified reason).
  * Domain `*.schema.ts` files and histories live in the domains.
  */
 
@@ -46,5 +47,12 @@ export {
   type RlsErrorCode,
   rlsContextOf,
 } from './rls/rls-context.js';
+export {
+  DB_RLS_ELEVATIONS_TOTAL,
+  ELEVATION_DENIED,
+  ELEVATION_REASONS,
+  type ElevationReason,
+  RlsElevation,
+} from './rls/rls-elevation.service.js';
 export * from './rls/row-count.js';
 export * from './rls/unit-of-work.js';

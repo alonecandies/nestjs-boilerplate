@@ -1,4 +1,11 @@
-import { type INestApplicationContext, Injectable, Module, type Provider } from '@nestjs/common';
+import {
+  type DynamicModule,
+  Global,
+  type INestApplicationContext,
+  Injectable,
+  Module,
+  type Provider,
+} from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import {
   InjectTransaction,
@@ -6,7 +13,7 @@ import {
   Transactional,
   TransactionHost,
 } from '@nestjs-cls/transactional';
-import { createPrincipal, runWithPrincipal } from '@platform/common';
+import { createPrincipal, PrincipalPermissions, runWithPrincipal } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { ClsModule } from 'nestjs-cls';
@@ -21,6 +28,7 @@ import { DatabaseHealthIndicator } from './health/database.health.js';
 import { MIGRATIONS_TABLE } from './migrator/migrations.constants.js';
 import { runMigrations } from './migrator/run-migrations.js';
 import { platformMigrations } from './platform/platform.migrations.js';
+import { RlsElevation } from './rls/rls-elevation.service.js';
 
 vi.mock('postgres', () => ({ default: vi.fn() }));
 vi.mock('./migrator/run-migrations.js', () => ({
@@ -32,6 +40,7 @@ vi.mock('./migrator/run-migrations.js', () => ({
 vi.mock('@platform/observability', () => ({
   HealthContributor: class HealthContributor {},
   getOrCreateGauge: () => undefined,
+  getOrCreateCounter: () => ({ inc: () => undefined }),
 }));
 
 const items = pgTable('items', { id: uuid().primaryKey(), name: text().notNull() });
@@ -86,11 +95,15 @@ class ProxyUser {
 async function boot(
   options: BootOptions,
   providers: Provider[] = [],
-  { clsRoot = true }: { clsRoot?: boolean } = {},
+  {
+    clsRoot = true,
+    imports = [],
+  }: { clsRoot?: boolean; imports?: (DynamicModule | (new () => unknown))[] } = {},
 ): Promise<INestApplicationContext> {
   @Module({
     imports: [
       AppConfigModule.forRoot(),
+      ...imports,
       // Mounted by ObservabilityModule in the apps; DatabaseModule only registers its plugin.
       ...(clsRoot ? [ClsModule.forRoot({ global: true })] : []),
       DatabaseModule.forRootAsync({ migrations: [], ...options }),
@@ -123,10 +136,10 @@ describe('DatabaseModule', () => {
   });
 
   describe('forRootAsync() definition', () => {
-    it('is global and exports DRIZZLE + the health contributor', () => {
+    it('is global and exports DRIZZLE, the health contributor and RlsElevation', () => {
       const mod = DatabaseModule.forRootAsync({ schema, migrations: [] });
       expect(mod).toMatchObject({ module: DatabaseModule, global: true });
-      expect(mod.exports).toEqual([DRIZZLE, DatabaseHealthIndicator]);
+      expect(mod.exports).toEqual([DRIZZLE, DatabaseHealthIndicator, RlsElevation]);
     });
 
     it('registers the transactional CLS plugin unless disabled', () => {
@@ -293,6 +306,40 @@ describe('DatabaseModule', () => {
         'set transaction isolation level serializable',
         RLS_CONTEXT,
       ]);
+    });
+
+    it('provides RlsElevation over the globally bound PrincipalPermissions (B3 Task 6)', async () => {
+      @Global()
+      @Module({
+        providers: [
+          {
+            provide: PrincipalPermissions,
+            useValue: { of: () => ['items:read-all'] } satisfies PrincipalPermissions,
+          },
+        ],
+        exports: [PrincipalPermissions],
+      })
+      class PermissionsModule {}
+      app = await boot({ schema }, [ItemsService], { imports: [PermissionsModule] });
+      const txHost = app.get<TransactionHost<Adapter>>(TransactionHost);
+      const elevation = app.get(RlsElevation);
+      await asPrincipal(() => txHost.withTransaction(() => elevation.elevate('items:read-all')));
+      expect(fake.queries.slice(1)).toEqual([
+        'begin',
+        RLS_CONTEXT,
+        "SET LOCAL app.elevated = 'on'",
+        'commit',
+      ]);
+    });
+
+    it('still boots without PrincipalPermissions; elevate then refuses and sends nothing', async () => {
+      app = await boot({ schema }, [ItemsService]);
+      const txHost = app.get<TransactionHost<Adapter>>(TransactionHost);
+      const elevation = app.get(RlsElevation);
+      await expect(
+        asPrincipal(() => txHost.withTransaction(() => elevation.elevate('items:read-all'))),
+      ).rejects.toThrow(/PrincipalPermissions is not bound/);
+      expect(fake.queries.slice(1)).toEqual(['begin', RLS_CONTEXT, 'rollback']);
     });
 
     it('refuses to open a transaction without a principal (RLS_NO_PRINCIPAL, no BEGIN)', async () => {

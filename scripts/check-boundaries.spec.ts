@@ -344,4 +344,65 @@ describe('scripts/check-boundaries.mjs', () => {
       expect(output).toContain(`domains/orders/src/${file}: must not import "@domain/users"`);
     }
   });
+
+  describe('justified elevation is named only by *.elevated.ts files (outside libs/database/src)', () => {
+    const DATABASE: Tree = {
+      'libs/database/package.json': manifest('@platform/database'),
+      'libs/database/src/rls/rls-elevation.service.ts': [
+        "export const ELEVATION_REASONS = Object.freeze(['membership-activity'] as const);",
+        'export class RlsElevation { async justified() {} }',
+        '',
+      ].join('\n'),
+    };
+    const touch = [
+      "import { RlsElevation } from '@platform/database';",
+      'export class Touch {',
+      '  constructor(private readonly elevation: RlsElevation) {}',
+      "  run() { return this.elevation.justified('membership-activity', async () => 1); }",
+      '}',
+      '',
+    ].join('\n');
+    const reasons = "import { ELEVATION_REASONS } from '@platform/database';\n";
+    const WHY =
+      'names RlsElevation.justified or ELEVATION_REASONS outside libs/database/src: only a *.elevated.ts file may';
+
+    it('fails for justified( in a domain service and ELEVATION_REASONS in an app', () => {
+      const { status, output } = check({
+        ...LAYERED,
+        ...DATABASE,
+        'domains/orders/src/foo.service.ts': touch,
+        'domains/orders/src/bound.ts': 'export const run = (e) => e.justified.bind(e);\n',
+        'domains/orders/src/destructured.ts':
+          "export const run = ({ justified }) => justified('tenant-bootstrap', async () => 1);\n",
+        'apps/api/src/reasons.ts': reasons,
+      });
+      expect(status).toBe(1);
+      expect(output).toContain('Layer boundary violations (4):');
+      for (const file of [
+        'domains/orders/src/foo.service.ts',
+        'domains/orders/src/bound.ts',
+        'domains/orders/src/destructured.ts',
+        'apps/api/src/reasons.ts',
+      ]) {
+        expect(output).toContain(`${file}: ${WHY}`);
+      }
+    });
+
+    it('passes in foo.elevated.ts, inside libs/database/src, in test code and in comments', () => {
+      const { status, output } = check({
+        ...LAYERED,
+        ...DATABASE,
+        'domains/orders/src/foo.elevated.ts': touch,
+        'domains/orders/src/foo.elevated.spec.ts': reasons,
+        'libs/database/test/elevation.int-spec.ts': touch,
+        'domains/orders/src/notes.ts': [
+          '// this.elevation.justified(…) lives in touch.elevated.ts (elevation justified by a token)',
+          'export const notes = 1;',
+          '',
+        ].join('\n'),
+      });
+      expect(output).toContain('Layer boundaries OK (8 packages');
+      expect(status).toBe(0);
+    });
+  });
 });

@@ -19,6 +19,7 @@ import { DrizzlePostgresTransactionalAdapter } from './drizzle/drizzle-transacti
 import { InjectDrizzle } from './drizzle/inject-drizzle.decorator.js';
 import { DatabaseHealthIndicator } from './health/database.health.js';
 import { withPlatformMigrations } from './migrator/migration-sets.js';
+import { RlsElevation } from './rls/rls-elevation.service.js';
 
 /** How long `end()` lets in-flight queries finish on shutdown before destroying sockets. */
 const POOL_END_TIMEOUT_SEC = 5;
@@ -65,7 +66,8 @@ const transactionalPlugin = (options: DatabaseTransactionalOptions): ClsPluginTr
 
 /**
  * PostgreSQL via postgres.js + Drizzle (global). Provides `DRIZZLE` (`@InjectDrizzle()`),
- * `TransactionHost` / `@Transactional()`, and `DatabaseHealthIndicator` (register it with
+ * `TransactionHost` / `@Transactional()`, `RlsElevation` (elevation of a runtime transaction; it
+ * asks the `PrincipalPermissions` that `RbacModule.forRoot()` binds) and `DatabaseHealthIndicator` (register it with
  * `ObservabilityModule.forRoot({ healthContributors: [DatabaseHealthIndicator] })`).
  * Pool settings come from the `database` config namespace; `application_name` = SERVICE_NAME.
  * With `runMigrations` / DATABASE_RUN_MIGRATIONS, boot applies `platformMigrations` and then
@@ -104,8 +106,9 @@ export class DatabaseModule {
         },
         DatabaseLifecycle,
         DatabaseHealthIndicator,
+        RlsElevation,
       ],
-      exports: [DRIZZLE, DatabaseHealthIndicator],
+      exports: [DRIZZLE, DatabaseHealthIndicator, RlsElevation],
     };
   }
 }
