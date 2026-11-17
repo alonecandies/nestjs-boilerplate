@@ -285,6 +285,26 @@ tenant tables): `0002_distribute.sql` (SH-6). The primary key and every unique i
 FK reaches another domain, so a query by `(tenant_id, …)` goes to one shard. Rows created before B2 belong to the platform tenant (nil
 UUID): no tenant can list them.
 
+### Row-level security (`0003_rls.sql`, B3-5/B3-6, program spec §8.2)
+
+Both tables have RLS enabled and **forced** (the owner `app_owner` has no policy, so it reads and writes no row).
+Grants are explicit per table and role, deny by default; `billing.__drizzle_migrations` has no RLS and no grant to
+either app role. Policies are `TO app_runtime` and call `app.tenant_id()`, `app.user_id()` and `app.elevated()`
+directly (no subquery, no helper or FK into identity); "–" means no policy, so denied:
+
+| Table (grants to `app_runtime`) | SELECT `USING`                                                                | INSERT `WITH CHECK`                                       | UPDATE `USING` / `WITH CHECK` | DELETE |
+| ------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------------- | ----------------------------- | ------ |
+| `payments` (S, I, U)            | `tenant_id = app.tenant_id() AND (user_id = app.user_id() OR app.elevated())` | `tenant_id = app.tenant_id() AND user_id = app.user_id()` | same as INSERT (both)         | –      |
+| `stripe_events` (S, I)          | `tenant_id = app.tenant_id() AND user_id = app.user_id()`                     | same as SELECT                                            | –                             | –      |
+
+- Elevation (`billing:read-all`) widens the payments read to the tenant; it never writes another member's payment,
+  and a `SELECT … FOR UPDATE` of another member's payment returns nothing even when elevated.
+- `app_system` (BYPASSRLS) gets `SELECT, INSERT, DELETE` on `stripe_events` only (the Stripe-event system methods)
+  and nothing on `payments`. Rows with `tenant_id = PLATFORM_TENANT_ID` match no runtime policy: only `app_system`
+  reads or writes them.
+- Until B3 Tasks 15-16 move them, flows that open a transaction without a principal (the Stripe webhook, the purge
+  cron) are refused by the adapter with `RLS_NO_PRINCIPAL`.
+
 `payment_status` enum: `pending`, `succeeded`, `failed`, `expired`, `refunded`, `partially_refunded`, `disputed`.
 Constraint and index names are explicit snake_case (`payments_tenant_id_id_pk`). The tables and the enum live in the `billing` Postgres schema
 (`billingPgSchema`); raw SQL qualifies them (`billing.payments`). Billing owns its migration history:
@@ -317,8 +337,9 @@ through `TransactionHost` and join the active transaction.
   `FOR UPDATE`, optimistic lock, prepared list statements).
 - `billing.migrations.spec.ts` — the migration set: its folder and `billing.__drizzle_migrations` bookkeeping,
   every table and enum in the `billing` schema, the match with `drizzle.config.ts`, the baseline's
-  `CREATE SCHEMA IF NOT EXISTS "billing";` first statement, and `0002_distribute` holding only the two
-  `app.distribute_by_tenant` calls.
+  `CREATE SCHEMA IF NOT EXISTS "billing";` first statement, `0002_distribute` holding only the two
+  `app.distribute_by_tenant` calls, and `0003_rls` holding exactly the forced RLS, the five policies (no subquery)
+  and one grant per table and role.
 - `infrastructure/stripe/*.spec.ts` — the Stripe adapter: SDK error mapping, signature verification (valid, forged, stale, re-serialised, missing, not JSON), Checkout params and idempotency key, module wiring and the invalid-key boot failure.
 - `billing.controller.spec.ts` — Fastify app with the real `AuthModule` guards (tokens from `signTestAccessToken`, `@platform/auth/testing`):
   401/403, 400 validation (body, query, `Idempotency-Key`), serialisation, raw-body webhook, OpenAPI document.
@@ -344,7 +365,16 @@ in `test/billing-database.ts`, local execution off): tenant isolation of list, f
 `infrastructure/persistence/billing.distribution.int-spec.ts` (`startRlsTestPostgres()`: local execution off, the
 history applied as `app_owner`): both tables distributed by `tenant_id` and colocated with `app.tenant_colocation`,
 `0002` re-applied without change, the purge removing exactly the old events of tenants on every shard and of the
-platform tenant, both `payments` uniques per tenant, and a `(tenant_id, id)` router query.
+platform tenant, both `payments` uniques per tenant, and a `(tenant_id, id)` router query (data through the
+superuser, since forced RLS hides every row from the owner).
+`infrastructure/persistence/billing.rls.int-spec.ts` (`startRlsTestPostgres()`, migrated as `app_owner`, seeded as the
+superuser, every case as raw postgres.js `app_runtime` in a transaction opened with `buildRlsContextSql`): both
+paths of every policy with exact rows (own payments only; elevated reads the tenant's, never another tenant's, and
+never updates another member's payment; inserts and updates only for the current tenant and user; `FOR UPDATE`;
+own Stripe events only, UPDATE and DELETE `42501`), platform rows invisible to every runtime principal and readable
+by `app_system`, no context returning or changing nothing, forced RLS (the owner reads nothing), the exact grants and
+policies, and nothing on `billing.__drizzle_migrations`. A superuser snapshot after every case proves that no
+forbidden write changed a row.
 
 ## Ledger (immudb)
 

@@ -68,6 +68,7 @@
     "@nestjs/testing": "catalog:",
     "testcontainers": "catalog:",
     "@types/lodash-es": "catalog:",
-    "drizzle-kit": "catalog:"
+    "drizzle-kit": "catalog:",
+    "postgres": "catalog:"
   }
 }

@@ -294,6 +294,7 @@
         "@platform/testing": "workspace:*",
         "@types/lodash-es": "catalog:",
         "drizzle-kit": "catalog:",
+        "postgres": "catalog:",
         "testcontainers": "catalog:",
       },
     },
