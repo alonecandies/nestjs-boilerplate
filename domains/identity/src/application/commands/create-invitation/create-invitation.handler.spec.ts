@@ -1,5 +1,6 @@
 import { createPrincipal, generateId, runWithPrincipal, type TenantRole } from '@platform/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { principalLog } from '../../../../test/principal-log.js';
 import { hashInvitationToken } from '../../../domain/invitation-token.js';
 import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
 import type { InvitationMailer } from '../../ports/invitation-mailer.port.js';
@@ -11,6 +12,7 @@ describe('CreateInvitationHandler', () => {
   let p: ReturnType<typeof createInMemoryIdentityPersistence>;
   let mailer: { send: ReturnType<typeof vi.fn> };
   let handler: CreateInvitationHandler;
+  let log: ReturnType<typeof principalLog>;
   const tenantId = generateId();
   const [owner, admin] = [generateId(), generateId()];
 
@@ -34,15 +36,17 @@ describe('CreateInvitationHandler', () => {
       await p.memberships.insert({ tenantId, userId, roles, lastActiveAt: null });
     }
     mailer = { send: vi.fn().mockResolvedValue(undefined) };
+    log = principalLog();
     handler = new CreateInvitationHandler(
-      p.tenants,
-      p.memberships,
-      p.invitations,
-      p.users,
+      log.track('tenants', p.tenants),
+      log.track('memberships', p.memberships),
+      log.track('invitations', p.invitations),
+      log.track('users', p.users),
       p.transactions,
       new TenantAuditLog(p.auditEvents),
       mailer as unknown as InvitationMailer,
       { appUrl: 'https://app.example.io' },
+      log.track('elevation', p.elevation),
     );
   });
 
@@ -89,8 +93,21 @@ describe('CreateInvitationHandler', () => {
       new TenantAuditLog(p.auditEvents),
       mailer as unknown as InvitationMailer,
       { appUrl: undefined },
+      p.elevation,
     );
     await invite(owner, 'y@example.com', ['admin']);
     expect(mailer.send.mock.calls[0]?.[0]).toMatchObject({ context: { acceptUrl: null } });
+  });
+  it('elevates with members:manage first in its unit of work; the mail goes out after COMMIT', async () => {
+    await invite(admin, 'x@example.com', ['member']);
+    expect(log.calls.map((c) => c.call)).toEqual([
+      'memberships.find',
+      'elevation.elevate',
+      'tenants.findById',
+      'invitations.insert',
+      'users.findById',
+    ]);
+    expect(p.elevation.calls).toEqual([{ kind: 'permission', name: 'members:manage', tenantId }]);
+    expect(mailer.send).toHaveBeenCalledOnce();
   });
 });

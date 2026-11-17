@@ -1,8 +1,10 @@
 import { createPrincipal, generateId, runWithPrincipal } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { principalLog } from '../../../../test/principal-log.js';
 import { generateInvitationToken, INVITATION_TTL_MS } from '../../../domain/invitation-token.js';
 import { UserAggregate } from '../../../domain/user.aggregate.js';
 import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
+import { InvitationAcceptance } from '../../services/invitation-acceptance.elevated.js';
 import { TenantAuditLog } from '../../services/tenant-audit-log.service.js';
 import { AcceptInvitationCommand } from './accept-invitation.command.js';
 import { AcceptInvitationHandler } from './accept-invitation.handler.js';
@@ -10,6 +12,7 @@ import { AcceptInvitationHandler } from './accept-invitation.handler.js';
 describe('AcceptInvitationHandler', () => {
   let p: ReturnType<typeof createInMemoryIdentityPersistence>;
   let handler: AcceptInvitationHandler;
+  let log: ReturnType<typeof principalLog>;
   const tenantId = generateId();
   const home = generateId();
   const bob = generateId();
@@ -52,12 +55,19 @@ describe('AcceptInvitationHandler', () => {
         now: new Date(),
       }),
     );
+    log = principalLog();
+    const memberships = log.track('memberships', p.memberships);
     handler = new AcceptInvitationHandler(
-      p.invitations,
-      p.memberships,
-      p.users,
+      log.track('invitationsSystem', p.invitationsSystem),
+      memberships,
+      log.track('users', p.users),
       p.transactions,
-      new TenantAuditLog(p.auditEvents),
+      new InvitationAcceptance(
+        log.track('invitations', p.invitations),
+        memberships,
+        new TenantAuditLog(log.track('auditEvents', p.auditEvents)),
+        p.elevation,
+      ),
     );
     token = await invite('bob@example.com');
   });
@@ -74,6 +84,23 @@ describe('AcceptInvitationHandler', () => {
       type: 'invitation.accepted',
     });
     await expect(accept(bob, token)).rejects.toMatchObject({ code: 'INVITATION_INVALID' });
+  });
+
+  it('pre-auth token read, own row as the caller, then the writes as { user, invitation tenant, roles }', async () => {
+    await accept(bob, token);
+    expect(log.summary()).toEqual([
+      ['invitationsSystem.findByTokenHash', bob, home],
+      ['users.findById', bob, home],
+      ['memberships.find', bob, tenantId],
+      ['invitations.markAccepted', bob, tenantId],
+      ['memberships.insert', bob, tenantId],
+      ['auditEvents.append', bob, tenantId],
+      ['memberships.listForUser', bob, tenantId],
+    ]);
+    expect(log.calls.at(-1)?.principal?.roles).toEqual(['admin']);
+    expect(p.elevation.calls).toEqual([
+      { kind: 'justified', name: 'verified-invitation', tenantId },
+    ]);
   });
 
   it('403 INVITATION_EMAIL_MISMATCH for another account; the invitation stays usable', async () => {

@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { LoggerService } from '@nestjs/common';
-import { generateId } from '@platform/common';
+import { createPrincipal, generateId, runWithPrincipal, SystemContext } from '@platform/common';
 import {
+  DrizzlePostgresTransactionalAdapter,
   type DrizzleTransactionalAdapter,
   runMigrations,
-  type TransactionHost,
+  SystemDatabase,
+  TransactionHost,
   withPlatformMigrations,
 } from '@platform/database';
 import { type RlsTestPostgres, startRlsTestPostgres } from '@platform/testing/postgres';
@@ -21,7 +23,7 @@ import {
 import { UserAggregate } from '../../domain/user.aggregate.js';
 import { IdentityErrorCode } from '../../identity.constants.js';
 import { DrizzleMembershipsRepository } from './drizzle-memberships.repository.js';
-import { DrizzleSessionsRepository } from './drizzle-sessions.repository.js';
+import { DrizzleSessionsSystemRepository } from './drizzle-sessions.system-repository.js';
 import { DrizzleTenantsRepository } from './drizzle-tenants.repository.js';
 import { DrizzleUsersRepository } from './drizzle-users.repository.js';
 import { identityMigrations } from './identity.migrations.js';
@@ -33,8 +35,10 @@ import { type IdentitySchema, identitySchema } from './identity.schema.js';
  * on a cluster. The platform set and identity's whole history are applied as `app_owner` on a fresh
  * database by the real runner, in one transaction per set: the runner switches local execution on
  * for its own session, so the shards of a schema created earlier in the same transaction are
- * created over the coordinator's own connection. Seeding and the repository use the superuser `url`:
- * the runtime and system roles get their grants only with the identity RLS migration.
+ * created over the coordinator's own connection. Seeding and the repositories use the superuser
+ * `url` (this spec is about distribution, not policies; identity.repositories.rls covers the roles):
+ * the runtime repositories through the real transactional adapter, each call as a principal, the
+ * purge through the system repository inside SystemContext.
  * Opt-in (needs Docker): INTEGRATION=1 bunx vitest run --project identity:int distribution
  */
 
@@ -72,7 +76,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     let admin: Sql;
     let owner: Sql;
     let repositoryClient: Sql;
-    let sessions: DrizzleSessionsRepository;
+    let sessions: DrizzleSessionsSystemRepository;
     let users: DrizzleUsersRepository;
     let tenants: DrizzleTenantsRepository;
     let memberships: DrizzleMembershipsRepository;
@@ -107,11 +111,16 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         schema: identitySchema,
         casing: 'snake_case',
       });
-      const txHost = { tx: db } as unknown as TransactionHost<
-        DrizzleTransactionalAdapter<IdentitySchema>
-      >;
-      sessions = new DrizzleSessionsRepository(txHost);
-      users = new DrizzleUsersRepository(db, txHost);
+      // The real adapter (BEGIN + SET LOCAL context), as ClsPluginTransactional builds the host.
+      const adapter = new DrizzlePostgresTransactionalAdapter({ drizzleInstanceToken: 'DB' });
+      const txHost = new TransactionHost({
+        ...adapter.optionsFactory(db),
+        connectionName: undefined,
+        enableTransactionProxy: false,
+        defaultTxOptions: {},
+      } as never) as unknown as TransactionHost<DrizzleTransactionalAdapter<IdentitySchema>>;
+      sessions = new DrizzleSessionsSystemRepository(new SystemDatabase(db));
+      users = new DrizzleUsersRepository(txHost);
       tenants = new DrizzleTenantsRepository(txHost);
       memberships = new DrizzleMembershipsRepository(txHost);
     });
@@ -223,12 +232,14 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         }
       }
 
-      await expect(sessions.deleteExpired(now)).resolves.toBe(6);
+      const purge = () =>
+        SystemContext.run('identity.purge-expired-sessions', () => sessions.deleteExpired(now));
+      await expect(purge()).resolves.toBe(6);
 
       const left = await admin<{ id: string }[]>`
         select id::text from identity.sessions where user_id = any(${userIds}::uuid[])`;
       expect(left.map(({ id }) => id).sort()).toEqual([...kept].sort());
-      await expect(sessions.deleteExpired(now)).resolves.toBe(0);
+      await expect(purge()).resolves.toBe(0);
     });
 
     it('still rejects a duplicate email and a duplicate slug (global uniques on reference tables)', async () => {
@@ -262,17 +273,23 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         });
       const email = `mapped-${generateId()}@example.com`;
       const user = register(email);
-      await users.insert(user);
-      const emailTaken = await users.insert(register(email)).catch((error: unknown) => error);
+      const as = <T>(tenantId: string | null, work: () => Promise<T>): Promise<T> =>
+        runWithPrincipal(createPrincipal({ userId: user.id, tenantId }), work);
+      await as(null, () => users.insert(user));
+      const emailTaken = await as(null, () => users.insert(register(email))).catch(
+        (error: unknown) => error,
+      );
       expect(emailTaken).toBeInstanceOf(EmailAlreadyTakenException);
       expect(emailTaken).toMatchObject({ code: IdentityErrorCode.EMAIL_TAKEN });
 
       const slug = `mapped-${generateId().slice(-12)}`;
       const tenantId = generateId();
-      await tenants.insert({ id: tenantId, slug, name: 'Mapped', personal: false });
-      const slugTaken = await tenants
-        .insert({ id: generateId(), slug, name: 'Mapped again', personal: false })
-        .catch((error: unknown) => error);
+      await as(tenantId, () =>
+        tenants.insert({ id: tenantId, slug, name: 'Mapped', personal: false }),
+      );
+      const slugTaken = await as(tenantId, () =>
+        tenants.insert({ id: generateId(), slug, name: 'Mapped again', personal: false }),
+      ).catch((error: unknown) => error);
       expect(slugTaken).toBeInstanceOf(TenantSlugTakenException);
       expect(slugTaken).toMatchObject({ code: IdentityErrorCode.TENANT_SLUG_TAKEN });
 
@@ -282,10 +299,10 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         roles: ['owner'],
         lastActiveAt: null,
       };
-      await memberships.insert(membership);
-      const membershipExists = await memberships
-        .insert(membership)
-        .catch((error: unknown) => error);
+      await as(tenantId, () => memberships.insert(membership));
+      const membershipExists = await as(tenantId, () => memberships.insert(membership)).catch(
+        (error: unknown) => error,
+      );
       expect(membershipExists).toBeInstanceOf(MembershipAlreadyExistsException);
       expect(membershipExists).toMatchObject({ code: IdentityErrorCode.MEMBERSHIP_EXISTS });
     });

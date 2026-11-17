@@ -1,7 +1,9 @@
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { EntityNotFoundException } from '@platform/common';
+import { RlsElevation } from '@platform/database';
 import { LastOwnerException } from '../../../domain/identity.errors.js';
 import { assertCanRemove } from '../../../domain/member-roles.policy.js';
+import { IdentityPermission } from '../../../identity.permissions.js';
 import { AUDIT_EVENT_TYPES } from '../../persistence/audit-events.repository.js';
 import { MembershipsRepository } from '../../persistence/memberships.repository.js';
 import { TransactionRunner } from '../../persistence/transaction-runner.js';
@@ -15,11 +17,14 @@ export class RemoveMemberHandler implements ICommandHandler<RemoveMemberCommand>
     private readonly memberships: MembershipsRepository,
     private readonly transactions: TransactionRunner,
     private readonly audit: TenantAuditLog,
+    private readonly elevation: RlsElevation,
   ) {}
 
   async execute({ tenantId, actorId, userId }: RemoveMemberCommand): Promise<void> {
     const principal = requireTenantActor(tenantId, actorId);
     await this.transactions.run(async () => {
+      // Route permission MembersManage: elevated (this tenant only) for the whole unit of work.
+      await this.elevation.elevate(IdentityPermission.MembersManage);
       const owners = await this.memberships.countOwnersLocked(tenantId);
       // After the lock, as in UpdateMemberRolesHandler.
       const actor = await actorTenantRoles(principal, this.memberships);

@@ -1,4 +1,12 @@
-import { generateId, isUuidV7, PLATFORM_TENANT_ID, sha256Hex } from '@platform/common';
+import {
+  createPrincipal,
+  generateId,
+  isUuidV7,
+  PLATFORM_TENANT_ID,
+  runWithPrincipal,
+  SystemContext,
+  sha256Hex,
+} from '@platform/common';
 import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type IdentityDatabase, startIdentityDatabase } from '../../../test/identity-database.js';
@@ -14,14 +22,17 @@ import {
 } from '../../domain/invitation-token.js';
 import { DrizzleAuditEventsRepository } from './drizzle-audit-events.repository.js';
 import { DrizzleInvitationsRepository } from './drizzle-invitations.repository.js';
+import { DrizzleInvitationsSystemRepository } from './drizzle-invitations.system-repository.js';
 import { DrizzleMembershipsRepository } from './drizzle-memberships.repository.js';
+import { DrizzleMembershipsSystemRepository } from './drizzle-memberships.system-repository.js';
 import { DrizzleTenantsRepository } from './drizzle-tenants.repository.js';
-import { DrizzleTransactionRunner } from './drizzle-transaction.runner.js';
-import { DrizzleUsersRepository } from './drizzle-users.repository.js';
 
 /*
- * identity's tenancy repositories against Citus 14.2 (single node, @platform/testing/postgres) with
- * identity's real migration history. Opt-in: INTEGRATION=1 npx vitest run --project identity:int tenancy
+ * identity's tenancy repositories against Citus 14.2 (single node, local execution off) with
+ * identity's real migration history, on the three roles (test/identity-database.ts): every runtime
+ * call runs as a principal under the 0009 policies (writes that need elevation inside
+ * `database.elevated`), the cross-tenant reads through the system repositories, seeding and
+ * constraint probes through the superuser. Opt-in: INTEGRATION=1 npx vitest run --project identity:int tenancy
  * The tables are distributed by identity's 0008_distribute (SH-5); every query carries its
  * distribution column (sharding design §2.1).
  */
@@ -51,43 +62,60 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     let memberships: DrizzleMembershipsRepository;
     let invitations: DrizzleInvitationsRepository;
     let auditEvents: DrizzleAuditEventsRepository;
-    let transactions: DrizzleTransactionRunner;
+    let invitationsSystem: DrizzleInvitationsSystemRepository;
+    let membershipsSystem: DrizzleMembershipsSystemRepository;
     const run = generateId().slice(-8);
     const slug = (name: string): string => `${name}-${run}`;
+    /** The acting user where only the tenant matters to the policy (it need not exist). */
+    const ACTOR = generateId();
+
+    /** `work` as `userId` in `tenantId` (a standalone unit of work per repository call). */
+    const as = <T>(tenantId: string | null, work: () => Promise<T>, userId = ACTOR): Promise<T> =>
+      runWithPrincipal(createPrincipal({ userId, tenantId }), work);
+    /** `work` in ONE unit of work as `userId` in `tenantId`, elevated (RlsElevation.elevate). */
+    const elevated = <T>(tenantId: string, work: () => Promise<T>, userId = ACTOR): Promise<T> =>
+      (database as IdentityDatabase).elevated(
+        createPrincipal({ userId, tenantId, roles: ['owner'] }),
+        work,
+      );
+    const system = <T>(work: () => Promise<T>): Promise<T> =>
+      SystemContext.run('identity.tenancy-int', work);
+    const admin = () => (database as IdentityDatabase).admin;
 
     beforeAll(async () => {
-      database = await startIdentityDatabase(
-        [
-          DrizzleTenantsRepository,
-          DrizzleMembershipsRepository,
-          DrizzleInvitationsRepository,
-          DrizzleAuditEventsRepository,
-          DrizzleTransactionRunner,
-          DrizzleUsersRepository,
-        ],
-        { localExecution: false },
-      );
+      database = await startIdentityDatabase([
+        DrizzleTenantsRepository,
+        DrizzleMembershipsRepository,
+        DrizzleInvitationsRepository,
+        DrizzleAuditEventsRepository,
+        DrizzleInvitationsSystemRepository,
+        DrizzleMembershipsSystemRepository,
+      ]);
       tenants = database.app.get(DrizzleTenantsRepository);
       memberships = database.app.get(DrizzleMembershipsRepository);
       invitations = database.app.get(DrizzleInvitationsRepository);
       auditEvents = database.app.get(DrizzleAuditEventsRepository);
-      transactions = database.app.get(DrizzleTransactionRunner);
-    });
+      invitationsSystem = database.app.get(DrizzleInvitationsSystemRepository);
+      membershipsSystem = database.app.get(DrizzleMembershipsSystemRepository);
+    }, 360_000);
 
     afterAll(async () => {
       await database?.close();
     });
 
+    /** Created as a member of the new tenant (`tenants_insert`: id = app.tenant_id()). */
     const newTenant = async (name: string, personal = false): Promise<string> => {
       const id = generateId();
-      await tenants.insert({ id, slug: slug(name), name: `${name} workspace`, personal });
+      await as(id, () =>
+        tenants.insert({ id, slug: slug(name), name: `${name} workspace`, personal }),
+      );
       return id;
     };
 
     describe('tenants', () => {
-      it('insert → findById / findByIds / existsBySlug / rename', async () => {
+      it('insert → findById / findByIds / existsBySlug / rename, within the session tenant', async () => {
         const id = await newTenant('acme', true);
-        await expect(tenants.findById(id)).resolves.toMatchObject({
+        await expect(as(id, () => tenants.findById(id))).resolves.toMatchObject({
           id,
           slug: slug('acme'),
           name: 'acme workspace',
@@ -95,31 +123,41 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           createdAt: expect.any(Date),
         });
         const other = await newTenant('globex');
-        const found = await tenants.findByIds([id, other, generateId()]);
-        expect(found.map((tenant) => tenant.id).sort()).toEqual([id, other].sort());
-        await expect(tenants.findByIds([])).resolves.toEqual([]);
-        await expect(tenants.existsBySlug(slug('acme'))).resolves.toBe(true);
-        await expect(tenants.existsBySlug(slug('nope'))).resolves.toBe(false);
-        await expect(tenants.rename(id, 'Acme Inc.')).resolves.toBe(true);
-        await expect(tenants.findById(id)).resolves.toMatchObject({ name: 'Acme Inc.' });
-        await expect(tenants.rename(generateId(), 'x')).resolves.toBe(false);
+        // Row-local: each principal reads only its session tenant (all of a user's tenants: the
+        // system listForUser, below).
+        const found = await as(id, () => tenants.findByIds([id, other, generateId()]));
+        expect(found.map((tenant) => tenant.id)).toEqual([id]);
+        const foundInOther = await as(other, () => tenants.findByIds([id, other]));
+        expect(foundInOther.map((tenant) => tenant.id)).toEqual([other]);
+        await expect(as(id, () => tenants.findByIds([]))).resolves.toEqual([]);
+        await expect(as(id, () => tenants.existsBySlug(slug('acme')))).resolves.toBe(true);
+        await expect(as(id, () => tenants.existsBySlug(slug('nope')))).resolves.toBe(false);
+        // Another tenant's slug is invisible: the unique constraint decides (next test).
+        await expect(as(other, () => tenants.existsBySlug(slug('acme')))).resolves.toBe(false);
+        await expect(elevated(id, () => tenants.rename(id, 'Acme Inc.'))).resolves.toBe(true);
+        await expect(as(id, () => tenants.findById(id))).resolves.toMatchObject({
+          name: 'Acme Inc.',
+        });
+        await expect(elevated(id, () => tenants.rename(generateId(), 'x'))).resolves.toBe(false);
+        // Elevation never crosses tenants.
+        await expect(elevated(id, () => tenants.rename(other, 'x'))).resolves.toBe(false);
       });
 
-      it('maps tenants_slug_unique to TenantSlugTakenException', async () => {
+      it('maps tenants_slug_unique to TenantSlugTakenException (a slug the caller cannot see)', async () => {
         await newTenant('dupe');
+        const id = generateId();
         await expect(
-          tenants.insert({ id: generateId(), slug: slug('dupe'), name: 'x', personal: false }),
+          as(id, () => tenants.insert({ id, slug: slug('dupe'), name: 'x', personal: false })),
         ).rejects.toBeInstanceOf(TenantSlugTakenException);
       });
 
       it('refuses the platform tenant id (tenants_id_not_platform)', async () => {
-        const failure: unknown = await tenants
-          .insert({
-            id: PLATFORM_TENANT_ID,
-            slug: slug('platform'),
-            name: 'Platform',
-            personal: false,
-          })
+        // No principal can carry the platform tenant (createPrincipal refuses it), so the
+        // constraint is probed through the superuser.
+        const failure: unknown = await admin()
+          .execute(
+            sql`insert into identity.tenants (id, slug, name) values (${PLATFORM_TENANT_ID}, ${slug('platform')}, 'Platform')`,
+          )
           .then(
             () => undefined,
             (error: unknown) => error,
@@ -128,7 +166,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       });
 
       it('defaults id (uuidv7) and personal = false for raw SQL inserts', async () => {
-        const [row] = await (database as IdentityDatabase).db.execute<{
+        const [row] = await admin().execute<{
           id: string;
           personal: boolean;
         }>(
@@ -139,9 +177,9 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       });
     });
 
-    /** A user row by raw SQL (no dependency on the users repository's shape, which Task 11 changes). */
+    /** A user row by raw SQL through the superuser (no dependency on the users repository). */
     const newUser = async (name: string): Promise<string> => {
-      const [row] = await (database as IdentityDatabase).db.execute<{ id: string }>(sql`
+      const [row] = await admin().execute<{ id: string }>(sql`
       insert into identity.users (email, password_hash, display_name)
       values (${`${name}.${run}@example.com`}, 'x', ${name}) returning id`);
       if (row === undefined) throw new Error('user insert returned nothing');
@@ -149,39 +187,45 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     };
 
     describe('memberships', () => {
-      it('insert → find, roles normalized; empty roles refused before any SQL', async () => {
+      it('insert (elevated) → find, roles normalized; empty roles refused before any SQL', async () => {
         const tenantId = await newTenant('m-insert');
         const userId = await newUser('m-insert');
-        await memberships.insert({
-          tenantId,
-          userId,
-          roles: ['member', 'owner', 'member'],
-          lastActiveAt: null,
-        });
-        await expect(memberships.find(tenantId, userId)).resolves.toEqual({
+        await elevated(tenantId, () =>
+          memberships.insert({
+            tenantId,
+            userId,
+            roles: ['member', 'owner', 'member'],
+            lastActiveAt: null,
+          }),
+        );
+        await expect(as(tenantId, () => memberships.find(tenantId, userId))).resolves.toEqual({
           tenantId,
           userId,
           roles: ['owner', 'member'],
           lastActiveAt: null,
           createdAt: expect.any(Date),
         });
-        await expect(memberships.find(tenantId, generateId())).resolves.toBeNull();
         await expect(
-          memberships.insert({
-            tenantId,
-            userId: await newUser('m-empty'),
-            roles: [],
-            lastActiveAt: null,
-          }),
+          as(tenantId, () => memberships.find(tenantId, generateId())),
+        ).resolves.toBeNull();
+        const emptyUser = await newUser('m-empty');
+        await expect(
+          as(tenantId, () =>
+            memberships.insert({ tenantId, userId: emptyUser, roles: [], lastActiveAt: null }),
+          ),
         ).rejects.toBeInstanceOf(InvalidRolesException);
       });
 
       it('maps the primary key to MembershipAlreadyExistsException', async () => {
         const tenantId = await newTenant('m-dupe');
         const userId = await newUser('m-dupe');
-        await memberships.insert({ tenantId, userId, roles: ['member'], lastActiveAt: null });
+        await elevated(tenantId, () =>
+          memberships.insert({ tenantId, userId, roles: ['member'], lastActiveAt: null }),
+        );
         await expect(
-          memberships.insert({ tenantId, userId, roles: ['admin'], lastActiveAt: null }),
+          elevated(tenantId, () =>
+            memberships.insert({ tenantId, userId, roles: ['admin'], lastActiveAt: null }),
+          ),
         ).rejects.toBeInstanceOf(MembershipAlreadyExistsException);
       });
 
@@ -190,39 +234,36 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         const never = await newTenant('m-never');
         const old = await newTenant('m-old');
         const recent = await newTenant('m-recent');
-        await memberships.insert({
-          tenantId: never,
-          userId,
-          roles: ['member'],
-          lastActiveAt: null,
-        });
-        await memberships.insert({
-          tenantId: old,
-          userId,
-          roles: ['member'],
-          lastActiveAt: new Date('2026-01-01T00:00:00Z'),
-        });
-        await memberships.insert({
-          tenantId: recent,
-          userId,
-          roles: ['admin'],
-          lastActiveAt: new Date('2026-02-01T00:00:00Z'),
-        });
-        await expect(memberships.findMostRecentForUser(userId)).resolves.toMatchObject({
-          tenantId: recent,
-        });
-        const listed = await memberships.listForUser(userId);
+        const join = (tenantId: string, lastActiveAt: Date | null, roles: ['member'] | ['admin']) =>
+          elevated(tenantId, () => memberships.insert({ tenantId, userId, roles, lastActiveAt }));
+        await join(never, null, ['member']);
+        await join(old, new Date('2026-01-01T00:00:00Z'), ['member']);
+        await join(recent, new Date('2026-02-01T00:00:00Z'), ['admin']);
+        const asUser = <T>(tenantId: string | null, work: () => Promise<T>) =>
+          as(tenantId, work, userId);
+        await expect(
+          asUser(null, () => memberships.findMostRecentForUser(userId)),
+        ).resolves.toMatchObject({ tenantId: recent });
+        // Every tenant of the user: the system read (the tenants policy shows the session tenant).
+        const listed = await system(() => membershipsSystem.listForUser(userId));
         expect(listed.map((membership) => membership.tenantId)).toEqual([recent, old, never]);
         expect(listed[0]?.tenant).toMatchObject({ id: recent, slug: slug('m-recent') });
-        await memberships.touch(old, userId, new Date('2026-03-01T00:00:00Z'));
-        await expect(memberships.findMostRecentForUser(userId)).resolves.toMatchObject({
-          tenantId: old,
-        });
-        await expect(memberships.findMostRecentForUser(generateId())).resolves.toBeNull();
+        // The runtime read joins only the session tenant's row.
+        const runtime = await asUser(old, () => memberships.listForUser(userId));
+        expect(runtime.map((membership) => membership.tenant.id)).toEqual([old]);
+        await elevated(
+          old,
+          () => memberships.touch(old, userId, new Date('2026-03-01T00:00:00Z')),
+          userId,
+        );
+        await expect(
+          asUser(null, () => memberships.findMostRecentForUser(userId)),
+        ).resolves.toMatchObject({ tenantId: old });
+        await expect(as(null, () => memberships.findMostRecentForUser(ACTOR))).resolves.toBeNull();
       });
 
       it('enforces memberships_roles_not_empty in SQL and cascades tenant and user deletes', async () => {
-        const db = (database as IdentityDatabase).db;
+        const db = admin();
         const tenantId = await newTenant('m-cascade');
         const userId = await newUser('m-cascade');
         const failure: unknown = await db
@@ -234,13 +275,17 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
             (error: unknown) => error,
           );
         expect(constraintOf(failure)).toMatch(constraintNamed('memberships_roles_not_empty'));
-        await memberships.insert({ tenantId, userId, roles: ['owner'], lastActiveAt: null });
+        await elevated(tenantId, () =>
+          memberships.insert({ tenantId, userId, roles: ['owner'], lastActiveAt: null }),
+        );
         await db.execute(sql`delete from identity.tenants where id = ${tenantId}`);
-        await expect(memberships.find(tenantId, userId)).resolves.toBeNull();
+        await expect(as(tenantId, () => memberships.find(tenantId, userId))).resolves.toBeNull();
         const other = await newTenant('m-cascade-2');
-        await memberships.insert({ tenantId: other, userId, roles: ['owner'], lastActiveAt: null });
+        await elevated(other, () =>
+          memberships.insert({ tenantId: other, userId, roles: ['owner'], lastActiveAt: null }),
+        );
         await db.execute(sql`delete from identity.users where id = ${userId}`);
-        await expect(memberships.find(other, userId)).resolves.toBeNull();
+        await expect(as(other, () => memberships.find(other, userId))).resolves.toBeNull();
       });
     });
 
@@ -248,15 +293,17 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       const invite = async (tenantId: string, invitedBy: string, expiresAt: Date) => {
         const { token, tokenHash } = generateInvitationToken();
         const id = generateId();
-        await invitations.insert({
-          tenantId,
-          id,
-          email: `guest.${generateId().slice(-6)}@example.com`,
-          roles: ['member'],
-          tokenHash,
-          invitedBy,
-          expiresAt,
-        });
+        await elevated(tenantId, () =>
+          invitations.insert({
+            tenantId,
+            id,
+            email: `guest.${generateId().slice(-6)}@example.com`,
+            roles: ['member'],
+            tokenHash,
+            invitedBy,
+            expiresAt,
+          }),
+        );
         return { id, token, tokenHash };
       };
 
@@ -267,28 +314,36 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         const live = await invite(tenantId, inviter, new Date(now.getTime() + INVITATION_TTL_MS));
         const expired = await invite(tenantId, inviter, new Date(now.getTime() - 1_000));
         await expect(
-          invitations.findByTokenHash(hashInvitationToken(live.token)),
+          invitationsSystem.findByTokenHash(hashInvitationToken(live.token)),
         ).resolves.toMatchObject({
           tenantId,
           id: live.id,
           roles: ['member'],
           acceptedAt: null,
         });
-        await expect(invitations.findByTokenHash(sha256Hex('unknown'))).resolves.toBeNull();
-        const pending = await invitations.listPending(tenantId, now);
+        await expect(invitationsSystem.findByTokenHash(sha256Hex('unknown'))).resolves.toBeNull();
+        const pending = await elevated(tenantId, () => invitations.listPending(tenantId, now));
         expect(pending.map((invitation) => invitation.id)).toEqual([live.id]);
-        await expect(invitations.markAccepted(tenantId, live.id, now)).resolves.toBe(true);
-        await expect(invitations.markAccepted(tenantId, live.id, now)).resolves.toBe(false);
-        await expect(invitations.markAccepted(tenantId, expired.id, now)).resolves.toBe(false);
-        await expect(invitations.listPending(tenantId, now)).resolves.toEqual([]);
+        const accept = (id: string) =>
+          elevated(tenantId, () => invitations.markAccepted(tenantId, id, now));
+        await expect(accept(live.id)).resolves.toBe(true);
+        await expect(accept(live.id)).resolves.toBe(false);
+        await expect(accept(expired.id)).resolves.toBe(false);
+        await expect(
+          elevated(tenantId, () => invitations.listPending(tenantId, now)),
+        ).resolves.toEqual([]);
+        // Without elevation a member reads none (the invitations policy).
+        await expect(as(tenantId, () => invitations.listPending(tenantId, now))).resolves.toEqual(
+          [],
+        );
       });
 
       it('is keyed (tenant_id, id) with a tenant-leading unique token hash', async () => {
         const tenantId = await newTenant('i-keys');
         const inviter = await newUser('i-keys');
         const first = await invite(tenantId, inviter, new Date(Date.now() + 60_000));
-        const failure: unknown = await invitations
-          .insert({
+        const failure: unknown = await elevated(tenantId, () =>
+          invitations.insert({
             tenantId,
             id: generateId(),
             email: 'x@example.com',
@@ -296,15 +351,15 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
             tokenHash: first.tokenHash,
             invitedBy: inviter,
             expiresAt: new Date(Date.now() + 60_000),
-          })
-          .then(
-            () => undefined,
-            (error: unknown) => error,
-          );
+          }),
+        ).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
         expect(constraintOf(failure)).toMatch(
           constraintNamed('invitations_tenant_id_token_hash_uq'),
         );
-        const [pk] = await (database as IdentityDatabase).db.execute<{ columns: string }>(sql`
+        const [pk] = await admin().execute<{ columns: string }>(sql`
           select string_agg(a.attname, ',' order by k.ord) as columns
           from pg_constraint c
           cross join lateral unnest(c.conkey) with ordinality as k(attnum, ord)
@@ -319,14 +374,13 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           const inviter = await newUser('i-race');
           const live = await invite(tenantId, inviter, new Date(Date.now() + INVITATION_TTL_MS));
           const now = new Date();
-          const results = await Promise.all([
-            invitations.markAccepted(tenantId, live.id, now),
-            invitations.markAccepted(tenantId, live.id, now),
-          ]);
+          const accept = () =>
+            elevated(tenantId, () => invitations.markAccepted(tenantId, live.id, now));
+          const results = await Promise.all([accept(), accept()]);
           expect(results.filter(Boolean)).toHaveLength(1);
         });
 
-        it('findByTokenHash finds the invitation across tenants (system read)', async () => {
+        it('findByTokenHash finds the invitation across tenants (pre-auth system read)', async () => {
           const [a, b] = [await newTenant('i-sys-a'), await newTenant('i-sys-b')] as [
             string,
             string,
@@ -334,12 +388,13 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           const inviter = await newUser('i-sys');
           const inA = await invite(a, inviter, new Date(Date.now() + INVITATION_TTL_MS));
           const inB = await invite(b, inviter, new Date(Date.now() + INVITATION_TTL_MS));
+          // Under a principal of tenant A too: a pre-auth method runs anywhere.
           await expect(
-            invitations.findByTokenHash(hashInvitationToken(inA.token)),
-          ).resolves.toMatchObject({ tenantId: a, id: inA.id });
-          await expect(
-            invitations.findByTokenHash(hashInvitationToken(inB.token)),
+            as(a, () => invitationsSystem.findByTokenHash(hashInvitationToken(inB.token))),
           ).resolves.toMatchObject({ tenantId: b, id: inB.id });
+          await expect(
+            invitationsSystem.findByTokenHash(hashInvitationToken(inA.token)),
+          ).resolves.toMatchObject({ tenantId: a, id: inA.id });
         });
       });
     });
@@ -352,24 +407,34 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         for (const type of ['member.left', 'member.removed', 'staff.switch_in'] as const) {
           const id = generateId();
           ids.push(id);
-          await auditEvents.append({
-            tenantId,
-            id,
-            actorId: null,
-            type,
-            data: { n: ids.length },
-            createdAt: new Date(),
-          });
+          await as(tenantId, () =>
+            auditEvents.append({
+              tenantId,
+              id,
+              actorId: null,
+              type,
+              data: { n: ids.length },
+              createdAt: new Date(),
+            }),
+          );
         }
-        await auditEvents.append({
-          tenantId: otherTenant,
-          id: generateId(),
-          actorId: null,
-          type: 'member.left',
-          data: {},
-          createdAt: new Date(),
-        });
-        const first = await auditEvents.listForTenant(tenantId, { limit: 2 });
+        await as(otherTenant, () =>
+          auditEvents.append({
+            tenantId: otherTenant,
+            id: generateId(),
+            actorId: null,
+            type: 'member.left',
+            data: {},
+            createdAt: new Date(),
+          }),
+        );
+        // Reading the log needs elevation (the audit_events policy).
+        await expect(
+          as(tenantId, () => auditEvents.listForTenant(tenantId, { limit: 2 })),
+        ).resolves.toMatchObject({ items: [] });
+        const first = await elevated(tenantId, () =>
+          auditEvents.listForTenant(tenantId, { limit: 2 }),
+        );
         expect(first.items.map((event) => event.id)).toEqual([ids[2], ids[1]]);
         expect(first.items[0]).toMatchObject({
           tenantId,
@@ -378,17 +443,16 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           actorId: null,
         });
         expect(first.nextCursor).not.toBeNull();
-        const second = await auditEvents.listForTenant(tenantId, {
-          limit: 2,
-          cursor: first.nextCursor ?? undefined,
-        });
+        const second = await elevated(tenantId, () =>
+          auditEvents.listForTenant(tenantId, { limit: 2, cursor: first.nextCursor ?? undefined }),
+        );
         expect(second.items.map((event) => event.id)).toEqual([ids[0]]);
         expect(second.nextCursor).toBeNull();
       });
 
       it('keeps actor_id without a foreign key (history outlives users) and defaults data to {}', async () => {
         const tenantId = await newTenant('a-actor');
-        const [row] = await (database as IdentityDatabase).db.execute<{ data: unknown }>(sql`
+        const [row] = await admin().execute<{ data: unknown }>(sql`
           insert into identity.audit_events (tenant_id, actor_id, type)
           values (${tenantId}, ${generateId()}, 'member.left') returning data`);
         expect(row?.data).toEqual({});
@@ -396,40 +460,57 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     });
 
     describe('members (B2-13)', () => {
-      it('listMembers pages inside the tenant with user profiles; updateRoles and delete report a match', async () => {
+      it('listMembers (system read) pages inside the tenant with user profiles; updateRoles and delete report a match', async () => {
         const tenantId = await newTenant('members');
         const ids = [await newUser('m1'), await newUser('m2'), await newUser('m3')];
         for (const userId of ids) {
-          await memberships.insert({ tenantId, userId, roles: ['member'], lastActiveAt: null });
+          await elevated(tenantId, () =>
+            memberships.insert({ tenantId, userId, roles: ['member'], lastActiveAt: null }),
+          );
         }
-        const first = await memberships.listMembers(tenantId, { limit: 2 });
+        const first = await system(() => membershipsSystem.listMembers(tenantId, { limit: 2 }));
         expect(first.items.map((m) => m.userId)).toEqual([...ids].sort().reverse().slice(0, 2));
         expect(first.items[0]).toMatchObject({
           email: expect.stringContaining('@'),
           roles: ['member'],
         });
-        const rest = await memberships.listMembers(tenantId, {
-          limit: 2,
-          cursor: first.nextCursor ?? undefined,
-        });
-        expect(rest.items).toHaveLength(1);
-        await expect(memberships.updateRoles(tenantId, ids[0] as string, ['admin'])).resolves.toBe(
-          true,
+        const rest = await system(() =>
+          membershipsSystem.listMembers(tenantId, {
+            limit: 2,
+            cursor: first.nextCursor ?? undefined,
+          }),
         );
+        expect(rest.items).toHaveLength(1);
         await expect(
-          memberships.updateRoles(generateId(), ids[0] as string, ['admin']),
+          elevated(tenantId, () => memberships.updateRoles(tenantId, ids[0] as string, ['admin'])),
+        ).resolves.toBe(true);
+        await expect(
+          elevated(tenantId, () =>
+            memberships.updateRoles(generateId(), ids[0] as string, ['admin']),
+          ),
         ).resolves.toBe(false);
-        await expect(memberships.delete(tenantId, ids[1] as string)).resolves.toBe(true);
-        await expect(memberships.findMember(tenantId, ids[1] as string)).resolves.toBeNull();
+        await expect(
+          elevated(tenantId, () => memberships.delete(tenantId, ids[1] as string)),
+        ).resolves.toBe(true);
+        await expect(
+          system(() => membershipsSystem.findMember(tenantId, ids[1] as string)),
+        ).resolves.toBeNull();
+        await expect(
+          system(() => membershipsSystem.findMember(tenantId, ids[0] as string)),
+        ).resolves.toMatchObject({ userId: ids[0], roles: ['admin'] });
       });
 
       it('countOwnersLocked serialises owner changes: two owners demoting each other leave exactly one', async () => {
         const tenantId = await newTenant('owners');
         const [a, b] = [await newUser('oa'), await newUser('ob')] as [string, string];
-        await memberships.insert({ tenantId, userId: a, roles: ['owner'], lastActiveAt: null });
-        await memberships.insert({ tenantId, userId: b, roles: ['owner'], lastActiveAt: null });
+        for (const userId of [a, b]) {
+          await elevated(tenantId, () =>
+            memberships.insert({ tenantId, userId, roles: ['owner'], lastActiveAt: null }),
+          );
+        }
+        // One unit of work each: the advisory lock is held until its COMMIT.
         const demote = (target: string) =>
-          transactions.run(async () => {
+          elevated(tenantId, async () => {
             const owners = await memberships.countOwnersLocked(tenantId);
             await new Promise((resolve) => setTimeout(resolve, 100)); // hold the lock
             if (owners <= 1) return false;
@@ -437,7 +518,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           });
         const results = await Promise.all([demote(a), demote(b)]);
         expect(results.filter(Boolean)).toHaveLength(1);
-        await expect(memberships.countOwnersLocked(tenantId)).resolves.toBe(1);
+        await expect(as(tenantId, () => memberships.countOwnersLocked(tenantId))).resolves.toBe(1);
       });
     });
   },

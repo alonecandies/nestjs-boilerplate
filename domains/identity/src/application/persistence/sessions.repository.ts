@@ -30,7 +30,10 @@ export interface RotateSessionInput {
   now: Date;
 }
 
-/** Sessions persistence port (implemented by `DrizzleSessionsRepository`). */
+/**
+ * Sessions persistence port on the runtime pool (implemented by `DrizzleSessionsRepository`): the
+ * principal's own sessions only. The purge is `SessionsSystemRepository.deleteExpired`.
+ */
 export abstract class SessionsRepository {
   abstract create(session: NewSession): Promise<void>;
 
@@ -49,11 +52,4 @@ export abstract class SessionsRepository {
 
   /** Revokes every active session of the user; returns how many. */
   abstract revokeAllForUser(userId: string, now: Date): Promise<number>;
-
-  /**
-   * Deletes every session whose `expiresAt <= now` in one statement; returns how many. Sessions are
-   * distributed by `user_id`, so this is a multi-shard DELETE without row locks (a `LIMIT`ed
-   * sub-select cannot be pushed down to the shards).
-   */
-  abstract deleteExpired(now: Date): Promise<number>;
 }

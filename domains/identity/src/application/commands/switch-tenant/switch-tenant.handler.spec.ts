@@ -1,12 +1,16 @@
 import type { AccessTokenDenylist, RefreshTokenClaims } from '@platform/auth';
-import { generateId, PLATFORM_TENANT_ID, sha256Hex } from '@platform/common';
-import { beforeEach, describe, expect, it } from 'vitest';
 import {
-  makeAuthTokens,
-  makeUserRecord,
-  passThroughTransaction,
-} from '../../../../test/fixtures.js';
+  createPrincipal,
+  generateId,
+  PLATFORM_TENANT_ID,
+  runWithPrincipal,
+  sha256Hex,
+  UnauthenticatedException,
+} from '@platform/common';
+import { beforeEach, describe, expect, it } from 'vitest';
+import { makeAuthTokens, makeUserRecord } from '../../../../test/fixtures.js';
 import { mockOf } from '../../../../test/mocks.js';
+import { principalLog } from '../../../../test/principal-log.js';
 import {
   InvalidRefreshTokenException,
   RefreshTokenReuseDetectedException,
@@ -16,7 +20,12 @@ import type { TokenIssuer } from '../../../infrastructure/security/token-issuer.
 import type { MembershipsRepository } from '../../persistence/memberships.repository.js';
 import type { SessionRecord, SessionsRepository } from '../../persistence/sessions.repository.js';
 import type { UsersRepository } from '../../persistence/users.repository.js';
-import type { SessionTokensService } from '../../services/session-tokens.service.js';
+import type { MembershipActivity } from '../../services/membership-activity.elevated.js';
+import {
+  type OpenSessionInput,
+  type SessionTokensService,
+  sessionPrincipal,
+} from '../../services/session-tokens.service.js';
 import { SwitchTenantCommand } from './switch-tenant.command.js';
 import { SwitchTenantHandler } from './switch-tenant.handler.js';
 
@@ -59,7 +68,12 @@ describe('SwitchTenantHandler', () => {
   let memberships: ReturnType<typeof mockOf<MembershipsRepository>>;
   let sessionTokens: ReturnType<typeof mockOf<SessionTokensService>>;
   let denylist: ReturnType<typeof mockOf<AccessTokenDenylist>>;
+  let activity: ReturnType<typeof mockOf<MembershipActivity>>;
+  let principals: ReturnType<typeof principalLog>;
   let handler: SwitchTenantHandler;
+  /** The caller: the access token's user in its current tenant (the edge sets it). */
+  const caller = () => createPrincipal({ userId: user.id, tenantId: FROM, roles: ['admin'] });
+  const run = (cmd: SwitchTenantCommand) => runWithPrincipal(caller(), () => handler.execute(cmd));
 
   beforeEach(() => {
     log.length = 0;
@@ -87,37 +101,36 @@ describe('SwitchTenantHandler', () => {
               createdAt: new Date(),
             }
           : null,
+    });
+    activity = mockOf<MembershipActivity>({
       touch: async () => {
         log.push('touch');
       },
     });
+    // The real service: ONE unit of work as the session's principal, `before` first (its spec).
     sessionTokens = mockOf<SessionTokensService>({
-      open: async () => {
-        log.push('open');
-        return tokens;
-      },
+      openIf: (input: OpenSessionInput, before: () => Promise<boolean>) =>
+        runWithPrincipal(sessionPrincipal(input), async () => {
+          log.push('begin');
+          const opened = await before();
+          if (opened) log.push('open');
+          log.push('commit');
+          return opened ? tokens : null;
+        }),
     });
     denylist = mockOf<AccessTokenDenylist>({
       deny: async () => {
         log.push('deny');
       },
     });
-    const transaction = {
-      ...passThroughTransaction(),
-      run: async <T>(work: () => Promise<T>): Promise<T> => {
-        log.push('begin');
-        const result = await work();
-        log.push('commit');
-        return result;
-      },
-    };
+    principals = principalLog();
     handler = new SwitchTenantHandler(
       issuer,
-      users,
-      sessions,
-      memberships,
-      sessionTokens,
-      transaction,
+      principals.track('users', users),
+      principals.track('sessions', sessions),
+      principals.track('memberships', memberships),
+      principals.track('sessionTokens', sessionTokens),
+      principals.track('activity', activity),
       denylist,
     );
   });
@@ -126,10 +139,10 @@ describe('SwitchTenantHandler', () => {
     new SwitchTenantCommand(user.id, tenantId, REFRESH, access, { ip: '10.0.0.1' });
 
   it('rotates the session into the target tenant with its roles and denylists the old access token', async () => {
-    await expect(handler.execute(command())).resolves.toBe(tokens);
+    await expect(run(command())).resolves.toBe(tokens);
     expect(log).toEqual(['deny', 'begin', 'rotate', 'touch', 'open', 'commit']);
     expect(denylist.deny).toHaveBeenCalledWith('access-jti', 1_900_000_000);
-    const [input] = sessionTokens.open.mock.calls[0] ?? [];
+    const [input] = sessionTokens.openIf.mock.calls[0] ?? [];
     expect(input).toMatchObject({
       user,
       tenantId: TO,
@@ -143,7 +156,31 @@ describe('SwitchTenantHandler', () => {
       replacedById: input?.sessionId,
       now: expect.any(Date),
     });
-    expect(memberships.touch).toHaveBeenCalledWith(TO, user.id, expect.any(Date));
+    expect(activity.touch).toHaveBeenCalledWith(TO, user.id, expect.any(Date));
+  });
+
+  it('reads the target as the caller, then rotates, touches and opens as { user, target, roles }', async () => {
+    await run(command());
+    expect(principals.summary()).toEqual([
+      ['memberships.find', user.id, FROM],
+      ['users.findById', user.id, FROM],
+      ['sessionTokens.openIf', user.id, FROM],
+      ['sessions.revokeForRotation', user.id, TO],
+      ['activity.touch', user.id, TO],
+    ]);
+    expect(principals.calls.at(-1)?.principal?.roles).toEqual(['member']);
+  });
+
+  it('refuses a call without the caller principal, or as another user, before any lookup', async () => {
+    await expect(handler.execute(command())).rejects.toBeInstanceOf(UnauthenticatedException);
+    await expect(
+      runWithPrincipal(
+        createPrincipal({ userId: '0190f3b2-0000-7000-8000-0000000000ff', tenantId: FROM }),
+        () => handler.execute(command()),
+      ),
+    ).rejects.toBeInstanceOf(TenantAccessDeniedException);
+    expect(principals.calls).toEqual([]);
+    expect(log).toEqual([]);
   });
 
   it.each([
@@ -153,9 +190,7 @@ describe('SwitchTenantHandler', () => {
   ])(
     '%s → 403 TENANT_ACCESS_DENIED; nothing rotated or denylisted (Review Focus 1)',
     async (_name, tenantId) => {
-      await expect(handler.execute(command(tenantId))).rejects.toBeInstanceOf(
-        TenantAccessDeniedException,
-      );
+      await expect(run(command(tenantId))).rejects.toBeInstanceOf(TenantAccessDeniedException);
       expect(log).toEqual([]);
     },
   );
@@ -165,18 +200,18 @@ describe('SwitchTenantHandler', () => {
       ...claims,
       sub: '0190f3b2-0000-7000-8000-0000000000ff',
     });
-    await expect(handler.execute(command())).rejects.toBeInstanceOf(InvalidRefreshTokenException);
+    await expect(run(command())).rejects.toBeInstanceOf(InvalidRefreshTokenException);
     expect(memberships.find).not.toHaveBeenCalled();
   });
 
   it('a reused (already rotated) refresh token revokes every session: 401 REFRESH_TOKEN_REUSED', async () => {
     sessions.revokeForRotation.mockResolvedValue(false);
     sessions.findById.mockResolvedValue(session({ revokedAt: new Date() }));
-    await expect(handler.execute(command())).rejects.toBeInstanceOf(
-      RefreshTokenReuseDetectedException,
-    );
+    await expect(run(command())).rejects.toBeInstanceOf(RefreshTokenReuseDetectedException);
     expect(sessions.findById).toHaveBeenCalledWith(user.id, sessionId);
-    expect(log).toContain('revoke-all');
-    expect(sessionTokens.open).not.toHaveBeenCalled();
+    expect(sessions.revokeForRotation).toHaveBeenCalledOnce();
+    expect(activity.touch).not.toHaveBeenCalled();
+    expect(log).toEqual(['deny', 'begin', 'commit', 'revoke-all']);
+    expect(principals.summary().at(-1)).toEqual(['sessions.revokeAllForUser', user.id, FROM]);
   });
 });

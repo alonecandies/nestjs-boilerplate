@@ -5,11 +5,14 @@ import {
   DomainValidationException,
   isUuid,
   MAX_PAGE_LIMIT,
+  SystemContext,
 } from '@platform/common';
 import { clamp, isNil, trim } from 'lodash-es';
 import { IDENTITY_LIMITS } from '../../../identity.constants.js';
 import { toUserContract } from '../../mappers/user.mapper.js';
-import { UsersRepository } from '../../persistence/users.repository.js';
+import { SYSTEM_READS } from '../../persistence/system-reads.js';
+import { UsersSystemRepository } from '../../persistence/users.system-repository.js';
+import { requireActingIn } from '../../services/tenant-actor.js';
 import { ListUsersQuery } from './list-users.query.js';
 
 /** gRPC sends `0` for an absent int32: treat it (and garbage) as "default page size". */
@@ -20,7 +23,7 @@ function pageLimit(limit: number | undefined): number {
 
 @QueryHandler(ListUsersQuery)
 export class ListUsersHandler implements IQueryHandler<ListUsersQuery> {
-  constructor(private readonly users: UsersRepository) {}
+  constructor(private readonly usersSystem: UsersSystemRepository) {}
 
   async execute(query: ListUsersQuery): Promise<UserPage> {
     if (!isUuid(query.tenantId)) {
@@ -29,12 +32,18 @@ export class ListUsersHandler implements IQueryHandler<ListUsersQuery> {
       });
     }
     const search = trim(query.search ?? '').slice(0, IDENTITY_LIMITS.SEARCH_MAX_LENGTH);
-    const page = await this.users.list({
-      tenantId: query.tenantId,
-      limit: pageLimit(query.limit),
-      cursor: query.cursor === '' ? undefined : query.cursor,
-      search: search === '' ? undefined : search,
-    });
+    const tenantId = query.tenantId;
+    // The tenant's member directory: a system read, for a caller acting in that tenant, with the
+    // tenant filter in the SQL.
+    requireActingIn(tenantId);
+    const page = await SystemContext.run(SYSTEM_READS.USER_DIRECTORY, () =>
+      this.usersSystem.listInTenant({
+        tenantId,
+        limit: pageLimit(query.limit),
+        cursor: query.cursor === '' ? undefined : query.cursor,
+        search: search === '' ? undefined : search,
+      }),
+    );
     return {
       items: page.items.map(toUserContract),
       // Contract: absent (not null) on the last page.

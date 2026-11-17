@@ -44,7 +44,7 @@ describe('ListMembersHandler', () => {
     await member(ids[0] as string, ['owner']);
     await member(ids[1] as string, ['admin']);
     await member(ids[2] as string, ['member']);
-    handler = new ListMembersHandler(p.memberships);
+    handler = new ListMembersHandler(p.memberships, p.membershipsSystem);
   });
 
   it('pages newest user id first via nextCursor', async () => {

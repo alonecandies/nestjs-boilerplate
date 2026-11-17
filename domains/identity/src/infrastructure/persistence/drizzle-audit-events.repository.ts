@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import type { CursorPage } from '@platform/common';
 import {
   type DrizzleTransactionalAdapter,
+  inUnitOfWork,
   keysetFetchLimit,
   keysetOrder,
   keysetPage,
@@ -16,6 +17,10 @@ import type {
 } from '../../application/persistence/audit-events.repository.js';
 import { auditEvents, type IdentitySchema } from './identity.schema.js';
 
+/**
+ * The audit log on the runtime pool; every method is a unit of work (`inUnitOfWork`). `append`
+ * has no RETURNING: reading the log back needs elevation, writing it does not.
+ */
 @Injectable()
 export class DrizzleAuditEventsRepository implements AuditEventsRepository {
   constructor(
@@ -23,19 +28,23 @@ export class DrizzleAuditEventsRepository implements AuditEventsRepository {
   ) {}
 
   async append(event: NewAuditEvent): Promise<void> {
-    await this.txHost.tx.insert(auditEvents).values(event);
+    await inUnitOfWork(this.txHost, (tx) => tx.insert(auditEvents).values(event));
   }
 
   async listForTenant(
     tenantId: string,
     criteria: { limit: number; cursor?: string | undefined },
   ): Promise<CursorPage<AuditEventRecord>> {
-    const rows = await this.txHost.tx
-      .select()
-      .from(auditEvents)
-      .where(and(eq(auditEvents.tenantId, tenantId), keysetWhere(auditEvents.id, criteria.cursor)))
-      .orderBy(keysetOrder(auditEvents.id))
-      .limit(keysetFetchLimit(criteria.limit));
+    const rows = await inUnitOfWork(this.txHost, (tx) =>
+      tx
+        .select()
+        .from(auditEvents)
+        .where(
+          and(eq(auditEvents.tenantId, tenantId), keysetWhere(auditEvents.id, criteria.cursor)),
+        )
+        .orderBy(keysetOrder(auditEvents.id))
+        .limit(keysetFetchLimit(criteria.limit)),
+    );
     return keysetPage(rows, criteria.limit);
   }
 }

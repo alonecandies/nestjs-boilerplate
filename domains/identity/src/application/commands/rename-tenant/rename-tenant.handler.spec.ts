@@ -1,5 +1,6 @@
 import { createPrincipal, generateId, runWithPrincipal, type TenantRole } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { principalLog } from '../../../../test/principal-log.js';
 import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
 import { TenantAuditLog } from '../../services/tenant-audit-log.service.js';
 import { RenameTenantCommand } from './rename-tenant.command.js';
@@ -8,6 +9,7 @@ import { RenameTenantHandler } from './rename-tenant.handler.js';
 describe('RenameTenantHandler', () => {
   let persistence: ReturnType<typeof createInMemoryIdentityPersistence>;
   let handler: RenameTenantHandler;
+  let log: ReturnType<typeof principalLog>;
   const tenantId = generateId();
   const owner = generateId();
   const admin = generateId();
@@ -37,11 +39,13 @@ describe('RenameTenantHandler', () => {
       roles: ['admin'],
       lastActiveAt: null,
     });
+    log = principalLog();
     handler = new RenameTenantHandler(
-      persistence.tenants,
+      log.track('tenants', persistence.tenants),
       persistence.memberships,
       persistence.transactions,
       new TenantAuditLog(persistence.auditEvents),
+      log.track('elevation', persistence.elevation),
     );
   });
 
@@ -63,5 +67,19 @@ describe('RenameTenantHandler', () => {
   it('403 FORBIDDEN for an admin, even with a forged owner token (the membership decides)', async () => {
     await expect(as(admin, ['owner'], 'Hijacked')).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(persistence.tenants.findById(tenantId)).resolves.toMatchObject({ name: 'Acme' });
+  });
+  it('elevates with tenant:manage first in its unit of work, before any repository call there', async () => {
+    await as(owner, ['owner'], 'Acme Labs');
+    const calls = log.calls.map((c) => c.call);
+    const elevate = calls.indexOf('elevation.elevate');
+    expect(elevate).toBeGreaterThan(-1);
+    expect(calls.indexOf('tenants.findById')).toBeGreaterThan(elevate);
+    expect(persistence.elevation.calls[0]).toMatchObject({
+      kind: 'permission',
+      name: 'tenant:manage',
+    });
+    // Only reads of the actor's own roles may run before (as the request principal, outside it).
+    expect(calls.slice(0, elevate).every((c) => c === 'memberships.find')).toBe(true);
+    expect(log.calls.every((c) => c.principal?.tenantId === tenantId)).toBe(true);
   });
 });

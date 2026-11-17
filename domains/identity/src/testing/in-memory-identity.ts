@@ -1,5 +1,11 @@
-import type { CursorPage } from '@platform/common';
-import { decodeIdCursor, keysetPage } from '@platform/database';
+import { type CursorPage, requirePrincipal } from '@platform/common';
+import {
+  decodeIdCursor,
+  type ElevationReason,
+  keysetPage,
+  RlsElevation,
+  RowCountMismatchError,
+} from '@platform/database';
 import type { UserAggregate } from '../index.js';
 import {
   type AuditEventRecord,
@@ -11,26 +17,32 @@ import {
   type RotateSessionInput,
   type SessionRecord,
   SessionsRepository,
+  SessionsSystemRepository,
   type TenantRecord,
   TransactionRunner,
   type UserRecord,
   type UserSnapshot,
   UsersRepository,
+  UsersSystemRepository,
 } from '../index.js';
 import {
   InMemoryAuditEventsRepository,
   InMemoryInvitationsRepository,
+  InMemoryInvitationsSystemRepository,
   InMemoryMembershipsRepository,
+  InMemoryMembershipsSystemRepository,
   InMemoryTenantsRepository,
   membershipKey,
 } from './in-memory-tenancy.js';
 
 /**
  * In-memory implementations of identity's persistence ports (`UsersRepository`,
- * `SessionsRepository`, `TransactionRunner`). The e2e suite binds them in place of the Drizzle
- * adapters, so the REAL command/query handlers, argon2 hashing, JWT issuing, refresh rotation and
- * the Kafka relay run end to end — only the SQL is replaced. Semantics mirror the Drizzle
- * repositories (normalised unique email, conditional rotation, keyset paging on uuidv7 ids).
+ * `SessionsRepository`, `TransactionRunner`, and the system ports over the same store). The e2e
+ * suite binds them in place of the Drizzle adapters, so the REAL command/query handlers, argon2
+ * hashing, JWT issuing, refresh rotation and the Kafka relay run end to end — only the SQL is
+ * replaced. Semantics mirror the Drizzle repositories (normalised unique email, conditional
+ * rotation, keyset paging on uuidv7 ids, a row-count check on single-row writes); row-level
+ * security is not modelled (the int specs cover it).
  */
 export class InMemoryIdentityStore {
   readonly users = new Map<string, UserSnapshot>();
@@ -67,11 +79,6 @@ export class InMemoryUsersRepository extends UsersRepository {
     return user ? toRecord(user) : null;
   }
 
-  async findByIdInTenant(id: string, tenantId: string): Promise<UserRecord | null> {
-    if (!this.store.memberships.has(membershipKey(tenantId, id))) return null;
-    return this.findById(id);
-  }
-
   async findByIds(ids: readonly string[]): Promise<UserRecord[]> {
     return ids.flatMap((id) => {
       const user = this.store.users.get(id);
@@ -79,19 +86,46 @@ export class InMemoryUsersRepository extends UsersRepository {
     });
   }
 
-  async findCredentialsByEmail(email: string): Promise<UserSnapshot | null> {
-    return [...this.store.users.values()].find((user) => user.email === email) ?? null;
-  }
-
   async isPlatformStaff(id: string): Promise<boolean> {
     return this.store.users.get(id)?.isPlatformStaff === true;
+  }
+
+  async insert(user: UserAggregate): Promise<void> {
+    const snapshot = user.toSnapshot();
+    if ([...this.store.users.values()].some((existing) => existing.email === snapshot.email)) {
+      throw new EmailAlreadyTakenException();
+    }
+    this.store.users.set(snapshot.id, snapshot);
+  }
+
+  async updatePasswordHash(id: string, passwordHash: string, updatedAt: Date): Promise<void> {
+    const user = this.store.users.get(id);
+    if (!user) throw new RowCountMismatchError(1, 0, 'users.updatePasswordHash');
+    this.store.users.set(id, { ...user, passwordHash, updatedAt });
+  }
+}
+
+/** `UsersSystemRepository` over the same store. */
+export class InMemoryUsersSystemRepository extends UsersSystemRepository {
+  constructor(private readonly store: InMemoryIdentityStore) {
+    super();
+  }
+
+  async findCredentialsByEmail(email: string): Promise<UserSnapshot | null> {
+    return [...this.store.users.values()].find((user) => user.email === email) ?? null;
   }
 
   async existsByEmail(email: string): Promise<boolean> {
     return (await this.findCredentialsByEmail(email)) !== null;
   }
 
-  async list(criteria: ListUsersCriteria): Promise<CursorPage<UserRecord>> {
+  async findByIdInTenant(id: string, tenantId: string): Promise<UserRecord | null> {
+    const user = this.store.users.get(id);
+    if (!user || !this.store.memberships.has(membershipKey(tenantId, id))) return null;
+    return toRecord(user);
+  }
+
+  async listInTenant(criteria: ListUsersCriteria): Promise<CursorPage<UserRecord>> {
     const after = criteria.cursor === undefined ? undefined : decodeIdCursor(criteria.cursor).id;
     const search = criteria.search?.toLowerCase();
     const rows = [...this.store.users.values()]
@@ -108,17 +142,6 @@ export class InMemoryUsersRepository extends UsersRepository {
       .slice(0, criteria.limit + 1)
       .map(toRecord);
     return keysetPage(rows, criteria.limit);
-  }
-
-  async insert(user: UserAggregate): Promise<void> {
-    const snapshot = user.toSnapshot();
-    if (await this.existsByEmail(snapshot.email)) throw new EmailAlreadyTakenException();
-    this.store.users.set(snapshot.id, snapshot);
-  }
-
-  async updatePasswordHash(id: string, passwordHash: string, updatedAt: Date): Promise<void> {
-    const user = this.store.users.get(id);
-    if (user) this.store.users.set(id, { ...user, passwordHash, updatedAt });
   }
 }
 
@@ -178,6 +201,13 @@ export class InMemorySessionsRepository extends SessionsRepository {
     }
     return revoked;
   }
+}
+
+/** `SessionsSystemRepository` over the same store. */
+export class InMemorySessionsSystemRepository extends SessionsSystemRepository {
+  constructor(private readonly store: InMemoryIdentityStore) {
+    super();
+  }
 
   async deleteExpired(now: Date): Promise<number> {
     const expired = [...this.store.sessions.values()].filter(
@@ -195,7 +225,32 @@ export class InlineTransactionRunner extends TransactionRunner {
   }
 }
 
-/** Every identity persistence binding, sharing one store. */
+/**
+ * `RlsElevation` without a database: the in-memory store has no policies and the inline runner no
+ * transaction, so the real service (which needs an open runtime transaction) is replaced. It keeps
+ * the precondition every elevation has (a principal with a tenant) and records each call; the
+ * permission itself is checked by the route guards in e2e (and by the real service in the int specs).
+ */
+export class InMemoryRlsElevation extends RlsElevation {
+  readonly calls: { kind: 'permission' | 'justified'; name: string; tenantId: string }[] = [];
+
+  override async elevate(permission: string): Promise<void> {
+    this.calls.push({ kind: 'permission', name: permission, tenantId: this.tenantOfPrincipal() });
+  }
+
+  override async justified<T>(reason: ElevationReason, work: () => Promise<T>): Promise<T> {
+    this.calls.push({ kind: 'justified', name: reason, tenantId: this.tenantOfPrincipal() });
+    return work();
+  }
+
+  private tenantOfPrincipal(): string {
+    const { tenantId } = requirePrincipal();
+    if (tenantId === null) throw new Error('InMemoryRlsElevation: elevation needs a tenant');
+    return tenantId;
+  }
+}
+
+/** Every identity persistence binding (runtime and system ports), sharing one store. */
 export function createInMemoryIdentityPersistence(store = new InMemoryIdentityStore()) {
   return {
     store,
@@ -206,5 +261,10 @@ export function createInMemoryIdentityPersistence(store = new InMemoryIdentitySt
     memberships: new InMemoryMembershipsRepository(store),
     invitations: new InMemoryInvitationsRepository(store),
     auditEvents: new InMemoryAuditEventsRepository(store),
+    usersSystem: new InMemoryUsersSystemRepository(store),
+    sessionsSystem: new InMemorySessionsSystemRepository(store),
+    membershipsSystem: new InMemoryMembershipsSystemRepository(store),
+    invitationsSystem: new InMemoryInvitationsSystemRepository(store),
+    elevation: new InMemoryRlsElevation(),
   };
 }
