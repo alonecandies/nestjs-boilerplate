@@ -22,10 +22,13 @@ export {
   Transactional,
   TransactionHost,
 } from '@nestjs-cls/transactional';
+// The boot guard's contract only: its checks and runner stay package-internal.
+export { type BootGuardFinding, DatabaseBootGuardError } from './boot/boot-guard.js';
 export * from './database.module.js';
 export * from './database.types.js';
 export * from './drizzle/drizzle.constants.js';
-// The runtime pool builder only: the system pool is reachable through SystemDatabase alone.
+// The runtime pool builder only: the system pool is reachable through SystemDatabase alone, and
+// the boot guard runs inside DatabaseModule.
 export { createDrizzleDatabase } from './drizzle/drizzle.factory.js';
 export * from './drizzle/drizzle.types.js';
 export * from './drizzle/drizzle-query.logger.js';

@@ -3,6 +3,7 @@ import { retry } from '@platform/common';
 import type { AppConfig, DatabaseConfig } from '@platform/config';
 import { drizzle } from 'drizzle-orm/postgres-js';
 import postgres, { type Sql } from 'postgres';
+import { runBootGuard } from '../boot/boot-guard.js';
 import type { DatabaseModuleOptions } from '../database.types.js';
 import { withPlatformMigrations } from '../migrator/migration-sets.js';
 import { requireMigrationUrl } from '../migrator/migration-url.js';
@@ -95,6 +96,30 @@ export async function createSystemDrizzleDatabase<TSchema extends DrizzleSchema>
   await warmUp(client, target, logger);
   logger.log(`Postgres system pool ready: ${target} (max ${cfg.systemPoolMax})`);
   return db;
+}
+
+/**
+ * The boot guard (B3-14, SH-10) on the open pools: `runtime` (DRIZZLE) and `system` (or `null`),
+ * over the platform set and `options.migrations`, in `cfg.bootGuard` mode. Throws
+ * `DatabaseBootGuardError` in `enforce` when anything is found; the caller ends the pools.
+ * Package-internal (`DatabaseModule` runs it once both pools are open).
+ */
+export async function guardDatabasePools<TSchema extends DrizzleSchema>(
+  cfg: DatabaseConfig,
+  options: DatabaseModuleOptions<TSchema>,
+  runtime: DrizzleDB<TSchema>,
+  system: DrizzleDB<TSchema> | null,
+  logger: Logger = new Logger('DatabaseModule'),
+): Promise<void> {
+  await runBootGuard(
+    cfg.bootGuard,
+    {
+      runtime: runtime.$client,
+      system: system?.$client ?? null,
+      sets: withPlatformMigrations(options.migrations),
+    },
+    logger,
+  );
 }
 
 /** Drizzle over `client`, its operations counted in `usage` (published as `db_pool_*{pool}`). */

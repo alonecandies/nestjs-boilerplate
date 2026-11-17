@@ -26,6 +26,7 @@ import { ClsModule } from 'nestjs-cls';
 import postgres from 'postgres';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createFakeSql, type FakeSql, type FakeSqlHandler } from '../test/fake-sql.js';
+import { DatabaseBootGuardError } from './boot/boot-guard.js';
 import { DatabaseModule } from './database.module.js';
 import type { DatabaseMigrationSet, DatabaseModuleOptions } from './database.types.js';
 import { DRIZZLE } from './drizzle/drizzle.constants.js';
@@ -139,6 +140,8 @@ describe('DatabaseModule', () => {
 
   beforeEach(() => {
     usePool();
+    // The pools here are fakes: the boot guard is off unless a case turns it on (Task 8 cases).
+    vi.stubEnv('DATABASE_BOOT_GUARD', 'off');
   });
   afterEach(async () => {
     await app?.close();
@@ -372,6 +375,98 @@ describe('DatabaseModule', () => {
       await expect(boot({ schema })).rejects.toThrow(/password authentication failed/);
       expect(system.end).toHaveBeenCalledWith({ timeout: 0 });
       expect(fake.end).toHaveBeenCalledWith({ timeout: 0 });
+    });
+  });
+
+  describe('boot guard (B3 Task 8)', () => {
+    let system: FakeSql;
+    /** Good answers per check, keyed by a fragment of its statement (`boot-guard.spec.ts`). */
+    const answer =
+      (role: 'runtime' | 'system', overrides: Record<string, unknown[]> = {}): FakeSqlHandler =>
+      (query) => {
+        const good: Record<string, unknown[]> = {
+          rolsuper: [{ flag: false }],
+          rolbypassrls: [{ flag: role === 'system' }],
+          pg_has_role: [],
+          relforcerowsecurity: [],
+          has_table_privilege: [],
+          citus_enabled: [{ citus: true, setting: 'local' }],
+          'current_user::text as name': [{ name: `app_${role}` }],
+          'select 1': [{ '?column?': 1 }],
+        };
+        const answers = { ...good, ...overrides };
+        const key = Object.keys(answers).find((fragment) => query.includes(fragment));
+        if (key === undefined) throw new Error(`unexpected statement: ${query}`);
+        return answers[key] ?? [];
+      };
+    const usePools = (
+      runtime: FakeSqlHandler,
+      systemHandler: FakeSqlHandler = answer('system'),
+    ): void => {
+      fake = createFakeSql(runtime);
+      system = createFakeSql(systemHandler);
+      vi.mocked(postgres).mockReset();
+      vi.mocked(postgres)
+        .mockReturnValueOnce(fake as never)
+        .mockReturnValueOnce(system as never);
+    };
+
+    it('enforce: good answers boot; the guard runs after both pools are warm', async () => {
+      vi.stubEnv('DATABASE_BOOT_GUARD', 'enforce');
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      usePools(answer('runtime'));
+      app = await boot({ schema, migrations: [itemsMigrations] });
+      expect(fake.queries[0]).toBe('select 1');
+      expect(system.queries[0]).toBe('select 1');
+      expect(fake.queries.length).toBeGreaterThan(1);
+      expect(system.queries.length).toBeGreaterThan(1);
+      // The domain set's schema is inspected next to the platform set's.
+      const owned = fake.unsafe.mock.calls.find(([query]) => query.includes('pg_has_role'));
+      expect(owned?.[1]).toEqual([['app', 'items']]);
+      expect(fake.end).not.toHaveBeenCalled();
+      expect(system.end).not.toHaveBeenCalled();
+    });
+
+    it('enforce: a finding refuses boot with DatabaseBootGuardError and ends both pools', async () => {
+      vi.stubEnv('DATABASE_BOOT_GUARD', 'enforce');
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      usePools(answer('runtime', { relforcerowsecurity: [{ name: 'items.items' }] }));
+      const error = await boot({ schema, migrations: [itemsMigrations] }).catch(
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(DatabaseBootGuardError);
+      expect((error as DatabaseBootGuardError).findings).toEqual([
+        { check: 'runtime.rls-forced', detail: expect.stringContaining('items.items') as unknown },
+      ]);
+      expect(fake.end).toHaveBeenCalledWith({ timeout: 0 });
+      expect(system.end).toHaveBeenCalledWith({ timeout: 0 });
+    });
+
+    it('enforce: a check that errors refuses boot (fails closed), also without a system pool', async () => {
+      vi.stubEnv('DATABASE_BOOT_GUARD', 'enforce');
+      const good = answer('runtime');
+      usePool((query, values) => {
+        if (query.includes('rolsuper')) throw new Error('permission denied for table pg_roles');
+        return good(query, values);
+      });
+      await expect(boot({ schema })).rejects.toBeInstanceOf(DatabaseBootGuardError);
+      expect(fake.end).toHaveBeenCalledWith({ timeout: 0 });
+    });
+
+    it('warn: findings are logged and boot goes on', async () => {
+      vi.stubEnv('DATABASE_BOOT_GUARD', 'warn');
+      usePool(answer('runtime', { rolsuper: [{ flag: true }] }));
+      app = await boot({ schema });
+      expect(fake.queries.some((query) => query.includes('rolsuper'))).toBe(true);
+      expect(fake.end).not.toHaveBeenCalled();
+    });
+
+    it('off: no guard statement on either pool', async () => {
+      vi.stubEnv('DATABASE_SYSTEM_URL', SYSTEM_URL);
+      usePools(answer('runtime'));
+      app = await boot({ schema });
+      expect(fake.queries).toEqual(['select 1']);
+      expect(system.queries).toEqual(['select 1']);
     });
   });
 

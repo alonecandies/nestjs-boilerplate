@@ -14,7 +14,11 @@ import { isObject } from 'lodash-es';
 import { ClsModule } from 'nestjs-cls';
 import type { DatabaseModuleOptions, DatabaseTransactionalOptions } from './database.types.js';
 import { DATABASE_MODULE_OPTIONS, DRIZZLE } from './drizzle/drizzle.constants.js';
-import { createDrizzleDatabase, createSystemDrizzleDatabase } from './drizzle/drizzle.factory.js';
+import {
+  createDrizzleDatabase,
+  createSystemDrizzleDatabase,
+  guardDatabasePools,
+} from './drizzle/drizzle.factory.js';
 import type { DrizzleDB, DrizzleSchema } from './drizzle/drizzle.types.js';
 import { DrizzlePostgresTransactionalAdapter } from './drizzle/drizzle-transactional.adapter.js';
 import { InjectDrizzle } from './drizzle/inject-drizzle.decorator.js';
@@ -48,8 +52,10 @@ class DatabaseLifecycle implements OnApplicationShutdown {
 }
 
 /**
- * The system pool opens after the runtime pool (after migrations and its warm-up); when it
- * cannot, the runtime pool is released too, so a failed boot leaves no connection behind.
+ * The system pool opens after the runtime pool (after migrations and its warm-up); then the boot
+ * guard inspects both (B3-14). When either step fails (`enforce` refusing included), both pools are
+ * ended, so a failed boot leaves no connection behind. `runtime` is whatever DRIZZLE resolved to:
+ * a fake one in e2e suites, which set DATABASE_BOOT_GUARD=off.
  */
 async function openSystemPool<TSchema extends DrizzleSchema>(
   cfg: DatabaseConfig,
@@ -57,10 +63,13 @@ async function openSystemPool<TSchema extends DrizzleSchema>(
   opts: DatabaseModuleOptions<TSchema>,
   runtime: DrizzleDB<TSchema>,
 ): Promise<DrizzleDB<TSchema> | null> {
+  let system: DrizzleDB<TSchema> | null = null;
   try {
-    return await createSystemDrizzleDatabase(cfg, app, opts);
+    system = await createSystemDrizzleDatabase(cfg, app, opts);
+    await guardDatabasePools(cfg, opts, runtime, system);
+    return system;
   } catch (error) {
-    await runtime.$client.end({ timeout: 0 });
+    await Promise.all([runtime.$client.end({ timeout: 0 }), system?.$client.end({ timeout: 0 })]);
     throw error;
   }
 }
@@ -102,7 +111,9 @@ const transactionalPlugin = (options: DatabaseTransactionalOptions): ClsPluginTr
  * `ObservabilityModule.forRoot({ healthContributors: [DatabaseHealthIndicator] })`).
  * Pool settings come from the `database` config namespace; `application_name` = SERVICE_NAME.
  * With `runMigrations` / DATABASE_RUN_MIGRATIONS, boot applies `platformMigrations` and then
- * `options.migrations` in order, under one advisory lock, before the pool opens.
+ * `options.migrations` in order, under one advisory lock, before the pool opens. Once both pools are
+ * open, the boot guard checks roles, RLS and grants on the live connections (DATABASE_BOOT_GUARD:
+ * `enforce` refuses to start, `warn` logs, `off` skips; see boot/boot-guard.ts).
  */
 @Module({})
 export class DatabaseModule {

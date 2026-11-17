@@ -21,6 +21,8 @@ export const MONOLITH_E2E_ENV: Readonly<Record<string, string>> = {
   REDIS_URL: 'redis://127.0.0.1:1',
   DATABASE_URL: 'postgres://e2e:e2e@127.0.0.1:1/e2e',
   DATABASE_RUN_MIGRATIONS: 'false',
+  // DRIZZLE is a fake: the boot guard (roles, RLS, grants) has no real catalog to inspect.
+  DATABASE_BOOT_GUARD: 'off',
   CASSANDRA_CONTACT_POINTS: '127.0.0.1',
   CASSANDRA_PORT: '1',
   CASSANDRA_RUN_MIGRATIONS: 'false',
