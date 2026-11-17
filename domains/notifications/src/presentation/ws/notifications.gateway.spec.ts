@@ -365,3 +365,70 @@ describe('NotificationsGateway', () => {
     });
   });
 });
+
+const capsSocket = () => ({
+  data: {} as Record<string, unknown>,
+  handshake: { auth: { token: 't' }, headers: {}, address: '1.2.3.4' },
+  request: { socket: { remoteAddress: '1.2.3.4' }, headers: {} },
+  join: vi.fn(),
+});
+
+describe('NotificationsGateway connection caps', () => {
+  const tokens = {
+    verifyAccessToken: vi.fn(async () => ({ jti: 'j', exp: Math.floor(Date.now() / 1000) + 60 })),
+    toAuthUser: vi.fn(() => ({ id: 'u-1', exp: Math.floor(Date.now() / 1000) + 60 })),
+  };
+  const denylist = { isDenied: vi.fn(async () => false) };
+  const gatewayWith = (caps: unknown) =>
+    new NotificationsGateway(
+      tokens as never,
+      denylist as never,
+      {} as never,
+      authWithSweepInterval(30_000),
+      caps as never,
+    );
+
+  it('refuses a handshake over the per-IP limit with a 429 problem (connect_error data)', async () => {
+    const caps = {
+      admitHandshake: vi.fn(async () => ({ ok: false as const, retryAfterSeconds: 7 })),
+      acquireSocket: vi.fn(),
+      releaseSocket: vi.fn(),
+    };
+    const error = await gatewayWith(caps).authenticate(capsSocket() as never);
+    expect(error?.data).toMatchObject({ status: 429, code: 'RATE_LIMITED' });
+    expect(caps.admitHandshake).toHaveBeenCalledWith('1.2.3.4');
+    expect(caps.acquireSocket).not.toHaveBeenCalled();
+  });
+
+  it('refuses the socket past the per-user cap with TOO_MANY_CONNECTIONS', async () => {
+    const caps = {
+      admitHandshake: vi.fn(async () => ({ ok: true as const })),
+      acquireSocket: vi.fn(async () => false),
+      releaseSocket: vi.fn(),
+    };
+    const error = await gatewayWith(caps).authenticate(capsSocket() as never);
+    expect(error?.data).toMatchObject({ status: 429, code: 'TOO_MANY_CONNECTIONS' });
+  });
+
+  it('accepts under the caps and releases the slot once, on disconnect', async () => {
+    const caps = {
+      admitHandshake: vi.fn(async () => ({ ok: true as const })),
+      acquireSocket: vi.fn(async () => true),
+      releaseSocket: vi.fn(async () => undefined),
+    };
+    const gateway = gatewayWith(caps);
+    const socket = capsSocket();
+    await expect(gateway.authenticate(socket as never)).resolves.toBeUndefined();
+    expect(caps.acquireSocket).toHaveBeenCalledWith('u-1');
+    gateway.handleDisconnect(socket as never);
+    expect(caps.releaseSocket).toHaveBeenCalledWith('u-1');
+  });
+
+  it('does not release a slot for a socket that never acquired one', () => {
+    const caps = { admitHandshake: vi.fn(), acquireSocket: vi.fn(), releaseSocket: vi.fn() };
+    const socket = capsSocket();
+    socket.data.user = { id: 'u-1' };
+    gatewayWith(caps).handleDisconnect(socket as never);
+    expect(caps.releaseSocket).not.toHaveBeenCalled();
+  });
+});

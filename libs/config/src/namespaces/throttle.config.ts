@@ -13,6 +13,10 @@ export const throttleEnvSchema = z
     THROTTLE_TENANT_LIMIT: zInt(3_000, { min: 1 }),
     THROTTLE_GRAPHQL_TTL_MS: zInt(60_000, { min: 1 }),
     THROTTLE_GRAPHQL_COST_LIMIT: zInt(20_000, { min: 1 }),
+    THROTTLE_WS_HANDSHAKE_LIMIT: zInt(30, { min: 1 }),
+    THROTTLE_WS_HANDSHAKE_TTL_MS: zInt(60_000, { min: 1 }),
+    THROTTLE_WS_SOCKETS_PER_USER: zInt(10, { min: 1 }),
+    THROTTLE_WS_SOCKET_TTL_MS: zInt(3_600_000, { min: 1_000 }),
     THROTTLE_REDIS_TIMEOUT_MS: zInt(250, { min: 10 }),
   })
   .transform((env) => ({
@@ -28,6 +32,12 @@ export const throttleEnvSchema = z
     /** GraphQL cost budget per user (else IP): sum of operation complexities per window. */
     graphqlTtlMs: env.THROTTLE_GRAPHQL_TTL_MS,
     graphqlCostLimit: env.THROTTLE_GRAPHQL_COST_LIMIT,
+    /** WebSockets (Socket.IO, graphql-ws): handshakes per client IP per window. */
+    wsHandshakeLimit: env.THROTTLE_WS_HANDSHAKE_LIMIT,
+    wsHandshakeTtlMs: env.THROTTLE_WS_HANDSHAKE_TTL_MS,
+    /** Concurrent sockets per user; the counter's safety TTL bounds leaks from crashed replicas. */
+    wsSocketsPerUser: env.THROTTLE_WS_SOCKETS_PER_USER,
+    wsSocketTtlMs: env.THROTTLE_WS_SOCKET_TTL_MS,
     /** Bound for one throttle command; past it, budgets fail open and auth fails closed. */
     redisTimeoutMs: env.THROTTLE_REDIS_TIMEOUT_MS,
   }));

@@ -1,4 +1,4 @@
-import { Inject, Logger, type OnModuleDestroy, UseGuards } from '@nestjs/common';
+import { Inject, Logger, type OnModuleDestroy, Optional, UseGuards } from '@nestjs/common';
 import {
   MessageBody,
   type OnGatewayConnection,
@@ -20,9 +20,21 @@ import {
   RevocationSweeper,
   TokenService,
 } from '@platform/auth';
-import { toProblemDetails, UnauthenticatedException, UseWsExceptionFilter } from '@platform/common';
-import { type AuthConfig, authConfig } from '@platform/config';
-import { RateLimit, WsThrottlerGuard } from '@platform/redis';
+import {
+  DEFAULT_PROBLEM_TYPE_BASE_URL,
+  type ProblemDetails,
+  toProblemDetails,
+  UnauthenticatedException,
+  UseWsExceptionFilter,
+} from '@platform/common';
+import { type AppConfig, type AuthConfig, appConfig, authConfig } from '@platform/config';
+import {
+  ConnectionCaps,
+  createClientIpResolver,
+  RateLimit,
+  TOO_MANY_CONNECTIONS,
+  WsThrottlerGuard,
+} from '@platform/redis';
 import type { DefaultEventsMap, ExtendedError, Namespace, Socket } from 'socket.io';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
 import {
@@ -43,6 +55,8 @@ import { WsSessionGuard } from './ws-session.guard.js';
 /** `socket.data` of this namespace: the user authenticated at the handshake. */
 export interface NotificationsSocketData {
   user?: AuthUser;
+  /** This socket holds a per-user socket slot (`ConnectionCaps`), freed on disconnect. */
+  capAcquired?: boolean;
 }
 
 export type NotificationsSocket = Socket<
@@ -68,6 +82,10 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
  *   `Authorization: Bearer`) once, including the revocation denylist, BEFORE the connection is
  *   accepted — so no message can race the authentication. A refused client gets `connect_error`
  *   whose `data` is the problem details (`code` MISSING_TOKEN / TOKEN_EXPIRED / …).
+ * - Connection caps (`ConnectionCaps`, when `AppThrottlerModule` is present): the handshake is
+ *   charged to the client IP (`TRUST_PROXY` rules) before the token is read, and the user may hold
+ *   `THROTTLE_WS_SOCKETS_PER_USER` sockets at once. Both refuse with `connect_error` whose `data`
+ *   is a 429 problem (`RATE_LIMITED` / `TOO_MANY_CONNECTIONS`); both fail open without Redis.
  * - Connection: the socket joins exactly one room, `t:<tenantId>:u:<userId>` (`tenantUserRoom`),
  *   both from the token it authenticated with. It never changes room: another tenant needs a new
  *   connection with that tenant's token. No message handler joins or leaves a room.
@@ -105,11 +123,20 @@ export class NotificationsGateway
   @WebSocketServer()
   private readonly server: NotificationsNamespace;
 
+  /** Property-injected so the client IP follows `TRUST_PROXY`; unset in unit tests. */
+  @Optional()
+  @Inject(appConfig.KEY)
+  private readonly app?: AppConfig;
+
+  private clientIp: ReturnType<typeof createClientIpResolver> | undefined;
+
   constructor(
     private readonly tokens: TokenService,
     private readonly denylist: AccessTokenDenylist,
     private readonly notifications: NotificationsPort,
     @Inject(authConfig.KEY) auth: AuthConfig,
+    // Explicit token: an optional parameter must not rely on emitted metadata.
+    @Optional() @Inject(ConnectionCaps) private readonly caps?: ConnectionCaps,
   ) {
     this.sweeper = new RevocationSweeper(denylist, {
       name: 'socket.io',
@@ -131,11 +158,23 @@ export class NotificationsGateway
   /** Resolves `undefined` (accept) or the error to refuse the handshake with. */
   async authenticate(socket: NotificationsSocket): Promise<ExtendedError | undefined> {
     try {
+      this.clientIp ??= createClientIpResolver(this.app?.trustProxy ?? false);
+      const ip = this.clientIp(socket.request) ?? socket.handshake?.address;
+      const verdict = (await this.caps?.admitHandshake(ip)) ?? { ok: true as const };
+      if (!verdict.ok) {
+        return this.refuse('RATE_LIMITED', 'Too many connection attempts. Please retry later.');
+      }
       socket.data.user = await authenticateSocket(
         this.tokens,
         this.denylist,
         extractSocketToken(socket.handshake),
       );
+      if (this.caps !== undefined) {
+        if (!(await this.caps.acquireSocket(socket.data.user.id))) {
+          return this.refuse(TOO_MANY_CONNECTIONS, 'Too many open connections for this user.');
+        }
+        socket.data.capAcquired = true;
+      }
       return undefined;
     } catch (error) {
       const problem = toProblemDetails(error, { exposeInternal: false });
@@ -170,6 +209,10 @@ export class NotificationsGateway
     this.expiryTimers.delete(client);
     this.untrackers.get(client)?.();
     this.untrackers.delete(client);
+    if (client.data.capAcquired === true && client.data.user) {
+      client.data.capAcquired = false;
+      void this.caps?.releaseSocket(client.data.user.id);
+    }
   }
 
   /**
@@ -214,6 +257,19 @@ export class NotificationsGateway
     this.server
       .to(tenantUserRoom(tenantId, userId))
       .emit(NOTIFICATIONS_WS_EVENTS.CREATED, notification);
+  }
+
+  /** A 429 handshake refusal, as a problem document in `connect_error` data. */
+  private refuse(code: string, detail: string): ExtendedError {
+    const problem: ProblemDetails = {
+      type: `${DEFAULT_PROBLEM_TYPE_BASE_URL}${code.toLowerCase().replaceAll('_', '-')}`,
+      title: 'Too Many Requests',
+      status: 429,
+      code,
+      detail,
+    };
+    this.logger.debug(`Refused socket handshake: ${code}`);
+    return Object.assign(new Error(detail), { data: problem });
   }
 
   /** Mirrors graphql-ws (`scheduleExpiry`): the socket ends when its access token does. */

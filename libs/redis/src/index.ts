@@ -75,6 +75,15 @@ export {
 } from './throttler/app-throttler.module.js';
 export { type ClientIpResolver, createClientIpResolver } from './throttler/client-ip.util.js';
 export {
+  CONN_COUNT_COMMAND,
+  CONN_COUNT_SCRIPT,
+} from './throttler/conn-count.command.js';
+export {
+  ConnectionCaps,
+  type HandshakeVerdict,
+  TOO_MANY_CONNECTIONS,
+} from './throttler/connection-caps.js';
+export {
   credentialFrom,
   credentialHash,
   normalizeCredential,

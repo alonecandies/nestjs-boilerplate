@@ -136,6 +136,10 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       tenantLimit: 3_000,
       graphqlTtlMs: 60_000,
       graphqlCostLimit: 20_000,
+      wsHandshakeLimit: 30,
+      wsHandshakeTtlMs: 60_000,
+      wsSocketsPerUser: 10,
+      wsSocketTtlMs: 3_600_000,
       redisTimeoutMs: 250,
     });
     expect(cacheConfig.parse({})).toEqual({ ttlMs: 30_000, l1TtlMs: 5000, l1MaxItems: 5000 });

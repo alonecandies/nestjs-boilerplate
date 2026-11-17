@@ -6,7 +6,7 @@
 import { createServer } from 'node:http';
 import type { INestApplicationContext } from '@nestjs/common';
 import { generateId } from '@platform/common';
-import { cacheConfig, redisConfig } from '@platform/config';
+import { cacheConfig, redisConfig, throttleConfig } from '@platform/config';
 import { Redlock } from '@sesamecare-oss/redlock';
 import { type Cache, createCache } from 'cache-manager';
 import type { Redis } from 'ioredis';
@@ -19,6 +19,8 @@ import { DistributedLockService, REDLOCK_SETTINGS } from './lock/distributed-loc
 import { closeRedisClient, createRedisClient, waitForRedisReady } from './redis.factory.js';
 import { RedisIoAdapter } from './socket-io/redis-io.adapter.js';
 import { InMemoryRedis } from './testing/in-memory-redis.js';
+import { ConnectionCaps } from './throttler/connection-caps.js';
+import { RateLimitCharger } from './throttler/rate-limit-charger.js';
 import { RedisThrottlerStorage } from './throttler/redis-throttler.storage.js';
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
@@ -81,6 +83,46 @@ describe('throttle Lua script, weighted hits (real Redis)', () => {
     const base = keys.key('throttle', '{graphql:w}');
     expect(await redis.exists(`${base}:hits`)).toBe(0);
     expect(await redis.exists(`${base}:block`)).toBe(1);
+  });
+});
+
+describe('connection-count Lua script (real Redis) == JS model', () => {
+  it('caps, releases, never goes below zero and sets a safety TTL — like the model', async () => {
+    const env = { THROTTLE_WS_SOCKETS_PER_USER: '2' };
+    const make = (client: Redis) =>
+      new ConnectionCaps(
+        client,
+        keys,
+        throttleConfig.parse(env),
+        new RateLimitCharger(new RedisThrottlerStorage(client, keys)),
+      );
+    const real = make(redis);
+    const model = make(new InMemoryRedis().asRedis());
+    const user = generateId();
+    const steps: ['acquire' | 'release', boolean?][] = [
+      ['release'],
+      ['acquire', true],
+      ['acquire', true],
+      ['acquire', false],
+      ['release'],
+      ['acquire', true],
+      ['release'],
+      ['release'],
+      ['release'],
+      ['acquire', true],
+    ];
+    for (const [action, admitted] of steps) {
+      if (action === 'release') {
+        await Promise.all([real.releaseSocket(user), model.releaseSocket(user)]);
+      } else {
+        await expect(
+          Promise.all([real.acquireSocket(user), model.acquireSocket(user)]),
+        ).resolves.toEqual([admitted, admitted]);
+      }
+    }
+    const ttl = await redis.pttl(keys.key('wsconn', `{${user}}`));
+    expect(ttl).toBeGreaterThan(0);
+    expect(ttl).toBeLessThanOrEqual(3_600_000);
   });
 });
 
