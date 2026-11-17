@@ -1,5 +1,5 @@
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
-import { SessionsRepository } from '../../persistence/sessions.repository.js';
+import { SessionsSystemRepository } from '../../persistence/sessions.system-repository.js';
 import { PurgeExpiredSessionsCommand } from './purge-expired-sessions.command.js';
 
 /**
@@ -8,10 +8,11 @@ import { PurgeExpiredSessionsCommand } from './purge-expired-sessions.command.js
  * locks beyond the rows it deletes and is bounded by the role's `statement_timeout`; a run that
  * times out is retried by the next hourly tick. Revoked-but-unexpired sessions are KEPT on purpose:
  * they are what makes replaying a rotated refresh token detectable until the token itself expires.
+ * A `system` method (spec §9 method 5): it runs only inside `SystemContext.run`.
  */
 @CommandHandler(PurgeExpiredSessionsCommand)
 export class PurgeExpiredSessionsHandler implements ICommandHandler<PurgeExpiredSessionsCommand> {
-  constructor(private readonly sessions: SessionsRepository) {}
+  constructor(private readonly sessions: SessionsSystemRepository) {}
 
   execute(command: PurgeExpiredSessionsCommand): Promise<number> {
     return this.sessions.deleteExpired(command.now);

@@ -14,6 +14,7 @@ import {
 import type { PasswordHasher } from '../../../infrastructure/security/password-hasher.service.js';
 import type { MembershipRecord } from '../../persistence/memberships.repository.js';
 import type { UsersRepository } from '../../persistence/users.repository.js';
+import type { UsersSystemRepository } from '../../persistence/users.system-repository.js';
 import type { SessionTokensService } from '../../services/session-tokens.service.js';
 import type { TenantSelection } from '../../services/tenant-selection.service.js';
 import { LoginCommand } from './login.command.js';
@@ -32,6 +33,7 @@ describe('LoginHandler', () => {
     createdAt: new Date(),
   };
   let users: ReturnType<typeof mockOf<UsersRepository>>;
+  let usersSystem: ReturnType<typeof mockOf<UsersSystemRepository>>;
   let hasher: ReturnType<typeof mockOf<PasswordHasher>>;
   let sessionTokens: ReturnType<typeof mockOf<SessionTokensService>>;
   let selection: ReturnType<typeof mockOf<TenantSelection>>;
@@ -39,10 +41,8 @@ describe('LoginHandler', () => {
   let handler: LoginHandler;
 
   beforeEach(() => {
-    users = mockOf<UsersRepository>({
-      findCredentialsByEmail: async () => stored,
-      updatePasswordHash: async () => undefined,
-    });
+    users = mockOf<UsersRepository>({ updatePasswordHash: async () => undefined });
+    usersSystem = mockOf<UsersSystemRepository>({ findCredentialsByEmail: async () => stored });
     hasher = mockOf<PasswordHasher>({
       verify: async () => true,
       verifyDummy: async () => false,
@@ -52,7 +52,7 @@ describe('LoginHandler', () => {
     sessionTokens = mockOf<SessionTokensService>({ open: async () => tokens });
     selection = mockOf<TenantSelection>({ forLogin: async () => membership });
     transaction = passThroughTransaction();
-    handler = new LoginHandler(users, hasher, sessionTokens, transaction, selection);
+    handler = new LoginHandler(users, usersSystem, hasher, sessionTokens, transaction, selection);
   });
 
   it('verifies the password, picks the tenant, opens a session there (hash never passed on)', async () => {
@@ -61,7 +61,7 @@ describe('LoginHandler', () => {
       handler.execute(new LoginCommand(' Ada@Example.com ', 'pw', client, TENANT)),
     ).resolves.toBe(tokens);
 
-    expect(users.findCredentialsByEmail).toHaveBeenCalledWith('ada@example.com');
+    expect(usersSystem.findCredentialsByEmail).toHaveBeenCalledWith('ada@example.com');
     expect(hasher.verify).toHaveBeenCalledWith(stored.passwordHash, 'pw');
     const [user, tenantId] = selection.forLogin.mock.calls[0] ?? [];
     expect(user).not.toHaveProperty('passwordHash');
@@ -81,7 +81,7 @@ describe('LoginHandler', () => {
   });
 
   it('unknown email: burns a dummy verification, then the same 401 as a wrong password', async () => {
-    users.findCredentialsByEmail.mockResolvedValue(null);
+    usersSystem.findCredentialsByEmail.mockResolvedValue(null);
     await expect(
       handler.execute(new LoginCommand('nobody@example.com', 'pw')),
     ).rejects.toBeInstanceOf(InvalidCredentialsException);

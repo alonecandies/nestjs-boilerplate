@@ -22,15 +22,13 @@ export interface NewInvitation {
   expiresAt: Date;
 }
 
-/** Invitations persistence port (`identity.invitations`, distributed by tenant_id). */
+/**
+ * Invitations persistence port on the runtime pool (`identity.invitations`, distributed by
+ * tenant_id; every call needs an elevated unit of work). The token lookup is
+ * `InvitationsSystemRepository.findByTokenHash`.
+ */
 export abstract class InvitationsRepository {
   abstract insert(invitation: NewInvitation): Promise<void>;
-
-  /**
-   * System method 3 (spec §9): the accept flow knows only the token. A multi-shard read on Citus;
-   * B3-11 moves it into a `*.system-repository.ts` on the BYPASSRLS pool.
-   */
-  abstract findByTokenHash(tokenHash: string): Promise<InvitationRecord | null>;
 
   /** Not accepted and `expires_at > now`, newest first. */
   abstract listPending(tenantId: string, now: Date): Promise<InvitationRecord[]>;

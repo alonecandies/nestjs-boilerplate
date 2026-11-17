@@ -38,6 +38,7 @@ describe('UpdateMemberRolesHandler', () => {
     await member(eve, ['member']);
     handler = new UpdateMemberRolesHandler(
       p.memberships,
+      p.membershipsSystem,
       p.transactions,
       new TenantAuditLog(p.auditEvents),
     );

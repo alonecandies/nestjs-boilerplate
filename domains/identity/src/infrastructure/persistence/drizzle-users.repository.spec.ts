@@ -1,14 +1,19 @@
 import { generateId } from '@platform/common';
-import type { DrizzleTransactionalAdapter, TransactionHost } from '@platform/database';
-import { encodeIdCursor } from '@platform/database';
+import { RowCountMismatchError } from '@platform/database';
 import { DrizzleQueryError } from 'drizzle-orm/errors';
 import { describe, expect, it } from 'vitest';
-import { createFakePostgres, type FakeQueryHandler } from '../../../test/fake-postgres.js';
+import {
+  affected,
+  asPrincipal,
+  createFakePostgres,
+  type FakeQueryHandler,
+  fakeTransactionHost,
+  SPEC_CONTEXT,
+} from '../../../test/fake-postgres.js';
 import { NOW } from '../../../test/fixtures.js';
 import { EmailAlreadyTakenException } from '../../domain/identity.errors.js';
 import { UserAggregate } from '../../domain/user.aggregate.js';
 import { DrizzleUsersRepository } from './drizzle-users.repository.js';
-import type { IdentitySchema } from './identity.schema.js';
 
 /** A users row as postgres.js returns it. */
 const row = (id: string) => ({
@@ -20,26 +25,50 @@ const row = (id: string) => ({
   updated_at: NOW.toISOString(),
 });
 
-/** `select()` of every column: drizzle maps positionally, in table column order. */
-const fullRow = (id: string) => ({
-  id,
-  email: 'ada@example.com',
-  password_hash: '$argon2id$h',
-  display_name: 'Ada',
-  is_platform_staff: false,
-  created_at: NOW.toISOString(),
-  updated_at: NOW.toISOString(),
-});
-
+/** The runtime repository on a fake pool, every call as SPEC_PRINCIPAL (a unit of work each). */
 function setup(handler?: FakeQueryHandler) {
   const fake = createFakePostgres(handler);
-  const txHost = { tx: fake.db } as unknown as TransactionHost<
-    DrizzleTransactionalAdapter<IdentitySchema>
-  >;
-  return { ...fake, repository: new DrizzleUsersRepository(fake.db, txHost) };
+  const bare = new DrizzleUsersRepository(fakeTransactionHost(fake.db));
+  return { ...fake, bare, repository: asPrincipal(bare) };
 }
 
 describe('DrizzleUsersRepository', () => {
+  it('runs each call in its own transaction opened with the principal context (inUnitOfWork)', async () => {
+    const id = generateId();
+    const { repository, transactions, executed } = setup(() => [row(id)]);
+    await repository.findById(id);
+    await repository.isPlatformStaff(id);
+    expect(transactions).toEqual([
+      'begin',
+      SPEC_CONTEXT,
+      'commit',
+      'begin',
+      SPEC_CONTEXT,
+      'commit',
+    ]);
+    expect(executed).toHaveLength(2);
+  });
+
+  it('refuses every method without a principal before any SQL (RLS_NO_PRINCIPAL)', async () => {
+    const { bare, transactions, executed } = setup(() => []);
+    const calls = [
+      () => bare.findById(generateId()),
+      () => bare.findByIds([generateId()]),
+      () => bare.isPlatformStaff(generateId()),
+      () => bare.insert(newUser()),
+      () => bare.updatePasswordHash(generateId(), 'h', NOW),
+    ];
+    for (const call of calls) {
+      await expect(call()).rejects.toMatchObject({ code: 'RLS_NO_PRINCIPAL' });
+    }
+    expect(transactions).toEqual([]);
+    expect(executed).toEqual([]);
+  });
+
+  it('builds no named prepared statement and holds no pool handle (constructor takes the host only)', () => {
+    expect(DrizzleUsersRepository.length).toBe(1);
+  });
+
   it('findById: public columns only (no password_hash), mapped to a record', async () => {
     const id = generateId();
     const { repository, executed } = setup(() => [row(id)]);
@@ -58,27 +87,9 @@ describe('DrizzleUsersRepository', () => {
     expect(executed[0]?.params).toEqual([id, 1]);
   });
 
-  it('findById / findCredentialsByEmail return null when there is no row', async () => {
+  it('findById returns null when there is no row', async () => {
     const { repository } = setup(() => []);
     await expect(repository.findById(generateId())).resolves.toBeNull();
-    await expect(repository.findCredentialsByEmail('x@y.z')).resolves.toBeNull();
-  });
-
-  it('findCredentialsByEmail selects the hash for login', async () => {
-    const id = generateId();
-    const { repository, executed } = setup(() => [fullRow(id)]);
-    const found = await repository.findCredentialsByEmail('ada@example.com');
-    expect(executed[0]?.sql).toContain('"password_hash"');
-    expect(executed[0]?.sql).toContain('where "identity"."users"."email" = $1');
-    expect(found).toMatchObject({ id, email: 'ada@example.com', passwordHash: '$argon2id$h' });
-  });
-
-  it('existsByEmail selects only the id', async () => {
-    const { repository, executed } = setup(() => [{ id: generateId() }]);
-    await expect(repository.existsByEmail('ada@example.com')).resolves.toBe(true);
-    expect(executed[0]?.sql).toBe(
-      'select "id" from "identity"."users" where "identity"."users"."email" = $1 limit $2',
-    );
   });
 
   it('findByIds: ONE query with ONE array parameter (same SQL for any batch size); none for an empty batch', async () => {
@@ -98,45 +109,6 @@ describe('DrizzleUsersRepository', () => {
     expect(executed[1]?.sql).toBe(executed[0]?.sql);
   });
 
-  it('list: keyset page on id DESC with limit+1 look-ahead and an escaped ILIKE search', async () => {
-    const ids = [generateId(), generateId(), generateId()];
-    const cursorId = generateId();
-    const { repository, executed } = setup(() => ids.map((id) => row(id)));
-
-    const tenantId = generateId();
-    const page = await repository.list({
-      tenantId,
-      limit: 2,
-      cursor: encodeIdCursor(cursorId),
-      search: '50%_off\\',
-    });
-
-    const [query] = executed;
-    expect(query?.sql).toContain(
-      'from "identity"."users" inner join "identity"."memberships" on ("identity"."memberships"."user_id" = "identity"."users"."id" and "identity"."memberships"."tenant_id" = $1) where (("identity"."users"."email" ilike $2 or "identity"."users"."display_name" ilike $3) and "identity"."users"."id" < $4) order by "identity"."users"."id" desc limit $5',
-    );
-    expect(query?.params).toEqual([
-      tenantId,
-      '%50\\%\\_off\\\\%',
-      '%50\\%\\_off\\\\%',
-      cursorId,
-      3,
-    ]);
-    expect(page.items.map((user) => user.id)).toEqual(ids.slice(0, 2));
-    expect(page.nextCursor).toBe(encodeIdCursor(ids[1] ?? ''));
-  });
-
-  it('list without search/cursor has only the tenant join and no next cursor on the last page', async () => {
-    const tenantId = generateId();
-    const { repository, executed } = setup(() => [row(generateId())]);
-    const page = await repository.list({ tenantId, limit: 20 });
-    expect(executed[0]?.sql).toBe(
-      'select "identity"."users"."id", "identity"."users"."email", "identity"."users"."display_name", "identity"."users"."is_platform_staff", "identity"."users"."created_at", "identity"."users"."updated_at" from "identity"."users" inner join "identity"."memberships" on ("identity"."memberships"."user_id" = "identity"."users"."id" and "identity"."memberships"."tenant_id" = $1) order by "identity"."users"."id" desc limit $2',
-    );
-    expect(executed[0]?.params).toEqual([tenantId, 21]);
-    expect(page.nextCursor).toBeNull();
-  });
-
   const newUser = () =>
     UserAggregate.register({
       id: generateId(),
@@ -147,7 +119,15 @@ describe('DrizzleUsersRepository', () => {
     });
 
   it('insert writes the snapshot; the email unique violation becomes EmailAlreadyTakenException', async () => {
-    const { repository, executed, unsafe } = setup(() => []);
+    let fail: Error | undefined;
+    const { repository, executed } = setup((sql) => {
+      if (fail !== undefined && sql.startsWith('insert')) {
+        const error = fail;
+        fail = undefined;
+        throw error;
+      }
+      return [];
+    });
     const user = newUser();
     await repository.insert(user);
     expect(executed[0]?.sql).toMatch(
@@ -161,30 +141,35 @@ describe('DrizzleUsersRepository', () => {
       constraint_name: 'users_email_unique',
     });
     // drizzle 0.45 wraps driver errors in DrizzleQueryError (cause = the postgres.js error).
-    unsafe.mockImplementationOnce(() => {
-      throw pgError;
-    });
+    fail = pgError;
     const taken = await repository.insert(newUser()).catch((error: unknown) => error);
     expect(taken).toBeInstanceOf(EmailAlreadyTakenException);
     expect((taken as Error).cause).toBeInstanceOf(DrizzleQueryError);
 
     const other = new Error('connection reset');
-    unsafe.mockImplementationOnce(() => {
-      throw other;
-    });
+    fail = other;
     const failure = await repository.insert(newUser()).catch((error: unknown) => error);
     expect(failure).not.toBeInstanceOf(EmailAlreadyTakenException);
     expect((failure as Error).cause).toBe(other);
   });
 
-  it('updatePasswordHash touches only its column (+ updated_at)', async () => {
-    const { repository, executed } = setup(() => []);
+  it('updatePasswordHash touches only its column (+ updated_at) and needs exactly one row', async () => {
+    const { repository, executed } = setup(() => affected(1));
     const id = generateId();
     await repository.updatePasswordHash(id, '$argon2id$new', NOW);
 
     expect(executed[0]?.sql).toBe(
       'update "identity"."users" set "password_hash" = $1, "updated_at" = $2 where "identity"."users"."id" = $3',
     );
+  });
+
+  it('updatePasswordHash of a row RLS hides (0 rows) throws RowCountMismatchError', async () => {
+    const { repository } = setup(() => affected(0));
+    const failure = await repository
+      .updatePasswordHash(generateId(), '$argon2id$new', NOW)
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(RowCountMismatchError);
+    expect(failure).toMatchObject({ expected: 1, actual: 0 });
   });
 
   it('isPlatformStaff: a fresh single-column read; false when the row is missing', async () => {

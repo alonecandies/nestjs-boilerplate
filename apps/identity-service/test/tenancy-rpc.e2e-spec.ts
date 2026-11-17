@@ -11,7 +11,7 @@ import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { generateId } from '@platform/common';
 import { grpcConfig } from '@platform/config';
-import { DRIZZLE } from '@platform/database';
+import { DRIZZLE, SYSTEM_DATABASE, SystemDatabase } from '@platform/database';
 import { MAIL_QUEUE } from '@platform/mailer';
 import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
@@ -65,6 +65,9 @@ describe('identity-service TenantsService (real AppModule, fakes at the network 
     const builder = Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DRIZZLE)
       .useValue(postgres.db)
+      // The app_system pool's door, over the same fake (pre-auth and directory reads).
+      .overrideProvider(SYSTEM_DATABASE)
+      .useValue(new SystemDatabase(postgres.db))
       .overrideProvider(REDIS_CLIENT)
       .useValue(new InMemoryRedis().asRedis())
       .overrideProvider(KafkaProducer)

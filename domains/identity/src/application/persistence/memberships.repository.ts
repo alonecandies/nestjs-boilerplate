@@ -1,4 +1,4 @@
-import type { CursorPage, TenantRole } from '@platform/common';
+import type { TenantRole } from '@platform/common';
 import type { TenantRecord } from './tenants.repository.js';
 
 export interface MembershipRecord {
@@ -29,7 +29,12 @@ export interface TenantMembership extends MembershipRecord {
   readonly tenant: TenantRecord;
 }
 
-/** Memberships persistence port (`identity.memberships`, a reference table on Citus). */
+/**
+ * Memberships persistence port on the runtime pool (`identity.memberships`, a reference table on
+ * Citus). The principal reads its own memberships and those of its session tenant; writes need
+ * elevation, except leaving (deleting its own row). The member directory (with user profiles) and
+ * every tenant of a user are on `MembershipsSystemRepository`.
+ */
 export abstract class MembershipsRepository {
   /**
    * Roles are normalized (canonical order, deduplicated).
@@ -43,10 +48,19 @@ export abstract class MembershipsRepository {
   /** Latest `last_active_at` first (NULLs last), then newest `created_at`; `null` when the user has none. */
   abstract findMostRecentForUser(userId: string): Promise<MembershipRecord | null>;
 
-  /** Every membership with its tenant, in the `findMostRecentForUser` order. */
+  /**
+   * Every membership whose tenant the principal can read (its session tenant: the tenants policy is
+   * row-local), with that tenant, in the `findMostRecentForUser` order. Inside the unit of work
+   * that just created a membership it sees the uncommitted row; all of a user's tenants:
+   * `MembershipsSystemRepository.listForUser`.
+   */
   abstract listForUser(userId: string): Promise<TenantMembership[]>;
 
-  /** Sets `last_active_at` (register, login and switch only; refresh never writes it). */
+  /**
+   * Sets `last_active_at` (register, login and switch only; refresh never writes it). Needs an
+   * elevated unit of work (the `membership-activity` justified elevation).
+   * @throws RowCountMismatchError unless exactly one row was updated
+   */
   abstract touch(tenantId: string, userId: string, at: Date): Promise<void>;
 
   /** Replaces the roles of one membership (already parsed); `false` when there is no such membership. */
@@ -64,12 +78,4 @@ export abstract class MembershipsRepository {
    * Call it first inside the unit of work of every change that can remove an owner.
    */
   abstract countOwnersLocked(tenantId: string): Promise<number>;
-
-  abstract findMember(tenantId: string, userId: string): Promise<MemberRecord | null>;
-
-  /** Keyset page on user_id (newest user first) within the tenant; cursor = encodeIdCursor(userId). */
-  abstract listMembers(
-    tenantId: string,
-    criteria: { limit: number; cursor?: string | undefined },
-  ): Promise<CursorPage<MemberRecord>>;
 }

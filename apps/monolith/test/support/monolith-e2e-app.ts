@@ -2,12 +2,16 @@ import { billingSchema } from '@domain/billing';
 import {
   AuditEventsRepository,
   InvitationsRepository,
+  InvitationsSystemRepository,
   identitySchema,
   MembershipsRepository,
+  MembershipsSystemRepository,
   SessionsRepository,
+  SessionsSystemRepository,
   TenantsRepository,
   TransactionRunner,
   UsersRepository,
+  UsersSystemRepository,
 } from '@domain/identity';
 import { createInMemoryIdentityPersistence } from '@domain/identity/testing';
 import { getQueueToken } from '@nestjs/bullmq';
@@ -97,6 +101,15 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     .useValue(identity.invitations)
     .overrideProvider(AuditEventsRepository)
     .useValue(identity.auditEvents)
+    // The system ports (app_system pool) read the same in-memory store.
+    .overrideProvider(UsersSystemRepository)
+    .useValue(identity.usersSystem)
+    .overrideProvider(MembershipsSystemRepository)
+    .useValue(identity.membershipsSystem)
+    .overrideProvider(InvitationsSystemRepository)
+    .useValue(identity.invitationsSystem)
+    .overrideProvider(SessionsSystemRepository)
+    .useValue(identity.sessionsSystem)
     .overrideProvider(CASSANDRA_CLIENT)
     .useValue(cassandra.client)
     .overrideProvider(getQueueToken(MAIL_QUEUE))

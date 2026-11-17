@@ -9,6 +9,7 @@ import { PasswordHasher } from '../../../infrastructure/security/password-hasher
 import { toUserRecord } from '../../mappers/user.mapper.js';
 import { TransactionRunner } from '../../persistence/transaction-runner.js';
 import { UsersRepository } from '../../persistence/users.repository.js';
+import { UsersSystemRepository } from '../../persistence/users.system-repository.js';
 import { SessionTokensService } from '../../services/session-tokens.service.js';
 import { TenantSelection } from '../../services/tenant-selection.service.js';
 import { LoginCommand } from './login.command.js';
@@ -19,6 +20,7 @@ export class LoginHandler implements ICommandHandler<LoginCommand> {
 
   constructor(
     private readonly users: UsersRepository,
+    private readonly usersSystem: UsersSystemRepository,
     private readonly hasher: PasswordHasher,
     private readonly sessionTokens: SessionTokensService,
     private readonly transaction: TransactionRunner,
@@ -26,7 +28,10 @@ export class LoginHandler implements ICommandHandler<LoginCommand> {
   ) {}
 
   async execute(command: LoginCommand): Promise<AuthTokens> {
-    const credentials = await this.users.findCredentialsByEmail(normalizeEmail(command.email));
+    // pre-auth system read (spec §9 method 1): there is no principal before the password check.
+    const credentials = await this.usersSystem.findCredentialsByEmail(
+      normalizeEmail(command.email),
+    );
     if (!credentials) {
       // Same argon2 cost as a real verification: "unknown email" and "wrong password" are
       // indistinguishable by timing as well as by response (no user enumeration).

@@ -7,6 +7,7 @@ import { EmailAlreadyTakenException } from '../../../domain/identity.errors.js';
 import type { UserAggregate } from '../../../domain/user.aggregate.js';
 import type { PasswordHasher } from '../../../infrastructure/security/password-hasher.service.js';
 import type { UsersRepository } from '../../persistence/users.repository.js';
+import type { UsersSystemRepository } from '../../persistence/users.system-repository.js';
 import type { PersonalWorkspaces } from '../../services/personal-workspaces.service.js';
 import type { SessionTokensService } from '../../services/session-tokens.service.js';
 import { RegisterUserCommand } from './register-user.command.js';
@@ -15,6 +16,7 @@ import { RegisterUserHandler } from './register-user.handler.js';
 describe('RegisterUserHandler', () => {
   const tokens = makeAuthTokens();
   let users: ReturnType<typeof mockOf<UsersRepository>>;
+  let usersSystem: ReturnType<typeof mockOf<UsersSystemRepository>>;
   let hasher: ReturnType<typeof mockOf<PasswordHasher>>;
   let sessionTokens: ReturnType<typeof mockOf<SessionTokensService>>;
   let transaction: ReturnType<typeof passThroughTransaction>;
@@ -25,8 +27,8 @@ describe('RegisterUserHandler', () => {
 
   beforeEach(() => {
     order.length = 0;
+    usersSystem = mockOf<UsersSystemRepository>({ existsByEmail: async () => false });
     users = mockOf<UsersRepository>({
-      existsByEmail: async () => false,
       insert: async () => {
         order.push('insert');
       },
@@ -54,6 +56,7 @@ describe('RegisterUserHandler', () => {
     });
     handler = new RegisterUserHandler(
       users,
+      usersSystem,
       hasher,
       sessionTokens,
       transaction,
@@ -69,7 +72,7 @@ describe('RegisterUserHandler', () => {
   it('hashes, inserts the user and its first session in ONE transaction, then publishes', async () => {
     await expect(handler.execute(command)).resolves.toBe(tokens);
 
-    expect(users.existsByEmail).toHaveBeenCalledWith('ada@example.com');
+    expect(usersSystem.existsByEmail).toHaveBeenCalledWith('ada@example.com');
     expect(hasher.hash).toHaveBeenCalledWith('correct horse');
     expect(transaction.runs).toBe(1);
     expect(order).toEqual(['insert', 'create-workspace', 'open-session']);
@@ -100,7 +103,7 @@ describe('RegisterUserHandler', () => {
   });
 
   it('rejects a taken email before spending an argon2 hash', async () => {
-    users.existsByEmail.mockResolvedValue(true);
+    usersSystem.existsByEmail.mockResolvedValue(true);
     await expect(handler.execute(command)).rejects.toBeInstanceOf(EmailAlreadyTakenException);
     expect(hasher.hash).not.toHaveBeenCalled();
     expect(users.insert).not.toHaveBeenCalled();

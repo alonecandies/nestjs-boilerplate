@@ -16,13 +16,14 @@ import {
   UnauthenticatedException,
 } from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
-import { DRIZZLE } from '@platform/database';
+import { DRIZZLE, SYSTEM_DATABASE, SystemDatabase } from '@platform/database';
 import { MAIL_QUEUE } from '@platform/mailer';
 import { MetricsListener } from '@platform/observability';
 import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import {
   createGrpcClientOptions,
+  createOutgoingMetadata,
   GrpcCircuitBreakers,
   grpcCall,
   KafkaProducer,
@@ -45,6 +46,8 @@ import { startServiceTestApp } from './support/service-test-app.js';
  */
 
 const KNOWN_USER_ID = '01994f6c-1c3a-7b4e-9f00-5d1e2a3b4c5d';
+/** gRPC metadata of the known user calling for itself (no tenant). */
+const self = createOutgoingMetadata({ userId: KNOWN_USER_ID });
 const CREATED_AT = new Date('2026-09-01T10:00:00.123Z');
 const UPDATED_AT = new Date('2026-09-02T11:30:00.456Z');
 
@@ -101,6 +104,9 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
     const builder = Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DRIZZLE)
       .useValue(postgres.db)
+      // The app_system pool's door, over the same fake (pre-auth and directory reads).
+      .overrideProvider(SYSTEM_DATABASE)
+      .useValue(new SystemDatabase(postgres.db))
       .overrideProvider(REDIS_CLIENT)
       .useValue(new InMemoryRedis().asRedis())
       .overrideProvider(KafkaProducer)
@@ -178,7 +184,11 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
     });
 
     it('UsersService.GetUser runs the real query handler + repository; Timestamp → Date', async () => {
-      const user = await call(usersClient.getUser({ id: KNOWN_USER_ID }), 'UsersService.GetUser');
+      // The runtime read runs as the caller the metadata carries (B3: no principal, no BEGIN).
+      const user = await call(
+        usersClient.getUser({ id: KNOWN_USER_ID }, self),
+        'UsersService.GetUser',
+      );
 
       expect(user).toEqual({
         id: KNOWN_USER_ID,
@@ -207,12 +217,12 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
 
     it('UsersService.GetUser for an unknown id → status NOT_FOUND + x-error-code trailer', async () => {
       const id = generateId();
-      const raw = await lastValueFrom(usersClient.getUser({ id })).catch((e: unknown) => e);
+      const raw = await lastValueFrom(usersClient.getUser({ id }, self)).catch((e: unknown) => e);
       expect(raw).toMatchObject({ code: status.NOT_FOUND });
       expect((raw as ServiceError).metadata.get('x-error-code')).toEqual(['NOT_FOUND']);
 
       // …and the gateway side turns it back into the same DomainException.
-      const error = await call(usersClient.getUser({ id }), 'UsersService.GetUser').catch(
+      const error = await call(usersClient.getUser({ id }, self), 'UsersService.GetUser').catch(
         (e: unknown) => e,
       );
       expect(error).toBeInstanceOf(EntityNotFoundException);

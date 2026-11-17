@@ -12,6 +12,7 @@ import { hashInvitationToken } from '../../../domain/invitation-token.js';
 import { toMyTenantContract } from '../../mappers/tenancy.mapper.js';
 import { AUDIT_EVENT_TYPES } from '../../persistence/audit-events.repository.js';
 import { InvitationsRepository } from '../../persistence/invitations.repository.js';
+import { InvitationsSystemRepository } from '../../persistence/invitations.system-repository.js';
 import { MembershipsRepository } from '../../persistence/memberships.repository.js';
 import { TransactionRunner } from '../../persistence/transaction-runner.js';
 import { UsersRepository } from '../../persistence/users.repository.js';
@@ -24,6 +25,7 @@ const TOKEN_SHAPE = /^[A-Za-z0-9_-]{43}$/; // base64url of 32 bytes (INVITATION_
 export class AcceptInvitationHandler implements ICommandHandler<AcceptInvitationCommand> {
   constructor(
     private readonly invitations: InvitationsRepository,
+    private readonly invitationsSystem: InvitationsSystemRepository,
     private readonly memberships: MembershipsRepository,
     private readonly users: UsersRepository,
     private readonly transactions: TransactionRunner,
@@ -34,8 +36,8 @@ export class AcceptInvitationHandler implements ICommandHandler<AcceptInvitation
     const principal = requirePrincipal();
     if (principal.userId !== userId || principal.staff) throw new TenantAccessDeniedException();
     if (!TOKEN_SHAPE.test(token)) throw new InvitationInvalidException();
-    // System read 3 (spec §9): multi-shard on Citus; B3-11 moves it to the system repository.
-    const invitation = await this.invitations.findByTokenHash(hashInvitationToken(token));
+    // pre-auth system read (spec §9 method 3): the token names no tenant; multi-shard on Citus.
+    const invitation = await this.invitationsSystem.findByTokenHash(hashInvitationToken(token));
     const now = new Date();
     if (invitation === null || invitation.acceptedAt !== null || invitation.expiresAt <= now) {
       throw new InvitationInvalidException();

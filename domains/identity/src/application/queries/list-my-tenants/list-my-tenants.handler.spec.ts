@@ -34,7 +34,7 @@ describe('ListMyTenantsHandler', () => {
       lastActiveAt: new Date(2_000),
     });
 
-    const handler = new ListMyTenantsHandler(persistence.memberships);
+    const handler = new ListMyTenantsHandler(persistence.membershipsSystem);
     const as = (principalId: string) =>
       runWithPrincipal(
         createPrincipal({ userId: principalId, tenantId: a, roles: ['owner'] }),

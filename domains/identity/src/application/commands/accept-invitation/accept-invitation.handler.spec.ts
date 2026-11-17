@@ -54,6 +54,7 @@ describe('AcceptInvitationHandler', () => {
     );
     handler = new AcceptInvitationHandler(
       p.invitations,
+      p.invitationsSystem,
       p.memberships,
       p.users,
       p.transactions,

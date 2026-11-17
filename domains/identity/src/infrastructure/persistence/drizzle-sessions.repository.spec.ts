@@ -3,8 +3,11 @@ import type { DrizzleTransactionalAdapter, TransactionHost } from '@platform/dat
 import { describe, expect, it, vi } from 'vitest';
 import {
   affected,
+  asPrincipal,
   createFakePostgres,
   type FakeQueryHandler,
+  fakeTransactionHost,
+  SPEC_CONTEXT,
 } from '../../../test/fake-postgres.js';
 import { NOW } from '../../../test/fixtures.js';
 import { DrizzleSessionsRepository } from './drizzle-sessions.repository.js';
@@ -15,8 +18,8 @@ type Host = TransactionHost<DrizzleTransactionalAdapter<IdentitySchema>>;
 
 function setup(handler?: FakeQueryHandler) {
   const fake = createFakePostgres(handler);
-  const txHost = { tx: fake.db } as unknown as Host;
-  return { ...fake, repository: new DrizzleSessionsRepository(txHost) };
+  const bare = new DrizzleSessionsRepository(fakeTransactionHost(fake.db));
+  return { ...fake, bare, repository: asPrincipal(bare) };
 }
 
 describe('DrizzleSessionsRepository', () => {
@@ -86,14 +89,14 @@ describe('DrizzleSessionsRepository', () => {
     );
   });
 
-  it('deleteExpired is ONE multi-shard DELETE on expires_at: no sub-select, no LIMIT, no row locks', async () => {
-    const { repository, executed } = setup(() => affected(12));
-    await expect(repository.deleteExpired(NOW)).resolves.toBe(12);
-    expect(executed).toHaveLength(1);
-    expect(executed[0]?.sql).toBe(
-      'delete from "identity"."sessions" where "identity"."sessions"."expires_at" <= $1',
-    );
-    expect(executed[0]?.params).toEqual([NOW.toISOString()]);
+  it('each call is its own unit of work with the principal context; none without a principal', async () => {
+    const { repository, bare, transactions } = setup(() => affected(0));
+    await repository.revokeAllForUser(ids.user, NOW);
+    expect(transactions).toEqual(['begin', SPEC_CONTEXT, 'commit']);
+    await expect(bare.revokeAllForUser(ids.user, NOW)).rejects.toMatchObject({
+      code: 'RLS_NO_PRINCIPAL',
+    });
+    expect(transactions).toHaveLength(3);
   });
 
   it('findById maps the row (null when absent)', async () => {

@@ -1,5 +1,9 @@
 import { Injectable } from '@nestjs/common';
-import { type DrizzleTransactionalAdapter, TransactionHost } from '@platform/database';
+import {
+  type DrizzleTransactionalAdapter,
+  inUnitOfWork,
+  TransactionHost,
+} from '@platform/database';
 import { and, desc, eq, gt, isNull } from 'drizzle-orm';
 import type {
   InvitationRecord,
@@ -8,6 +12,7 @@ import type {
 } from '../../application/persistence/invitations.repository.js';
 import { type IdentitySchema, invitations } from './identity.schema.js';
 
+/** Invitations on the runtime pool; every method is a unit of work (`inUnitOfWork`). */
 @Injectable()
 export class DrizzleInvitationsRepository implements InvitationsRepository {
   constructor(
@@ -15,47 +20,42 @@ export class DrizzleInvitationsRepository implements InvitationsRepository {
   ) {}
 
   async insert(invitation: NewInvitation): Promise<void> {
-    await this.txHost.tx
-      .insert(invitations)
-      .values({ ...invitation, roles: [...invitation.roles] });
-  }
-
-  async findByTokenHash(tokenHash: string): Promise<InvitationRecord | null> {
-    const [row] = await this.txHost.tx
-      .select()
-      .from(invitations)
-      .where(eq(invitations.tokenHash, tokenHash))
-      .limit(1);
-    return row ?? null;
+    await inUnitOfWork(this.txHost, (tx) =>
+      tx.insert(invitations).values({ ...invitation, roles: [...invitation.roles] }),
+    );
   }
 
   async listPending(tenantId: string, now: Date): Promise<InvitationRecord[]> {
-    return this.txHost.tx
-      .select()
-      .from(invitations)
-      .where(
-        and(
-          eq(invitations.tenantId, tenantId),
-          isNull(invitations.acceptedAt),
-          gt(invitations.expiresAt, now),
-        ),
-      )
-      .orderBy(desc(invitations.id));
+    return inUnitOfWork(this.txHost, (tx) =>
+      tx
+        .select()
+        .from(invitations)
+        .where(
+          and(
+            eq(invitations.tenantId, tenantId),
+            isNull(invitations.acceptedAt),
+            gt(invitations.expiresAt, now),
+          ),
+        )
+        .orderBy(desc(invitations.id)),
+    );
   }
 
   async markAccepted(tenantId: string, id: string, now: Date): Promise<boolean> {
-    const rows = await this.txHost.tx
-      .update(invitations)
-      .set({ acceptedAt: now })
-      .where(
-        and(
-          eq(invitations.tenantId, tenantId),
-          eq(invitations.id, id),
-          isNull(invitations.acceptedAt),
-          gt(invitations.expiresAt, now),
-        ),
-      )
-      .returning({ id: invitations.id });
+    const rows = await inUnitOfWork(this.txHost, (tx) =>
+      tx
+        .update(invitations)
+        .set({ acceptedAt: now })
+        .where(
+          and(
+            eq(invitations.tenantId, tenantId),
+            eq(invitations.id, id),
+            isNull(invitations.acceptedAt),
+            gt(invitations.expiresAt, now),
+          ),
+        )
+        .returning({ id: invitations.id }),
+    );
     return rows.length > 0;
   }
 }
