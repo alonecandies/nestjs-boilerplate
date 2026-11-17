@@ -156,11 +156,8 @@ export class InMemoryStripeEventsRepository implements StripeEventsRepository {
     return true;
   }
 
-  async deleteProcessedBefore(cutoff: Date, limit: number): Promise<number> {
-    const expired = [...this.processedAt]
-      .filter(([, at]) => at < cutoff)
-      .slice(0, limit)
-      .map(([k]) => k);
+  async deleteProcessedBefore(cutoff: Date): Promise<number> {
+    const expired = [...this.processedAt].filter(([, at]) => at < cutoff).map(([k]) => k);
     for (const k of expired) {
       this.store.state.events.delete(k);
       this.processedAt.delete(k);

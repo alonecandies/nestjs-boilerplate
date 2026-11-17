@@ -188,17 +188,19 @@ describe('Drizzle billing repositories (generated SQL + row mapping)', () => {
     );
   });
 
-  it('stripe_events purge: bounded DELETE of rows processed before the cutoff', async () => {
+  it('stripe_events purge: one multi-shard DELETE of rows processed before the cutoff', async () => {
     const cutoff = new Date('2026-09-05T00:00:00.000Z');
     // postgres.js result of a DELETE without RETURNING: no rows, `count` = affected rows.
     const deleteResult: unknown[][] = Object.assign([], { count: 2 });
     answers.push(deleteResult);
 
-    await expect(events.deleteProcessedBefore(cutoff, 500)).resolves.toBe(2);
+    await expect(events.deleteProcessedBefore(cutoff)).resolves.toBe(2);
 
+    // No subquery and no LIMIT (Citus cannot push either down on a distributed table), no row lock.
+    expect(queries).toHaveLength(1);
     expect(lastSql()).toBe(
-      'delete from "billing"."stripe_events" where "billing"."stripe_events"."id" in (select "id" from "billing"."stripe_events" where "billing"."stripe_events"."processed_at" < $1 limit $2)',
+      'delete from "billing"."stripe_events" where "billing"."stripe_events"."processed_at" < $1',
     );
-    expect(queries.at(-1)?.params).toEqual([cutoff.toISOString(), 500]);
+    expect(queries.at(-1)?.params).toEqual([cutoff.toISOString()]);
   });
 });

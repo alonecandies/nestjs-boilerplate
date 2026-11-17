@@ -65,8 +65,6 @@ export const STRIPE_EVENTS_RETENTION_DAYS = 30;
 /** Hourly purge of old `stripe_events`, on one replica only (`@WithLock`). */
 export const PURGE_STRIPE_EVENTS_LOCK = 'billing:purge-stripe-events';
 export const PURGE_STRIPE_EVENTS_LOCK_TTL_MS = 60_000;
-/** Rows deleted per statement: keeps each DELETE short (row locks, WAL bursts, replication lag). */
-export const PURGE_STRIPE_EVENTS_BATCH_SIZE = 5_000;
 
 /**
  * Prometheus counter: Checkout Sessions Stripe reported paid without any usable currency (none in

@@ -15,6 +15,13 @@
       "when": 1794851841593,
       "tag": "0001_tenant_columns",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1794880966489,
+      "tag": "0002_distribute",
+      "breakpoints": true
     }
   ]
 }

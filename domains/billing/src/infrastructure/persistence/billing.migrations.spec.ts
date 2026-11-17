@@ -78,4 +78,31 @@ describe('billingMigrations', () => {
       }
     });
   });
+
+  describe('0002_distribute (custom, sharding design SH-6)', () => {
+    const file = join(billingMigrations.folder, '0002_distribute.sql');
+    const journal = JSON.parse(
+      readFileSync(join(billingMigrations.folder, 'meta', '_journal.json'), 'utf8'),
+    ) as { entries: { idx: number; tag: string }[] };
+
+    it('is the third journal entry', () => {
+      expect(journal.entries.map((entry) => entry.tag)).toEqual([
+        '0000_init',
+        '0001_tenant_columns',
+        '0002_distribute',
+      ]);
+    });
+
+    it('holds only the tenant distribution calls, payments then stripe_events', () => {
+      // Comments aside, every statement is one `SELECT app.*(…)` call (sharding design §4.2).
+      const calls = readFileSync(file, 'utf8')
+        .split('\n')
+        .filter((line) => !line.startsWith('--') && line.trim() !== '')
+        .map((line) => line.replace('--> statement-breakpoint', '').trim());
+      expect(calls).toEqual([
+        "SELECT app.distribute_by_tenant('billing.payments');",
+        "SELECT app.distribute_by_tenant('billing.stripe_events');",
+      ]);
+    });
+  });
 });

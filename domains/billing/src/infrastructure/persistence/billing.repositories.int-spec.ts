@@ -11,8 +11,9 @@ import { DrizzleStripeEventsRepository } from './drizzle-stripe-events.repositor
 
 /*
  * Billing repositories against Citus 14.2 (single node, local execution off: tenant isolation) with
- * billing's real history. Opt-in: INTEGRATION=1 npx vitest run --project billing:int repositories
- * Not distributed here (SH-6 distributes); every query already carries tenant_id (sharding §2.1.5).
+ * billing's real history, so both tables are distributed by tenant_id (0002_distribute, SH-6).
+ * Opt-in: INTEGRATION=1 npx vitest run --project billing:int repositories
+ * Every query carries tenant_id (sharding §2.1.5): a router query to one shard.
  */
 const statements = (file: string): string[] =>
   readFileSync(join(billingMigrations.folder, file), 'utf8')

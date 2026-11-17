@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { type DrizzleTransactionalAdapter, TransactionHost } from '@platform/database';
-import { inArray, lt } from 'drizzle-orm';
+import { lt } from 'drizzle-orm';
 import type {
   StripeEventReceipt,
   StripeEventsRepository,
@@ -20,23 +20,13 @@ export class DrizzleStripeEventsRepository implements StripeEventsRepository {
     return inserted.length > 0;
   }
 
-  async deleteProcessedBefore(cutoff: Date, limit: number): Promise<number> {
-    // System method 5 (spec §9): B3-11 moves it to a *.system-repository.ts; SH-6 rewrites the LIMIT
-    // subquery, which Citus cannot push down on a distributed table.
-    const tx = this.txHost.tx;
-    // DELETE has no LIMIT in Postgres: bound it through the id subquery (index range scan).
-    const result = await tx
+  async deleteProcessedBefore(cutoff: Date): Promise<number> {
+    // System method 5 (spec §9): B3-11 moves it to a *.system-repository.ts. One multi-shard
+    // DELETE, no FOR UPDATE (SH-6): Citus cannot push an `id IN (SELECT … LIMIT n)` batch down
+    // on a distributed table. Bounded by the role's statement_timeout (B3 ruling 6).
+    const result = await this.txHost.tx
       .delete(stripeEvents)
-      .where(
-        inArray(
-          stripeEvents.id,
-          tx
-            .select({ id: stripeEvents.id })
-            .from(stripeEvents)
-            .where(lt(stripeEvents.processedAt, cutoff))
-            .limit(limit),
-        ),
-      );
+      .where(lt(stripeEvents.processedAt, cutoff));
     return result.count;
   }
 }

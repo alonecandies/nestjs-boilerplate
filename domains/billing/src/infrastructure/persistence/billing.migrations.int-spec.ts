@@ -23,8 +23,8 @@ import { type BillingSchema, billingSchema } from './billing.schema.js';
  * billing-service boots: the platform set, then billingMigrations, into the `billing` schema.
  * Opt-in (needs Docker):
  *   INTEGRATION=1 bunx vitest run --project billing:int
- * Set INTEGRATION_DATABASE_URL to use an existing throwaway database instead of testcontainers.
- * The container is Citus 14.2 on PostgreSQL 18, single node (@platform/testing/postgres).
+ * Always a fresh container (startTestPostgres ignores INTEGRATION_DATABASE_URL by default):
+ * Citus 14.2 on PostgreSQL 18, single node (@platform/testing/postgres).
  */
 
 @Module({
