@@ -2,6 +2,7 @@ import { Module, type Provider } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { authConfig, mailConfig } from '@platform/config';
+import { OutboxModule } from '@platform/outbox';
 import { AcceptInvitationHandler } from './application/commands/accept-invitation/accept-invitation.handler.js';
 import { CreateInvitationHandler } from './application/commands/create-invitation/create-invitation.handler.js';
 import { CreateTenantHandler } from './application/commands/create-tenant/create-tenant.handler.js';
@@ -17,8 +18,6 @@ import { StaffSwitchInHandler } from './application/commands/staff-switch-in/sta
 import { StaffSwitchOutHandler } from './application/commands/staff-switch-out/staff-switch-out.handler.js';
 import { SwitchTenantHandler } from './application/commands/switch-tenant/switch-tenant.handler.js';
 import { UpdateMemberRolesHandler } from './application/commands/update-member-roles/update-member-roles.handler.js';
-import { MembershipEventsRelay } from './application/event-handlers/membership-events.relay.js';
-import { UserRegisteredRelay } from './application/event-handlers/user-registered.relay.js';
 import { AuditEventsRepository } from './application/persistence/audit-events.repository.js';
 import { InvitationsRepository } from './application/persistence/invitations.repository.js';
 import { InvitationsSystemRepository } from './application/persistence/invitations.system-repository.js';
@@ -36,6 +35,7 @@ import { GetUsersByIdsHandler } from './application/queries/get-users-by-ids/get
 import { ListMembersHandler } from './application/queries/list-members/list-members.handler.js';
 import { ListMyTenantsHandler } from './application/queries/list-my-tenants/list-my-tenants.handler.js';
 import { ListUsersHandler } from './application/queries/list-users/list-users.handler.js';
+import { IdentityIntegrationEvents } from './application/services/identity-integration-events.service.js';
 import { InvitationAcceptance } from './application/services/invitation-acceptance.elevated.js';
 import { MembershipActivity } from './application/services/membership-activity.elevated.js';
 import { PersonalWorkspaces } from './application/services/personal-workspaces.service.js';
@@ -49,12 +49,14 @@ import { DrizzleInvitationsRepository } from './infrastructure/persistence/drizz
 import { DrizzleInvitationsSystemRepository } from './infrastructure/persistence/drizzle-invitations.system-repository.js';
 import { DrizzleMembershipsRepository } from './infrastructure/persistence/drizzle-memberships.repository.js';
 import { DrizzleMembershipsSystemRepository } from './infrastructure/persistence/drizzle-memberships.system-repository.js';
+import { IdentityOutboxSystemRepository } from './infrastructure/persistence/drizzle-outbox.system-repository.js';
 import { DrizzleSessionsRepository } from './infrastructure/persistence/drizzle-sessions.repository.js';
 import { DrizzleSessionsSystemRepository } from './infrastructure/persistence/drizzle-sessions.system-repository.js';
 import { DrizzleTenantsRepository } from './infrastructure/persistence/drizzle-tenants.repository.js';
 import { DrizzleTransactionRunner } from './infrastructure/persistence/drizzle-transaction.runner.js';
 import { DrizzleUsersRepository } from './infrastructure/persistence/drizzle-users.repository.js';
 import { DrizzleUsersSystemRepository } from './infrastructure/persistence/drizzle-users.system-repository.js';
+import { IDENTITY_OUTBOX, IdentityOutbox } from './infrastructure/persistence/identity-outbox.js';
 import { PurgeExpiredSessionsCron } from './infrastructure/scheduling/purge-expired-sessions.cron.js';
 import { passwordConfig } from './infrastructure/security/password.config.js';
 import { PasswordHasher } from './infrastructure/security/password-hasher.service.js';
@@ -88,8 +90,6 @@ export const IDENTITY_QUERY_HANDLERS = [
   ListMembersHandler,
 ];
 
-export const IDENTITY_EVENT_HANDLERS = [UserRegisteredRelay, MembershipEventsRelay];
-
 /**
  * Persistence bindings (the only place that knows it is Drizzle/Postgres): the runtime ports
  * (app_runtime, under RLS) and the system ports (app_system, by identity's named system methods).
@@ -109,14 +109,16 @@ const PERSISTENCE: Provider[] = [
 ];
 
 /**
- * The identity core: CQRS handlers, the Kafka relay, repositories, the session purge cron and
- * identity's security services: `PasswordHasher` (`password` namespace) and `TokenIssuer` (its own
- * `JwtModule`; `auth` + `refreshToken` namespaces).
+ * The identity core: CQRS handlers, repositories, the session purge cron, identity's security
+ * services (`PasswordHasher`: `password` namespace; `TokenIssuer`: its own `JwtModule`, `auth` +
+ * `refreshToken` namespaces) and identity's outbox (`OutboxModule.forFeature`: the
+ * `IdentityOutbox` writer the handlers enqueue integration events with, in their unit of work, and
+ * the relay that publishes `identity.outbox` to Kafka; `outbox` namespace).
  * Imported by the monolith (next to `IdentityApiModule.forLocal()`) and identity-service
  * (through `IdentityGrpcModule`). Expects the app-level global modules: `CqrsModule.forRoot()`,
  * `DatabaseModule.forRootAsync({ schema: identitySchema, migrations: [identityMigrations] })`
- * (Drizzle + transactional CLS plugin), `RedisModule` (denylist, locks), `AuthModule` (the
- * access-token denylist), `KafkaProducerModule`, `AppMailerModule` (`MailService`: invitations are
+ * (Drizzle + transactional CLS plugin; the relay needs the system pool), `RedisModule` (denylist,
+ * locks: the relay's leader lock), `AuthModule` (the access-token denylist), `KafkaProducerModule`, `AppMailerModule` (`MailService`: invitations are
  * queued; only the processes that run `MailProcessor` deliver them) and — for the cron —
  * `ScheduleModule.forRoot()`.
  */
@@ -132,12 +134,17 @@ const PERSISTENCE: Provider[] = [
     // CreateInvitationHandler reads `appUrl` (MAIL_APP_URL) for the accept link.
     ConfigModule.forFeature(mailConfig),
     JwtModule.register({}),
+    OutboxModule.forFeature({
+      feature: IDENTITY_OUTBOX,
+      writer: IdentityOutbox,
+      systemRepository: IdentityOutboxSystemRepository,
+    }),
   ],
   providers: [
     ...IDENTITY_COMMAND_HANDLERS,
     ...IDENTITY_QUERY_HANDLERS,
-    ...IDENTITY_EVENT_HANDLERS,
     ...PERSISTENCE,
+    IdentityIntegrationEvents,
     PasswordHasher,
     TokenIssuer,
     SessionTokensService,

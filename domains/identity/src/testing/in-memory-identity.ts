@@ -6,10 +6,13 @@ import {
   RlsElevation,
   RowCountMismatchError,
 } from '@platform/database';
+import { InMemoryOutbox, type InMemoryOutboxOptions } from '@platform/outbox/testing';
 import type { UserAggregate } from '../index.js';
 import {
   type AuditEventRecord,
   EmailAlreadyTakenException,
+  IDENTITY_OUTBOX,
+  IdentityIntegrationEvents,
   type InvitationRecord,
   type ListUsersCriteria,
   type MembershipRecord,
@@ -37,10 +40,11 @@ import {
 
 /**
  * In-memory implementations of identity's persistence ports (`UsersRepository`,
- * `SessionsRepository`, `TransactionRunner`, and the system ports over the same store). The e2e
- * suite binds them in place of the Drizzle adapters, so the REAL command/query handlers, argon2
- * hashing, JWT issuing, refresh rotation and the Kafka relay run end to end — only the SQL is
- * replaced. Semantics mirror the Drizzle repositories (normalised unique email, conditional
+ * `SessionsRepository`, `TransactionRunner`, and the system ports over the same store) and of its
+ * outbox (`InMemoryOutbox`: the `IdentityOutbox` writer and the system repository over one array).
+ * The e2e suite binds them in place of the Drizzle adapters, so the REAL command/query handlers,
+ * argon2 hashing, JWT issuing and refresh rotation run end to end, and the outbox relay can be
+ * driven over the fake with `tick()` — only the SQL is replaced. Semantics mirror the Drizzle repositories (normalised unique email, conditional
  * rotation, keyset paging on uuidv7 ids, a row-count check on single-row writes); row-level
  * security is not modelled (the int specs cover it).
  */
@@ -259,8 +263,17 @@ export class InMemoryRlsElevation extends RlsElevation {
   }
 }
 
-/** Every identity persistence binding (runtime and system ports), sharing one store. */
-export function createInMemoryIdentityPersistence(store = new InMemoryIdentityStore()) {
+/**
+ * Every identity persistence binding (runtime and system ports), sharing one store, plus identity's
+ * outbox: bind `outbox` as `IdentityOutbox` and as `IdentityOutboxSystemRepository` (the inline
+ * runner opens no transaction, so the fake counts every call as inside one).
+ * `integrationEvents` is the real service over that outbox, for handler specs.
+ */
+export function createInMemoryIdentityPersistence(
+  store = new InMemoryIdentityStore(),
+  outboxOptions: InMemoryOutboxOptions = {},
+) {
+  const outbox = new InMemoryOutbox(IDENTITY_OUTBOX, outboxOptions);
   return {
     store,
     users: new InMemoryUsersRepository(store),
@@ -275,5 +288,7 @@ export function createInMemoryIdentityPersistence(store = new InMemoryIdentitySt
     membershipsSystem: new InMemoryMembershipsSystemRepository(store),
     invitationsSystem: new InMemoryInvitationsSystemRepository(store),
     elevation: new InMemoryRlsElevation(),
+    outbox,
+    integrationEvents: new IdentityIntegrationEvents(outbox),
   };
 }

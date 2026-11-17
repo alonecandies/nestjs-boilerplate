@@ -41,6 +41,7 @@
     "@platform/database": "workspace:*",
     "@platform/graphql": "workspace:*",
     "@platform/mailer": "workspace:*",
+    "@platform/outbox": "workspace:*",
     "@platform/redis": "workspace:*",
     "@platform/transport": "workspace:*",
     "@grpc/grpc-js": "catalog:",

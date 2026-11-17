@@ -1,3 +1,4 @@
+import { MEMBERSHIP_CREATED_EVENT } from '@domain/identity-contracts';
 import { Logger } from '@nestjs/common';
 import { getPrincipal, runWithPrincipal } from '@platform/common';
 import type { RlsElevation } from '@platform/database';
@@ -57,9 +58,11 @@ describe('LoginHandler', () => {
   let activity: ReturnType<typeof mockOf<MembershipActivity>>;
   let log: ReturnType<typeof principalLog>;
   let events: ReturnType<typeof recordingEventBus>;
+  let outbox: ReturnType<typeof createInMemoryIdentityPersistence>;
   let handler: LoginHandler;
 
   beforeEach(() => {
+    outbox = createInMemoryIdentityPersistence();
     users = mockOf<UsersRepository>({ updatePasswordHash: async () => undefined });
     usersSystem = mockOf<UsersSystemRepository>({ findCredentialsByEmail: async () => stored });
     hasher = mockOf<PasswordHasher>({
@@ -92,6 +95,7 @@ describe('LoginHandler', () => {
       log.track('bootstrap', bootstrap),
       log.track('activity', activity),
       events.eventBus,
+      outbox.integrationEvents,
     );
   });
 
@@ -111,12 +115,14 @@ describe('LoginHandler', () => {
     expect(activity.touch).toHaveBeenCalledWith(TENANT, stored.id, expect.any(Date));
     expect(bootstrap.create).not.toHaveBeenCalled();
     expect(events.published).toEqual([]);
+    expect(outbox.outbox.records).toEqual([]);
   });
 
-  it('a login that created the personal workspace publishes its membership after the commit', async () => {
+  it('a login that created the personal workspace enqueues its membership in the unit of work and publishes it in process after the commit', async () => {
     selection.forLogin.mockResolvedValue(null);
     bootstrap.create.mockImplementation(async () => {
       expect(events.published).toEqual([]); // still inside the unit of work
+      expect(outbox.outbox.records).toEqual([]); // after the workspace rows
     });
 
     await expect(handler.execute(new LoginCommand('ada@example.com', 'pw'))).resolves.toBe(tokens);
@@ -130,6 +136,19 @@ describe('LoginHandler', () => {
       displayName: stored.displayName,
       actorId: stored.id,
     });
+    const [created] = events.published as [MembershipCreatedEvent];
+    expect(outbox.outbox.records.map((r) => [r.topic, r.tenantId, r.id, r.key])).toEqual([
+      [MEMBERSHIP_CREATED_EVENT.topic, WORKSPACE.id, created.eventId, stored.id],
+    ]);
+  });
+
+  it('a failing enqueue rejects the workspace login and publishes nothing in process', async () => {
+    selection.forLogin.mockResolvedValue(null);
+    vi.spyOn(outbox.outbox, 'enqueue').mockRejectedValue(new Error('outbox down'));
+    await expect(handler.execute(new LoginCommand('ada@example.com', 'pw'))).rejects.toThrow(
+      'outbox down',
+    );
+    expect(events.published).toEqual([]);
   });
 
   it('publishes nothing when the session cannot be opened', async () => {
@@ -247,6 +266,7 @@ describe('LoginHandler', () => {
       bootstrap,
       real,
       events.eventBus,
+      outbox.integrationEvents,
     );
     await expect(
       handler.execute(new LoginCommand('ada@example.com', 'pw', undefined, TENANT)),

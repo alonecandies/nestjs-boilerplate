@@ -1,3 +1,4 @@
+import { MEMBERSHIP_REMOVED_EVENT } from '@domain/identity-contracts';
 import { createPrincipal, generateId, runWithPrincipal, type TenantRole } from '@platform/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { recordingEventBus } from '../../../../test/cqrs-fakes.js';
@@ -42,6 +43,7 @@ describe('LeaveTenantHandler', () => {
       p.transactions,
       new TenantAuditLog(p.auditEvents),
       events.eventBus,
+      p.integrationEvents,
     );
   });
 
@@ -56,11 +58,24 @@ describe('LeaveTenantHandler', () => {
     expect(events.published).toHaveLength(1);
     expect(events.published[0]).toBeInstanceOf(MembershipRemovedEvent);
     expect(events.published[0]).toMatchObject({ tenantId, userId: eve, actorId: eve });
+    // The integration event rides the unit of work, with the in-process event's id.
+    const [removed] = events.published as [MembershipRemovedEvent];
+    expect(p.outbox.records.map((r) => [r.topic, r.tenantId, r.id, r.key])).toEqual([
+      [MEMBERSHIP_REMOVED_EVENT.topic, tenantId, removed.eventId, eve],
+    ]);
+    expect(p.outbox.records[0]?.envelope).toMatchObject({ tenantId, actorId: eve });
+  });
+
+  it('a failing enqueue rejects the leave and publishes nothing in process', async () => {
+    vi.spyOn(p.outbox, 'enqueue').mockRejectedValue(new Error('outbox down'));
+    await expect(leave(eve)).rejects.toThrow('outbox down');
+    expect(events.published).toEqual([]);
   });
 
   it('422 LAST_OWNER for the sole owner', async () => {
     await expect(leave(ada)).rejects.toMatchObject({ code: 'LAST_OWNER' });
     expect(events.published).toEqual([]);
+    expect(p.outbox.records).toEqual([]);
   });
 
   it('403 TENANT_ACCESS_DENIED for a staff switch-in principal (no membership to leave)', async () => {

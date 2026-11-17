@@ -1,5 +1,6 @@
+import { MEMBERSHIP_CREATED_EVENT } from '@domain/identity-contracts';
 import { createPrincipal, generateId, runWithPrincipal } from '@platform/common';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { recordingEventBus } from '../../../../test/cqrs-fakes.js';
 import { principalLog } from '../../../../test/principal-log.js';
 import { MembershipCreatedEvent } from '../../../domain/events/membership-created.event.js';
@@ -73,6 +74,7 @@ describe('AcceptInvitationHandler', () => {
         p.elevation,
       ),
       events.eventBus,
+      p.integrationEvents,
     );
     token = await invite('bob@example.com');
   });
@@ -100,6 +102,17 @@ describe('AcceptInvitationHandler', () => {
     });
     await expect(accept(bob, token)).rejects.toMatchObject({ code: 'INVITATION_INVALID' });
     expect(events.published).toHaveLength(1);
+    // The integration event rode the unit of work: the invitation's tenant, the same id.
+    const [created] = events.published as [MembershipCreatedEvent];
+    expect(p.outbox.records.map((r) => [r.topic, r.tenantId, r.id, r.key])).toEqual([
+      [MEMBERSHIP_CREATED_EVENT.topic, tenantId, created.eventId, bob],
+    ]);
+  });
+
+  it('a failing enqueue rejects the acceptance and publishes nothing in process', async () => {
+    vi.spyOn(p.outbox, 'enqueue').mockRejectedValue(new Error('outbox down'));
+    await expect(accept(bob, token)).rejects.toThrow('outbox down');
+    expect(events.published).toEqual([]);
   });
 
   it('pre-auth token read, own row as the caller, then the writes as { user, invitation tenant, roles }', async () => {

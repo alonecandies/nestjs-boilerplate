@@ -113,6 +113,9 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     let systemRuns: MockInstance<SystemDatabase['run']>;
 
     beforeAll(async () => {
+      // IdentityCoreModule's outbox relay would poll on the system pool and show up in the per-flow
+      // system-method pins below; register-outbox.int-spec.ts drives it on its own.
+      vi.stubEnv('OUTBOX_RELAY_ENABLED', 'false');
       database = await startIdentityDatabase([], {
         testPermissions: false,
         imports: [

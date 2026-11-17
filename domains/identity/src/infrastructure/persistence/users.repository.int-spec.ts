@@ -167,6 +167,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('identity persistence on Pos
       'identity.audit_events',
       'identity.invitations',
       'identity.memberships',
+      // 0010_outbox (the outbox plan, Task 5).
+      'identity.outbox',
       'identity.sessions',
       'identity.tenants',
       'identity.users',

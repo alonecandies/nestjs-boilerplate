@@ -862,13 +862,14 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         }
       });
 
-      it('all six tables have RLS enabled and forced; identity.__drizzle_migrations has neither and app_runtime cannot read it', async () => {
+      it('all six tables (and the outbox, 0010) have RLS enabled and forced; identity.__drizzle_migrations has neither and app_runtime cannot read it', async () => {
         const rows = await admin<{ name: string; enabled: boolean; forced: boolean }[]>`
           select c.relname as name, c.relrowsecurity as enabled, c.relforcerowsecurity as forced
           from pg_class c join pg_namespace n on n.oid = c.relnamespace
           where n.nspname = 'identity' and c.relkind = 'r' order by c.relname`;
+        // identity.outbox (0010_outbox) has its own spec: identity.outbox.rls.int-spec.ts.
         expect(rows).toEqual(
-          sorted([...IDENTITY_TABLES, '__drizzle_migrations']).map((name) => ({
+          sorted([...IDENTITY_TABLES, 'outbox', '__drizzle_migrations']).map((name) => ({
             name,
             enabled: name !== '__drizzle_migrations',
             forced: name !== '__drizzle_migrations',

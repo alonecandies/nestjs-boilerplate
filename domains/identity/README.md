@@ -14,13 +14,14 @@ src/
 ├── application/
 │   ├── commands/           RegisterUser, Login, RefreshSession, Logout, PurgeExpiredSessions
 │   ├── queries/            GetUserById, GetUsersByIds, ListUsers
-│   ├── event-handlers/     UserRegisteredRelay (→ Kafka)
 │   ├── ports/              AuthPort, UsersPort (abstract classes, @domain/identity-contracts types)
 │   ├── persistence/        UsersRepository, SessionsRepository, TransactionRunner (abstractions)
-│   ├── services/           SessionTokensService (open session + issue the token pair)
+│   ├── services/           SessionTokensService (open session + issue the token pair),
+│   │                       IdentityIntegrationEvents (domain event → identity.outbox row)
 │   └── mappers/            contract/record/request mappers
 ├── infrastructure/
-│   ├── persistence/        identity.schema.ts (Drizzle), Drizzle repositories, DrizzleTransactionRunner
+│   ├── persistence/        identity.schema.ts (Drizzle), Drizzle repositories, DrizzleTransactionRunner,
+│   │                       IdentityOutbox + IDENTITY_OUTBOX, IdentityOutboxSystemRepository
 │   ├── adapters/local/     AuthLocalAdapter, UsersLocalAdapter (CommandBus / QueryBus)
 │   ├── adapters/grpc/      AuthGrpcAdapter, UsersGrpcAdapter, IdentityGrpcCaller (deadline + breaker + metadata)
 │   ├── scheduling/         PurgeExpiredSessionsCron (@Cron hourly + @WithLock)
@@ -39,12 +40,12 @@ abstractions; only `IdentityCoreModule` knows they are Drizzle/Postgres.
 
 ## Modules and app wiring
 
-| Module                                  | Contents                                                                                                                                                                                                                     | Used by                    |
-| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- |
-| `IdentityCoreModule`                    | command/query/event handlers, relay, repositories (Drizzle), `TransactionRunner`, `SessionTokensService`, cron, `PasswordHasher` (`password` namespace), `TokenIssuer` (own `JwtModule`; `auth` + `refreshToken` namespaces) | monolith, identity-service |
-| `IdentityGrpcModule`                    | `IdentityCoreModule` + `AuthGrpcController`, `UsersGrpcController`                                                                                                                                                           | identity-service           |
-| `IdentityApiModule.forLocal()`          | REST controllers, GraphQL resolvers, `LocalStrategy`, `UserReadCache`, `users` DataLoader + ports → local adapters (the app imports `IdentityCoreModule` too)                                                                | monolith                   |
-| `IdentityApiModule.forRemote(options?)` | same presentation + ports → gRPC adapters + `GrpcClientsModule.register({ spec: IDENTITY_GRPC_PACKAGE, url }, options)`                                                                                                      | gateway                    |
+| Module                                  | Contents                                                                                                                                                                                                                                                           | Used by                    |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------- |
+| `IdentityCoreModule`                    | command/query handlers, `OutboxModule.forFeature` (outbox writer + relay), repositories (Drizzle), `TransactionRunner`, `SessionTokensService`, cron, `PasswordHasher` (`password` namespace), `TokenIssuer` (own `JwtModule`; `auth` + `refreshToken` namespaces) | monolith, identity-service |
+| `IdentityGrpcModule`                    | `IdentityCoreModule` + `AuthGrpcController`, `UsersGrpcController`                                                                                                                                                                                                 | identity-service           |
+| `IdentityApiModule.forLocal()`          | REST controllers, GraphQL resolvers, `LocalStrategy`, `UserReadCache`, `users` DataLoader + ports → local adapters (the app imports `IdentityCoreModule` too)                                                                                                      | monolith                   |
+| `IdentityApiModule.forRemote(options?)` | same presentation + ports → gRPC adapters + `GrpcClientsModule.register({ spec: IDENTITY_GRPC_PACKAGE, url }, options)`                                                                                                                                            | gateway                    |
 
 Entry points: `@domain/identity/api` (edge: `IdentityApiModule`, ports, gRPC client config, GraphQL/REST types;
 what the gateway imports), `@domain/identity` (everything in `./api` plus core, persistence, commands, queries,
@@ -107,21 +108,26 @@ user(@Parent() payment: PaymentModel, @Loader(USERS_LOADER) users: GraphqlLoader
 
 No Kafka consumer group is needed: identity only **produces** its three tenant-scoped events,
 `identity.user-registered.v1`, `identity.membership-created.v1` and `identity.membership-removed.v1`.
-Each is published after its unit of work committed, with the envelope `tenantId` passed explicitly
-(never the caller's CLS principal) and the user id as key. Every handler that writes a membership
-publishes `MembershipCreatedEvent` or `MembershipRemovedEvent` (`MembershipEventsRelay`): register
-and a login that creates a missing personal workspace, tenant creation, invitation acceptance,
-member removal and leave.
+Each is written to `identity.outbox` in the unit of work that changes the state
+(`IdentityIntegrationEvents` → `IdentityOutbox.enqueue`), with the envelope `tenantId` passed
+explicitly (it must be the unit of work's tenant) and the user id as key; the outbox relay
+(`@platform/outbox`, one leader per outbox) publishes the rows afterwards, at least once. Every
+handler that writes a membership enqueues `identity.membership-created.v1` or
+`identity.membership-removed.v1`: register and a login that creates a missing personal workspace,
+tenant creation, invitation acceptance, member removal and leave. The domain events
+(`UserRegisteredEvent`, `MembershipCreatedEvent`, `MembershipRemovedEvent`) still go to the
+in-process `EventBus` after the commit.
 
 ## Flows
 
 - **Register**: normalise email → pre-check `existsByEmail` (skips argon2 for duplicates) →
   argon2id hash → `UserAggregate.register()` → **one transaction** (`TransactionRunner` on
-  `TransactionHost`): insert user + personal workspace + first session → commit →
-  `UserRegisteredEvent` → `UserRegisteredRelay` →
-  `KafkaProducer.publish(USER_REGISTERED_EVENT, …, { key: userId, eventId, tenantId })` (the
-  workspace id is chosen before the transaction), then `MembershipCreatedEvent` for that workspace.
-  The unique constraint still decides under races (`23505` → `EMAIL_TAKEN`).
+  `TransactionHost`): insert user + personal workspace + the `identity.user-registered.v1` and
+  `identity.membership-created.v1` outbox rows (`{ key: userId, eventId, tenantId }`; the workspace
+  id is chosen before the transaction) + first session → commit → `UserRegisteredEvent` and
+  `MembershipCreatedEvent` on the in-process `EventBus`. No registration commits without its
+  events, and none is published from the request path. The unique constraint still decides under
+  races (`23505` → `EMAIL_TAKEN`).
 - **Login** (REST: `LoginRequestGuard` → `LocalAuthGuard` → `LocalStrategy` → `AuthPort.login`;
   GraphQL: `AuthPort.login`): unknown email burns `verifyDummy` (equal timing), wrong password and
   unknown email share one 401 `INVALID_CREDENTIALS`. Outdated argon2 parameters are re-hashed
@@ -254,13 +260,21 @@ last-owner concurrency and the invitation accept against Citus.
 
 ## Events
 
-| Topic                         | Direction | Key      | Payload                                        |
-| ----------------------------- | --------- | -------- | ---------------------------------------------- |
-| `identity.user-registered.v1` | produced  | `userId` | `{ userId, email, displayName, registeredAt }` |
+| Topic                            | Direction | Key      | Payload                                        |
+| -------------------------------- | --------- | -------- | ---------------------------------------------- |
+| `identity.user-registered.v1`    | produced  | `userId` | `{ userId, email, displayName, registeredAt }` |
+| `identity.membership-created.v1` | produced  | `userId` | `{ userId, email, displayName, createdAt }`    |
+| `identity.membership-removed.v1` | produced  | `userId` | `{ userId, removedAt }`                        |
 
-Envelope id = the domain event id (idempotent consumers). Publishing is after commit; failures are
-logged, never thrown. A transactional outbox (event row in the same transaction + relay) would
-close the "committed but not published" window; it is not implemented.
+Envelope id = the domain event id (idempotent consumers). **Transactional outbox** (outbox plan
+Task 5): every event is a row of `identity.outbox` (`0010_outbox`: distributed by `tenant_id`, RLS
+forced, insert-only for `app_runtime` under the policy `tenant_id = app.tenant_id()`, poll, mark and
+purge for `app_system`) written in the state change's transaction, so a failed insert fails the
+flow and a rollback takes the event with it. `OutboxModule.forFeature` runs the relay (Redis lock
+`outbox-relay:identity`, `OUTBOX_*` settings) that publishes the rows with
+`KafkaProducer.publishStored` and marks them through `IdentityOutboxSystemRepository` (the pinned
+`outbox.pollUnpublished`, `outbox.markPublished`, `outbox.deletePublishedBefore`). Delivery is at
+least once: consumers dedupe by envelope id.
 
 ## Data model (`identity.schema.ts` → `identitySchema`)
 
@@ -369,7 +383,8 @@ locks, denylist and cache).
   outside the transaction, timing-safe login, rehash, batching/order of `GetUsersByIds`, …);
 - repositories: Drizzle's real query building over a fake postgres.js client (exact SQL, keyset,
   ILIKE escaping, unique-violation mapping through `DrizzleQueryError`);
-- relay (`FakeKafkaProducer`, failure path), cron (`@Cron` metadata + `@WithLock` skip), mappers,
+- integration events (`InMemoryOutbox`: the record fields, tenant rule, no dedupe), cron (`@Cron`
+  metadata + `@WithLock` skip), mappers,
   normalisers, local adapters;
 - REST through a Fastify test app with real JWTs and global guards (201/200/204, 400 validation,
   401/403 RBAC, 404/409/422 domain errors, cache + invalidation, allow-listed responses);
@@ -378,7 +393,8 @@ locks, denylist and cache).
 - gRPC round trip: `IdentityApiModule.forRemote()` adapters ↔ a real in-process gRPC server with
   the identity controllers (validation, mapping, null normalisation, error codes across the hop);
 - compositions: `IdentityApiModule.forLocal()` (real CQRS + handlers + repositories, fake
-  Postgres/Redis/Kafka: register → SQL → Kafka event, login with real argon2) and
+  Postgres/Redis/Kafka: register → SQL incl. the outbox rows, nothing on Kafka from the request,
+  login with real argon2) and
   `IdentityGrpcModule`. `apps/monolith/test/payment-user.e2e-spec.ts` and
   `apps/gateway/test/payment-user.e2e-spec.ts` compose this lib with billing in one GraphQL schema
   (`Payment.user` through the `users` loader).
@@ -399,7 +415,11 @@ Scan on users_search_trgm_idx`).
 - `infrastructure/persistence/identity.rls.int-spec.ts` checks `0009_rls`. It runs raw postgres.js as `app_runtime`,
   `app_system` and `app_owner`, one transaction per case opened with `buildRlsContextSql`, against two tenants, and checks
   both paths of every policy with exact rows. A forbidden write leaves the superuser's snapshot unchanged. It also covers
-  the grants, the no-context refusals and FORCE RLS on all six tables.
+  the grants, the no-context refusals and FORCE RLS on all six tables (and the outbox).
+- `infrastructure/persistence/identity.outbox.rls.int-spec.ts` checks `0010_outbox`: `identity.outbox` distributed by
+  `tenant_id` and colocated with `app.tenant_colocation`, RLS enabled and forced, exactly `INSERT` for `app_runtime` and
+  `SELECT, INSERT, UPDATE, DELETE` for `app_system`, the single `outbox_insert` policy, the runtime insert of its own
+  tenant's row only (no read, update or delete), and the poll and mark of `IdentityOutboxSystemRepository`.
 - `infrastructure/persistence/identity.repositories.rls.int-spec.ts` calls every public method of every runtime port
   standalone as the right principal (a typed table: a new port method without a case does not compile) and once with no
   principal, and the system repositories by their pinned methods.
@@ -408,14 +428,19 @@ Scan on users_search_trgm_idx`).
 - `test/identity-flows.rls.int-spec.ts` (17 cases) runs the real identity core on the three URLs, with the real RBAC and
   commands through the `CommandBus`: register, login (with and without a membership), refresh and reuse, switch tenant,
   create tenant, invitations (elevation, accept, the replayed and the mismatched account), members, staff switch-in,
-  the purge cron and the `staff:grant` CLI. A spy on `SystemDatabase.run` pins each flow's system methods.
+  the purge cron and the `staff:grant` CLI. A spy on `SystemDatabase.run` pins each flow's system methods (the
+  outbox relay is off there).
+- `test/register-outbox.int-spec.ts`: a registration leaves one unpublished `identity.user-registered.v1` row (and its
+  membership row) under the new tenant, a failure in the unit of work's last call leaves no user and no row, and one
+  tick of a real `OutboxRelay` publishes envelopes that parse with the contracts and marks the rows.
 - The e2e harnesses of the apps use in-memory identity persistence and never reach Postgres. The 409 `EMAIL_TAKEN`
   mapping and the cross-tenant `UPDATE … WITH CHECK` refusals are proven through a real distributed database in
   `apps/monolith/test/rls-journeys.int-spec.ts` (the `monolith:int` project, both domains together).
 
 Test doubles for the apps: `@domain/identity/testing` exports `createInMemoryIdentityPersistence`
-(in-memory `UsersRepository`/`SessionsRepository` and an inline `TransactionRunner`, used by the
-monolith e2e suite under the real handlers) and `FakeIdentityState`, `FakeAuthPort`, `FakeUsersPort`
+(in-memory `UsersRepository`/`SessionsRepository`, an inline `TransactionRunner` and `outbox`, an
+`InMemoryOutbox` of `IDENTITY_OUTBOX` to bind as `IdentityOutbox` and `IdentityOutboxSystemRepository`,
+used by the monolith e2e suite under the real handlers) and `FakeIdentityState`, `FakeAuthPort`, `FakeUsersPort`
 (a fake identity-service behind the gateway's ports). Production code never imports the subpath.
 
 ## Scripts

@@ -8,6 +8,7 @@ import { IdentityPermission } from '../../../identity.permissions.js';
 import { AUDIT_EVENT_TYPES } from '../../persistence/audit-events.repository.js';
 import { MembershipsRepository } from '../../persistence/memberships.repository.js';
 import { TransactionRunner } from '../../persistence/transaction-runner.js';
+import { IdentityIntegrationEvents } from '../../services/identity-integration-events.service.js';
 import { actorTenantRoles, requireTenantActor } from '../../services/tenant-actor.js';
 import { TenantAuditLog } from '../../services/tenant-audit-log.service.js';
 import { RemoveMemberCommand } from './remove-member.command.js';
@@ -20,10 +21,18 @@ export class RemoveMemberHandler implements ICommandHandler<RemoveMemberCommand>
     private readonly audit: TenantAuditLog,
     private readonly elevation: RlsElevation,
     private readonly events: EventBus,
+    private readonly integrationEvents: IdentityIntegrationEvents,
   ) {}
 
   async execute({ tenantId, actorId, userId }: RemoveMemberCommand): Promise<void> {
     const principal = requireTenantActor(tenantId, actorId);
+    const removed = new MembershipRemovedEvent({
+      tenantId,
+      userId,
+      actorId,
+      occurredAt: new Date(),
+    });
+    // The membership, its audit row and the `identity.membership-removed.v1` outbox row: one unit.
     await this.transactions.run(async () => {
       // Route permission MembersManage: elevated (this tenant only) for the whole unit of work.
       await this.elevation.elevate(IdentityPermission.MembersManage);
@@ -44,9 +53,9 @@ export class RemoveMemberHandler implements ICommandHandler<RemoveMemberCommand>
         type: AUDIT_EVENT_TYPES.MEMBER_REMOVED,
         data: { userId, roles: [...target.roles] },
       });
+      await this.integrationEvents.membershipRemoved(removed);
     });
-    this.events.publish(
-      new MembershipRemovedEvent({ tenantId, userId, actorId, occurredAt: new Date() }),
-    );
+    // Committed: in-process handlers see the removal.
+    this.events.publish(removed);
   }
 }

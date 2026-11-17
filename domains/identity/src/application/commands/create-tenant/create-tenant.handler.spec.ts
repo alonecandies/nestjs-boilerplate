@@ -1,5 +1,6 @@
+import { MEMBERSHIP_CREATED_EVENT } from '@domain/identity-contracts';
 import { createPrincipal, generateId, runWithPrincipal } from '@platform/common';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { recordingEventBus } from '../../../../test/cqrs-fakes.js';
 import { principalLog } from '../../../../test/principal-log.js';
 import { MembershipCreatedEvent } from '../../../domain/events/membership-created.event.js';
@@ -44,6 +45,7 @@ describe('CreateTenantHandler', () => {
       ),
       log.track('users', persistence.users),
       events.eventBus,
+      persistence.integrationEvents,
     );
   });
 
@@ -68,12 +70,24 @@ describe('CreateTenantHandler', () => {
       displayName: 'Ada',
       actorId: userId,
     });
+    // The integration event rides the unit of work, in the new tenant, with the same id.
+    const [created1] = events.published as [MembershipCreatedEvent];
+    expect(persistence.outbox.records.map((r) => [r.topic, r.tenantId, r.id, r.key])).toEqual([
+      [MEMBERSHIP_CREATED_EVENT.topic, created.tenant!.id, created1.eventId, userId],
+    ]);
+  });
+
+  it('a failing enqueue rejects the creation and publishes nothing in process', async () => {
+    vi.spyOn(persistence.outbox, 'enqueue').mockRejectedValue(new Error('outbox down'));
+    await expect(run(new CreateTenantCommand(userId, 'Acme'))).rejects.toThrow('outbox down');
+    expect(events.published).toEqual([]);
   });
 
   it('publishes nothing when the unit of work fails', async () => {
     persistence.memberships.insert = () => Promise.reject(new Error('db down'));
     await expect(run(new CreateTenantCommand(userId, 'Acme'))).rejects.toThrow('db down');
     expect(events.published).toEqual([]);
+    expect(persistence.outbox.records).toEqual([]);
   });
 
   it('every write and the read-back run as { user, newTenant, [owner] } (id generated first)', async () => {

@@ -5,7 +5,7 @@
  *
  * Entry points: `@domain/identity/api` (edge surface, re-exported here), this root entry (adds core,
  * persistence, commands, queries and domain types) and `@domain/identity/testing` (fakes, tests only).
- * Wiring: `IdentityCoreModule` (handlers, repositories, relay, cron), `IdentityGrpcModule`
+ * Wiring: `IdentityCoreModule` (handlers, repositories, outbox and its relay, cron), `IdentityGrpcModule`
  * (identity-service), `IdentityCoreModule` + `IdentityApiModule.forLocal()` (monolith),
  * `IdentityApiModule.forRemote()` from `@domain/identity/api` (gateway). `identitySchema` and the
  * migration set `identityMigrations` go into `DatabaseModule.forRootAsync({ schema, migrations })`.
@@ -87,6 +87,7 @@ export { ListMembersQuery } from './application/queries/list-members/list-member
 export { ListMyTenantsHandler } from './application/queries/list-my-tenants/list-my-tenants.handler.js';
 export { ListMyTenantsQuery } from './application/queries/list-my-tenants/list-my-tenants.query.js';
 export { ListUsersQuery } from './application/queries/list-users/list-users.query.js';
+export { IdentityIntegrationEvents } from './application/services/identity-integration-events.service.js';
 export { InvitationAcceptance } from './application/services/invitation-acceptance.elevated.js';
 export { MembershipActivity } from './application/services/membership-activity.elevated.js';
 export { PersonalWorkspaces } from './application/services/personal-workspaces.service.js';
@@ -159,7 +160,6 @@ export { UserAggregate, type UserSnapshot } from './domain/user.aggregate.js';
 // Modules.
 export {
   IDENTITY_COMMAND_HANDLERS,
-  IDENTITY_EVENT_HANDLERS,
   IDENTITY_QUERY_HANDLERS,
   IdentityCoreModule,
 } from './identity-core.module.js';
@@ -168,6 +168,9 @@ export {
   INVITATION_MAIL_RETENTION,
   QueuedInvitationMailer,
 } from './infrastructure/mail/queued-invitation.mailer.js';
+// Infrastructure: identity's outbox (G-1): the writer token, the feature and the system repository
+// (the e2e apps bind @platform/outbox/testing's InMemoryOutbox in their place).
+export { IdentityOutboxSystemRepository } from './infrastructure/persistence/drizzle-outbox.system-repository.js';
 // Infrastructure: the Drizzle schema and the migration set for DatabaseModule / drizzle-kit.
 export { identityMigrations } from './infrastructure/persistence/identity.migrations.js';
 export {
@@ -176,6 +179,7 @@ export {
   identitySchema,
   invitations,
   memberships,
+  outbox,
   sessions,
   sessionsRelations,
   tenantRole,
@@ -183,6 +187,7 @@ export {
   users,
   usersRelations,
 } from './infrastructure/persistence/identity.schema.js';
+export { IDENTITY_OUTBOX, IdentityOutbox } from './infrastructure/persistence/identity-outbox.js';
 // Infrastructure: config namespaces the identity-service and monolith env-example specs validate.
 // PasswordHasher and TokenIssuer stay internal (TokenIssuer is on ./testing for test signers).
 export { type PasswordConfig, passwordConfig } from './infrastructure/security/password.config.js';

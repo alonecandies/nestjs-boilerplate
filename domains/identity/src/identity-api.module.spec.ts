@@ -4,6 +4,7 @@ import { CqrsModule } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { provideCommonEnhancers } from '@platform/common';
+import { parseEventEnvelope } from '@platform/contracts';
 import {
   DRIZZLE,
   RlsElevation,
@@ -31,9 +32,10 @@ import { PasswordHasher } from './infrastructure/security/password-hasher.servic
 
 /*
  * Monolith composition without infrastructure: IdentityCoreModule + IdentityApiModule.forLocal()
- * with the REAL CQRS bus, handlers, repositories, Drizzle query building and relay; only the
- * postgres.js client, Redis and Kafka are fakes. Proves the DI graph of the whole context and the
- * register → session → UserRegisteredEvent → Kafka path end to end.
+ * with the REAL CQRS bus, handlers, repositories, Drizzle query building and outbox writer; only
+ * the postgres.js client, Redis and Kafka are fakes. Proves the DI graph of the whole context and
+ * the register → user, workspace, outbox and session rows path (the outbox relay, which publishes
+ * the rows to Kafka, is proven by register-outbox.int-spec.ts).
  */
 
 type App = Awaited<ReturnType<typeof createFastifyTestApp>>;
@@ -137,7 +139,7 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
     expect(app.get(UsersPort)).toBeInstanceOf(UsersLocalAdapter);
   });
 
-  it('register → user, workspace and session rows → tokens, then identity.user-registered.v1 on Kafka', async () => {
+  it('register → user, workspace, outbox and session rows in one transaction → tokens; nothing on Kafka from the request', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/v1/auth/register',
@@ -153,18 +155,30 @@ describe('IdentityApiModule.forLocal() (monolith wiring, fake Postgres/Redis/Kaf
       'insert into "identity"."users"',
       'insert into "identity"."tenants"',
       'insert into "identity"."memberships"',
+      'insert into "identity"."outbox"',
+      'insert into "identity"."outbox"',
       'insert into "identity"."sessions"',
     ]);
     // The refresh token itself is never stored: the session row carries its sha256.
-    const sessionInsert = database.executed[4];
+    const sessionInsert = database.executed[6];
     expect(sessionInsert?.params).not.toContain(res.json<{ refreshToken: string }>().refreshToken);
 
-    await vi.waitFor(() => expect(kafka.published(USER_REGISTERED_EVENT)).toHaveLength(1));
-    expect(kafka.envelopes(USER_REGISTERED_EVENT)[0]?.payload).toMatchObject({
-      userId: body.user.id,
-      email: 'grace@example.com',
-      displayName: 'Grace',
+    // identity.user-registered.v1 is an outbox row of the same transaction (a plain INSERT: the
+    // runtime role cannot read the table), not a Kafka publish from the request path.
+    const registered = database.executed[4];
+    expect(registered?.sql).not.toMatch(/returning|on conflict/i);
+    expect(registered?.params.slice(2, 4)).toEqual([USER_REGISTERED_EVENT.topic, body.user.id]);
+    const envelope = parseEventEnvelope(
+      USER_REGISTERED_EVENT,
+      JSON.parse(String(registered?.params[4])) as unknown,
+    );
+    expect(envelope).toMatchObject({
+      id: registered?.params[1],
+      tenantId: registered?.params[0],
+      actorId: body.user.id,
+      payload: { userId: body.user.id, email: 'grace@example.com', displayName: 'Grace' },
     });
+    expect(kafka.records).toEqual([]);
 
     // The issued access token is accepted by the global guards.
     const me = await app.inject({

@@ -1,4 +1,5 @@
 import { defineSystemMethod } from '@platform/database';
+import { OUTBOX_SYSTEM_METHODS } from '@platform/outbox';
 
 /**
  * Identity's doors to the `app_system` pool (BYPASSRLS), pinned by
@@ -10,6 +11,9 @@ import { defineSystemMethod } from '@platform/database';
  *   method 5) is the purge cron's. The others are the co-member and cross-tenant reads the
  *   row-local policies no longer allow (ruling `b3-identity-policies`, 2026-11-17): the caller
  *   asserts the scope (the tenant it acts in, or itself) and the SQL filters on it.
+ * - `outbox` (spec §9 item 6 plus the purge; outbox plan Task 5): the relay's poll, mark and
+ *   purge of `identity.outbox`, the shared `@platform/outbox` methods (system scope). Identity
+ *   writes no platform-tenant rows: `outbox.insertAsPlatform` is not in its list.
  *
  * Method 7 (`staff:grant`) is not a pool method: the CLI connects as `app_owner`.
  */
@@ -31,5 +35,10 @@ export const IDENTITY_SYSTEM_METHODS = Object.freeze({
     findMember: defineSystemMethod('memberships.findMember', 'system'),
     listMembers: defineSystemMethod('memberships.listMembers', 'system'),
     listForUser: defineSystemMethod('memberships.listForUser', 'system'),
+  }),
+  outbox: Object.freeze({
+    pollUnpublished: OUTBOX_SYSTEM_METHODS.poll,
+    markPublished: OUTBOX_SYSTEM_METHODS.markPublished,
+    deletePublishedBefore: OUTBOX_SYSTEM_METHODS.deletePublishedBefore,
   }),
 });
