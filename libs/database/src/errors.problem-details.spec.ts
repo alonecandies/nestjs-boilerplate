@@ -13,13 +13,9 @@ describe('database errors in problem details', () => {
   const problem = (error: Error) => toProblemDetails(error, { exposeInternal: false });
 
   it.each([
-    [
-      new RlsContextError('RLS_NO_PRINCIPAL', 'RLS context: no principal in CLS'),
-      401,
-      'UNAUTHENTICATED',
-    ],
+    [new RlsContextError('RLS_NO_PRINCIPAL', 'RLS context: no principal in CLS'), 500, 'INTERNAL'],
     [new RlsContextError('RLS_PLATFORM_TENANT', 'RLS context: platform tenant'), 403, 'FORBIDDEN'],
-    [new RowCountMismatchError(1, 0, 'memberships.updateRoles'), 409, 'CONFLICT'],
+    [new RowCountMismatchError(1, 0, 'memberships.updateRoles'), 500, 'INTERNAL'],
     [
       new SystemDatabaseError('SYSTEM_DATABASE_UNAVAILABLE', 'System method x: no system pool'),
       503,

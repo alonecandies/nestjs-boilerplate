@@ -51,10 +51,18 @@ export interface TimeSlicedPurgeResult {
   readonly drained: boolean;
 }
 
-const isStatementTimeout = (error: unknown): boolean =>
-  typeof error === 'object' &&
-  error !== null &&
-  (error as { code?: unknown }).code === STATEMENT_TIMEOUT;
+const MAX_CAUSE_DEPTH = 5;
+
+/** `true` when `error` or one of its causes is a statement timeout (drizzle wraps driver errors). */
+const isStatementTimeout = (error: unknown): boolean => {
+  let current: unknown = error;
+  for (let depth = 0; depth < MAX_CAUSE_DEPTH; depth += 1) {
+    if (typeof current !== 'object' || current === null) return false;
+    if ((current as { code?: unknown }).code === STATEMENT_TIMEOUT) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+};
 
 /** Runs one bounded purge; see the module comment. */
 export async function purgeInTimeSlices(

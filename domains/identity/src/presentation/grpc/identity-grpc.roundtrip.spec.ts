@@ -133,14 +133,16 @@ describe('identity over gRPC (forRemote adapters ↔ gRPC controllers)', () => {
     expect(error).toMatchObject({ httpStatus: 404, details: { entity: 'User', id } });
   });
 
-  it('GetUser without a principal: the runtime RLS_NO_PRINCIPAL is UNAUTHENTICATED, not INTERNAL', async () => {
-    // What the runtime pool throws when a unit of work opens without a CLS principal.
+  it('GetUser without a principal: RLS_NO_PRINCIPAL is a server bug, INTERNAL with a generic message', async () => {
+    // What the runtime pool throws when a unit of work opens without a CLS principal: a guard
+    // should have refused the call first, so it stays a logged 500 rather than a client 401.
     queryBus.execute.mockRejectedValue(
       new RlsContextError('RLS_NO_PRINCIPAL', 'RLS context: no principal in CLS'),
     );
     const error = await users.getUser(generateId()).catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(UnauthenticatedException);
-    expect(error).toMatchObject({ httpStatus: 401, code: 'UNAUTHENTICATED' });
+    // The upstream INTERNAL reaches the gateway's caller as 502 (an upstream failure), not a 401.
+    expect(error).not.toBeInstanceOf(UnauthenticatedException);
+    expect(error).toMatchObject({ httpStatus: 502 });
     expect((error as Error).message).not.toContain('RLS context');
   });
 

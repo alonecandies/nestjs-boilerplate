@@ -141,6 +141,33 @@ describe('purgeInTimeSlices', () => {
     expect(result).toEqual({ deleted: 3, slices: 3, drained: true });
   });
 
+  it('recognises a timeout that drizzle wrapped (DrizzleQueryError puts the PostgresError on .cause)', async () => {
+    const cutoff = at(1_000);
+    const bounds: number[] = [];
+    let timeouts = 1;
+    let rows = [at(0)];
+    const result = await purgeInTimeSlices({
+      cutoff,
+      sliceMs: 40 * MINUTE,
+      oldestDue: async () => rows[0] ?? null,
+      deleteThrough: async (bound) => {
+        bounds.push((bound.getTime() - T0) / MINUTE);
+        if (timeouts > 0) {
+          timeouts -= 1;
+          const driver = Object.assign(new Error('canceling statement due to statement timeout'), {
+            code: '57014',
+          });
+          throw new Error('Failed query: delete from ...', { cause: driver });
+        }
+        const before = rows.length;
+        rows = rows.filter((row) => row > bound);
+        return before - rows.length;
+      },
+    });
+    expect(bounds).toEqual([40, 20]);
+    expect(result).toEqual({ deleted: 1, slices: 2, drained: true });
+  });
+
   it('rethrows any other error, and a timeout at the minimum span', async () => {
     const cutoff = at(1_000);
     const boom = new Error('boom');

@@ -341,11 +341,12 @@ a stable `code` and an HTTP status. Each transport turns that exception into its
 | `INTERNAL`                | 500    | Anything unexpected                                                                               |
 
 **Database errors** (B3 final review F5) map to the same codes in every transport, with a fixed message (the internal
-one, which names tables, system methods or env keys, is only logged): no principal reached the database (`RLS_NO_PRINCIPAL`)
-→ 401 `UNAUTHENTICATED`; a runtime query as the platform tenant (`RLS_PLATFORM_TENANT`) → 403 `FORBIDDEN`; a write that
-expected one row and matched none (`RowCountMismatchError`: the row changed or went away concurrently, or is hidden) →
-409 `CONFLICT`, reload and retry; no system pool configured → 503 `SYSTEM_DATABASE_UNAVAILABLE`. A stale RLS context, a
-missing transaction or a system method outside `SystemContext` are programming errors: 500 `INTERNAL`.
+one, which names tables, system methods or env keys, is only logged): a runtime query as the platform tenant
+(`RLS_PLATFORM_TENANT`) → 403 `FORBIDDEN`; no system pool configured → 503 `SYSTEM_DATABASE_UNAVAILABLE`. Everything
+else is a server bug and stays a logged 500 `INTERNAL`: no principal reached the database (`RLS_NO_PRINCIPAL`, a guard let
+the call through), a stale RLS context, a missing transaction, a system method outside `SystemContext`, and a write that
+expected one row and matched none (`RowCountMismatchError`). The expected zero-row cases, a membership removed before the
+touch and an RLS-hidden tenant or member write, are mapped by their handlers to 403 `TENANT_ACCESS_DENIED` or 404.
 
 4xx domain errors carry their public context in `details` (plain JSON only), for example
 `details.requiredPermissions` on 403 and `{ entity, id }` on 404. GraphQL puts the same object in

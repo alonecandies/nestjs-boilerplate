@@ -265,22 +265,10 @@ const databaseError = (name: string, code: string | undefined, message: string):
 describe('exceptionToGrpcError (server side)', () => {
   it.each([
     [
-      'RlsContextError RLS_NO_PRINCIPAL',
-      databaseError('RlsContextError', 'RLS_NO_PRINCIPAL', 'RLS context: no principal in CLS'),
-      GrpcStatus.UNAUTHENTICATED,
-      ErrorCode.UNAUTHENTICATED,
-    ],
-    [
       'RlsContextError RLS_PLATFORM_TENANT',
       databaseError('RlsContextError', 'RLS_PLATFORM_TENANT', 'RLS context: platform tenant'),
       GrpcStatus.PERMISSION_DENIED,
       ErrorCode.FORBIDDEN,
-    ],
-    [
-      'RowCountMismatchError',
-      databaseError('RowCountMismatchError', undefined, 'memberships.touch: expected 1, got 0'),
-      GrpcStatus.ALREADY_EXISTS,
-      ErrorCode.CONFLICT,
     ],
     [
       'SystemDatabaseError SYSTEM_DATABASE_UNAVAILABLE',
@@ -302,8 +290,10 @@ describe('exceptionToGrpcError (server side)', () => {
     }
   });
 
-  it('keeps RLS_CONTEXT_STALE and SYSTEM_CONTEXT_REQUIRED an INTERNAL with a generic message', () => {
+  it('keeps server-bug database errors an INTERNAL with a generic message', () => {
     for (const error of [
+      databaseError('RlsContextError', 'RLS_NO_PRINCIPAL', 'RLS context: no principal in CLS'),
+      databaseError('RowCountMismatchError', undefined, 'memberships.touch: expected 1, got 0'),
       databaseError('RlsContextError', 'RLS_CONTEXT_STALE', 'RLS context: stale'),
       databaseError('SystemDatabaseError', 'SYSTEM_CONTEXT_REQUIRED', 'System method x'),
     ]) {

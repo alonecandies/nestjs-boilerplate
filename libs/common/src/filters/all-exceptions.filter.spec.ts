@@ -76,10 +76,10 @@ describe('AllExceptionsFilter', () => {
 
       it.each([
         [
-          'RLS_NO_PRINCIPAL → 401 UNAUTHENTICATED',
+          'RLS_NO_PRINCIPAL → 500 INTERNAL (a server bug: a guard let it through)',
           new RlsContextError('RLS_NO_PRINCIPAL', 'RLS context: no principal in CLS'),
-          401,
-          'UNAUTHENTICATED',
+          500,
+          'INTERNAL',
         ],
         [
           'RLS_PLATFORM_TENANT → 403 FORBIDDEN',
@@ -88,10 +88,10 @@ describe('AllExceptionsFilter', () => {
           'FORBIDDEN',
         ],
         [
-          'RowCountMismatchError → 409 CONFLICT',
+          'RowCountMismatchError → 500 INTERNAL (expected misses are mapped by the domain)',
           new RowCountMismatchError('users.updatePasswordHash: expected 1 row(s) affected, got 0'),
-          409,
-          'CONFLICT',
+          500,
+          'INTERNAL',
         ],
         [
           'SYSTEM_DATABASE_UNAVAILABLE → 503',
