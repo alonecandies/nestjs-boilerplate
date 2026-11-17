@@ -144,19 +144,28 @@ revoked_at IS NULL AND expires_at > now RETURNING id` (compare-and-set: concurre
 
 ## REST (URI version `v1`, problem+json errors)
 
-| Method | Path                | Auth                                            | Body / query                               | Success                                      | Errors                                                                        |
-| ------ | ------------------- | ----------------------------------------------- | ------------------------------------------ | -------------------------------------------- | ----------------------------------------------------------------------------- |
-| POST   | `/v1/auth/register` | `@Public`, `@RateLimit('identity.credentials')` | `{ email, password (8–128), displayName }` | 201 `AuthTokensResponse`                     | 400, 409 `EMAIL_TAKEN`, 429                                                   |
-| POST   | `/v1/auth/login`    | `@Public`, `@RateLimit('identity.credentials')` | `{ email, password }` (passport-local)     | 200 `AuthTokensResponse`                     | 400, 401 `INVALID_CREDENTIALS` / `MISSING_CREDENTIALS`, 429                   |
-| POST   | `/v1/auth/refresh`  | `@Public`                                       | `{ refreshToken }` (JWT)                   | 200 `AuthTokensResponse`                     | 400, 401 `INVALID_REFRESH_TOKEN` / `SESSION_EXPIRED` / `REFRESH_TOKEN_REUSED` |
-| POST   | `/v1/auth/logout`   | bearer                                          | `{ refreshToken? }`                        | 204                                          | 401                                                                           |
-| GET    | `/v1/auth/me`       | bearer                                          | –                                          | 200 `UserResponse`                           | 401                                                                           |
-| GET    | `/v1/users`         | `users:read`                                    | `?limit (1–100)&cursor&search (3–100)`     | 200 `UserPageResponse`                       | 400, 401, 403, 422 `INVALID_CURSOR`                                           |
-| GET    | `/v1/users/:id`     | self, or `users:read`                           | `:id` uuidv7 (`ParseUUIDPipe`)             | 200 `UserResponse` (cached `user:{id}` 30 s) | 400, 401, 403, 404                                                            |
+| Method | Path                | Auth                                            | Body / query                               | Success                                            | Errors                                                                        |
+| ------ | ------------------- | ----------------------------------------------- | ------------------------------------------ | -------------------------------------------------- | ----------------------------------------------------------------------------- |
+| POST   | `/v1/auth/register` | `@Public`, `@RateLimit('identity.credentials')` | `{ email, password (8–128), displayName }` | 201 `AuthTokensResponse`                           | 400, 409 `EMAIL_TAKEN`, 429                                                   |
+| POST   | `/v1/auth/login`    | `@Public`, `@RateLimit('identity.credentials')` | `{ email, password }` (passport-local)     | 200 `AuthTokensResponse`                           | 400, 401 `INVALID_CREDENTIALS` / `MISSING_CREDENTIALS`, 429                   |
+| POST   | `/v1/auth/refresh`  | `@Public`                                       | `{ refreshToken }` (JWT)                   | 200 `AuthTokensResponse`                           | 400, 401 `INVALID_REFRESH_TOKEN` / `SESSION_EXPIRED` / `REFRESH_TOKEN_REUSED` |
+| POST   | `/v1/auth/logout`   | bearer                                          | `{ refreshToken? }`                        | 204                                                | 401                                                                           |
+| GET    | `/v1/auth/me`       | bearer                                          | –                                          | 200 `UserResponse`                                 | 401                                                                           |
+| GET    | `/v1/users`         | `users:read`                                    | `?limit (1–100)&cursor&search (3–100)`     | 200 `UserPageResponse`                             | 400, 401, 403, 422 `INVALID_CURSOR`                                           |
+| GET    | `/v1/users/:id`     | self, or `users:read`                           | `:id` uuidv7 (`ParseUUIDPipe`)             | 200 `UserResponse` (self: cached `user:{id}` 30 s) | 400, 401, 403, 404                                                            |
 
 DTOs are class-validator classes with `@ApiProperty` and `@Transform` normalisation (trimmed,
 lowercased email; trimmed names/search, blank search = no filter). Responses are `@Exclude()`/`@Expose()` allow-list
 classes serialised by a controller-level (HTTP-only) `ClassSerializerInterceptor`.
+
+**User cache.** `UserReadCache` caches only the caller's own profile (`user:{id}`, 30 s, for `me`, `/v1/auth/me`
+and a self read). Another user's profile (`GET /v1/users/:id`, `query user`) is read as `getScopedUser(id, { tenantId })`
+with the caller's active tenant and is never cached (B4 ruling 4): a removed member is a 404 at once, and a warm
+`user:{id}` is never served to a tenant the user is not in. A deployment that wants these reads cached can put them
+behind a per-tenant membership marker, `tenantCacheKey('identity', tenantId, 'member', userId)` from
+`@platform/redis`: fill it from the scoped port call, then serve `user:{id}`, and delete it after a successful member
+remove or leave. The cost is that a removal which bypasses those edges, or a Redis outage, leaves the member readable
+in that tenant for up to `USER_CACHE_TTL_MS`.
 
 ## GraphQL (code-first)
 

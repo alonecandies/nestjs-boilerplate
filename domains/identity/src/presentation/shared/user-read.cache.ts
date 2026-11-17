@@ -32,7 +32,8 @@ export class UserReadCache {
 
   /**
    * A profile seen from a tenant (`scope.tenantId`): never cached, so a removed member disappears at
-   * once and one tenant's read can never serve another's.
+   * once and one tenant's read can never serve another's (B4 ruling 4; the README describes an opt-in
+   * cache behind a per-tenant membership marker built with `tenantCacheKey`).
    */
   getScopedUser(id: string, scope: { tenantId: string }): Promise<User> {
     return this.users.getUser(id, scope);
