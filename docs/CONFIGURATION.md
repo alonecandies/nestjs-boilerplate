@@ -418,10 +418,10 @@ identity-service (loaded by `IdentityCoreModule`)
 `IDENTITY_CREDENTIALS_LIMIT` / `IDENTITY_CREDENTIALS_TTL_MS` instead. In code, `@AuthThrottle()` became
 `@RateLimit('identity.credentials')`, `AUTH_THROTTLE_KEY` became `RATE_LIMIT_POLICY_KEY`,
 `DEFAULT_THROTTLER_NAME` was removed (throttlers are `ip`, `user`, `route`, `auth`), and `@SkipThrottle()` must
-become `@SkipRateLimit()`. The old names are not accepted: the old variables are ignored, and
-`AuthThrottle`/`AUTH_THROTTLE_KEY`/`DEFAULT_THROTTLER_NAME` no longer compile. `SkipThrottle`/`Throttle` are still
-re-exported and still compile, but with no `default` throttler they have NO effect: use
-`SkipRateLimit()`/`RateLimit()`.
+become `@SkipRateLimit()`. The old names are not accepted: setting an old variable fails config validation at boot
+with a message naming its replacement, and `AuthThrottle`/`AUTH_THROTTLE_KEY`/`DEFAULT_THROTTLER_NAME` no longer
+compile. `SkipThrottle`/`Throttle` are still re-exported and still compile, but with no `default` throttler they have
+NO effect: use `SkipRateLimit()`/`RateLimit()`.
 
 ### `identityRateLimit` — credential endpoints (identity)
 
