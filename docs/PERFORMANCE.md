@@ -580,7 +580,8 @@ candidate on the B3 build with the same settings, machine and Docker resources.
 - **Baseline commit:** `0dcfd18` (`feat/domains-tenancy` after B2 merged, before any B3 change).
   The k6 summary and the scripts below landed on the B3 quality lane, which changes only
   `docker/k6/`, `scripts/perf/` and docs; its application code is that of `0dcfd18`.
-- **Files:** `docker/k6/baselines/b3-pre-rls.json` (before RLS) and
+- **Files (produced when the gate is run, not committed yet; see the status below):**
+  `docker/k6/baselines/b3-pre-rls.json` (before RLS) and
   `docker/k6/baselines/b3-post-rls.json` (the B3 build). Each holds, per topology (`monolith`,
   `microservices`), the three run summaries and the median p95 of each series.
 
@@ -621,19 +622,41 @@ series always passes), 1 listing each series over the bound, and 2 when a series
 missing from either file or a file is unreadable or malformed. A series over the bound blocks the
 B3 checkpoint until it is explained or fixed; the bound is not raised.
 
-<!-- PLACEHOLDER: the controller fills in this table after measuring on 0dcfd18. -->
+#### Status: not measured, run on native amd64
 
-> **Placeholder, not yet measured.** The machine, the Docker resources and the baseline p95 below
-> are filled in by the controller after the baseline runs on `0dcfd18`. Until then this table holds
-> no data.
+The gate was **not run** for B3, and no baseline files are committed
+(`docker/k6/baselines/b3-pre-rls.json` and `docker/k6/baselines/b3-post-rls.json` do not exist).
+Decision of the B3 owner: Citus ships amd64 images only, and on the Apple Silicon development
+machine they run under emulation, so any p95 measured there reflects the emulator, not RLS,
+PgBouncer or distribution. Numbers from it would be noise and are not recorded. This table is
+intentionally empty; `compare-k6.mjs` and `k6-baseline.mjs` are tested (`scripts/perf/*.spec.ts`)
+and ready.
 
-| Item                                 | Baseline (`0dcfd18`, before RLS) |
-| ------------------------------------ | -------------------------------- |
-| Machine                              | _TBD (controller)_               |
-| Docker resources (CPU / memory)      | _TBD (controller)_               |
-| k6 settings                          | _TBD (controller)_               |
-| Median p95 per series, monolith      | _TBD (controller)_               |
-| Median p95 per series, microservices | _TBD (controller)_               |
+| Item                                 | Value                                                             |
+| ------------------------------------ | ----------------------------------------------------------------- |
+| Baseline commit                      | `0dcfd18` (before any B3)                                         |
+| Candidate commit                     | the B3 merge into `feat`                                          |
+| Machine, Docker CPU / memory         | not measured                                                      |
+| k6 settings to use                   | `K6_RATE=5 K6_READ_RATE=20 K6_DURATION=3m`, `MAX_DROPPED_RATIO=0` |
+| Median p95 per series, monolith      | not measured                                                      |
+| Median p95 per series, microservices | not measured                                                      |
+| Round trips per standalone call      | not measured                                                      |
+
+To close the gate, on a native amd64 host (a Linux runner or an Intel Mac, same machine and Docker
+resources for both sides):
+
+1. Check out `0dcfd18` (a separate worktree is fine) and run the three-run loops above with
+   `RUN_ID=pre-rls-*`; build `docker/k6/baselines/b3-pre-rls.json` with
+   `node scripts/perf/k6-baseline.mjs --commit 0dcfd18 ...`.
+2. Check out the B3 build, run `docker compose down -v` once (the three-role init SQL only runs on
+   an empty volume), then repeat the same loops with `RUN_ID=post-rls-*` through PgBouncer and
+   `DATABASE_BOOT_GUARD=enforce` (the compose setting), and build `docker/k6/baselines/b3-post-rls.json`
+   with `--commit <sha>` and the `post-rls` summaries.
+3. Run the gate command above. Exit 0 closes it; exit 1 names the series over the bound, which must
+   be explained or fixed before the B3 checkpoint, never by raising `--max-p95-regression`.
+
+Then replace this section with the measured tables (machine, resources, both medians, the delta
+per series and the explanation of any series over the bound).
 
 ## Reading the Grafana dashboard
 
