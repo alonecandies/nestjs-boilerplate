@@ -169,8 +169,11 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
       const stored = e2e.identity.store.users.get(tokens.user.id);
       expect(stored?.passwordHash).toMatch(/^\$argon2id\$/);
 
-      // UserRegisteredEvent → UserRegisteredRelay → Kafka, after the handler committed.
-      await vi.waitFor(() => expect(e2e.kafka.envelopes(USER_REGISTERED_EVENT)).toHaveLength(1));
+      // Enqueued on identity's outbox in the registration's unit of work; Kafka sees it only when
+      // the outbox relay ticks (outbox.e2e-spec covers the whole path).
+      expect(e2e.kafka.envelopes(USER_REGISTERED_EVENT)).toEqual([]);
+      await e2e.tickRelays();
+      expect(e2e.kafka.envelopes(USER_REGISTERED_EVENT)).toHaveLength(1);
       expect(e2e.kafka.envelopes(USER_REGISTERED_EVENT)[0]).toMatchObject({
         type: USER_REGISTERED_EVENT.topic,
         source: 'monolith-e2e',

@@ -59,10 +59,14 @@
   "devDependencies": {
     "@platform/testing": "workspace:*",
     "@domain/identity-contracts": "workspace:*",
+    "@platform/outbox": "workspace:*",
+    "@domain/billing-contracts": "workspace:*",
+    "@nestjs/microservices": "catalog:",
     "@nestjs/testing": "catalog:",
     "cache-manager": "catalog:",
     "drizzle-orm": "catalog:",
     "graphql": "catalog:",
-    "graphql-subscriptions": "catalog:"
+    "graphql-subscriptions": "catalog:",
+    "rxjs": "catalog:"
   }
 }

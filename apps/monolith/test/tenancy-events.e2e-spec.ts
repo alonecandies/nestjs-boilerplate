@@ -26,7 +26,10 @@ const PASSWORD = 'correct horse battery staple';
 
 /**
  * B4-1 producer side: every identity event names the tenant it is about, and every membership that
- * is created or removed is published once, after its unit of work committed.
+ * is created or removed is published once, after its unit of work committed. The events go through
+ * identity's outbox (G-1): the unit of work enqueues them and a relay tick publishes them, so
+ * every check ticks the relays first, and `flushOutboxes()` (tick, then forget what was
+ * published) stands where a spec starts counting.
  */
 describe('identity events carry the tenant (monolith, B4-1)', () => {
   let e2e: MonolithE2e;
@@ -39,11 +42,19 @@ describe('identity events carry the tenant (monolith, B4-1)', () => {
     created: created().length,
     removed: removed().length,
   });
-  /** Waits for `expected`, then lets the event bus drain and checks again (no late duplicate). */
+  /** Ticks the relays and expects `expected`; then lets the bus drain and checks again after another tick (no late duplicate). */
   const expectPublished = async (expected: Counts): Promise<void> => {
-    await vi.waitFor(() => expect(counts()).toEqual(expected));
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await e2e.tickRelays();
     expect(counts()).toEqual(expected);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await e2e.tickRelays();
+    expect(counts()).toEqual(expected);
+  };
+  /** Nothing was published, also after the bus drained and the relays ticked. */
+  const expectNothingPublished = async (): Promise<void> => {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    await e2e.tickRelays();
+    expect(e2e.kafka.records).toEqual([]);
   };
 
   const register = async (email: string, displayName: string): Promise<Tokens> => {
@@ -94,8 +105,8 @@ describe('identity events carry the tenant (monolith, B4-1)', () => {
     e2e = await createMonolithE2eApp();
   });
 
-  beforeEach(() => {
-    e2e.kafka.clear();
+  beforeEach(async () => {
+    await e2e.flushOutboxes();
   });
 
   afterAll(async () => {
@@ -122,7 +133,7 @@ describe('identity events carry the tenant (monolith, B4-1)', () => {
 
   it('creating a second tenant publishes one membership-created for it', async () => {
     const ada = await register('ada.second@example.com', 'Ada');
-    e2e.kafka.clear();
+    await e2e.flushOutboxes();
 
     const res = await e2e.app.inject({
       method: 'POST',
@@ -174,8 +185,7 @@ describe('identity events carry the tenant (monolith, B4-1)', () => {
       const replay = await accept(bob, bobToken);
       expect(replay.statusCode, replay.body).toBe(404);
 
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      expect(e2e.kafka.records).toEqual([]);
+      await expectNothingPublished();
     });
 
     it('removing that member publishes one membership-removed', async () => {
@@ -200,7 +210,7 @@ describe('identity events carry the tenant (monolith, B4-1)', () => {
       const accepted = await accept(carol, await invite(ada, 'carol.members.events@example.com'));
       expect(accepted.statusCode, accepted.body).toBe(200);
       const carolInAda = await login('carol.members.events@example.com', ada.tenantId);
-      e2e.kafka.clear();
+      await e2e.flushOutboxes();
 
       const res = await e2e.app.inject({
         method: 'POST',
@@ -222,7 +232,7 @@ describe('identity events carry the tenant (monolith, B4-1)', () => {
     const dave = await register('dave.events@example.com', 'Dave');
     // A pre-tenancy account: no membership at all.
     await e2e.identity.memberships.delete(dave.tenantId, dave.user.id);
-    e2e.kafka.clear();
+    await e2e.flushOutboxes();
 
     const session = await login('dave.events@example.com');
 
@@ -237,11 +247,10 @@ describe('identity events carry the tenant (monolith, B4-1)', () => {
 
   it('a login with an existing membership publishes nothing', async () => {
     await register('erin.events@example.com', 'Erin');
-    e2e.kafka.clear();
+    await e2e.flushOutboxes();
 
     await login('erin.events@example.com');
 
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(e2e.kafka.records).toEqual([]);
+    await expectNothingPublished();
   });
 });

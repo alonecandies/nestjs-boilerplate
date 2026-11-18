@@ -17,7 +17,8 @@ import { monolithConfig } from '../src/monolith.config.js';
 /**
  * The domain and app-local namespaces the monolith loads besides the platform ones: billing's
  * `stripe` (BillingCoreModule), identity's `password`, `refreshToken` and `staffSwitchIn` (IdentityCoreModule),
- * files' `files` (FilesModule) and its own `monolith` (main.ts).
+ * files' `files` (FilesModule) and its own `monolith` (main.ts). The platform `outbox` namespace
+ * (validated with every platform namespace) drives the identity and billing outbox relays.
  */
 const NAMESPACES = [
   stripeConfig,
@@ -50,8 +51,10 @@ describe('monolith .env.example', () => {
     expect(config.monolith.kafkaGroupId).toBe('monolith');
     expect(config.database.runMigrations).toBe(true);
     expect(config.cassandra.runMigrations).toBe(true);
-    for (const namespace of ['stripe', 'password', 'refreshToken', 'files']) {
+    for (const namespace of ['stripe', 'password', 'refreshToken', 'files', 'outbox']) {
       expect(config).toHaveProperty(namespace);
     }
+    // This process owns the identity and billing outboxes: their relays run here.
+    expect(config.outbox.relayEnabled).toBe(true);
   });
 });

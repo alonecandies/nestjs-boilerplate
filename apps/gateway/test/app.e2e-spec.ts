@@ -19,6 +19,7 @@ import { passwordConfig, refreshTokenConfig } from '@domain/identity';
 import { ConfigService } from '@nestjs/config';
 import { generateId, HTTP_HEADERS, isUuidV7 } from '@platform/common';
 import { MetricsListener } from '@platform/observability';
+import { outboxRelayToken } from '@platform/outbox';
 import { PARAMS_PROVIDER_TOKEN, type Params } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createGatewayE2eApp, type GatewayE2e } from './support/gateway-e2e-app.js';
@@ -70,6 +71,12 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
     for (const namespace of [refreshTokenConfig, passwordConfig, stripeConfig]) {
       expect(config.get(namespace.namespace), namespace.namespace).toBeUndefined();
       expect(() => e2e.app.get(namespace.KEY, { strict: false }), namespace.namespace).toThrow();
+    }
+  });
+
+  it('runs no outbox relay: the edge owns no outbox (identity and billing relay in their services)', () => {
+    for (const outbox of ['identity', 'billing']) {
+      expect(() => e2e.app.get(outboxRelayToken(outbox), { strict: false }), outbox).toThrow();
     }
   });
 

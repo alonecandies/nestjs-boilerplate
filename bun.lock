@@ -76,6 +76,7 @@
       },
       "devDependencies": {
         "@nestjs/testing": "catalog:",
+        "@platform/outbox": "workspace:*",
         "@platform/testing": "workspace:*",
         "drizzle-orm": "catalog:",
       },
@@ -118,6 +119,7 @@
       "devDependencies": {
         "@nestjs/jwt": "catalog:",
         "@nestjs/testing": "catalog:",
+        "@platform/outbox": "workspace:*",
         "@platform/testing": "workspace:*",
         "cache-manager": "catalog:",
         "graphql": "catalog:",
@@ -159,6 +161,7 @@
       "devDependencies": {
         "@nestjs/bullmq": "catalog:",
         "@nestjs/testing": "catalog:",
+        "@platform/outbox": "workspace:*",
         "@platform/testing": "workspace:*",
         "drizzle-orm": "catalog:",
       },
@@ -205,13 +208,17 @@
         "zod": "catalog:",
       },
       "devDependencies": {
+        "@domain/billing-contracts": "workspace:*",
         "@domain/identity-contracts": "workspace:*",
+        "@nestjs/microservices": "catalog:",
         "@nestjs/testing": "catalog:",
+        "@platform/outbox": "workspace:*",
         "@platform/testing": "workspace:*",
         "cache-manager": "catalog:",
         "drizzle-orm": "catalog:",
         "graphql": "catalog:",
         "graphql-subscriptions": "catalog:",
+        "rxjs": "catalog:",
       },
     },
     "apps/notifications-service": {

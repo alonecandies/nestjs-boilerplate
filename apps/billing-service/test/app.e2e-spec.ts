@@ -11,6 +11,7 @@ import {
   type PaymentList,
 } from '@domain/billing-contracts';
 import { Metadata, type ServiceError, status } from '@grpc/grpc-js';
+import { Logger } from '@nestjs/common';
 import { ClientGrpcProxy } from '@nestjs/microservices';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
@@ -23,7 +24,8 @@ import {
 import { type GrpcConfig, grpcConfig } from '@platform/config';
 import { DRIZZLE } from '@platform/database';
 import { MetricsListener } from '@platform/observability';
-import { REDIS_CLIENT } from '@platform/redis';
+import { OutboxRelay, outboxRelayLockResource, outboxRelayToken } from '@platform/outbox';
+import { DistributedLockService, REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import {
   createGrpcClientOptions,
@@ -153,6 +155,8 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
   let app: NestFastifyApplication;
   let client: ClientGrpcProxy;
   let billing: BillingServiceClient;
+  /** What the outbox relay did while the app booted (its start decision runs on bootstrap). */
+  const relayBoot = { lockResources: [] as unknown[], logLines: [] as unknown[][] };
   const breakers = new GrpcCircuitBreakers();
   /** The app_system side of the Stripe events ledger: platform webhooks land here, not in SQL. */
   const systemEvents = new InMemoryStripeEventsSystemRepository();
@@ -178,8 +182,13 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
       DATABASE_URL: 'postgres://app:app@127.0.0.1:1/app',
       REDIS_URL: 'redis://127.0.0.1:1',
       KAFKA_BROKERS: '127.0.0.1:1',
+      // The relay resolves but stays off: no broker, and the case below pins that it never leads.
+      OUTBOX_RELAY_ENABLED: 'false',
     };
     for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
+    // Installed before the app boots: the relay decides whether to start on bootstrap.
+    const lockAttempts = vi.spyOn(DistributedLockService.prototype, 'using');
+    const logLines = vi.spyOn(Logger.prototype, 'log');
 
     const builder = Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DRIZZLE)
@@ -191,6 +200,15 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
       .overrideProvider(StripeEventsSystemRepository)
       .useValue(systemEvents);
     app = await startServiceTestApp(builder, { grpc: [BILLING_GRPC_PACKAGE] });
+    // Kept here: the config restores every spy before each test (restoreMocks).
+    relayBoot.lockResources = lockAttempts.mock.calls.map(([resource]) => resource);
+    relayBoot.logLines = logLines.mock.calls.filter(
+      (_, call) =>
+        (logLines.mock.contexts[call] as { context?: string } | undefined)?.context ===
+        'OutboxRelay:billing',
+    );
+    lockAttempts.mockRestore();
+    logLines.mockRestore();
 
     client = new ClientGrpcProxy(
       createGrpcClientOptions(grpcConfig.parse(), { spec: BILLING_GRPC_PACKAGE, url: grpcUrl })
@@ -244,6 +262,15 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
       const response = await app.inject({ method: 'POST', url: '/v1/billing/webhooks/stripe' });
       expect(response.statusCode).toBe(404);
       expect(response.headers['content-type']).toContain('application/problem+json');
+    });
+  });
+
+  describe('outbox relay (billing.outbox)', () => {
+    it('resolves, and with OUTBOX_RELAY_ENABLED=false never asks for its lock', () => {
+      expect(app.get(outboxRelayToken('billing'), { strict: false })).toBeInstanceOf(OutboxRelay);
+      // It stopped at the switch, not at a missing system pool or a lost lock race.
+      expect(relayBoot.logLines).toEqual([['relay disabled (OUTBOX_RELAY_ENABLED=false)']]);
+      expect(relayBoot.lockResources).not.toContain(outboxRelayLockResource('billing'));
     });
   });
 

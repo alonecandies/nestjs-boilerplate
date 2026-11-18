@@ -49,6 +49,7 @@
   },
   "devDependencies": {
     "@platform/testing": "workspace:*",
+    "@platform/outbox": "workspace:*",
     "@nestjs/testing": "catalog:",
     "drizzle-orm": "catalog:"
   }

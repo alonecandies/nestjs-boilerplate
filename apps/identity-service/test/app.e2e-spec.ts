@@ -6,6 +6,7 @@ import {
 } from '@domain/identity-contracts';
 import { type ServiceError, status } from '@grpc/grpc-js';
 import { getQueueToken } from '@nestjs/bullmq';
+import { Logger } from '@nestjs/common';
 import { ClientGrpcProxy } from '@nestjs/microservices';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
@@ -19,7 +20,8 @@ import { type GrpcConfig, grpcConfig } from '@platform/config';
 import { DRIZZLE, SYSTEM_DATABASE, SystemDatabase } from '@platform/database';
 import { MAIL_QUEUE } from '@platform/mailer';
 import { MetricsListener } from '@platform/observability';
-import { REDIS_CLIENT } from '@platform/redis';
+import { OutboxRelay, outboxRelayLockResource, outboxRelayToken } from '@platform/outbox';
+import { DistributedLockService, REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import {
   createGrpcClientOptions,
@@ -81,6 +83,8 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
   let client: ClientGrpcProxy;
   let usersClient: UsersServiceClient;
   let authClient: AuthServiceClient;
+  /** What the outbox relay did while the app booted (its start decision runs on bootstrap). */
+  const relayBoot = { lockResources: [] as unknown[], logLines: [] as unknown[][] };
   const breakers = new GrpcCircuitBreakers();
 
   /** What the gateway adapters do: deadline + breaker + ServiceError → DomainException. */
@@ -98,8 +102,13 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
       DATABASE_URL: 'postgres://app:app@127.0.0.1:1/app',
       REDIS_URL: 'redis://127.0.0.1:1',
       KAFKA_BROKERS: '127.0.0.1:1',
+      // The relay resolves but stays off: no broker, and the case below pins that it never leads.
+      OUTBOX_RELAY_ENABLED: 'false',
     };
     for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value);
+    // Installed before the app boots: the relay decides whether to start on bootstrap.
+    const lockAttempts = vi.spyOn(DistributedLockService.prototype, 'using');
+    const logLines = vi.spyOn(Logger.prototype, 'log');
 
     const builder = Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DRIZZLE)
@@ -115,6 +124,15 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
       .overrideProvider(getQueueToken(MAIL_QUEUE))
       .useValue({ add: vi.fn(), close: vi.fn(), on: vi.fn() });
     app = await startServiceTestApp(builder, { grpc: [IDENTITY_GRPC_PACKAGE] });
+    // Kept here: the config restores every spy before each test (restoreMocks).
+    relayBoot.lockResources = lockAttempts.mock.calls.map(([resource]) => resource);
+    relayBoot.logLines = logLines.mock.calls.filter(
+      (_, call) =>
+        (logLines.mock.contexts[call] as { context?: string } | undefined)?.context ===
+        'OutboxRelay:identity',
+    );
+    lockAttempts.mockRestore();
+    logLines.mockRestore();
 
     client = new ClientGrpcProxy(
       createGrpcClientOptions(grpcConfig.parse(), { spec: IDENTITY_GRPC_PACKAGE, url: grpcUrl })
@@ -171,6 +189,15 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
       expect(response.statusCode).toBe(404);
       expect(response.headers['content-type']).toContain('application/problem+json');
       expect(response.json()).toMatchObject({ status: 404, code: 'NOT_FOUND' });
+    });
+  });
+
+  describe('outbox relay (identity.outbox)', () => {
+    it('resolves, and with OUTBOX_RELAY_ENABLED=false never asks for its lock', () => {
+      expect(app.get(outboxRelayToken('identity'), { strict: false })).toBeInstanceOf(OutboxRelay);
+      // It stopped at the switch, not at a missing system pool or a lost lock race.
+      expect(relayBoot.logLines).toEqual([['relay disabled (OUTBOX_RELAY_ENABLED=false)']]);
+      expect(relayBoot.lockResources).not.toContain(outboxRelayLockResource('identity'));
     });
   });
 
