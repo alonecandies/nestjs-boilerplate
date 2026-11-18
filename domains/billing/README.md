@@ -296,6 +296,30 @@ tenant tables): `0002_distribute.sql` (SH-6). The primary key and every unique i
 FK reaches another domain, so a query by `(tenant_id, …)` goes to one shard. Rows created before B2 belong to the platform tenant (nil
 UUID): no tenant can list them.
 
+### Ledger tables (`0005_ledger_tables.sql`, outbox plan Task 10, ledger design §5)
+
+The receipts and bookkeeping around the immudb ledger (the entries themselves live in immudb). Every table also has
+`created_at`; no FK (`payment_id`, `run_id` and `resolves_id` are plain columns); all five have RLS enabled and forced.
+T = distributed by `tenant_id` inline, right after its `CREATE TABLE`, colocated with `app.tenant_colocation`;
+L = coordinator-local, system only.
+
+| Table (kind)                     | Columns                                                                                                                                                                                | PK                            | Grants `app_runtime` / `app_system` |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | ----------------------------------- |
+| `ledger_accounts` (T)            | `tenant_id`, `code`, `currency`, `immudb_account_id uuid`                                                                                                                              | `(tenant_id, code, currency)` | S, I / S, I                         |
+| `ledger_entry_refs` (T)          | `tenant_id`, `entry_id`, `source_key`, `payload_hash`, `immudb_tx_id int8` (NULL when replayed), `payment_id` (nullable), `kind`, `posted_at`; index `ledger_entry_refs_posted_at_idx` | `(tenant_id, entry_id)`       | S, I / S, I                         |
+| `ledger_discrepancies` (T)       | `tenant_id`, `id`, `kind`, `source_key`, `expected jsonb`, `actual jsonb`, `detected_by`, `run_id` (nullable), `resolves_id` (nullable)                                                | `(tenant_id, id)`             | S, I / S, I                         |
+| `ledger_reconciliation_runs` (L) | `id`, `from_ts`, `to_ts`, `status`, `counts jsonb`, `finished_at` (nullable)                                                                                                           | `(id)`                        | none / S, I, U                      |
+| `ledger_trusted_state` (L)       | `database`, `tx_id int8`, `tx_hash bytea`, `verified_at`                                                                                                                               | `(database)`                  | none / S, I, U                      |
+
+- Each tenant table has two policies `TO app_runtime`: `<table>_select USING (tenant_id = app.tenant_id() AND
+app.elevated())` and `<table>_insert WITH CHECK (tenant_id = app.tenant_id())`. A principal inserts only its own
+  tenant's rows and reads them only when elevated (the posting consumer's `roles: []` principal never is), so its
+  inserts are plain `INSERT`s without `RETURNING`. An idempotent runtime insert uses `INSERT … ON CONFLICT DO
+NOTHING` without a conflict target: the int spec pins that it reports 1 row, then 0, for a non-elevated principal
+  on Citus.
+- Neither app role may `UPDATE` or `DELETE` a tenant table: entry refs and discrepancies are append-only.
+  `PLATFORM_TENANT_ID` rows and the two local tables belong to `app_system`.
+
 ### Row-level security (`0003_rls.sql`, B3-5/B3-6, program spec §8.2)
 
 Both tables have RLS enabled and **forced** (the owner `app_owner` has no policy, so it reads and writes no row).
@@ -368,8 +392,10 @@ transaction would carry no RLS context.
   every table and enum in the `billing` schema, the match with `drizzle.config.ts`, the baseline's
   `CREATE SCHEMA IF NOT EXISTS "billing";` first statement, `0002_distribute` holding only the two
   `app.distribute_by_tenant` calls, and `0003_rls` holding exactly the forced RLS, the five policies (no subquery)
-  and one grant per table and role, and `0004_outbox` holding the plan's outbox SQL in order
-  (`describeOutboxTable` pins the table's shape).
+  and one grant per table and role, `0004_outbox` holding the plan's outbox SQL in order
+  (`describeOutboxTable` pins the table's shape), and `0005_ledger_tables` holding the five ledger tables in order
+  (each tenant table's distribution call right after its `CREATE`, no FK, no `REVOKE`, the contract's grants and
+  policies).
 - `infrastructure/stripe/*.spec.ts` — the Stripe adapter: SDK error mapping, signature verification (valid, forged, stale, re-serialised, missing, not JSON), Checkout params and idempotency key, module wiring and the invalid-key boot failure.
 - `billing.controller.spec.ts` — Fastify app with the real `AuthModule` guards (tokens from `signTestAccessToken`, `@platform/auth/testing`):
   401/403, 400 validation (body, query, `Idempotency-Key`), serialisation, raw-body webhook, OpenAPI document.
@@ -423,6 +449,15 @@ INSERT, UPDATE, DELETE` for `app_system`, the one `outbox_insert` policy; a prin
 rows (another tenant's, the nil tenant's and a tenant-less principal's are refused); runtime reads and writes are
 `42501`; the system repository polls and marks; a row written by `insertAsPlatform` is invisible to and unchangeable
 by every runtime principal, elevated or not, and is returned by the poll.
+`infrastructure/persistence/billing.ledger.rls.int-spec.ts` (`0005_ledger_tables`, local execution off): the three
+tenant tables distributed by `tenant_id` and colocated, the two local ones not in `pg_dist_partition`; forced RLS and
+no FK on all five; exactly the contract's grants and policies. Per tenant table: a non-elevated member inserts its
+own tenant's row, another tenant's or the nil tenant's is refused; it reads nothing without elevation and only its
+tenant's rows with it (never another tenant's or the platform's, which `app_system` reads); `UPDATE` and `DELETE`
+are `42501` for `app_runtime`, elevated or not, and for `app_system`. Local tables: runtime `SELECT` and `INSERT` are
+`42501`, `app_system` inserts, reads and updates. The probe for the receipts repository: `INSERT … ON CONFLICT DO
+NOTHING` (no target, no `RETURNING`) on `ledger_entry_refs` as a non-elevated member reports 1 row, then 0. Without
+an RLS context nothing is readable.
 `test/webhook-outbox.int-spec.ts` (the real core on the three URLs, the module's relay off): a paid webhook for tenant
 A leaves the payment succeeded, the receipt and one outbox row under A; a replay adds no row; one tick of a real
 `OutboxRelay` publishes an envelope that parses with `PAYMENT_SUCCEEDED_EVENT` and marks the row; with the row's id
