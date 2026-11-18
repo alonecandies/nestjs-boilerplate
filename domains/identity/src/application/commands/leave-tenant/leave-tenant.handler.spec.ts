@@ -24,6 +24,7 @@ describe('LeaveTenantHandler', () => {
         displayName: `user ${userId.slice(-4)}`,
         passwordHash: 'x',
         now: new Date(),
+        personalTenantId: generateId(),
       }),
     );
     await p.memberships.insert({ tenantId, userId, roles, lastActiveAt: null });

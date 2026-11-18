@@ -365,6 +365,23 @@ describe('GraphQL per-request charging (C-5)', () => {
     expect(increment.mock.calls.filter(([, , , , n]) => n === 'user')).toHaveLength(1);
   });
 
+  it('a @Public root field first does not let the authenticated fields skip the user budget (F3)', async () => {
+    const { guard, increment } = await createGuard();
+    // One GraphQL request: JwtAuthGuard sets req.user only for the authenticated root fields.
+    const req: Record<string, unknown> = { headers: {}, ip: '1.2.3.4' };
+    await guard.canActivate(context('graphql', req));
+    req['user'] = { id: 'u-1', tenantId: 't-1' };
+    await Promise.all(Array.from({ length: 3 }, () => guard.canActivate(context('graphql', req))));
+    const userKeys = increment.mock.calls
+      .filter(([, , , , n]) => n === THROTTLER.USER)
+      .map(([key]) => key);
+    expect(userKeys).toEqual([
+      rateLimitKey('user', 'global', 'ip:1.2.3.4'),
+      rateLimitKey('user', 'global', 'user:u-1'),
+    ]);
+    expect(increment.mock.calls.filter(([, , , , n]) => n === THROTTLER.TENANT)).toHaveLength(1);
+  });
+
   it('still charges a route policy per resolver', async () => {
     const { guard, increment } = await createGuard();
     const req = { headers: {}, user: { id: 'u-1' } };

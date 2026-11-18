@@ -2,6 +2,7 @@ import type { NotificationCreatedPayload, NotificationPage } from '@domain/notif
 import { Args, Mutation, Query, Resolver, Subscription } from '@nestjs/graphql';
 import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
 import { type GqlContext, type GraphqlPubSub, InjectPubSub } from '@platform/graphql';
+import { RateLimit } from '@platform/redis';
 import { notificationFromCreatedPayload } from '../../application/mappers/notification.mapper.js';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
 import {
@@ -10,6 +11,7 @@ import {
 } from '../../notifications.constants.js';
 import { NotificationsPermission } from '../../notifications.permissions.js';
 import { toNotificationView } from '../notification-view.js';
+import { NOTIFICATIONS_RATE_LIMITS } from '../ws/notifications-rate-limit.js';
 import { ListNotificationsArgs } from './list-notifications.args.js';
 import { MarkNotificationReadInput } from './mark-notification-read.input.js';
 import { NotificationConnectionModel, NotificationModel } from './notification.model.js';
@@ -81,6 +83,7 @@ export class NotificationsResolver {
     description: 'Marks one of my notifications read (idempotent). NOT_FOUND outside my inbox.',
   })
   @RequirePermissions(NotificationsPermission.Read)
+  @RateLimit(NOTIFICATIONS_RATE_LIMITS.MARK_READ)
   async markNotificationRead(
     @Args('input') input: MarkNotificationReadInput,
     @CurrentUser() user: AuthUser,

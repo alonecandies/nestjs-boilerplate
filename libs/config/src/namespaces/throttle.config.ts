@@ -3,6 +3,15 @@ import { z } from 'zod';
 import { defineConfigNamespace } from '../define-config-namespace.js';
 import { zInt } from '../env/env.helpers.js';
 
+/**
+ * Variables removed without an alias, with what replaces them. Setting one fails validation instead
+ * of being ignored, so a deployment that still sets it learns the new name at boot. Blank = unset.
+ */
+const REMOVED_VARS: Readonly<Record<string, string>> = {
+  THROTTLE_AUTH_LIMIT: 'IDENTITY_CREDENTIALS_LIMIT',
+  THROTTLE_AUTH_TTL_MS: 'IDENTITY_CREDENTIALS_TTL_MS',
+};
+
 export const throttleEnvSchema = z
   .object({
     THROTTLE_TTL_MS: zInt(60_000, { min: 1 }),
@@ -18,6 +27,19 @@ export const throttleEnvSchema = z
     THROTTLE_WS_SOCKETS_PER_USER: zInt(10, { min: 1 }),
     THROTTLE_WS_SOCKET_TTL_MS: zInt(3_600_000, { min: 1_000 }),
     THROTTLE_REDIS_TIMEOUT_MS: zInt(250, { min: 10 }),
+  })
+  // Keeps the undeclared keys so the check below can see the removed variables.
+  .loose()
+  .superRefine((env, ctx) => {
+    for (const [removed, replacement] of Object.entries(REMOVED_VARS)) {
+      const value = env[removed];
+      if (typeof value !== 'string' || value.trim() === '') continue;
+      ctx.addIssue({
+        code: 'custom',
+        path: [removed],
+        message: `${removed} was removed: set ${replacement} instead`,
+      });
+    }
   })
   .transform((env) => ({
     /** @nestjs/throttler 6 windows are in MILLISECONDS. Per-user (else per-IP) budget across routes. */

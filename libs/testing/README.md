@@ -2,7 +2,7 @@
 
 Test-only helpers shared by every package's unit and e2e tests. It depends on **no other workspace
 package** (so any package can use it without dependency cycles) and pulls in `vitest` (and, through the
-`./postgres` and `./cassandra` subpaths only, testcontainers, postgres.js and cassandra-driver) — import it only from `*.spec.ts`,
+`./postgres` and `./cassandra` subpaths only, testcontainers, postgres.js and cassandra-driver; through `./realtime` only, `socket.io-client` and `graphql-ws`) — import it only from `*.spec.ts`,
 `*.int-spec.ts`, `*.e2e-spec.ts` and `test/**`.
 
 ## Public API
@@ -48,6 +48,42 @@ const client = new cassandra.Client({
 // … run the context's CQL migrations (`CqlMigrator`), then the specs …
 await client.shutdown();
 await node.stop();
+```
+
+### @platform/testing/realtime
+
+For specs that open real connections to an app listening on the loopback interface (import only from
+`*.e2e-spec.ts`; it pulls in `socket.io-client` and `graphql-ws`).
+
+| Export                                                            | Signature                                                                                      | Purpose                                                                                                                                                                                                                                                                                |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `listenOnLoopback`                                                | `(app: NestFastifyApplication) => Promise<{ httpUrl: string; wsUrl: string }>`                 | binds an app from `createFastifyTestApp` to `127.0.0.1`, port 0; `app.close()` frees the port                                                                                                                                                                                          |
+| `openSocket`                                                      | `(wsUrl: string, options: OpenSocketOptions) => Socket`                                        | a websocket-only, non-reconnecting `socket.io-client` (`namespace`, `token`, `headers`, `query`)                                                                                                                                                                                       |
+| `connected`, `refused`                                            | `(socket, timeoutMs?) => Promise<Socket>`, `=> Promise<ConnectRefusal>`                        | wait for the connection, or for the `connect_error` of a refused handshake (`data` = problem details)                                                                                                                                                                                  |
+| `nextEvent`, `collectEvents`, `disconnected`, `wait`, `waitUntil` | event helpers                                                                                  | the next payload of an event, a recorder, the disconnect reason, a pause, a polled condition                                                                                                                                                                                           |
+| `SocketClients`                                                   | `new SocketClients(namespace)`: `track`, `open`, `connect`, `closeAll`                         | remembers every client of a spec so `afterAll` closes them all                                                                                                                                                                                                                         |
+| `GraphqlWsClients`, `GraphqlWsConnection`                         | `new GraphqlWsClients()`: `open`, `connect(wsUrl, { connectionParams?, path? })`, `disposeAll` | a `graphql-ws` client on Node 24's global `WebSocket` (no retries): `closed` / `closedWithin()` give the close event `{ code, reason }`, `acknowledgement()` waits for `connection_ack`, `subscribe()` collects `next` data and errors, `execute()` runs one operation over the socket |
+
+```ts
+const app = await createFastifyTestApp(builder);
+const { wsUrl } = await listenOnLoopback(app);
+const clients = new SocketClients('/orders');
+const socket = await clients.connect(wsUrl, { token: accessToken });
+const pong = nextEvent<{ ts: string }>(socket, 'pong');
+socket.emit('ping');
+await pong;
+clients.closeAll();
+await app.close();
+```
+
+```ts
+const gql = new GraphqlWsClients();
+const connection = await gql.connect(wsUrl, {
+  connectionParams: { authorization: `Bearer ${accessToken}` },
+});
+const feed = connection.subscribe({ query: 'subscription { orderPlaced { id } }' });
+await waitUntil(() => feed.received.length > 0);
+await gql.disposeAll(); // a refused token closes 4403: `(await gql.open(wsUrl, { connectionParams }).closedWithin()).code`
 ```
 
 ## Usage

@@ -152,13 +152,15 @@ export function createGraphqlWsAuthHandlers(
         const user = await authenticate(token);
         if (closed.has(ctx.extra)) return false;
         if (options.caps !== undefined) {
-          if (!(await options.caps.acquireSocket(user.id))) return false;
+          const slot = await options.caps.acquireSocket(user.id);
+          if (!slot.admitted) return false;
           if (closed.has(ctx.extra)) {
             // Closed while acquiring: onClose already ran and could not see the slot.
-            void options.caps.releaseSocket(user.id);
+            if (slot.held) void options.caps.releaseSocket(user.id);
             return false;
           }
-          acquired.set(ctx.extra, user.id);
+          // A slot admitted while Redis was unusable was never counted: nothing to release.
+          if (slot.held) acquired.set(ctx.extra, user.id);
         }
         ctx.extra.user = user;
         scheduleExpiry(ctx.extra, user.exp);

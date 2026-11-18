@@ -455,27 +455,27 @@ Sizing rules:
 ## Cassandra
 
 Notifications are stored in Cassandra 5 (`domains/notifications/src/infrastructure/persistence/`),
-modelled around the one query that matters, "a user's inbox, newest first":
+modelled around the one query that matters, "a user's inbox in one tenant, newest first":
 
 ```sql
-CREATE TABLE IF NOT EXISTS notifications_by_user (
-  user_id uuid, notification_id uuid, type text, title text, body text,
+CREATE TABLE IF NOT EXISTS notifications_by_tenant_user (
+  tenant_id uuid, user_id uuid, notification_id uuid, type text, title text, body text,
   data map<text, text>, read boolean, created_at timestamp,
-  PRIMARY KEY ((user_id), notification_id)
+  PRIMARY KEY ((tenant_id, user_id), notification_id)
 ) WITH CLUSTERING ORDER BY (notification_id DESC)
   AND default_time_to_live = 7776000;   -- 90 days
 ```
 
-| Choice                                                                               | Why                                                                                                                                                      |
-| ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| One partition per user (`(user_id)`)                                                 | The inbox read touches exactly one partition on one replica set; no scatter-gather.                                                                      |
-| Clustering on `notification_id DESC`, a uuidv7                                       | Cassandra orders non-time-based uuids byte-wise, which for v7 is time order: rows are stored newest first and the inbox is a sequential slice.           |
-| `default_time_to_live` 90 days instead of deletes                                    | Partitions stay bounded without tombstones (mass deletes create tombstones that slow every later read of the partition).                                 |
-| `UPDATE … USING TTL ?` when marking read                                             | The table TTL also applies to UPDATEs, so the `read` cell would otherwise outlive (or underlive) the row; the bound TTL is the row's remaining lifetime. |
-| `read` never written on insert                                                       | An idempotent re-insert (Kafka redelivery) cannot flip a read notification back to unread.                                                               |
-| Driver paging (`fetchSize` + `pageState`)                                            | Pagination resumes from the driver's page state instead of re-reading earlier rows.                                                                      |
-| Every statement a constant string with `prepare: true`, writes marked `isIdempotent` | Prepared once per connection; idempotent statements may be retried safely by the driver.                                                                 |
-| `notification_recipients` projection (one row per user)                              | Receipts and digests read email and display name locally instead of a synchronous call to identity.                                                      |
+| Choice                                                                                   | Why                                                                                                                                                                                 |
+| ---------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| One partition per `(tenant, user)` (`((tenant_id, user_id))`)                            | The inbox read touches exactly one partition on one replica set; no scatter-gather. A paging state only pages the partition it came from, so one tenant never reads another's rows. |
+| Clustering on `notification_id DESC`, a uuidv7                                           | Cassandra orders non-time-based uuids byte-wise, which for v7 is time order: rows are stored newest first and the inbox is a sequential slice.                                      |
+| `default_time_to_live` 90 days instead of deletes                                        | Partitions stay bounded without tombstones (mass deletes create tombstones that slow every later read of the partition).                                                            |
+| `UPDATE … USING TTL ?` when marking read                                                 | The table TTL also applies to UPDATEs, so the `read` cell would otherwise outlive (or underlive) the row; the bound TTL is the row's remaining lifetime.                            |
+| `read` never written on insert                                                           | An idempotent re-insert (Kafka redelivery) cannot flip a read notification back to unread.                                                                                          |
+| Driver paging (`fetchSize` + `pageState`)                                                | Pagination resumes from the driver's page state instead of re-reading earlier rows.                                                                                                 |
+| Every statement a constant string with `prepare: true`, writes marked `isIdempotent`     | Prepared once per connection; idempotent statements may be retried safely by the driver.                                                                                            |
+| `notification_recipients_by_tenant` projection (one row per `(tenant, user)` membership) | Receipts and digests read email and display name locally instead of a synchronous call to identity.                                                                                 |
 
 Driver knobs: `CASSANDRA_CONSISTENCY` (`localOne`), `CASSANDRA_CORE_CONNECTIONS` (2 per host),
 `CASSANDRA_REQUEST_TIMEOUT_MS` (12000), `CASSANDRA_LOCAL_DC` (must match the cluster's DC name, or

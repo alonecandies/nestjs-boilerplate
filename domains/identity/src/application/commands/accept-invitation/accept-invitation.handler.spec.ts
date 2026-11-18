@@ -57,6 +57,7 @@ describe('AcceptInvitationHandler', () => {
         displayName: 'Bob',
         passwordHash: 'x',
         now: new Date(),
+        personalTenantId: home,
       }),
     );
     events = recordingEventBus();
@@ -141,6 +142,7 @@ describe('AcceptInvitationHandler', () => {
         displayName: 'Eve',
         passwordHash: 'x',
         now: new Date(),
+        personalTenantId: home,
       }),
     );
     await expect(accept(eve, token)).rejects.toMatchObject({ code: 'INVITATION_EMAIL_MISMATCH' });
