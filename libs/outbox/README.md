@@ -100,6 +100,24 @@ export class OrdersModule {}
 
 The root module provides `DatabaseModule`, `KafkaProducerModule` and `RedisModule`.
 
+## Metrics
+
+`OutboxRelay` exports five series through `@platform/observability`'s `getOrCreate*` helpers (the
+process-wide registry `/metrics` serves), all labelled `outbox` with the feature name:
+
+| Metric                                  | Type      | Labels                       | Meaning                                                                                                           |
+| --------------------------------------- | --------- | ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `outbox_backlog`                        | gauge     | `outbox`                     | Unpublished rows at the leader's last poll (`OutboxPoll.backlog`).                                                |
+| `outbox_oldest_unpublished_age_seconds` | gauge     | `outbox`                     | Now minus the `created_at` of the oldest unpublished row at that poll; 0 when there is none.                      |
+| `outbox_publish_latency_seconds`        | histogram | `outbox`, `topic`            | Publish acknowledgement time minus `created_at`, observed once per acknowledged row (a resend is observed again). |
+| `outbox_published_total`                | counter   | `outbox`, `topic`, `outcome` | One per publish attempt: `ok` when the broker acknowledged, `error` for the failed row that ends a batch.         |
+| `outbox_relay_leader`                   | gauge     | `outbox`                     | 1 while this process holds the relay lock; 0 once its relay started and while it follows, and after a term ends.  |
+
+Only the leader sets the backlog and age. When a term ends (lock lost, shutdown, failure) the
+leader gauge reads 0 and the backlog and age series of that outbox are removed, so a sum over
+processes never adds a former leader's stale value. `OutboxMetrics` is exported for code that drives
+a relay by hand.
+
 ## Configuration
 
 Namespace `outbox` in `@platform/config` (`OUTBOX_RELAY_ENABLED`, `OUTBOX_POLL_INTERVAL_MS`,

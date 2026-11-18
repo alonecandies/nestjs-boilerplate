@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Transactional outbox: the outbox table type, the runtime writer that inserts an event in the caller's open transaction, the system repository base, the leader relay and (later) its metrics.",
+  "description": "Transactional outbox: the outbox table type, the runtime writer that inserts an event in the caller's open transaction, the system repository base, the leader relay and its metrics.",
   "exports": {
     ".": {
       "@repo/source": "./src/index.ts",

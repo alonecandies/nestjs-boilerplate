@@ -9,6 +9,7 @@ import type { DistributedLockService } from '@platform/redis';
 import type { KafkaProducer } from '@platform/transport';
 import type { OutboxSystemRepository } from './outbox.system-repository.js';
 import type { OutboxFeature, OutboxRow } from './outbox.types.js';
+import { OutboxMetrics } from './outbox-metrics.js';
 
 /** The `SystemContext` reason of every repository call the relay makes (poll, mark, purge). */
 export const OUTBOX_RELAY_REASON = 'outbox.relay';
@@ -91,6 +92,10 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
  * - A full batch polls again at once; otherwise the relay waits `pollIntervalMs`.
  * - Once per hour of leadership (and at the start of the first term) it purges the rows published
  *   more than `retentionHours` ago.
+ * - Metrics (`OutboxMetrics`, label `outbox` = the feature name): each poll sets the backlog and
+ *   the age of the oldest unpublished row, each acknowledged row observes its commit-to-publish
+ *   latency, each publish counts `ok` or `error`; `outbox_relay_leader` is 1 during a term, and
+ *   when the term ends it reads 0 and the backlog and age series are removed.
  * - Starts on application bootstrap when `relayEnabled` and the process has a system pool; stops
  *   in `beforeApplicationShutdown` (before Redis, the pools and the Kafka client close), waiting
  *   for the in-flight publish at most `lockTtlMs`.
@@ -99,6 +104,7 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
   private readonly logger: Logger;
   private readonly lockResource: string;
   private readonly random: () => number;
+  private readonly metrics: OutboxMetrics;
   /** Epoch ms from which the next purge is due; shared by the terms of this instance. */
   private nextPurgeAt = 0;
   private stopController: AbortController | undefined;
@@ -115,6 +121,7 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
     this.logger = new Logger(`OutboxRelay:${feature.name}`);
     this.lockResource = outboxRelayLockResource(feature.name);
     this.random = options.random ?? Math.random;
+    this.metrics = new OutboxMetrics(feature.name);
   }
 
   /**
@@ -126,7 +133,9 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
       if (signal.aborted) return { polled: 0, published: 0, failed: false };
       let rows: readonly OutboxRow[];
       try {
-        ({ rows } = await this.repository.pollUnpublished(this.config.batchSize));
+        const poll = await this.repository.pollUnpublished(this.config.batchSize);
+        this.metrics.polled(poll);
+        rows = poll.rows;
       } catch (error) {
         this.logger.warn(`poll failed (${errorMessage(error)}); retrying after a backoff`);
         return { polled: 0, published: 0, failed: true };
@@ -137,9 +146,11 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
         if (signal.aborted) break;
         try {
           await this.publisher.publishStored(row.topic, row.envelope, row.key);
+          this.metrics.published(row);
           acknowledged.push(row);
         } catch (error) {
           failed = true;
+          this.metrics.publishFailed(row);
           this.logger.warn(
             `publish of event ${row.id} to "${row.topic}" failed (${errorMessage(error)}); ` +
               'the batch stops here and the row goes out again',
@@ -186,6 +197,7 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
       return;
     }
     if (this.running !== undefined) return;
+    this.metrics.following();
     const controller = new AbortController();
     this.stopController = controller;
     this.running = this.run(controller.signal).catch((error: unknown) => {
@@ -234,6 +246,15 @@ export class OutboxRelay implements OnApplicationBootstrap, BeforeApplicationShu
 
   private async term(stop: AbortSignal, lost: AbortSignal): Promise<'lost' | 'stopped'> {
     this.logger.log('leading: publishing this outbox');
+    this.metrics.termStarted();
+    try {
+      return await this.lead(stop, lost);
+    } finally {
+      this.metrics.termEnded();
+    }
+  }
+
+  private async lead(stop: AbortSignal, lost: AbortSignal): Promise<'lost' | 'stopped'> {
     const signal = AbortSignal.any([stop, lost]);
     let failures = 0;
     for (;;) {
