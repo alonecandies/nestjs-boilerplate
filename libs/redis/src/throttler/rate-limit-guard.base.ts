@@ -13,6 +13,7 @@ import {
   type RateLimitDecision,
 } from './rate-limit-headers.js';
 import { rateLimitKey } from './rate-limit-key.util.js';
+import { recordRateLimitDecision } from './rate-limit-metrics.js';
 import { type RateLimitPolicy, RateLimitPolicyRegistry } from './rate-limit-policy.js';
 import { GLOBAL_SCOPE, RATE_LIMIT_POLICY_KEY, THROTTLER } from './throttle.constants.js';
 import { authenticatedTenantId, authenticatedUserId } from './throttle-tracker.util.js';
@@ -194,12 +195,12 @@ export abstract class RateLimitGuardBase extends ThrottlerGuard {
   }
 
   /**
-   * Every guard decision passes here: writes the IETF headers (all budgets of this response, both
-   * guards) and is the hook for decision metrics (G-10: count at the TOP of this method, before the
-   * early returns, so lockout and WebSocket decisions are counted too). The lockout bucket is never
-   * advertised.
+   * Every guard decision passes here: counts it (`rate_limit_decisions_total`, G-10: first, before
+   * the early returns, so lockout and WebSocket decisions are counted too) and writes the IETF
+   * headers (all budgets of this response, both guards). The lockout bucket is never advertised.
    */
   protected recordDecision(context: ExecutionContext, decision: RateLimitDecision): void {
+    recordRateLimitDecision(decision);
     if (decision.throttler === THROTTLER.LOCKOUT) return;
     const res = this.responseOf(context);
     if (res === undefined) return;
