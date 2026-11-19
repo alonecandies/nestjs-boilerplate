@@ -20,6 +20,15 @@ import {
 /** Page size of the ref list. */
 export const R5_REF_PAGE_SIZE = 500;
 
+/**
+ * How far before the stored `verifiedAt` a run looks for refs the last run could not see. A ref is
+ * written to Postgres after its immudb post, so one whose tx the stored state includes may land
+ * after that run read the state; the last run's read happened before `verifiedAt` (stamped by the
+ * compare-and-set after the proof), and this margin covers the proof's duration and the clock skew
+ * between the database (`verified_at`) and the consumers (`posted_at`).
+ */
+export const R5_VERIFIED_AT_OVERLAP_MS = 10 * 60_000;
+
 const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
 
 /**
@@ -33,8 +42,10 @@ const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
  *    entry verified, the run `failed` (`ReconciliationCheckFailure`).
  * 3. `advanceTrustedState(db, trusted, next)`, a compare-and-set: lost → the run `failed`, no
  *    finding, no retry, no entry verified (the run that won verifies them).
- * 4. Every ref posted from `min(from, trusted.verifiedAt)` until the state was read, whose tx id is
- *    above the old trusted tx id (up to `next`'s) or null (a `replayed` receipt):
+ * 4. Every ref posted from `min(from, cutoff)` until the state was read, with `cutoff` the stored
+ *    `verifiedAt` − `R5_VERIFIED_AT_OVERLAP_MS`, whose tx id is above the old trusted tx id (up to
+ *    `next`'s), or at most the old one and posted since `cutoff` (recorded after the last run read
+ *    its state, so that run never saw it), or null (a `replayed` receipt):
  *    `LedgerPort.verifyEntry(entryId, payloadHash, next)`; a failure → `verification_failed` under
  *    the ref's tenant (source key `ledger_entries:<id>`). Entry failures do not undo step 3.
  * `ledger_verified_tx_id` follows the stored state. Runs only inside `SystemContext`.
@@ -102,17 +113,18 @@ export class R5VerificationCheck implements ReconciliationCheck {
     LedgerMetrics.verifiedTxId(next.txId);
     LedgerMetrics.unverifiedTxLag(current.txId, next.txId);
 
-    const since =
-      stored === null || ctx.from.getTime() <= stored.verifiedAt.getTime()
-        ? ctx.from
-        : stored.verifiedAt;
+    // Refs of txs the stored state includes but recorded after the last run read it: posted since
+    // `cutoff`. A ref recorded later still falls in a later run's window, with its own cutoff.
+    const cutoff =
+      stored === null ? null : new Date(stored.verifiedAt.getTime() - R5_VERIFIED_AT_OVERLAP_MS);
+    const since = cutoff === null || ctx.from.getTime() <= cutoff.getTime() ? ctx.from : cutoff;
     const oldTxId = trusted?.txId ?? 0n;
     const found: LedgerDiscrepancyInput[] = [];
     let after: LedgerCursor | null = null;
     for (;;) {
       const batch = await this.system.listEntryRefs(since, readAt, after, R5_REF_PAGE_SIZE);
       for (const ref of batch) {
-        if (!needsVerification(ref, oldTxId, next.txId)) continue;
+        if (!needsVerification(ref, oldTxId, next.txId, cutoff)) continue;
         const failure = await this.verify(ref, next);
         if (failure !== null) found.push(this.finding(ctx, failure));
       }
@@ -154,11 +166,19 @@ export class R5VerificationCheck implements ReconciliationCheck {
 }
 
 /**
- * A ref the new state has to vouch for: posted after the old trusted state (`immudbTxId` above it,
- * up to the new one; a later one is verified by the next run) or a `replayed` receipt without a tx
- * id, which is verified on every run that lists it.
+ * A ref the new state has to vouch for (a tx above the new one is verified by the next run):
+ * - posted after the old trusted state (`immudbTxId` above it, up to the new one);
+ * - of a tx the old state includes but recorded since `cutoff`, after the last run read its state;
+ * - a `replayed` receipt without a tx id, which is verified on every run that lists it.
  */
-function needsVerification(ref: LedgerEntryRef, oldTxId: bigint, nextTxId: bigint): boolean {
+function needsVerification(
+  ref: LedgerEntryRef,
+  oldTxId: bigint,
+  nextTxId: bigint,
+  cutoff: Date | null,
+): boolean {
   if (ref.immudbTxId === null) return true;
-  return ref.immudbTxId > oldTxId && ref.immudbTxId <= nextTxId;
+  if (ref.immudbTxId > nextTxId) return false;
+  if (ref.immudbTxId > oldTxId) return true;
+  return cutoff !== null && ref.postedAt.getTime() >= cutoff.getTime();
 }

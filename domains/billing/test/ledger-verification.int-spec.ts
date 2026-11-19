@@ -106,11 +106,14 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       return new ImmudbLedgerAdapter(moduleRef.get(ImmudbClient));
     };
 
-    /** Posts entry `n` and records its receipt the way the consumer does (`posted`: its tx id). */
+    /**
+     * Posts entry `n` and records its receipt the way the consumer does (`posted`: its tx id),
+     * stamped `postedAt` (default: now).
+     */
     const post = async (
       ledger: ImmudbLedgerAdapter,
       tenantId: string,
-      options: { refHash?: string } = {},
+      options: { refHash?: string; postedAt?: Date } = {},
     ): Promise<LedgerEntryRef> => {
       posted += 1;
       const entry = draft(posted, tenantId);
@@ -124,7 +127,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         immudbTxId: outcome.immudbTxId,
         paymentId: null,
         kind: entry.kind,
-        postedAt: new Date(),
+        postedAt: options.postedAt ?? new Date(),
       };
       await asSystem(() => system.recordEntryRefs([ref]));
       return ref;
@@ -173,8 +176,11 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       const ledger = await adapterOn(signed, { key: pinned, migrate: true });
       const check = new R5VerificationCheck(ledger, system);
       const verifyEntry = vi.spyOn(ledger, 'verifyEntry');
-      const a = await post(ledger, TENANT_A);
-      const b = await post(ledger, TENANT_B);
+      // Recorded well before this run: the next run's look-back for late refs
+      // (R5_VERIFIED_AT_OVERLAP_MS before the stored verifiedAt) does not reach them again.
+      const earlier = new Date(Date.now() - HOUR);
+      const a = await post(ledger, TENANT_A, { postedAt: earlier });
+      const b = await post(ledger, TENANT_B, { postedAt: earlier });
 
       await expect(asSystem(() => check.run(window()))).resolves.toEqual([]);
       const first = await trustedRow();

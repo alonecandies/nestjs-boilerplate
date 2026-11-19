@@ -619,7 +619,8 @@ tenant). A Stripe failure fails R4 and keeps what was already enqueued. **R5** (
 tamper evidence): reads `billing.ledger_trusted_state` for the immudb database, proves with `LedgerPort.advanceTrustedState`
 (dual proof, plus the state signature when `IMMUDB_SERVER_SIGNING_PUBLIC_KEY` pins a key) that the current state
 extends it, and advances the row by compare-and-set; then verifies (`VerifiableSQLGet`) every ref posted since
-`min(from, verifiedAt)` whose tx id is above the old trusted one or null (`replayed`). A failed proof → one
+`min(from, verifiedAt − 10 min)` whose tx id is above the old trusted one, or at most it and posted since
+`verifiedAt − 10 min` (a ref recorded after the last run read the state), or null (`replayed`). A failed proof → one
 `verification_failed` under the platform tenant (`state:<db>`), no advance, no entry verified, the run `failed`; a lost
 compare-and-set → the run `failed`, no finding; an entry that does not verify → `verification_failed` under the ref's
 tenant (`ledger_entries:<id>`), the state still advances. No row yet: the current state is taken on trust (its signature

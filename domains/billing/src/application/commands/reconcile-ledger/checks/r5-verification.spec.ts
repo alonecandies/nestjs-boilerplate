@@ -20,7 +20,11 @@ import type { R1InvariantCheck } from './r1-invariant.js';
 import type { R2MutationCheck } from './r2-mutation.js';
 import type { R3PaymentsCheck } from './r3-payments.js';
 import type { R4StripeCheck } from './r4-stripe.js';
-import { R5_REF_PAGE_SIZE, R5VerificationCheck } from './r5-verification.js';
+import {
+  R5_REF_PAGE_SIZE,
+  R5_VERIFIED_AT_OVERLAP_MS,
+  R5VerificationCheck,
+} from './r5-verification.js';
 
 const TENANT_B = '0192f0c1-0000-7000-8000-000000000002';
 const HOUR = 3_600_000;
@@ -70,10 +74,19 @@ describe('R5VerificationCheck (reconciliation R5: the trusted state and verified
   const lastRun = () => [...store.runs.values()].at(-1);
   const trusted = () => store.trustedStates.get(DB);
 
-  /** Posts `n` through the ledger and records its ref as the consumer does (`posted`: its tx id). */
+  /**
+   * Posts `n` through the ledger and records its ref as the consumer does (`posted`: its tx id);
+   * `record: false` leaves the ref for the test to insert later.
+   */
   const post = async (
     n: number,
-    options: { tenantId?: string; replayed?: boolean; refHash?: string; postedAt?: Date } = {},
+    options: {
+      tenantId?: string;
+      replayed?: boolean;
+      refHash?: string;
+      postedAt?: Date;
+      record?: boolean;
+    } = {},
   ): Promise<LedgerEntryRef> => {
     const d = draft(n, options.tenantId);
     const outcome = await ledger.post(d);
@@ -88,7 +101,7 @@ describe('R5VerificationCheck (reconciliation R5: the trusted state and verified
       kind: d.kind,
       postedAt: options.postedAt ?? new Date(NOW.getTime() - HOUR),
     };
-    store.insertEntryRef(ref);
+    if (options.record !== false) store.insertEntryRef(ref);
     return ref;
   };
 
@@ -164,11 +177,51 @@ describe('R5VerificationCheck (reconciliation R5: the trusted state and verified
     expect(await metric(LEDGER_VERIFIED_TX_ID)).toBe(5);
   });
 
-  it('lists the refs since min(from, verifiedAt), page by page, up to when the state was read', async () => {
+  it.each([
+    ['at the instant the state was read', 0],
+    ['long after the state was read (a stalled consumer)', 2 * HOUR],
+  ])(
+    'a ref recorded %s, whose tx the stored state includes, is verified by the next run',
+    async (_, lateBy) => {
+      await post(1);
+      // Posted to immudb before the state is read; its ref reaches Postgres only after the run.
+      const late = await post(2, { record: false, postedAt: new Date(NOW.getTime() + lateBy) });
+      await reconcile();
+      expect(trusted()?.txId).toBe(2n);
+      expect(verified).not.toContain(late.entryId);
+      store.insertEntryRef(late);
+      verified = [];
+
+      vi.setSystemTime(new Date(NOW.getTime() + 3 * HOUR));
+      await reconcile();
+
+      expect(verified).toEqual([late.entryId]);
+      expect(lastRun()?.status).toBe('succeeded');
+    },
+  );
+
+  it('a late ref with a wrong hash is still found by the next run', async () => {
+    const late = await post(1, { record: false, postedAt: NOW, refHash: 'e'.repeat(64) });
+    await reconcile();
+    store.insertEntryRef(late);
+
+    vi.setSystemTime(new Date(NOW.getTime() + HOUR));
+    await reconcile();
+
+    expect(store.discrepancies).toEqual([
+      expect.objectContaining({
+        kind: 'verification_failed',
+        sourceKey: `ledger_entries:${late.entryId}`,
+      }),
+    ]);
+  });
+
+  it('lists the refs since min(from, verifiedAt − overlap), page by page, up to when the state was read', async () => {
     await post(1);
     await reconcile();
     const list = vi.spyOn(store.system, 'listEntryRefs');
-    // The stored state was verified before the window starts: the refs since then are read.
+    // The stored state was verified before the window starts: the refs since a little before
+    // then are read.
     store.trustedStates.set(DB, {
       ...(trusted() ?? expect.fail('no state')),
       verifiedAt: new Date(FROM.getTime() - HOUR),
@@ -177,7 +230,7 @@ describe('R5VerificationCheck (reconciliation R5: the trusted state and verified
     await reconcile();
 
     expect(list.mock.calls[0]).toEqual([
-      new Date(FROM.getTime() - HOUR),
+      new Date(FROM.getTime() - HOUR - R5_VERIFIED_AT_OVERLAP_MS),
       NOW,
       null,
       R5_REF_PAGE_SIZE,
