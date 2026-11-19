@@ -22,6 +22,10 @@ export * from './application/ledger/posting-rules.js';
 export * from './application/mappers/payment.mapper.js';
 export * from './application/ports/ledger.port.js';
 export * from './application/queries/list-payments/list-payments.query.js';
+// The ledger's receipt and system ports (outbox plan Task 11; `@domain/billing/testing` has
+// `InMemoryLedgerStore` behind both).
+export * from './application/repositories/ledger.system-repository.js';
+export * from './application/repositories/ledger-receipts.repository.js';
 // The system port (app e2e harnesses override it with `@domain/billing/testing`'s in-memory one).
 export type { StripeEventReceipt } from './application/repositories/stripe-events.repository.js';
 export { StripeEventsSystemRepository } from './application/repositories/stripe-events.system-repository.js';
@@ -43,6 +47,7 @@ export * from './domain/ledger/ledger.errors.js';
 export * from './domain/ledger/ledger.ids.js';
 export * from './domain/ledger/ledger.invariant.js';
 export * from './domain/ledger/ledger.types.js';
+export * from './domain/ledger/ledger-discrepancy.js';
 export * from './domain/payment.aggregate.js';
 // Infrastructure
 export * from './infrastructure/ledger/billing-ledger.migrations.js';

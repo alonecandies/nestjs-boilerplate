@@ -229,7 +229,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         ]);
       });
 
-      it('grants app_runtime S, I, U on payments and S, I on stripe_events; app_system S, I, D on stripe_events only', async () => {
+      it('grants app_runtime S, I, U on payments and S, I on stripe_events; app_system S, I, D on stripe_events and S on payments', async () => {
         const rows = await admin<{ grantee: string; name: string; privileges: string }[]>`
           select a.grantee::regrole::text as grantee, c.relname as name,
             string_agg(a.privilege_type, ',' order by a.privilege_type) as privileges
@@ -242,6 +242,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         expect([...rows]).toEqual([
           { grantee: 'app_runtime', name: 'payments', privileges: 'INSERT,SELECT,UPDATE' },
           { grantee: 'app_runtime', name: 'stripe_events', privileges: 'INSERT,SELECT' },
+          // 0006_ledger_system_reads (outbox plan Task 11): reconciliation R3 reads payments.
+          { grantee: 'app_system', name: 'payments', privileges: 'SELECT' },
           { grantee: 'app_system', name: 'stripe_events', privileges: 'DELETE,INSERT,SELECT' },
         ]);
       });
@@ -520,8 +522,15 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         expect(changed).toEqual([1, EVENTS.length + 1]);
       });
 
-      it('app_system has no grant on payments, and cannot update stripe_events', async () => {
-        expect(await failure(plain(system, paymentIds))).toEqual(NO_PRIVILEGE);
+      it('app_system reads every payment (0006, reconciliation R3) but cannot write one, and cannot update stripe_events', async () => {
+        await expect(plain(system, paymentIds)).resolves.toEqual(
+          PAYMENTS.map((payment) => payment.id).toSorted(),
+        );
+        expect(
+          await failure(
+            plain(system, (tx) => tx`update billing.payments set quantity = 9`, { commit: true }),
+          ),
+        ).toEqual(NO_PRIVILEGE);
         expect(
           await failure(
             plain(system, (tx) => insertPayment(tx, PLATFORM_TENANT_ID, A1), { commit: true }),

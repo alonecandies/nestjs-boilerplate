@@ -334,8 +334,9 @@ directly (no subquery, no helper or FK into identity); "–" means no policy, so
 
 - Elevation (`billing:read-all`) widens the payments read to the tenant; it never writes another member's payment,
   and a `SELECT … FOR UPDATE` of another member's payment returns nothing even when elevated.
-- `app_system` (BYPASSRLS) gets `SELECT, INSERT, DELETE` on `stripe_events` only (the Stripe-event system methods)
-  and nothing on `payments`. Rows with `tenant_id = PLATFORM_TENANT_ID` match no runtime policy: only `app_system`
+- `app_system` (BYPASSRLS) gets `SELECT, INSERT, DELETE` on `stripe_events` (the Stripe-event system methods) and,
+  since `0006_ledger_system_reads`, `SELECT` on `payments` (reconciliation R3's
+  `ledgerReconciliation.listSucceededPayments`); it never writes a payment. Rows with `tenant_id = PLATFORM_TENANT_ID` match no runtime policy: only `app_system`
   reads or writes them.
 - **Which principal each flow runs as** (no transaction spans the Stripe call, and each flow settles its principal before
   its unit of work opens):
@@ -348,11 +349,14 @@ directly (no subquery, no helper or FK into identity); "–" means no policy, so
   | List payments                        | the request principal; the `billing:read-all` check is in TypeScript first, then `elevate(billing:read-all)` for the whole-tenant listing only         |
   | Purge Stripe events (hourly cron)    | `SystemContext.run('billing.purge-stripe-events')` and `stripeEvents.deleteProcessedBefore`                                                            |
 
-- **System methods** (two, both `system` scope, pinned in `billing.system-methods.ts`):
-  `stripeEvents.deleteProcessedBefore` and `stripeEvents.markProcessedAsPlatform`. Only
-  `drizzle-stripe-events.system-repository.ts` names `SystemDatabase`. Every process that runs the billing core needs
-  `DATABASE_SYSTEM_URL`; without it a platform webhook fails with `SYSTEM_DATABASE_UNAVAILABLE` and Stripe retries.
-  The ledger phase adds its methods to the same list, with their grants.
+- **System methods** (all `system` scope, pinned in `billing.system-methods.ts`):
+  `stripeEvents.deleteProcessedBefore` and `stripeEvents.markProcessedAsPlatform`; the four shared `outbox.*`
+  methods; and the ledger's ten (outbox plan Task 11, spec §9 items 9-11 and delta 4):
+  `ledgerReconciliation.{listSucceededPayments, listEntryRefs, appendDiscrepancies, enqueueMissingPostings}`,
+  `ledgerEntryRefs.recordAsSystem`, `ledgerAccounts.recordPlatformAccounts`, `ledgerTrustedState.{read, advance}` and
+  `ledgerRuns.{start, finish}`. Only the three `drizzle-*.system-repository.ts` files name `SystemDatabase`. Every
+  process that runs the billing core needs `DATABASE_SYSTEM_URL`; without it a platform webhook fails with
+  `SYSTEM_DATABASE_UNAVAILABLE` and Stripe retries.
 
 `payment_status` enum: `pending`, `succeeded`, `failed`, `expired`, `refunded`, `partially_refunded`, `disputed`.
 Constraint and index names are explicit snake_case (`payments_tenant_id_id_pk`). The tables and the enum live in the `billing` Postgres schema
@@ -395,7 +399,7 @@ transaction would carry no RLS context.
   and one grant per table and role, `0004_outbox` holding the plan's outbox SQL in order
   (`describeOutboxTable` pins the table's shape), and `0005_ledger_tables` holding the five ledger tables in order
   (each tenant table's distribution call right after its `CREATE`, no FK, no `REVOKE`, the contract's grants and
-  policies).
+  policies), and `0006_ledger_system_reads` holding only `app_system`'s `SELECT` on `payments`.
 - `infrastructure/stripe/*.spec.ts` — the Stripe adapter: SDK error mapping, signature verification (valid, forged, stale, re-serialised, missing, not JSON), Checkout params and idempotency key, module wiring and the invalid-key boot failure.
 - `billing.controller.spec.ts` — Fastify app with the real `AuthModule` guards (tokens from `signTestAccessToken`, `@platform/auth/testing`):
   401/403, 400 validation (body, query, `Idempotency-Key`), serialisation, raw-body webhook, OpenAPI document.
@@ -458,6 +462,13 @@ are `42501` for `app_runtime`, elevated or not, and for `app_system`. Local tabl
 `42501`, `app_system` inserts, reads and updates. The probe for the receipts repository: `INSERT … ON CONFLICT DO
 NOTHING` (no target, no `RETURNING`) on `ledger_entry_refs` as a non-elevated member reports 1 row, then 0. Without
 an RLS context nothing is readable.
+`infrastructure/persistence/billing.ledger-repositories.rls.int-spec.ts` (outbox plan Task 11, local execution off):
+the receipts repository as a non-elevated member (`recordEntryRef` true then false, another tenant's or the
+platform's ref `42501`, `recordAccounts` idempotent and refusing platform-owned rows before SQL, `appendDiscrepancy`
+true then false, no principal refused before BEGIN) and the ledger system repository as `app_system` (both lists
+return every tenant's rows, the platform's included, in `(tenant_id, id)` order over three pages within `[from, to)`;
+`appendDiscrepancies`, `enqueueMissingPostings`, `recordEntryRefs` and `recordPlatformAccounts` count new rows only;
+the trusted-state compare-and-set; a run finishes once; every method refused outside `SystemContext`).
 `test/webhook-outbox.int-spec.ts` (the real core on the three URLs, the module's relay off): a paid webhook for tenant
 A leaves the payment succeeded, the receipt and one outbox row under A; a replay adds no row; one tick of a real
 `OutboxRelay` publishes an envelope that parses with `PAYMENT_SUCCEEDED_EVENT` and marks the row; with the row's id
@@ -474,6 +485,13 @@ RLS). Tables: `infrastructure/ledger/migrations/001_ledger.sql` (`billingLedgerM
 into the apps yet: the posting consumer, reconciliation and `LEDGER_ENABLED` arrive with the outbox
 (ledger waves 1-2). Tests: `InMemoryLedger` (`@domain/billing/testing`) and the adapter run the same
 contract spec (`src/testing/ledger.contract.test.ts`).
+
+Postgres keeps the receipts around the entries (outbox plan Task 11): `LedgerReceiptsRepository` writes refs, tenant
+account rows and findings as the principal (plain `INSERT … ON CONFLICT DO NOTHING`, no target and no `RETURNING`,
+the form 0005's probe pinned), and `LedgerSystemRepository` is the system side (reconciliation lists, findings,
+re-enqueued postings, platform refs and accounts, the trusted state and the runs). Findings have deterministic ids
+(`ledgerDiscrepancyId`: kind, source key and a hash of `expected`/`actual`), so an overlapping window or a rerun
+appends nothing new. `InMemoryLedgerStore` (`@domain/billing/testing`) is the twin of both.
 
 ## Gotchas
 

@@ -6,6 +6,8 @@ import { CreateCheckoutSessionHandler } from './application/commands/create-chec
 import { HandleStripeWebhookHandler } from './application/commands/handle-stripe-webhook/handle-stripe-webhook.handler.js';
 import { PurgeStripeEventsHandler } from './application/commands/purge-stripe-events/purge-stripe-events.handler.js';
 import { ListPaymentsHandler } from './application/queries/list-payments/list-payments.handler.js';
+import { LedgerSystemRepository } from './application/repositories/ledger.system-repository.js';
+import { LedgerReceiptsRepository } from './application/repositories/ledger-receipts.repository.js';
 import { PaymentsRepository } from './application/repositories/payments.repository.js';
 import { StripeEventsRepository } from './application/repositories/stripe-events.repository.js';
 import { StripeEventsSystemRepository } from './application/repositories/stripe-events.system-repository.js';
@@ -17,6 +19,8 @@ import {
   PAID_WITHOUT_CURRENCY_METRIC,
 } from './billing.constants.js';
 import { BILLING_OUTBOX, BillingOutbox } from './infrastructure/persistence/billing-outbox.js';
+import { DrizzleLedgerSystemRepository } from './infrastructure/persistence/drizzle-ledger.system-repository.js';
+import { DrizzleLedgerReceiptsRepository } from './infrastructure/persistence/drizzle-ledger-receipts.repository.js';
 import { BillingOutboxSystemRepository } from './infrastructure/persistence/drizzle-outbox.system-repository.js';
 import { DrizzlePaymentsRepository } from './infrastructure/persistence/drizzle-payments.repository.js';
 import { DrizzleStripeEventsRepository } from './infrastructure/persistence/drizzle-stripe-events.repository.js';
@@ -80,8 +84,11 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
     }),
     { provide: PaymentsRepository, useClass: DrizzlePaymentsRepository },
     { provide: StripeEventsRepository, useClass: DrizzleStripeEventsRepository },
-    // Billing's doors to the app_system pool (BILLING_SYSTEM_METHODS): this one and the outbox's.
+    // The ledger's receipts as the principal (runtime pool, insert-only RLS; outbox plan Task 11).
+    { provide: LedgerReceiptsRepository, useClass: DrizzleLedgerReceiptsRepository },
+    // Billing's doors to the app_system pool (BILLING_SYSTEM_METHODS): these two and the outbox's.
     { provide: StripeEventsSystemRepository, useClass: DrizzleStripeEventsSystemRepository },
+    { provide: LedgerSystemRepository, useClass: DrizzleLedgerSystemRepository },
   ],
 })
 export class BillingCoreModule {}

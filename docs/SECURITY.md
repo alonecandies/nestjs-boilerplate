@@ -541,29 +541,40 @@ it); it never falls back to `DATABASE_URL`.
   counted in `db_system_calls_total{method,outcome}`.
 - **Grants.** `app_system` holds per-table grants for these methods and nothing else (identity: `SELECT` on `users`,
   `tenants`, `memberships` and `invitations`, `SELECT, DELETE` on `sessions`; billing: `SELECT, INSERT, DELETE` on
-  `stripe_events` only).
+  `stripe_events`, `SELECT` on `payments` for reconciliation R3, the outbox's `SELECT, INSERT, UPDATE, DELETE`,
+  `SELECT, INSERT` on the three tenant ledger tables and `SELECT, INSERT, UPDATE` on the two local ones).
 - **Not a pool method:** `staff:grant` connects as `app_owner` on `DATABASE_MIGRATION_URL`.
 
-The pinned lists (12 methods when B3 shipped; program spec section 9 numbers the first group, the second is the B3
-ruling below):
+The pinned lists (12 methods when B3 shipped, 22 with the ledger's ten; program spec section 9 numbers the first
+group, the second is the B3 ruling below; the shared `outbox.*` methods are listed in `libs/outbox`):
 
-| Method                                 | Scope    | Used by (reason)                                                                            |
-| -------------------------------------- | -------- | ------------------------------------------------------------------------------------------- |
-| `users.findCredentialsByEmail`         | pre-auth | login (spec 1): the credentials row by email                                                |
-| `users.existsByEmail`                  | pre-auth | register pre-check (spec 2); the unique constraint still guards races                       |
-| `invitations.findByTokenHash`          | pre-auth | accept invitation (spec 3): a multi-shard read, one index probe per shard                   |
-| `sessions.deleteExpired`               | system   | the hourly purge, `identity.purge-expired-sessions` (spec 4): multi-shard `DELETE` slices   |
-| `stripeEvents.deleteProcessedBefore`   | system   | the hourly purge, `billing.purge-stripe-events` (spec 5)                                    |
-| `stripeEvents.markProcessedAsPlatform` | system   | platform webhooks without a user, `billing.platform-webhook` (spec 8, `stripe_events` half) |
-| `users.findByIdInTenant`               | system   | `GET /v1/users/:id` and scoped `UsersPort` reads, `identity.user-directory`                 |
-| `users.listInTenant`                   | system   | `ListUsers`, `identity.user-directory`                                                      |
-| `users.findByIdsInTenant`              | system   | `GetUsersByIds` (the GraphQL users DataLoader, `Payment.user`), `identity.user-directory`   |
-| `memberships.findMember`               | system   | the member and profile after a role change, `identity.member-directory`                     |
-| `memberships.listMembers`              | system   | `ListMembers` and GraphQL `tenantMembers`, `identity.member-directory`                      |
-| `memberships.listForUser`              | system   | `ListMyTenants`, `identity.my-tenants`: every membership of the caller, across tenants      |
+| Method                                        | Scope    | Used by (reason)                                                                                   |
+| --------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| `users.findCredentialsByEmail`                | pre-auth | login (spec 1): the credentials row by email                                                       |
+| `users.existsByEmail`                         | pre-auth | register pre-check (spec 2); the unique constraint still guards races                              |
+| `invitations.findByTokenHash`                 | pre-auth | accept invitation (spec 3): a multi-shard read, one index probe per shard                          |
+| `sessions.deleteExpired`                      | system   | the hourly purge, `identity.purge-expired-sessions` (spec 4): multi-shard `DELETE` slices          |
+| `stripeEvents.deleteProcessedBefore`          | system   | the hourly purge, `billing.purge-stripe-events` (spec 5)                                           |
+| `stripeEvents.markProcessedAsPlatform`        | system   | platform webhooks without a user, `billing.platform-webhook` (spec 8, `stripe_events` half)        |
+| `users.findByIdInTenant`                      | system   | `GET /v1/users/:id` and scoped `UsersPort` reads, `identity.user-directory`                        |
+| `users.listInTenant`                          | system   | `ListUsers`, `identity.user-directory`                                                             |
+| `users.findByIdsInTenant`                     | system   | `GetUsersByIds` (the GraphQL users DataLoader, `Payment.user`), `identity.user-directory`          |
+| `memberships.findMember`                      | system   | the member and profile after a role change, `identity.member-directory`                            |
+| `memberships.listMembers`                     | system   | `ListMembers` and GraphQL `tenantMembers`, `identity.member-directory`                             |
+| `memberships.listForUser`                     | system   | `ListMyTenants`, `identity.my-tenants`: every membership of the caller, across tenants             |
+| `ledgerReconciliation.listSucceededPayments`  | system   | reconciliation R3 (spec 9): paid payments of every tenant in a window, keyset by `(tenant_id, id)` |
+| `ledgerReconciliation.listEntryRefs`          | system   | reconciliation (spec 9): ledger entry refs of every tenant in a window, keyset                     |
+| `ledgerReconciliation.appendDiscrepancies`    | system   | reconciliation (spec 10): findings under their tenants, deterministic ids, append-only             |
+| `ledgerReconciliation.enqueueMissingPostings` | system   | reconciliation R4 (spec 10): re-enqueued ledger postings, outbox rows of any tenant                |
+| `ledgerEntryRefs.recordAsSystem`              | system   | the ledger-posting consumer in `SystemContext` (spec 10): refs of platform or user-less postings   |
+| `ledgerAccounts.recordPlatformAccounts`       | system   | ledger postings (outbox plan delta 4): `PLATFORM_TENANT_ID` account rows only                      |
+| `ledgerTrustedState.read`                     | system   | reconciliation R5 (spec 11): the stored trusted immudb state                                       |
+| `ledgerTrustedState.advance`                  | system   | reconciliation R5 (spec 11): compare-and-set after the dual proof                                  |
+| `ledgerRuns.start`                            | system   | the reconciliation cron (spec 11): a run starts                                                    |
+| `ledgerRuns.finish`                           | system   | the reconciliation cron (spec 11): a run finishes, once                                            |
 
-Later phases add their own methods (the outbox relay, the ledger reconciliation) to the same pinned lists, with
-their per-table `app_system` grants and this table.
+Later phases add their own methods to the same pinned lists, with their per-table `app_system` grants and this
+table.
 
 ### Trust model
 

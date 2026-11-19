@@ -43,6 +43,13 @@
       "when": 1794975386145,
       "tag": "0005_ledger_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795072854589,
+      "tag": "0006_ledger_system_reads",
+      "breakpoints": true
     }
   ]
 }

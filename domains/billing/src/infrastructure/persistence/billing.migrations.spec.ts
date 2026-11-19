@@ -264,8 +264,8 @@ describe('billingMigrations', () => {
   describe('0005_ledger_tables (outbox plan Task 10: the "Ledger tables" contract, in migration order)', () => {
     const ledgerStatements = (): string[] => statementsOf('0005_ledger_tables.sql');
 
-    it('is the sixth and last journal entry: L-10 after G-1 (Task 6) on the billing lane', () => {
-      expect(journalTags()).toEqual([
+    it('is the sixth journal entry: L-10 after G-1 (Task 6) on the billing lane', () => {
+      expect(journalTags().slice(0, 6)).toEqual([
         '0000_init',
         '0001_tenant_columns',
         '0002_distribute',
@@ -332,6 +332,26 @@ describe('billingMigrations', () => {
           `CREATE POLICY "${table}_select" ON "billing"."${table}" FOR SELECT TO app_runtime USING (tenant_id = app.tenant_id() AND app.elevated());`,
           `CREATE POLICY "${table}_insert" ON "billing"."${table}" FOR INSERT TO app_runtime WITH CHECK (tenant_id = app.tenant_id());`,
         ]),
+      ]);
+    });
+  });
+
+  describe('0006_ledger_system_reads (custom, outbox plan Task 11: spec §9 item 9)', () => {
+    it('is the seventh and last journal entry, after the ledger tables', () => {
+      expect(journalTags()).toEqual([
+        '0000_init',
+        '0001_tenant_columns',
+        '0002_distribute',
+        '0003_rls',
+        '0004_outbox',
+        '0005_ledger_tables',
+        '0006_ledger_system_reads',
+      ]);
+    });
+
+    it('only grants app_system SELECT on payments (ledgerReconciliation.listSucceededPayments)', () => {
+      expect(statementsOf('0006_ledger_system_reads.sql')).toEqual([
+        'GRANT SELECT ON TABLE billing.payments TO app_system;',
       ]);
     });
   });
