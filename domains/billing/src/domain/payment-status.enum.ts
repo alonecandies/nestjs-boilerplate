@@ -7,7 +7,10 @@
  * Lifecycle of a payment:
  * `pending` → `succeeded` (Checkout paid) | `expired` (session expired unpaid) | `failed`
  * (session creation failed, or an async payment method was declined). `failed` → `pending` only
- * when the same idempotent checkout request is retried.
+ * when the same idempotent checkout request is retried. After payment (Stripe money webhooks,
+ * L-11): `succeeded` | `partially_refunded` → `partially_refunded` | `refunded` (`charge.refunded`)
+ * or → `disputed` (`charge.dispute.funds_withdrawn`); `disputed` → `succeeded`
+ * (`charge.dispute.funds_reinstated`).
  */
 export enum PaymentStatus {
   Pending = 'pending',

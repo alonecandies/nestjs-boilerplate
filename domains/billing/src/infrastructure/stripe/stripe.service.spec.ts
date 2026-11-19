@@ -209,6 +209,54 @@ describe('StripeService.retrieveCheckoutSession and the pinned API version', () 
     });
   });
 
+  it('retrievePaymentIntent: one GET by id; a missing PaymentIntent (404) is null', async () => {
+    const service = createService();
+    const retrieve = vi
+      .spyOn(service.client.paymentIntents, 'retrieve')
+      .mockResolvedValueOnce({ id: 'pi_1', object: 'payment_intent', metadata: {} } as never)
+      .mockRejectedValueOnce(
+        Stripe.errors.StripeError.generate({
+          statusCode: 404,
+          message: "No such payment_intent: 'pi_gone'",
+          type: 'invalid_request_error',
+          code: 'resource_missing',
+        }),
+      );
+
+    await expect(service.retrievePaymentIntent('pi_1')).resolves.toMatchObject({ id: 'pi_1' });
+    expect(retrieve).toHaveBeenNthCalledWith(1, 'pi_1');
+    await expect(service.retrievePaymentIntent('pi_gone')).resolves.toBeNull();
+    expect(retrieve).toHaveBeenCalledTimes(2);
+  });
+
+  it('retrievePaymentIntent: other failures are translated and thrown (the webhook is retried)', async () => {
+    const service = createService();
+    vi.spyOn(service.client.paymentIntents, 'retrieve')
+      .mockRejectedValueOnce(
+        Stripe.errors.StripeError.generate({ statusCode: 500, message: 'down', type: 'api_error' }),
+      )
+      .mockRejectedValueOnce(
+        new Stripe.errors.StripeRateLimitError({ message: 'slow down', type: 'rate_limit_error' }),
+      )
+      .mockRejectedValueOnce(
+        Stripe.errors.StripeError.generate({
+          statusCode: 400,
+          message: 'Invalid id',
+          type: 'invalid_request_error',
+        }),
+      );
+
+    await expect(service.retrievePaymentIntent('pi_1')).rejects.toMatchObject({
+      code: 'PAYMENT_PROVIDER_ERROR',
+    });
+    await expect(service.retrievePaymentIntent('pi_1')).rejects.toMatchObject({
+      code: 'PAYMENT_PROVIDER_RATE_LIMITED',
+    });
+    await expect(service.retrievePaymentIntent('pi_1')).rejects.toMatchObject({
+      code: 'PAYMENT_REQUEST_INVALID',
+    });
+  });
+
   it('pins the API version the SDK was built for', () => {
     expect(STRIPE_API_VERSION).toBe(Stripe.API_VERSION);
   });

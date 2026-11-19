@@ -59,6 +59,20 @@ export class StripeService {
   }
 
   /**
+   * A PaymentIntent by id (a GET: naturally idempotent), for its signed owner metadata (L-11), or
+   * `null` when Stripe has no such PaymentIntent (404). Never call it inside a unit of work.
+   * @throws DomainException any other Stripe failure (translated; the caller's delivery is retried)
+   */
+  async retrievePaymentIntent(id: string): Promise<Stripe.PaymentIntent | null> {
+    try {
+      return await this.client.paymentIntents.retrieve(id);
+    } catch (error) {
+      if (error instanceof Stripe.errors.StripeError && error.statusCode === 404) return null;
+      throw toPaymentDomainException(error) ?? error;
+    }
+  }
+
+  /**
    * Verifies the `Stripe-Signature` header (HMAC-SHA256 with the endpoint secret, timestamp within
    * 5 min) and parses the event. `payload` MUST be the raw request bytes — re-serialized JSON never
    * verifies. Synchronous `constructEvent` on purpose: node:crypto HMAC is the cheapest path.

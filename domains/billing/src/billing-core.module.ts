@@ -5,6 +5,7 @@ import { OutboxModule } from '@platform/outbox';
 import { CreateCheckoutSessionHandler } from './application/commands/create-checkout-session/create-checkout-session.handler.js';
 import { HandleStripeWebhookHandler } from './application/commands/handle-stripe-webhook/handle-stripe-webhook.handler.js';
 import { PurgeStripeEventsHandler } from './application/commands/purge-stripe-events/purge-stripe-events.handler.js';
+import { StripeOwnerResolver } from './application/ledger/stripe-owner-resolver.js';
 import { ListPaymentsHandler } from './application/queries/list-payments/list-payments.handler.js';
 import { LedgerSystemRepository } from './application/repositories/ledger.system-repository.js';
 import { LedgerReceiptsRepository } from './application/repositories/ledger-receipts.repository.js';
@@ -18,6 +19,7 @@ import {
   PAID_WITHOUT_AMOUNT_METRIC,
   PAID_WITHOUT_CURRENCY_METRIC,
 } from './billing.constants.js';
+import { ledgerConfig } from './infrastructure/ledger/ledger.config.js';
 import { BILLING_OUTBOX, BillingOutbox } from './infrastructure/persistence/billing-outbox.js';
 import { DrizzleLedgerSystemRepository } from './infrastructure/persistence/drizzle-ledger.system-repository.js';
 import { DrizzleLedgerReceiptsRepository } from './infrastructure/persistence/drizzle-ledger-receipts.repository.js';
@@ -32,8 +34,9 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
 /**
  * The billing core: CQRS handlers, the Drizzle repositories and billing's outbox
  * (`OutboxModule.forFeature`: the `BillingOutbox` writer the webhook enqueues
- * `billing.payment-succeeded.v1` with, in its unit of work, and the relay that publishes
- * `billing.outbox` to Kafka; `outbox` namespace). Imported by the process that owns the billing
+ * `billing.payment-succeeded.v1` and, while LEDGER_ENABLED, `billing.ledger-posting.v1` with, in
+ * its unit of work, and the relay that publishes `billing.outbox` to Kafka; `outbox` and `ledger`
+ * namespaces). Imported by the process that owns the billing
  * tables (billing-service via `BillingGrpcModule`; the monolith imports it directly, next to
  * `BillingApiModule.forLocal()`).
  *
@@ -48,6 +51,8 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
 @Module({
   imports: [
     ConfigModule.forFeature(stripeConfig),
+    // LEDGER_ENABLED gates the webhook's billing.ledger-posting.v1 rows (outbox plan Task 12).
+    ConfigModule.forFeature(ledgerConfig),
     StripeModule.forRootAsync(),
     OutboxModule.forFeature({
       feature: BILLING_OUTBOX,
@@ -58,6 +63,8 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
   providers: [
     CreateCheckoutSessionHandler,
     HandleStripeWebhookHandler,
+    // The owner of a Stripe money object: its metadata, else its PaymentIntent's (one GET).
+    StripeOwnerResolver,
     ListPaymentsHandler,
     PurgeStripeEventsHandler,
     PurgeStripeEventsCron,

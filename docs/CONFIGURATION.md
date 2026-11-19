@@ -120,6 +120,7 @@ it imports. A process ignores (and does not validate) variables of namespaces it
 | `storage`                 |    ✓     |         ✓         |                  |                         |                 | `StorageModule`                                                                                      |
 | `files`                   |    ✓     |         ✓         |                  |                         |                 | `FilesModule`                                                                                        |
 | `stripe`                  |    ✓     |                   |                  |                         |        ✓        | `StripeModule`, `BillingCoreModule`                                                                  |
+| `ledger`                  |    ✓     |                   |                  |                         |        ✓        | `BillingCoreModule` (`@domain/billing`)                                                              |
 | `monolith`                |    ✓     |                   |                  |                         |                 | `apps/monolith/src/main.ts`                                                                          |
 | `gateway`                 |          |         ✓         |                  |                         |                 | `apps/gateway/src/main.ts`                                                                           |
 
@@ -550,6 +551,16 @@ enqueue invitation mail on the shared BullMQ `mail` queue: in production it need
 | `STRIPE_MAX_NETWORK_RETRIES`   | `2`                                     | `0`–`10`; Stripe retries idempotently.                                                                                                                                 |
 | `STRIPE_TIMEOUT_MS`            | `20000`                                 | Stripe API timeout.                                                                                                                                                    |
 | `STRIPE_ALLOW_LOCAL_REDIRECTS` | `false`                                 | Local compose stack only. Production requires https, non-loopback `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` unless this is `true`.                                    |
+
+### `ledger` — Stripe money postings to the immudb ledger
+
+[`ledger.config.ts`](../domains/billing/src/infrastructure/ledger/ledger.config.ts) (owned by billing) · monolith, billing-service
+
+| Variable                          | Default | Description                                                                                                                                                                                                                                   |
+| --------------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LEDGER_ENABLED`                  | `false` | Stripe money webhooks (`charge.succeeded`, `refund.*`, `charge.dispute.funds_*`, `payout.*`) write a `billing.ledger-posting.v1` outbox row in the unit of work of their receipt. Off: receipts and payment transitions still happen, no row. |
+| `LEDGER_RECONCILE_LOOKBACK_HOURS` | `72`    | `1`–`720`. Window of the hourly reconciliation, back from now.                                                                                                                                                                                |
+| `LEDGER_VERIFY`                   | `false` | Verify postings against the trusted state kept in Postgres (R5).                                                                                                                                                                              |
 
 ## App-local variables
 

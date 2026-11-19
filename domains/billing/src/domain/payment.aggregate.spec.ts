@@ -350,6 +350,93 @@ describe('Payment aggregate', () => {
     });
   });
 
+  describe('refund / dispute / reinstate (ledger S-6, L-11)', () => {
+    const later = new Date('2026-09-10T08:00:00.000Z');
+    const at = (status: PaymentStatus) =>
+      makePayment({ status, amountTotal: 2_500, currency: 'usd', paidAt });
+
+    it('refund(full) moves succeeded → refunded, refund(partial) → partially_refunded', () => {
+      const full = at(PaymentStatus.Succeeded);
+      expect(full.refund(true, later)).toBe(true);
+      expect(full.toSnapshot()).toMatchObject({
+        status: PaymentStatus.Refunded,
+        updatedAt: later,
+        paidAt,
+        amountTotal: 2_500,
+      });
+
+      const partial = at(PaymentStatus.Succeeded);
+      expect(partial.refund(false, later)).toBe(true);
+      expect(partial.status).toBe(PaymentStatus.PartiallyRefunded);
+    });
+
+    it('a partially refunded payment can be refunded in full', () => {
+      const payment = at(PaymentStatus.PartiallyRefunded);
+      expect(payment.refund(true, later)).toBe(true);
+      expect(payment.status).toBe(PaymentStatus.Refunded);
+    });
+
+    it('dispute() moves succeeded and partially_refunded → disputed', () => {
+      for (const status of [PaymentStatus.Succeeded, PaymentStatus.PartiallyRefunded]) {
+        const payment = at(status);
+        expect(payment.dispute(later)).toBe(true);
+        expect(payment.toSnapshot()).toMatchObject({
+          status: PaymentStatus.Disputed,
+          updatedAt: later,
+        });
+      }
+    });
+
+    it('reinstate() moves disputed → succeeded', () => {
+      const payment = at(PaymentStatus.Disputed);
+      expect(payment.reinstate(later)).toBe(true);
+      expect(payment.toSnapshot()).toMatchObject({
+        status: PaymentStatus.Succeeded,
+        updatedAt: later,
+        paidAt,
+      });
+    });
+
+    it.each([PaymentStatus.Pending, PaymentStatus.Failed, PaymentStatus.Expired])(
+      'refuses every new transition from %s (no state change, no event)',
+      (status) => {
+        const payment = at(status);
+        const before = payment.toSnapshot();
+        expect(payment.refund(true, later)).toBe(false);
+        expect(payment.refund(false, later)).toBe(false);
+        expect(payment.dispute(later)).toBe(false);
+        expect(payment.reinstate(later)).toBe(false);
+        expect(payment.toSnapshot()).toEqual(before);
+        expect(payment.getUncommittedEvents()).toEqual([]);
+      },
+    );
+
+    it('a repeat changes nothing', () => {
+      const cases: [PaymentStatus, (payment: Payment) => boolean][] = [
+        [PaymentStatus.Refunded, (p) => p.refund(true, later)],
+        [PaymentStatus.Refunded, (p) => p.refund(false, later)],
+        [PaymentStatus.PartiallyRefunded, (p) => p.refund(false, later)],
+        [PaymentStatus.Disputed, (p) => p.dispute(later)],
+        [PaymentStatus.Succeeded, (p) => p.reinstate(later)],
+      ];
+      for (const [status, repeat] of cases) {
+        const payment = at(status);
+        const before = payment.toSnapshot();
+        expect(repeat(payment), status).toBe(false);
+        expect(payment.toSnapshot()).toEqual(before);
+      }
+    });
+
+    it('refuses a dispute of a refunded payment and a refund of a disputed one', () => {
+      const refunded = at(PaymentStatus.Refunded);
+      expect(refunded.dispute(later)).toBe(false);
+      expect(refunded.status).toBe(PaymentStatus.Refunded);
+      const disputed = at(PaymentStatus.Disputed);
+      expect(disputed.refund(true, later)).toBe(false);
+      expect(disputed.status).toBe(PaymentStatus.Disputed);
+    });
+  });
+
   describe('tenant', () => {
     const base = {
       id: generateId(),

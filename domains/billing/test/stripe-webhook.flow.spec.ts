@@ -20,6 +20,7 @@ import { KafkaProducer } from '@platform/transport';
 import { FakeKafkaProducer } from '@platform/transport/testing';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { HandleStripeWebhookHandler } from '../src/application/commands/handle-stripe-webhook/handle-stripe-webhook.handler.js';
+import { StripeOwnerResolver } from '../src/application/ledger/stripe-owner-resolver.js';
 import { BillingPort } from '../src/application/ports/billing.port.js';
 import { PaymentsRepository } from '../src/application/repositories/payments.repository.js';
 import { StripeEventsRepository } from '../src/application/repositories/stripe-events.repository.js';
@@ -33,7 +34,9 @@ import {
 import { BILLING_RBAC } from '../src/billing.permissions.js';
 import { PaymentStatus } from '../src/domain/payment-status.enum.js';
 import { BillingLocalAdapter } from '../src/infrastructure/adapters/local/billing-local.adapter.js';
+import { ledgerConfig } from '../src/infrastructure/ledger/ledger.config.js';
 import { BILLING_OUTBOX, BillingOutbox } from '../src/infrastructure/persistence/billing-outbox.js';
+import { BillingOutboxSystemRepository } from '../src/infrastructure/persistence/drizzle-outbox.system-repository.js';
 import { StripeService } from '../src/infrastructure/stripe/stripe.service.js';
 import { BillingController } from '../src/presentation/http/billing.controller.js';
 import { createInMemoryBillingOutbox } from '../src/testing/in-memory-billing-outbox.js';
@@ -112,7 +115,11 @@ describe('Stripe webhook flow (raw body → signature → exactly-once → outbo
       providers: [
         { provide: BillingPort, useClass: BillingLocalAdapter },
         HandleStripeWebhookHandler,
+        StripeOwnerResolver,
         { provide: BillingOutbox, useValue: outbox },
+        { provide: BillingOutboxSystemRepository, useValue: outbox },
+        // LEDGER_ENABLED=false (the default): no ledger-posting rows in this flow.
+        { provide: ledgerConfig.KEY, useValue: ledgerConfig.parse({}) },
         makeCounterProvider({ name: PAID_WITHOUT_CURRENCY_METRIC, help: 'test' }),
         makeCounterProvider({ name: AMOUNT_MISMATCH_METRIC, help: 'test' }),
         makeCounterProvider({ name: API_VERSION_MISMATCH_METRIC, help: 'test' }),

@@ -242,6 +242,7 @@ failure marks the payment `failed`; a retry with the same key reopens it and get
    - `checkout.session.completed` / `async_payment_succeeded` (paid) → `succeeded` + `PaymentSucceededEvent`
      (a completed-but-`unpaid` session, i.e. a delayed payment method, stays `pending`);
    - `checkout.session.async_payment_failed` → `failed`; `checkout.session.expired` → `expired`;
+   - the money events of **Ledger postings** below (refunds, disputes, payouts);
    - any other signed event → acknowledged and ignored.
 3. The whole delivery runs as the `{ userId, tenantId }` signed into the session and PaymentIntent metadata, so it can touch
    only that tenant's rows. An event without a usable owner (payouts, unattributed fees, pre-tenancy sessions) is recorded
@@ -249,6 +250,41 @@ failure marks the payment `failed`; a retry with the same key reopens it and get
 4. In the same unit of work, after `markProcessed` and `save`, a completed payment enqueues
    `billing.payment-succeeded.v1` on `billing.outbox` (`BillingOutbox`). After COMMIT the aggregate's events go to
    the in-process event bus; the outbox relay publishes the row to Kafka.
+
+**Ledger postings** (outbox plan Task 12, L-11). The webhook also handles Stripe's money events. While
+`LEDGER_ENABLED=true`, each event with a posting writes one `billing.ledger-posting.v1` row in the unit of work of its
+receipt (envelope id `uuidv5(LEDGER_NAMESPACE, <evt id>)`, key = tenant id, actor = the user; the billing consumer
+posts it to immudb). With the ledger off (the default) receipts and transitions still happen and no row is written.
+
+| Stripe event                                                                   | Owner from                              | Payment transition                                                      | Posting row       |
+| ------------------------------------------------------------------------------ | --------------------------------------- | ----------------------------------------------------------------------- | ----------------- |
+| `checkout.session.completed`, `async_payment_succeeded` (paid)                 | session metadata                        | → `succeeded`                                                           | none              |
+| `charge.succeeded`                                                             | charge metadata, else its PaymentIntent | none                                                                    | `charge`, `ch_…`  |
+| `charge.refunded`                                                              | same                                    | → `refunded` when `amount_refunded = amount`, else `partially_refunded` | none              |
+| `refund.created` and `refund.updated` with status `succeeded`; `refund.failed` | the refund's PaymentIntent              | none                                                                    | `refund`, `re_…`  |
+| `charge.dispute.funds_withdrawn`                                               | the dispute's PaymentIntent             | → `disputed`                                                            | `dispute`, `du_…` |
+| `charge.dispute.funds_reinstated`                                              | same                                    | `disputed` → `succeeded`                                                | `dispute`, `du_…` |
+| `payout.paid`, `payout.failed`                                                 | none: the platform                      | none                                                                    | `payout`, `po_…`  |
+
+- The owner comes from `StripeOwnerResolver`: the object's own signed metadata, else its PaymentIntent's (checkout
+  signs `{ paymentId, userId, tenantId }` onto it), read with at most one GET (`StripeService.retrievePaymentIntent`)
+  **before** the unit of work opens. No Stripe call is made while a transaction is open.
+- An owner that cannot be resolved (no metadata, a missing PaymentIntent, a tenant that is not a UUID, the nil
+  tenant) is recorded as a platform receipt with a warning: no payment is touched and no row is written
+  (reconciliation R4 posts the balance transaction later).
+- The payment is the one the metadata names, and only when it belongs to the owner's tenant and user; otherwise
+  nothing moves and the row carries `paymentId: null`. A transition that does not apply (a refund of a pending
+  payment, a repeat) is acknowledged with a warning; the posting row is still written, since the money moved.
+- Payouts are platform money: `SystemContext.run('billing.platform-webhook')`, `outbox.insertAsPlatform` first (nil
+  tenant and key, null user and actor), then `stripeEvents.markProcessedAsPlatform`. Both are idempotent, so a crash
+  between them is healed by Stripe's redelivery.
+- Events without a posting or a transition (a `refund.updated` still pending, and with the ledger off
+  `charge.succeeded`, `refund.*` and `payout.*`) resolve their owner from their own metadata only, like any other event.
+
+**Stripe event types to enable** on the webhook endpoint: `checkout.session.completed`,
+`checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`,
+`charge.succeeded`, `charge.refunded`, `refund.created`, `refund.updated`, `refund.failed`,
+`charge.dispute.funds_withdrawn`, `charge.dispute.funds_reinstated`, `payout.paid` and `payout.failed`.
 
 Unknown payments and impossible transitions are acknowledged with a warning (a retry could never succeed).
 A paid session with no usable currency (none in the event, none stored) is one of them: the payment stays
@@ -345,6 +381,7 @@ directly (no subquery, no helper or FK into identity); "–" means no policy, so
   | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
   | Webhook, owner with tenant and user  | `runWithPrincipal({ userId, tenantId, roles: [] })` from the signed metadata, around one `@Transactional()` unit (`markProcessed`, payment lock, save) |
   | Webhook, platform or user-less owner | `SystemContext.run('billing.platform-webhook')` and `stripeEvents.markProcessedAsPlatform` only: no runtime transaction, no payment looked up          |
+  | Webhook, payout (ledger enabled)     | `SystemContext.run('billing.platform-webhook')`: `outbox.insertAsPlatform`, then `stripeEvents.markProcessedAsPlatform`                                |
   | Create checkout session              | the request principal; each repository call is its own unit of work, and no transaction spans the Stripe call                                          |
   | List payments                        | the request principal; the `billing:read-all` check is in TypeScript first, then `elevate(billing:read-all)` for the whole-tenant listing only         |
   | Purge Stripe events (hourly cron)    | `SystemContext.run('billing.purge-stripe-events')` and `stripeEvents.deleteProcessedBefore`                                                            |
@@ -375,19 +412,25 @@ transaction would carry no RLS context.
 
 `stripe` namespace (`src/infrastructure/stripe/stripe.config.ts`, owned by billing; production rejects the dev placeholders, the compose fallbacks and local redirect URLs): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`
 (redirect URLs are never taken from REST clients: no open redirect), `STRIPE_MAX_NETWORK_RETRIES`,
-`STRIPE_TIMEOUT_MS`. Gateway: `BILLING_GRPC_URL` (`billingGrpcClient` namespace, `src/infrastructure/adapters/grpc/billing-grpc-client.config.ts`), `GRPC_DEADLINE_MS` (platform `grpc`).
+`STRIPE_TIMEOUT_MS`. `ledger` namespace (`src/infrastructure/ledger/ledger.config.ts`): `LEDGER_ENABLED` (false),
+`LEDGER_RECONCILE_LOOKBACK_HOURS` (72, 1-720), `LEDGER_VERIFY` (false). Gateway: `BILLING_GRPC_URL` (`billingGrpcClient` namespace, `src/infrastructure/adapters/grpc/billing-grpc-client.config.ts`), `GRPC_DEADLINE_MS` (platform `grpc`).
 
 ## Tests
 
 `bunx vitest run --project billing` — no infrastructure needed:
 
-- `payment.aggregate.spec.ts` — status machine, event applied once, idempotent replays.
+- `payment.aggregate.spec.ts` — status machine (also `refund`, `dispute`, `reinstate`), event applied once,
+  idempotent replays.
+- `application/ledger/*.spec.ts` — `StripeOwnerResolver` (no Stripe call with metadata, exactly one PaymentIntent GET
+  otherwise, unresolved owners) and the ledger-posting record (deterministic envelope id, key, actor, platform record).
 - Handlers: checkout (mocked `StripeService`: idempotency per user, key reuse 409, failure → `failed` → retry,
   missing URL), webhook (real signature verification with `stripe.webhooks.generateTestHeaderString`: valid,
   duplicate, ignored type, invalid/missing/tampered signature, async payments, expiry, unknown payment, rollback on
   infrastructure error, events published only after the transaction, the outbox record enqueued after
-  `markProcessed` and `save` and before COMMIT, nothing enqueued otherwise, a failing enqueue rolling back), list
-  (limit normalisation).
+  `markProcessed` and `save` and before COMMIT, nothing enqueued otherwise, a failing enqueue rolling back; each money
+  event of the ledger table with its transition and its exact posting record, duplicates, unresolved owners, the
+  ledger off, no Stripe call inside the unit of work, and the payout's two system methods in order), list (limit
+  normalisation).
 - Mappers (contract, row, the payment-succeeded payload), local adapter (bus mapping), gRPC
   adapter (null normalisation, metadata, error mapping), gRPC controller (bus mapping, zod payload schemas).
 - Drizzle repositories: real Drizzle SQL generation on a recording postgres.js fake (ON CONFLICT targets,
@@ -473,6 +516,13 @@ the trusted-state compare-and-set; a run finishes once; every method refused out
 A leaves the payment succeeded, the receipt and one outbox row under A; a replay adds no row; one tick of a real
 `OutboxRelay` publishes an envelope that parses with `PAYMENT_SUCCEEDED_EVENT` and marks the row; with the row's id
 pre-seeded through the system pool, the delivery fails and leaves the payment pending and no receipt.
+`test/webhook-ledger.int-spec.ts` (`LEDGER_ENABLED=true`): `charge.succeeded` for tenant A commits the receipt and A's
+posting row together, a replay leaves one row, a forced outbox failure (the deterministic id pre-seeded) leaves
+neither, `charge.refunded` moves the payment to `refunded`, and metadata naming tenant A with a payment of tenant B
+changes no payment of B (its row says `paymentId: null`).
+`test/webhook-platform.int-spec.ts` (`LEDGER_ENABLED=true`): `payout.paid` writes one nil-tenant posting row and its
+platform receipt, a redelivery is a duplicate, no runtime principal (elevated or not) can read the row, and one relay
+tick publishes it with the nil tenant in the envelope.
 
 ## Ledger (immudb)
 
@@ -481,9 +531,9 @@ balance transaction (`sourceKey = stripe:txn:<id>`, entry id = uuidv5 of it), po
 currency, fees from the balance transaction (`application/ledger/posting-rules.ts`). `LedgerPort.post` is
 idempotent (`posted` / `replayed` / `conflict`) and validates the double-entry rules before any I/O. The
 immudb user may only `SELECT` and `INSERT`; every tenant read carries `tenant_id = @tenant` (immudb has no
-RLS). Tables: `infrastructure/ledger/migrations/001_ledger.sql` (`billingLedgerMigrations`). Not wired
-into the apps yet: the posting consumer, reconciliation and `LEDGER_ENABLED` arrive with the outbox
-(ledger waves 1-2). Tests: `InMemoryLedger` (`@domain/billing/testing`) and the adapter run the same
+RLS). Tables: `infrastructure/ledger/migrations/001_ledger.sql` (`billingLedgerMigrations`). The webhook writes
+the `billing.ledger-posting.v1` rows (see **Ledger postings** above, `LEDGER_ENABLED`); the posting consumer and
+reconciliation arrive in ledger wave 2. Tests: `InMemoryLedger` (`@domain/billing/testing`) and the adapter run the same
 contract spec (`src/testing/ledger.contract.test.ts`).
 
 Postgres keeps the receipts around the entries (outbox plan Task 11): `LedgerReceiptsRepository` writes refs, tenant

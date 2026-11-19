@@ -62,6 +62,16 @@ export interface CheckoutCompletion {
 }
 
 const OPEN_STATUSES: readonly PaymentStatus[] = [PaymentStatus.Pending, PaymentStatus.Failed];
+/** Paid and not disputed: what a Stripe refund applies to. */
+const REFUNDABLE_STATUSES: readonly PaymentStatus[] = [
+  PaymentStatus.Succeeded,
+  PaymentStatus.PartiallyRefunded,
+];
+/** Paid and not refunded in full: what a dispute's withdrawal applies to. */
+const DISPUTABLE_STATUSES: readonly PaymentStatus[] = [
+  PaymentStatus.Succeeded,
+  PaymentStatus.PartiallyRefunded,
+];
 
 const ISO_4217_CODE = /^[a-z]{3}$/;
 
@@ -290,6 +300,40 @@ export class Payment extends AggregateRoot {
   expire(now: Date): boolean {
     if (!OPEN_STATUSES.includes(this.state.status)) return false;
     this.state = { ...this.state, status: PaymentStatus.Expired, updatedAt: now };
+    return true;
+  }
+
+  /**
+   * A Stripe refund of the charge (`charge.refunded`, ledger S-6): `succeeded` or
+   * `partially_refunded` → `refunded` when `full` (Stripe's `amount_refunded = amount`), else
+   * `partially_refunded`. Returns `false` when nothing changes: a payment never paid (`pending`,
+   * `failed`, `expired`), a disputed one (Stripe refuses refunds of disputed charges), a repeat.
+   */
+  refund(full: boolean, now: Date): boolean {
+    if (!REFUNDABLE_STATUSES.includes(this.state.status)) return false;
+    const status = full ? PaymentStatus.Refunded : PaymentStatus.PartiallyRefunded;
+    if (status === this.state.status) return false;
+    this.state = { ...this.state, status, updatedAt: now };
+    return true;
+  }
+
+  /**
+   * Funds withdrawn for a dispute (`charge.dispute.funds_withdrawn`): `succeeded` or
+   * `partially_refunded` → `disputed`. Returns `false` otherwise (never paid, refunded, a repeat).
+   */
+  dispute(now: Date): boolean {
+    if (!DISPUTABLE_STATUSES.includes(this.state.status)) return false;
+    this.state = { ...this.state, status: PaymentStatus.Disputed, updatedAt: now };
+    return true;
+  }
+
+  /**
+   * Funds reinstated after a won dispute (`charge.dispute.funds_reinstated`): `disputed` →
+   * `succeeded`. Returns `false` from any other status.
+   */
+  reinstate(now: Date): boolean {
+    if (this.state.status !== PaymentStatus.Disputed) return false;
+    this.state = { ...this.state, status: PaymentStatus.Succeeded, updatedAt: now };
     return true;
   }
 

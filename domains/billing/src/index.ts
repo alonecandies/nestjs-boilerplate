@@ -1,7 +1,8 @@
 /**
  * @domain/billing — the billing bounded context: Stripe Checkout sessions (idempotent), signed and
- * exactly-once Stripe webhooks, the payments ledger (Drizzle) and the
- * `billing.payment-succeeded.v1` integration event.
+ * exactly-once Stripe webhooks, the payments ledger (Drizzle), the
+ * `billing.payment-succeeded.v1` integration event and the `billing.ledger-posting.v1` rows of the
+ * Stripe money events.
  *
  * Entry points: `@domain/billing/api` (edge surface, re-exported here) and this root entry (adds
  * core, persistence, the Stripe adapter, commands, queries and domain types).
@@ -17,8 +18,10 @@ export * from './api/index.js';
 // Application
 export * from './application/commands/create-checkout-session/create-checkout-session.command.js';
 export * from './application/commands/handle-stripe-webhook/handle-stripe-webhook.command.js';
-// Ledger (model)
+// Ledger (model; the posting request and the Stripe owner resolver of L-11)
+export * from './application/ledger/ledger-posting-request.js';
 export * from './application/ledger/posting-rules.js';
+export * from './application/ledger/stripe-owner-resolver.js';
 export * from './application/mappers/payment.mapper.js';
 export * from './application/ports/ledger.port.js';
 export * from './application/queries/list-payments/list-payments.query.js';
@@ -52,6 +55,8 @@ export * from './domain/payment.aggregate.js';
 // Infrastructure
 export * from './infrastructure/ledger/billing-ledger.migrations.js';
 export * from './infrastructure/ledger/immudb-ledger.adapter.js';
+// The `ledger` namespace (LEDGER_ENABLED, LEDGER_RECONCILE_LOOKBACK_HOURS, LEDGER_VERIFY).
+export * from './infrastructure/ledger/ledger.config.js';
 export { billingMigrations } from './infrastructure/persistence/billing.migrations.js';
 export {
   type BillingSchema,
