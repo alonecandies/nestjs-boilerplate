@@ -3,12 +3,17 @@ import { ConfigModule } from '@nestjs/config';
 import { ImmudbClient } from '@platform/immudb';
 import { PostLedgerEntryHandler } from '../../application/commands/post-ledger-entry/post-ledger-entry.handler.js';
 import { ProcessLedgerPostingHandler } from '../../application/commands/process-ledger-posting/process-ledger-posting.handler.js';
+import { R1InvariantCheck } from '../../application/commands/reconcile-ledger/checks/r1-invariant.js';
+import { R2MutationCheck } from '../../application/commands/reconcile-ledger/checks/r2-mutation.js';
+import { R3PaymentsCheck } from '../../application/commands/reconcile-ledger/checks/r3-payments.js';
+import { ReconcileLedgerHandler } from '../../application/commands/reconcile-ledger/reconcile-ledger.handler.js';
 import { LedgerService } from '../../application/ledger/ledger.service.js';
 import { LedgerPort } from '../../application/ports/ledger.port.js';
 import { LedgerSystemRepository } from '../../application/repositories/ledger.system-repository.js';
 import { LedgerReceiptsRepository } from '../../application/repositories/ledger-receipts.repository.js';
 import { DrizzleLedgerSystemRepository } from '../persistence/drizzle-ledger.system-repository.js';
 import { DrizzleLedgerReceiptsRepository } from '../persistence/drizzle-ledger-receipts.repository.js';
+import { ReconcileLedgerCron } from '../scheduling/reconcile-ledger.cron.js';
 import { StripeModule } from '../stripe/stripe.module.js';
 import { DisabledLedger } from './disabled-ledger.js';
 import { ImmudbLedgerAdapter } from './immudb-ledger.adapter.js';
@@ -31,12 +36,16 @@ export function createLedgerPort(cfg: LedgerConfig, immudb: ImmudbClient | undef
 }
 
 /**
- * Billing's ledger (L-12): `LedgerPort` (above), `LedgerService` (the ledger tenant rule, the only
- * caller of `post`/`getEntry`/`balances`), the posting commands `PostLedgerEntryCommand` and
- * `ProcessLedgerPostingCommand`, and the ledger repositories they write receipts with. Self-
- * contained over the apps' global modules (`DatabaseModule` for the runtime and system pools,
- * `CqrsModule.forRoot()`, nestjs-cls) and its own Stripe adapter; imported by
- * `BillingMessagingModule`. Exports `LedgerPort` and `LedgerService`.
+ * Billing's ledger (L-12, L-13): `LedgerPort` (above), `LedgerService` (the ledger tenant rule, the
+ * only caller of `post`/`getEntry`/`balances` outside reconciliation), the posting commands
+ * `PostLedgerEntryCommand` and `ProcessLedgerPostingCommand`, the ledger repositories they write
+ * receipts with, and the reconciliation: `ReconcileLedgerCommand`, its checks (R1-R3, which read
+ * `LedgerPort` across tenants inside `SystemContext`) and the hourly `ReconcileLedgerCron` (needs
+ * `ScheduleModule.forRoot()` and `RedisModule` for its lock in the app; it does nothing while
+ * `LEDGER_ENABLED=false`). Self-contained over the apps' global modules (`DatabaseModule` for the
+ * runtime and system pools, `CqrsModule.forRoot()`, nestjs-cls) and its own Stripe adapter;
+ * imported by `BillingMessagingModule`, which the apps load only while the ledger is enabled.
+ * Exports `LedgerPort` and `LedgerService`.
  */
 @Module({
   imports: [ConfigModule.forFeature(ledgerConfig), StripeModule.forRootAsync()],
@@ -49,6 +58,11 @@ export function createLedgerPort(cfg: LedgerConfig, immudb: ImmudbClient | undef
     LedgerService,
     PostLedgerEntryHandler,
     ProcessLedgerPostingHandler,
+    R1InvariantCheck,
+    R2MutationCheck,
+    R3PaymentsCheck,
+    ReconcileLedgerHandler,
+    ReconcileLedgerCron,
     { provide: LedgerReceiptsRepository, useClass: DrizzleLedgerReceiptsRepository },
     { provide: LedgerSystemRepository, useClass: DrizzleLedgerSystemRepository },
   ],

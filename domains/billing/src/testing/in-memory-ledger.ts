@@ -18,9 +18,16 @@ import type {
   LedgerTrustedState,
 } from '../domain/ledger/ledger.types.js';
 
-/** `LedgerPort` in memory, with the same ids, hashes, replay/conflict and balance semantics. */
+/**
+ * `LedgerPort` in memory, with the same ids, hashes, replay/conflict and balance semantics. Two
+ * tamper hooks stand in for a superuser on the immudb host (reconciliation fixtures): `forge`
+ * writes an entry without the balance check, `tamper` rewrites a stored one and leaves a revision
+ * that `findMutations` reports (R2).
+ */
 export class InMemoryLedger extends LedgerPort {
   private readonly entries = new Map<string, LedgerEntry>();
+  /** Revision of each rewritten entry (absent: revision 1, never rewritten). */
+  private readonly revisions = new Map<string, bigint>();
   private chain = new Uint8Array(32);
   private txId = 0n;
 
@@ -38,6 +45,38 @@ export class InMemoryLedger extends LedgerPort {
         ? { status: 'replayed', entryId, payloadHash }
         : { status: 'conflict', entryId, payloadHash, existingPayloadHash: existing.payloadHash };
     }
+    return { status: 'posted', entryId, payloadHash, immudbTxId: this.store(draft) };
+  }
+
+  /**
+   * Test hook: stores `draft` as a new entry WITHOUT `assertBalanced` (a row the adapter would
+   * never write, such as a superuser's INSERT), in its own transaction; returns the entry id.
+   * @throws Error when the entry id exists
+   */
+  forge(draft: LedgerEntryDraft): string {
+    const entryId = ledgerEntryId(draft.sourceKey);
+    if (this.entries.has(entryId)) throw new Error(`ledger entry ${entryId} exists`);
+    this.store(draft);
+    return entryId;
+  }
+
+  /**
+   * Test hook: rewrites a stored entry in place (an UPDATE on the immudb host): the entry gets a
+   * new revision, which `findMutations` reports as `ledger_entries`.
+   * @throws Error when no entry has that id
+   */
+  tamper(entryId: string, change: (entry: LedgerEntry) => LedgerEntry): void {
+    const entry = this.entries.get(entryId);
+    if (entry === undefined) throw new Error(`no ledger entry ${entryId}`);
+    const changed = change(entry);
+    this.entries.set(entryId, changed);
+    this.revisions.set(entryId, (this.revisions.get(entryId) ?? 1n) + 1n);
+    this.commit(changed.payloadHash);
+  }
+
+  private store(draft: LedgerEntryDraft): bigint {
+    const entryId = ledgerEntryId(draft.sourceKey);
+    const payloadHash = ledgerPayloadHash(draft);
     this.entries.set(entryId, {
       id: entryId,
       sourceKey: draft.sourceKey,
@@ -57,11 +96,16 @@ export class InMemoryLedger extends LedgerPort {
         credit: line.credit,
       })),
     });
+    return this.commit(payloadHash);
+  }
+
+  /** One immudb transaction: the next tx id and the hash chain over the written payload. */
+  private commit(payloadHash: string): bigint {
     this.txId++;
     this.chain = new Uint8Array(
       createHash('sha256').update(this.chain).update(payloadHash).digest(),
     );
-    return { status: 'posted', entryId, payloadHash, immudbTxId: this.txId };
+    return this.txId;
   }
 
   override async getEntry(tenantId: string, entryId: string): Promise<LedgerEntry | null> {
@@ -100,6 +144,7 @@ export class InMemoryLedger extends LedgerPort {
       if (entry.postings.length < 2) {
         found.push({
           entryId: entry.id,
+          tenantId: entry.tenantId,
           currency: null,
           debit: 0n,
           credit: 0n,
@@ -117,7 +162,9 @@ export class InMemoryLedger extends LedgerPort {
         });
       }
       for (const [currency, sum] of byCurrency) {
-        if (sum.debit !== sum.credit) found.push({ entryId: entry.id, currency, ...sum });
+        if (sum.debit !== sum.credit) {
+          found.push({ entryId: entry.id, tenantId: entry.tenantId, currency, ...sum });
+        }
       }
     }
     return found;
@@ -140,9 +187,11 @@ export class InMemoryLedger extends LedgerPort {
     return [...totals.values()].sort((a, b) => a.currency.localeCompare(b.currency));
   }
 
-  /** Memory has no history: nothing is ever mutated. */
+  /** The entries `tamper` rewrote, at their current revision (nothing else is ever mutated). */
   override async findMutations(): Promise<readonly { table: string; id: string; rev: bigint }[]> {
-    return [];
+    return [...this.revisions]
+      .map(([id, rev]) => ({ table: 'ledger_entries', id, rev }))
+      .sort((a, b) => a.id.localeCompare(b.id));
   }
 
   override async verifyEntry(

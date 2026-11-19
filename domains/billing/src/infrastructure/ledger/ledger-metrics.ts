@@ -1,10 +1,17 @@
-import { getOrCreateCounter, getOrCreateHistogram } from '@platform/observability';
+import {
+  getOrCreateCounter,
+  getOrCreateGauge,
+  getOrCreateHistogram,
+} from '@platform/observability';
 import type { LedgerPostOutcome } from '../../domain/ledger/ledger.types.js';
 import type { LedgerDiscrepancyKind } from '../../domain/ledger/ledger-discrepancy.js';
 
 export const LEDGER_POSTINGS_TOTAL = 'ledger_postings_total';
 export const LEDGER_POST_DURATION_SECONDS = 'ledger_post_duration_seconds';
 export const LEDGER_DISCREPANCIES_TOTAL = 'ledger_discrepancies_total';
+export const LEDGER_RECONCILIATION_RUNS_TOTAL = 'ledger_reconciliation_runs_total';
+export const LEDGER_RECONCILIATION_LAST_SUCCESS =
+  'ledger_reconciliation_last_success_timestamp_seconds';
 
 /** `LedgerPort.post` latency buckets: one immudb read-write transaction, retried on a conflict. */
 export const LEDGER_POST_DURATION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5];
@@ -30,6 +37,19 @@ const discrepancies = () =>
     labelNames: ['kind'],
   });
 
+const reconciliationRuns = () =>
+  getOrCreateCounter({
+    name: LEDGER_RECONCILIATION_RUNS_TOTAL,
+    help: 'Finished ledger reconciliation runs, by status (succeeded, failed)',
+    labelNames: ['status'],
+  });
+
+const reconciliationLastSuccess = () =>
+  getOrCreateGauge({
+    name: LEDGER_RECONCILIATION_LAST_SUCCESS,
+    help: 'Unix time (seconds) the last ledger reconciliation run succeeded',
+  });
+
 /**
  * The ledger's Prometheus series (prom-client's default registry through GM's `getOrCreate*`, so
  * several apps in one process share them). Labels carry no tenant, user or amount.
@@ -51,5 +71,11 @@ export const LedgerMetrics = Object.freeze({
   /** `count` new discrepancy rows of `kind` (0 adds nothing). */
   discrepancies(kind: LedgerDiscrepancyKind, count = 1): void {
     if (count > 0) discrepancies().inc({ kind }, count);
+  },
+
+  /** One finished reconciliation run; a succeeded one also stamps the last-success time. */
+  reconciliationRun(status: 'succeeded' | 'failed', at: Date): void {
+    reconciliationRuns().inc({ status });
+    if (status === 'succeeded') reconciliationLastSuccess().set(at.getTime() / 1_000);
   },
 });

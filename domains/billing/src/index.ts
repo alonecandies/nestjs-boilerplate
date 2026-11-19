@@ -21,6 +21,8 @@ export * from './application/commands/handle-stripe-webhook/handle-stripe-webhoo
 // The posting commands of L-12 (handlers registered by BillingLedgerModule).
 export * from './application/commands/post-ledger-entry/post-ledger-entry.command.js';
 export * from './application/commands/process-ledger-posting/process-ledger-posting.command.js';
+// Reconciliation (L-13; handler, checks and cron registered by BillingLedgerModule).
+export * from './application/commands/reconcile-ledger/reconcile-ledger.command.js';
 // Ledger (model; the posting request and the Stripe owner resolver of L-11; LedgerService of L-12)
 export * from './application/ledger/ledger.service.js';
 export * from './application/ledger/ledger-posting-request.js';
@@ -38,10 +40,13 @@ export type { StripeEventReceipt } from './application/repositories/stripe-event
 export { StripeEventsSystemRepository } from './application/repositories/stripe-events.system-repository.js';
 // Modules and core constants
 export {
+  LEDGER_RECONCILE_GRACE_MS,
   PAID_WITHOUT_AMOUNT_METRIC,
   PAID_WITHOUT_CURRENCY_METRIC,
   PURGE_STRIPE_EVENTS_LOCK,
   PURGE_STRIPE_EVENTS_LOCK_TTL_MS,
+  RECONCILE_LEDGER_LOCK,
+  RECONCILE_LEDGER_LOCK_TTL_MS,
   STRIPE_EVENTS_RETENTION_DAYS,
 } from './billing.constants.js';
 export * from './billing-core.module.js';

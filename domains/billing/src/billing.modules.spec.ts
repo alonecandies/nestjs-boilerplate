@@ -19,6 +19,7 @@ import { KafkaProducer } from '@platform/transport';
 import { FakeKafkaProducer } from '@platform/transport/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRecordingDrizzle, installRlsTransactionHost } from '../test/billing-test.utils.js';
+import { ReconcileLedgerHandler } from './application/commands/reconcile-ledger/reconcile-ledger.handler.js';
 import { LedgerService } from './application/ledger/ledger.service.js';
 import { BillingPort } from './application/ports/billing.port.js';
 import { LedgerPort } from './application/ports/ledger.port.js';
@@ -34,6 +35,7 @@ import { DisabledLedger } from './infrastructure/ledger/disabled-ledger.js';
 import { ImmudbLedgerAdapter } from './infrastructure/ledger/immudb-ledger.adapter.js';
 import { BillingOutbox } from './infrastructure/persistence/billing-outbox.js';
 import { BillingOutboxSystemRepository } from './infrastructure/persistence/drizzle-outbox.system-repository.js';
+import { ReconcileLedgerCron } from './infrastructure/scheduling/reconcile-ledger.cron.js';
 import { StripeService } from './infrastructure/stripe/stripe.service.js';
 import { BillingGrpcController } from './presentation/grpc/billing-grpc.controller.js';
 import { LedgerPostingConsumer } from './presentation/messaging/ledger-posting.consumer.js';
@@ -110,6 +112,8 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
     expect(context.get(BillingOutboxSystemRepository, { strict: false })).toBeInstanceOf(
       BillingOutboxSystemRepository,
     );
+    // The reconciliation comes with the ledger (BillingMessagingModule), not with the core.
+    expect(() => context?.get(ReconcileLedgerCron, { strict: false })).toThrow();
     await expect(
       asMember(() =>
         context
@@ -204,6 +208,11 @@ describe('BillingMessagingModule (L-12: the ledger-posting consumer and its ledg
     context = await boot([FakeImmudbModule]);
 
     expect(context.get(LedgerPort, { strict: false })).toBeInstanceOf(ImmudbLedgerAdapter);
+    // L-13: the reconciliation handler with R1-R3 and its hourly cron.
+    expect(context.get(ReconcileLedgerCron, { strict: false })).toBeInstanceOf(ReconcileLedgerCron);
+    expect(
+      context.get(ReconcileLedgerHandler, { strict: false }).checks.map((check) => check.name),
+    ).toEqual(['R1', 'R2', 'R3']);
   });
 
   it('LEDGER_ENABLED=true without ImmudbModule fails at boot, naming it', async () => {

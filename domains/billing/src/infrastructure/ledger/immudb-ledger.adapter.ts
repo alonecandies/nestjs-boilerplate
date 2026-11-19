@@ -43,10 +43,10 @@ export const LEDGER_SQL = {
   balancesForTenantCurrency:
     'SELECT account_id, currency, SUM(debit) AS debit_total, SUM(credit) AS credit_total FROM ledger_postings WHERE tenant_id = @tenant AND currency = @currency GROUP BY account_id, currency',
   // Reconciliation reads (cross-tenant, system context in wave 2).
+  // R1 reads only the window's entries and their postings (index on entry_id), never every row.
   entriesRecordedIn:
-    'SELECT id FROM ledger_entries WHERE recorded_at_us >= @from_us AND recorded_at_us < @to_us',
-  postingSumsByEntry:
-    'SELECT entry_id, currency, SUM(debit) AS debit_total, SUM(credit) AS credit_total, COUNT(*) AS postings FROM ledger_postings GROUP BY entry_id, currency',
+    'SELECT id, tenant_id FROM ledger_entries WHERE recorded_at_us >= @from_us AND recorded_at_us < @to_us',
+  postingsOfEntry: 'SELECT currency, debit, credit FROM ledger_postings WHERE entry_id = @entry_id',
   totalsByCurrency:
     'SELECT currency, SUM(debit) AS debit_total, SUM(credit) AS credit_total FROM ledger_postings GROUP BY currency',
   entriesHistory: 'SELECT id, _rev FROM (HISTORY OF ledger_entries)',
@@ -84,13 +84,8 @@ type PostingRow = {
   credit: bigint;
 };
 type SumRow = { account_id: string; currency: string; debit_total: bigint; credit_total: bigint };
-type EntrySumRow = {
-  entry_id: string;
-  currency: string;
-  debit_total: bigint;
-  credit_total: bigint;
-  postings: bigint;
-};
+type WindowEntryRow = { id: string; tenant_id: string };
+type EntryPostingRow = { currency: string; debit: bigint; credit: bigint };
 type HistoryRow = { id: string; _rev: bigint };
 type Unposted = Exclude<LedgerPostOutcome, { status: 'posted' }> | { status: 'pending' };
 
@@ -254,35 +249,47 @@ export class ImmudbLedgerAdapter extends LedgerPort {
     });
   }
 
+  /**
+   * R1 over the entries recorded in `[fromUs, toUs)`: one read of their ids and tenants, then the
+   * postings of each by `entry_id` (indexed), summed per currency here. Bounded by the window: no
+   * statement aggregates the whole ledger.
+   */
   override findUnbalanced(window: {
     fromUs: bigint;
     toUs: bigint;
   }): Promise<readonly LedgerImbalance[]> {
     return this.immudb.readOnly(async (tx) => {
-      const inWindow = await tx.query<{ id: string }>(LEDGER_SQL.entriesRecordedIn, {
+      const inWindow = await tx.query<WindowEntryRow>(LEDGER_SQL.entriesRecordedIn, {
         from_us: window.fromUs,
         to_us: window.toUs,
       });
-      const sums = await tx.query<EntrySumRow>(LEDGER_SQL.postingSumsByEntry);
-      const byEntry = Map.groupBy(sums, (row) => row.entry_id);
       const found: LedgerImbalance[] = [];
-      for (const { id } of inWindow) {
-        const rows = byEntry.get(id) ?? [];
-        const postings = rows.reduce((n, row) => n + Number(row.postings), 0);
-        if (postings < 2) {
-          found.push({ entryId: id, currency: null, debit: 0n, credit: 0n, postings });
+      for (const { id, tenant_id: tenantId } of inWindow) {
+        const postings = await tx.query<EntryPostingRow>(LEDGER_SQL.postingsOfEntry, {
+          entry_id: id,
+        });
+        if (postings.length < 2) {
+          found.push({
+            entryId: id,
+            tenantId,
+            currency: null,
+            debit: 0n,
+            credit: 0n,
+            postings: postings.length,
+          });
           continue;
         }
-        for (const row of rows) {
-          if (row.debit_total !== row.credit_total) {
-            found.push({
-              entryId: id,
-              currency: row.currency,
-              debit: row.debit_total,
-              credit: row.credit_total,
-              postings: Number(row.postings),
-            });
-          }
+        const sums = new Map<string, { debit: bigint; credit: bigint; postings: number }>();
+        for (const row of postings) {
+          const sum = sums.get(row.currency) ?? { debit: 0n, credit: 0n, postings: 0 };
+          sums.set(row.currency, {
+            debit: sum.debit + row.debit,
+            credit: sum.credit + row.credit,
+            postings: sum.postings + 1,
+          });
+        }
+        for (const [currency, sum] of sums) {
+          if (sum.debit !== sum.credit) found.push({ entryId: id, tenantId, currency, ...sum });
         }
       }
       return found;

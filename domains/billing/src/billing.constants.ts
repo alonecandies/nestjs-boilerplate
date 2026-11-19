@@ -74,6 +74,18 @@ export const PURGE_STRIPE_EVENTS_LOCK = 'billing:purge-stripe-events';
 export const PURGE_STRIPE_EVENTS_LOCK_TTL_MS = 60_000;
 
 /**
+ * Hourly ledger reconciliation (R1-R3, outbox plan Task 15), on one replica only (`@WithLock`; the
+ * lock is auto-extended while the run lasts).
+ */
+export const RECONCILE_LEDGER_LOCK = 'billing:reconcile-ledger';
+export const RECONCILE_LEDGER_LOCK_TTL_MS = 120_000;
+/**
+ * The reconciliation window ends this long before now (plan delta 8): postings of the last
+ * minutes may still be on their way through the outbox and the consumer.
+ */
+export const LEDGER_RECONCILE_GRACE_MS = 900_000;
+
+/**
  * Prometheus counter: Checkout Sessions Stripe reported paid without any usable currency (none in
  * the event, none stored). The payment is left `pending` and NOT announced (no receipt): alert on
  * any increase and reconcile it against the Stripe dashboard.

@@ -19,13 +19,13 @@ src/
 
 ## Modules and wiring
 
-| Module                         | Contents                                                                                                                                            | Used by          |
-| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
-| `BillingCoreModule`            | CQRS handlers, Drizzle repositories, billing's outbox and its relay (`OutboxModule.forFeature`), the Stripe adapter (`StripeModule.forRootAsync()`) | (via the others) |
-| `BillingGrpcModule`            | `BillingCoreModule` + `BillingGrpcController` (`billing.v1.BillingService`)                                                                         | billing-service  |
-| `BillingApiModule.forLocal()`  | `BillingController` + `BillingResolver` + `BillingPort → BillingLocalAdapter` (the app imports `BillingCoreModule` too)                             | monolith         |
-| `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule.register({ spec: BILLING_GRPC_PACKAGE, url })`    | gateway          |
-| `BillingMessagingModule`       | `LedgerPostingConsumer` + `BillingLedgerModule` (`LedgerPort`, `LedgerService`, the posting commands); only while `LEDGER_ENABLED=true`             | (Task 14 wiring) |
+| Module                         | Contents                                                                                                                                                             | Used by          |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `BillingCoreModule`            | CQRS handlers, Drizzle repositories, billing's outbox and its relay (`OutboxModule.forFeature`), the Stripe adapter (`StripeModule.forRootAsync()`)                  | (via the others) |
+| `BillingGrpcModule`            | `BillingCoreModule` + `BillingGrpcController` (`billing.v1.BillingService`)                                                                                          | billing-service  |
+| `BillingApiModule.forLocal()`  | `BillingController` + `BillingResolver` + `BillingPort → BillingLocalAdapter` (the app imports `BillingCoreModule` too)                                              | monolith         |
+| `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule.register({ spec: BILLING_GRPC_PACKAGE, url })`                     | gateway          |
+| `BillingMessagingModule`       | `LedgerPostingConsumer` + `BillingLedgerModule` (`LedgerPort`, `LedgerService`, the posting commands, reconciliation and its cron); only while `LEDGER_ENABLED=true` | (Task 14 wiring) |
 
 Entry points: `@domain/billing/api` (edge: `BillingApiModule`, `BillingPort` and its adapters, gRPC client config,
 GraphQL/REST presentation, log-redaction paths; what the gateway imports) and `@domain/billing` (everything in
@@ -387,6 +387,7 @@ directly (no subquery, no helper or FK into identity); "–" means no policy, so
   | Create checkout session              | the request principal; each repository call is its own unit of work, and no transaction spans the Stripe call                                          |
   | List payments                        | the request principal; the `billing:read-all` check is in TypeScript first, then `elevate(billing:read-all)` for the whole-tenant listing only         |
   | Purge Stripe events (hourly cron)    | `SystemContext.run('billing.purge-stripe-events')` and `stripeEvents.deleteProcessedBefore`                                                            |
+  | Reconcile the ledger (hourly cron)   | `SystemContext.run('billing.reconcile-ledger')`: `ledgerRuns.*`, `ledgerReconciliation.{listSucceededPayments, listEntryRefs, appendDiscrepancies}`    |
 
 - **System methods** (all `system` scope, pinned in `billing.system-methods.ts`):
   `stripeEvents.deleteProcessedBefore` and `stripeEvents.markProcessedAsPlatform`; the four shared `outbox.*`
@@ -534,8 +535,8 @@ currency, fees from the balance transaction (`application/ledger/posting-rules.t
 idempotent (`posted` / `replayed` / `conflict`) and validates the double-entry rules before any I/O. The
 immudb user may only `SELECT` and `INSERT`; every tenant read carries `tenant_id = @tenant` (immudb has no
 RLS). Tables: `infrastructure/ledger/migrations/001_ledger.sql` (`billingLedgerMigrations`). The webhook writes
-the `billing.ledger-posting.v1` rows (see **Ledger postings** above, `LEDGER_ENABLED`); reconciliation arrives in
-ledger wave 2. Tests: `InMemoryLedger` (`@domain/billing/testing`) and the adapter run the same
+the `billing.ledger-posting.v1` rows (see **Ledger postings** above, `LEDGER_ENABLED`); reconciliation is below.
+Tests: `InMemoryLedger` (`@domain/billing/testing`) and the adapter run the same
 contract spec (`src/testing/ledger.contract.test.ts`).
 
 Postgres keeps the receipts around the entries (outbox plan Task 11): `LedgerReceiptsRepository` writes refs, tenant
@@ -566,6 +567,24 @@ binds `LedgerPort` to `ImmudbLedgerAdapter` while `LEDGER_ENABLED=true` (the app
 and `test/ledger-posting.int-spec.ts` (Citus + immudb: a charge processed twice concurrently and once more leaves one
 balanced entry, one ref and the account rows; a payload of tenant B in A's envelope posts nothing; a payout posts on
 the platform tenant, its rows readable by the system pool only).
+
+**Reconciliation** (outbox plan Task 15, L-13 part 1). `ReconcileLedgerCron` (hourly, UTC, `@WithLock('billing:reconcile-ledger')`,
+nothing while `LEDGER_ENABLED=false`) sends `ReconcileLedgerCommand` inside `SystemContext.run('billing.reconcile-ledger', …)`
+over `[now − 15 min − LEDGER_RECONCILE_LOOKBACK_HOURS, now − 15 min)` (an explicit window wins, for a backfill). The
+handler starts a `ledger_reconciliation_runs` row, runs R1, R2, R3 in order, appends each check's findings
+(`appendDiscrepancies`, one call per kind) and finishes the run `succeeded`, or `failed` when a check threw (the
+other checks still run, rows already appended stay). It never corrects anything; deterministic finding ids make
+reruns and overlapping windows append nothing new. **R1**: entries recorded in the window with fewer than two
+postings or unbalanced in a currency → `unbalanced_entry` (the entry's tenant); debit ≠ credit per currency over the
+ledger → `unbalanced_currency` (platform). **R2**: any immudb row with a revision above 1 → `ledger_row_mutated`
+(platform, `<table>:<id>`). **R3**: paid payments and refs over `[from − 24 h, to + 15 min)` in pages of 500, joined by
+tenant and payment id; reported for rows of the window only: `payment_without_entry`, `entry_without_payment`,
+`tenant_mismatch` (no such entry under the ref's tenant), `amount_mismatch` (presentment vs payment) and
+`status_mismatch` (refund and dispute refs vs the payment status). Metrics: `ledger_reconciliation_runs_total{status}`,
+`ledger_reconciliation_last_success_timestamp_seconds`, `ledger_discrepancies_total{kind}` (new rows only). Tests: one
+spec per check, `reconcile-ledger.handler.spec.ts`, `reconcile-ledger.cron.spec.ts` and
+`test/reconcile-ledger.int-spec.ts` (Citus + immudb: a clean run, then a paid payment without an entry and a ref under
+the wrong tenant, each finding readable by its tenant's elevated principal only).
 
 ## Gotchas
 
