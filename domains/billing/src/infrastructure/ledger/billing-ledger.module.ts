@@ -9,6 +9,7 @@ import { R1InvariantCheck } from '../../application/commands/reconcile-ledger/ch
 import { R2MutationCheck } from '../../application/commands/reconcile-ledger/checks/r2-mutation.js';
 import { R3PaymentsCheck } from '../../application/commands/reconcile-ledger/checks/r3-payments.js';
 import { R4StripeCheck } from '../../application/commands/reconcile-ledger/checks/r4-stripe.js';
+import { R5VerificationCheck } from '../../application/commands/reconcile-ledger/checks/r5-verification.js';
 import { ReconcileLedgerHandler } from '../../application/commands/reconcile-ledger/reconcile-ledger.handler.js';
 import { LedgerService } from '../../application/ledger/ledger.service.js';
 import { StripeOwnerResolver } from '../../application/ledger/stripe-owner-resolver.js';
@@ -46,7 +47,8 @@ export function createLedgerPort(cfg: LedgerConfig, immudb: ImmudbClient | undef
  * `PostLedgerEntryCommand` and `ProcessLedgerPostingCommand`, the ledger repositories they write
  * receipts with, and the reconciliation: `ReconcileLedgerCommand`, its checks (R1-R4, which read
  * `LedgerPort` across tenants inside `SystemContext`; R4 also lists Stripe's balance transactions
- * and re-enqueues missing postings into `billing.outbox`) and the hourly `ReconcileLedgerCron` (needs
+ * and re-enqueues missing postings into `billing.outbox`; R5, while `LEDGER_VERIFY=true`, advances
+ * the trusted state by dual proof and verifies the new entries) and the hourly `ReconcileLedgerCron` (needs
  * `ScheduleModule.forRoot()` and `RedisModule` for its lock in the app; it does nothing while
  * `LEDGER_ENABLED=false`). Self-contained over the apps' global modules (`DatabaseModule` for the
  * runtime and system pools, `CqrsModule.forRoot()`, nestjs-cls, `KafkaProducerModule` for R4's
@@ -69,6 +71,7 @@ export function createLedgerPort(cfg: LedgerConfig, immudb: ImmudbClient | undef
     R2MutationCheck,
     R3PaymentsCheck,
     R4StripeCheck,
+    R5VerificationCheck,
     // R4 resolves the owner of a missing transaction and builds its outbox record (`record()`,
     // no SQL: the system repository inserts it). This module's own writer instance: importing
     // OutboxModule.forFeature again would start a second relay of billing.outbox.

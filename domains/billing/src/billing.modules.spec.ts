@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { Global, type INestApplicationContext, Module, type Type } from '@nestjs/common';
 import { CqrsModule, QueryBus } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
@@ -196,14 +197,15 @@ describe('BillingMessagingModule (L-12: the ledger-posting consumer and its ledg
     expect(context.get(LedgerService, { strict: false })).toBeInstanceOf(LedgerService);
   });
 
+  @Global()
+  @Module({
+    providers: [{ provide: ImmudbClient, useValue: new RecordingImmudbClient() }],
+    exports: [ImmudbClient],
+  })
+  class FakeImmudbModule {}
+
   it('LEDGER_ENABLED=true: LedgerPort is the immudb adapter over the global ImmudbClient', async () => {
     vi.stubEnv('LEDGER_ENABLED', 'true');
-    @Global()
-    @Module({
-      providers: [{ provide: ImmudbClient, useValue: new RecordingImmudbClient() }],
-      exports: [ImmudbClient],
-    })
-    class FakeImmudbModule {}
 
     context = await boot([FakeImmudbModule]);
 
@@ -213,6 +215,67 @@ describe('BillingMessagingModule (L-12: the ledger-posting consumer and its ledg
     expect(
       context.get(ReconcileLedgerHandler, { strict: false }).checks.map((check) => check.name),
     ).toEqual(['R1', 'R2', 'R3', 'R4']);
+  });
+
+  it('LEDGER_VERIFY=true: the handler runs R5 last', async () => {
+    vi.stubEnv('LEDGER_ENABLED', 'true');
+    vi.stubEnv('LEDGER_VERIFY', 'true');
+
+    context = await boot([FakeImmudbModule]);
+
+    expect(
+      context.get(ReconcileLedgerHandler, { strict: false }).checks.map((check) => check.name),
+    ).toEqual(['R1', 'R2', 'R3', 'R4', 'R5']);
+  });
+
+  describe('production guard (Task 17): an enabled ledger is verified against a pinned key', () => {
+    const KEY = Buffer.from(
+      generateKeyPairSync('ec', { namedCurve: 'prime256v1' })
+        .publicKey.export({ type: 'spki', format: 'pem' })
+        .toString(),
+    ).toString('base64');
+    /** Production with the ledger on and a Stripe setup production accepts, plus `env`. */
+    const production = (env: Record<string, string>) => {
+      for (const [key, value] of Object.entries({
+        NODE_ENV: 'production',
+        LEDGER_ENABLED: 'true',
+        STRIPE_SECRET_KEY: 'sk_test_billing_modules_production',
+        STRIPE_WEBHOOK_SECRET: 'whsec_billing_modules_production',
+        STRIPE_SUCCESS_URL: 'https://app.example.com/billing/success',
+        STRIPE_CANCEL_URL: 'https://app.example.com/billing/cancel',
+        DATABASE_URL: 'postgres://app:secret-0001@db.example.com:6432/app?sslmode=verify-full',
+        DATABASE_SYSTEM_URL:
+          'postgres://system:secret-0002@db.example.com:6432/app?sslmode=verify-full',
+        ...env,
+      })) {
+        vi.stubEnv(key, value);
+      }
+    };
+
+    it.each([
+      ['LEDGER_VERIFY=false', { IMMUDB_SERVER_SIGNING_PUBLIC_KEY: KEY }],
+      ['no pinned key', { LEDGER_VERIFY: 'true' }],
+    ])('refuses to start with %s, naming both variables', async (_case, env) => {
+      production(env);
+
+      const boot$ = boot([FakeImmudbModule]);
+
+      await expect(boot$).rejects.toThrow(/LEDGER_VERIFY.*IMMUDB_SERVER_SIGNING_PUBLIC_KEY/s);
+    });
+
+    it.each([
+      [
+        'verified with a pinned key',
+        { LEDGER_VERIFY: 'true', IMMUDB_SERVER_SIGNING_PUBLIC_KEY: KEY },
+      ],
+      ['LEDGER_ALLOW_UNVERIFIED=true', { LEDGER_ALLOW_UNVERIFIED: 'true' }],
+    ])('starts %s', async (_case, env) => {
+      production(env);
+
+      context = await boot([FakeImmudbModule]);
+
+      expect(context.get(LedgerPort, { strict: false })).toBeInstanceOf(ImmudbLedgerAdapter);
+    });
   });
 
   it('LEDGER_ENABLED=true without ImmudbModule fails at boot, naming it', async () => {

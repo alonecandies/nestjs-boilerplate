@@ -357,19 +357,31 @@ export class ImmudbLedgerAdapter extends LedgerPort {
     }
   }
 
+  override async currentState(): Promise<LedgerTrustedState> {
+    const state = await this.immudb.currentState();
+    return { database: state.database, txId: state.txId, txHash: state.txHash };
+  }
+
+  /**
+   * `CurrentState`, then the dual proof from `trusted` (and the state signature when the client
+   * pins a key). First use (`trusted === null`): proven from the empty state at tx 0, which every
+   * history extends, so only the pinned key's signature is checked.
+   */
   override async advanceTrustedState(
     trusted: LedgerTrustedState | null,
   ): Promise<LedgerTrustedState> {
     const state = await this.immudb.currentState();
-    if (trusted !== null) {
-      try {
-        await this.immudb.verifyConsistency(toImmudbState(trusted), state);
-      } catch (error) {
-        if (error instanceof ImmudbError && error.kind === 'verification-failed') {
-          throw new LedgerVerificationFailedException('trusted-state', error.message, error);
-        }
-        throw error;
+    const from: ImmudbState =
+      trusted === null
+        ? { database: state.database, txId: 0n, txHash: new Uint8Array(32), signature: null }
+        : toImmudbState(trusted);
+    try {
+      await this.immudb.verifyConsistency(from, state);
+    } catch (error) {
+      if (error instanceof ImmudbError && error.kind === 'verification-failed') {
+        throw new LedgerVerificationFailedException('trusted-state', error.message, error);
       }
+      throw error;
     }
     return { database: state.database, txId: state.txId, txHash: state.txHash };
   }

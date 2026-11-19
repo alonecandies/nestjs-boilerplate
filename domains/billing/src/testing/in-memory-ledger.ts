@@ -18,18 +18,27 @@ import type {
   LedgerTrustedState,
 } from '../domain/ledger/ledger.types.js';
 
+/** The database the in-memory states name (immudb's is the configured `IMMUDB_DATABASE`). */
+export const IN_MEMORY_LEDGER_DATABASE = 'in-memory';
+
 /**
- * `LedgerPort` in memory, with the same ids, hashes, replay/conflict and balance semantics. Two
- * tamper hooks stand in for a superuser on the immudb host (reconciliation fixtures): `forge`
- * writes an entry without the balance check, `tamper` rewrites a stored one and leaves a revision
- * that `findMutations` reports (R2).
+ * `LedgerPort` in memory, with the same ids, hashes, replay/conflict and balance semantics. Every
+ * transaction extends a hash chain (`currentState`); a trusted state is consistent when the chain
+ * held its hash at its tx id. Three tamper hooks stand in for a superuser on the immudb host
+ * (reconciliation fixtures): `forge` writes an entry without the balance check, `tamper` rewrites
+ * a stored one and leaves a revision that `findMutations` reports (R2), `forkHistory` rewrites
+ * the history itself so no earlier state is consistent any more (R5).
  */
 export class InMemoryLedger extends LedgerPort {
   private readonly entries = new Map<string, LedgerEntry>();
   /** Revision of each rewritten entry (absent: revision 1, never rewritten). */
   private readonly revisions = new Map<string, bigint>();
-  private chain = new Uint8Array(32);
+  /** The payload hash each transaction wrote, by tx id - 1. */
+  private readonly txPayloads: string[] = [];
+  /** The chain hash after each transaction, by tx id (index 0: the empty ledger). */
+  private chain: Uint8Array[] = [new Uint8Array(32)];
   private txId = 0n;
+  private forks = 0;
 
   constructor(private readonly now: () => Date = () => new Date()) {
     super();
@@ -102,10 +111,41 @@ export class InMemoryLedger extends LedgerPort {
   /** One immudb transaction: the next tx id and the hash chain over the written payload. */
   private commit(payloadHash: string): bigint {
     this.txId++;
-    this.chain = new Uint8Array(
-      createHash('sha256').update(this.chain).update(payloadHash).digest(),
-    );
+    this.txPayloads.push(payloadHash);
+    this.chain.push(link(this.chain.at(-1) ?? new Uint8Array(32), payloadHash));
     return this.txId;
+  }
+
+  /**
+   * Test hook: rebuilds every transaction's hash from another genesis, as a history rewritten (or
+   * restored from elsewhere) on the immudb host: the entries and tx ids stay, but no state taken
+   * before is consistent with the store any more, so `advanceTrustedState` and `verifyEntry`
+   * against it fail.
+   */
+  forkHistory(): void {
+    this.forks++;
+    const genesis = new Uint8Array(createHash('sha256').update(`fork:${this.forks}`).digest());
+    const chain: Uint8Array[] = [genesis];
+    for (const payloadHash of this.txPayloads) {
+      chain.push(link(chain.at(-1) ?? genesis, payloadHash));
+    }
+    this.chain = chain;
+  }
+
+  /** @throws LedgerVerificationFailedException unless `trusted` is a state of this history */
+  private assertConsistent(id: string, trusted: LedgerTrustedState): void {
+    if (trusted.txId > this.txId) {
+      throw new LedgerVerificationFailedException(id, 'trusted state is ahead of the ledger');
+    }
+    // Every history extends the empty state (immudb proves nothing from tx 0 either).
+    if (trusted.txId === 0n) return;
+    const hash = this.chain[Number(trusted.txId)];
+    if (hash === undefined || !sameBytes(hash, trusted.txHash)) {
+      throw new LedgerVerificationFailedException(
+        id,
+        `no valid consistency proof from tx ${trusted.txId} to tx ${this.txId}`,
+      );
+    }
   }
 
   override async getEntry(tenantId: string, entryId: string): Promise<LedgerEntry | null> {
@@ -199,9 +239,7 @@ export class InMemoryLedger extends LedgerPort {
     expectedPayloadHash: string,
     trusted: LedgerTrustedState,
   ): Promise<void> {
-    if (trusted.txId > this.txId) {
-      throw new LedgerVerificationFailedException(entryId, 'trusted state is ahead of the ledger');
-    }
+    this.assertConsistent(entryId, trusted);
     const entry = this.entries.get(entryId);
     if (entry === undefined) throw new LedgerVerificationFailedException(entryId, 'no such entry');
     if (entry.payloadHash !== expectedPayloadHash) {
@@ -209,15 +247,26 @@ export class InMemoryLedger extends LedgerPort {
     }
   }
 
+  override async currentState(): Promise<LedgerTrustedState> {
+    return {
+      database: IN_MEMORY_LEDGER_DATABASE,
+      txId: this.txId,
+      txHash: new Uint8Array(this.chain[Number(this.txId)] ?? []),
+    };
+  }
+
   override async advanceTrustedState(
     trusted: LedgerTrustedState | null,
   ): Promise<LedgerTrustedState> {
-    if (trusted !== null && trusted.txId > this.txId) {
-      throw new LedgerVerificationFailedException(
-        'trusted-state',
-        'trusted state is ahead of the ledger',
-      );
-    }
-    return { database: 'in-memory', txId: this.txId, txHash: this.chain };
+    if (trusted !== null) this.assertConsistent('trusted-state', trusted);
+    return this.currentState();
   }
+}
+
+function link(previous: Uint8Array, payloadHash: string): Uint8Array {
+  return new Uint8Array(createHash('sha256').update(previous).update(payloadHash).digest());
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && a.every((byte, i) => byte === b[i]);
 }

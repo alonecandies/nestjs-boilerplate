@@ -37,10 +37,28 @@ export interface ReconciliationContext {
 
 /**
  * One reconciliation check (R1-R5). `run` returns its findings, each carrying `detectedBy: name`
- * and the run id, and writes nothing: the handler appends them. A check that throws fails the run
- * after the other checks ran.
+ * and the run id, and writes no discrepancy: the handler appends them. A check that throws fails
+ * the run after the other checks ran (a `ReconciliationCheckFailure`'s findings are appended all
+ * the same). R5 is the one check that writes something else: the trusted state.
  */
 export interface ReconciliationCheck {
   readonly name: Exclude<LedgerDetector, 'consumer'>;
   run(ctx: ReconciliationContext): Promise<readonly LedgerDiscrepancyInput[]>;
+}
+
+/**
+ * Thrown by a check whose run must finish `failed` although it has findings to store (R5: a failed
+ * proof is a finding AND a failed run). The handler appends `findings` first, then counts the check
+ * as failed like any other throwing check.
+ */
+export class ReconciliationCheckFailure extends Error {
+  override readonly name = 'ReconciliationCheckFailure';
+
+  constructor(
+    message: string,
+    readonly findings: readonly LedgerDiscrepancyInput[] = [],
+    options?: { readonly cause?: unknown },
+  ) {
+    super(message, options);
+  }
 }

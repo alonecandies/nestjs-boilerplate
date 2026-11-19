@@ -31,6 +31,17 @@ export abstract class LedgerPort {
     expectedPayloadHash: string,
     trusted: LedgerTrustedState,
   ): Promise<void>;
-  /** @throws LedgerVerificationFailedException when the store is not consistent with `trusted`. */
+  /**
+   * The store's current state as it reports it, NOT verified (R5 reads the database it names and
+   * its tx id for `ledger_unverified_tx_lag`; `advanceTrustedState` is what proves a state).
+   */
+  abstract currentState(): Promise<LedgerTrustedState>;
+  /**
+   * The current state, proven to extend `trusted` (dual proof) and, when a server signing key is
+   * pinned, carrying a valid signature. `trusted === null` (first use): the state is taken on
+   * trust, its signature still checked when a key is pinned.
+   * @throws LedgerVerificationFailedException when the store is not consistent with `trusted`,
+   *   or the signature does not verify.
+   */
   abstract advanceTrustedState(trusted: LedgerTrustedState | null): Promise<LedgerTrustedState>;
 }

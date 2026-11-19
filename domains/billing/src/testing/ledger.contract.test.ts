@@ -168,5 +168,22 @@ export function describeLedgerContract(name: string, make: () => Promise<LedgerU
         }),
       ).rejects.toBeInstanceOf(LedgerVerificationFailedException);
     });
+
+    it('reports its current state, which the next advance proves and returns', async () => {
+      const posted = await subject.ledger.post(charge());
+      const current = await subject.ledger.currentState();
+      expect(posted.status === 'posted' && current.txId >= posted.immudbTxId).toBe(true);
+      expect(current.txHash).toHaveLength(32);
+      const advanced = await subject.ledger.advanceTrustedState(current);
+      expect(advanced).toMatchObject({ database: current.database, txId: current.txId });
+      expect([...advanced.txHash]).toEqual([...current.txHash]);
+      // The same tx id under another hash is not the same history.
+      await expect(
+        subject.ledger.advanceTrustedState({
+          ...current,
+          txHash: current.txHash.map((b, i) => (i === 0 ? b ^ 1 : b)),
+        }),
+      ).rejects.toBeInstanceOf(LedgerVerificationFailedException);
+    });
   });
 }

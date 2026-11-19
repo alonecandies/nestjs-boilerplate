@@ -21,6 +21,7 @@ import { R1InvariantCheck } from './checks/r1-invariant.js';
 import { R2MutationCheck } from './checks/r2-mutation.js';
 import { R3PaymentsCheck } from './checks/r3-payments.js';
 import { R4StripeCheck } from './checks/r4-stripe.js';
+import { R5VerificationCheck } from './checks/r5-verification.js';
 import { ReconcileLedgerCommand } from './reconcile-ledger.command.js';
 import { ReconcileLedgerHandler } from './reconcile-ledger.handler.js';
 
@@ -31,6 +32,7 @@ const config: LedgerConfig = {
   enabled: true,
   reconcileLookbackHours: 72,
   verify: false,
+  allowUnverified: false,
 };
 const asSystem = <T>(fn: () => Promise<T>) => SystemContext.run('billing.reconcile-ledger', fn);
 
@@ -109,14 +111,22 @@ describe('ReconcileLedgerHandler', () => {
       new StripeOwnerResolver(stripe),
       store.outbox,
     );
-    handler = new ReconcileLedgerHandler(config, store.system, r1, r2, r3, r4);
+    handler = new ReconcileLedgerHandler(
+      config,
+      store.system,
+      r1,
+      r2,
+      r3,
+      r4,
+      new R5VerificationCheck(ledger, store.system),
+    );
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it('runs R1, R2, R3, R4 in order', () => {
+  it('runs R1, R2, R3, R4 in order (R5 only with LEDGER_VERIFY=true)', () => {
     expect(handler.checks.map((check) => check.name)).toEqual(['R1', 'R2', 'R3', 'R4']);
   });
 

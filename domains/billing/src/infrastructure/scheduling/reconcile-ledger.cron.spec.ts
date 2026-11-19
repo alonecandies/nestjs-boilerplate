@@ -13,7 +13,12 @@ import { ReconcileLedgerCron } from './reconcile-ledger.cron.js';
 
 type Routine = (signal: AbortSignal) => Promise<void>;
 
-const enabled: LedgerConfig = { enabled: true, reconcileLookbackHours: 72, verify: false };
+const enabled: LedgerConfig = {
+  enabled: true,
+  reconcileLookbackHours: 72,
+  verify: false,
+  allowUnverified: false,
+};
 const disabled: LedgerConfig = { ...enabled, enabled: false };
 
 describe('ReconcileLedgerCron', () => {

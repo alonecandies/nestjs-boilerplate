@@ -218,7 +218,7 @@ describe('HandleStripeWebhookHandler', () => {
       return { id, object: 'payment_intent', metadata };
     }) as never);
     // LEDGER_ENABLED defaults to false; the ledger blocks below switch it on.
-    ledger = { enabled: false, reconcileLookbackHours: 72, verify: false };
+    ledger = { enabled: false, reconcileLookbackHours: 72, verify: false, allowUnverified: false };
     systemEventsRepository = systemEvents;
     // The in-memory outbox is both the writer and the system repository (one array).
     outboxSystem = outbox as unknown as BillingOutboxSystemRepository;

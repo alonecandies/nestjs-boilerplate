@@ -1,0 +1,303 @@
+import { Logger } from '@nestjs/common';
+import { PLATFORM_TENANT_ID, SystemContext } from '@platform/common';
+import { register } from 'prom-client';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  CHARGE_DRAFT,
+  LEDGER_TEST_TENANT as TENANT_A,
+} from '../../../../../test/ledger-fixtures.js';
+import type { LedgerEntryDraft } from '../../../../domain/ledger/ledger.types.js';
+import {
+  LEDGER_UNVERIFIED_TX_LAG,
+  LEDGER_VERIFIED_TX_ID,
+} from '../../../../infrastructure/ledger/ledger-metrics.js';
+import { InMemoryLedger } from '../../../../testing/in-memory-ledger.js';
+import { InMemoryLedgerStore } from '../../../../testing/in-memory-ledger-store.js';
+import type { LedgerEntryRef } from '../../../repositories/ledger-receipts.repository.js';
+import { ReconcileLedgerCommand } from '../reconcile-ledger.command.js';
+import { ReconcileLedgerHandler } from '../reconcile-ledger.handler.js';
+import type { R1InvariantCheck } from './r1-invariant.js';
+import type { R2MutationCheck } from './r2-mutation.js';
+import type { R3PaymentsCheck } from './r3-payments.js';
+import type { R4StripeCheck } from './r4-stripe.js';
+import { R5_REF_PAGE_SIZE, R5VerificationCheck } from './r5-verification.js';
+
+const TENANT_B = '0192f0c1-0000-7000-8000-000000000002';
+const HOUR = 3_600_000;
+const NOW = new Date('2026-11-19T12:00:00.000Z');
+const FROM = new Date(NOW.getTime() - 72 * HOUR);
+const TO = new Date(NOW.getTime() - 15 * 60_000);
+const DB = 'in-memory';
+const asSystem = <T>(fn: () => Promise<T>) => SystemContext.run('billing.reconcile-ledger', fn);
+
+type Sample = { labels: Record<string, string>; value: number };
+const metric = async (name: string) => {
+  const found = register.getSingleMetric(name);
+  const values = found === undefined ? [] : ((await found.get()).values as Sample[]);
+  return values[0]?.value;
+};
+
+/** A check that finds nothing (R1-R4 are not under test here). */
+const quiet = <T>(name: string) => ({ name, run: async () => [] }) as unknown as T;
+
+const draft = (n: number, tenantId = TENANT_A): LedgerEntryDraft => ({
+  ...CHARGE_DRAFT,
+  sourceKey: `stripe:txn:txn_r5_${n}`,
+  tenantId,
+  lines: CHARGE_DRAFT.lines.map((line) =>
+    line.account === 'revenue:checkout' ? { ...line, accountOwnerTenantId: tenantId } : line,
+  ),
+});
+
+describe('R5VerificationCheck (reconciliation R5: the trusted state and verified entries)', () => {
+  let ledger: InMemoryLedger;
+  let store: InMemoryLedgerStore;
+  let check: R5VerificationCheck;
+  let verified: string[];
+
+  const handler = (verify = true) =>
+    new ReconcileLedgerHandler(
+      { enabled: true, reconcileLookbackHours: 72, verify, allowUnverified: false },
+      store.system,
+      quiet<R1InvariantCheck>('R1'),
+      quiet<R2MutationCheck>('R2'),
+      quiet<R3PaymentsCheck>('R3'),
+      quiet<R4StripeCheck>('R4'),
+      check,
+    );
+  const reconcile = (verify = true) =>
+    asSystem(() => handler(verify).execute(new ReconcileLedgerCommand({ from: FROM, to: TO })));
+  const lastRun = () => [...store.runs.values()].at(-1);
+  const trusted = () => store.trustedStates.get(DB);
+
+  /** Posts `n` through the ledger and records its ref as the consumer does (`posted`: its tx id). */
+  const post = async (
+    n: number,
+    options: { tenantId?: string; replayed?: boolean; refHash?: string; postedAt?: Date } = {},
+  ): Promise<LedgerEntryRef> => {
+    const d = draft(n, options.tenantId);
+    const outcome = await ledger.post(d);
+    const ref: LedgerEntryRef = {
+      tenantId: d.tenantId,
+      entryId: outcome.entryId,
+      sourceKey: d.sourceKey,
+      payloadHash: options.refHash ?? outcome.payloadHash,
+      immudbTxId:
+        outcome.status === 'posted' && options.replayed !== true ? outcome.immudbTxId : null,
+      paymentId: null,
+      kind: d.kind,
+      postedAt: options.postedAt ?? new Date(NOW.getTime() - HOUR),
+    };
+    store.insertEntryRef(ref);
+    return ref;
+  };
+
+  beforeAll(() => {
+    Logger.overrideLogger(false);
+  });
+
+  beforeEach(() => {
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+    register.resetMetrics();
+    ledger = new InMemoryLedger();
+    store = new InMemoryLedgerStore();
+    check = new R5VerificationCheck(ledger, store.system);
+    verified = [];
+    const verifyEntry = ledger.verifyEntry.bind(ledger);
+    vi.spyOn(ledger, 'verifyEntry').mockImplementation(async (entryId, hash, state) => {
+      verified.push(entryId);
+      return verifyEntry(entryId, hash, state);
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('is R5 and runs last, only with LEDGER_VERIFY=true', () => {
+    expect(check.name).toBe('R5');
+    expect(handler().checks.map((c) => c.name)).toEqual(['R1', 'R2', 'R3', 'R4', 'R5']);
+    expect(handler(false).checks.map((c) => c.name)).toEqual(['R1', 'R2', 'R3', 'R4']);
+  });
+
+  it('the first run takes the current state on trust, stores it and verifies the refs of the window', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn');
+    const a = await post(1);
+    const b = await post(2, { tenantId: TENANT_B });
+
+    await expect(reconcile()).resolves.toEqual({ found: {}, appended: {} });
+
+    const current = await ledger.currentState();
+    expect(trusted()).toEqual({
+      database: DB,
+      txId: 2n,
+      txHash: current.txHash,
+      verifiedAt: NOW,
+    });
+    expect(verified.sort()).toEqual([a.entryId, b.entryId].sort());
+    expect(lastRun()?.status).toBe('succeeded');
+    expect(warn).toHaveBeenCalledWith(
+      expect.objectContaining({ database: DB, txId: '2' }),
+      expect.stringContaining('taken on trust'),
+    );
+    expect(await metric(LEDGER_VERIFIED_TX_ID)).toBe(2);
+    expect(await metric(LEDGER_UNVERIFIED_TX_LAG)).toBe(0);
+  });
+
+  it('a later run advances the state and verifies exactly the refs above the old tx id plus the null-tx ones', async () => {
+    await post(1);
+    await post(2);
+    const replayed = await post(3, { replayed: true });
+    await reconcile();
+    const first = trusted();
+    expect(first?.txId).toBe(3n);
+    verified = [];
+
+    const c = await post(4);
+    const d = await post(5, { tenantId: TENANT_B });
+    vi.setSystemTime(new Date(NOW.getTime() + HOUR));
+    await reconcile();
+
+    expect(verified.sort()).toEqual([c.entryId, d.entryId, replayed.entryId].sort());
+    expect(trusted()).toMatchObject({ txId: 5n, verifiedAt: new Date(NOW.getTime() + HOUR) });
+    expect(lastRun()?.status).toBe('succeeded');
+    expect(await metric(LEDGER_VERIFIED_TX_ID)).toBe(5);
+  });
+
+  it('lists the refs since min(from, verifiedAt), page by page, up to when the state was read', async () => {
+    await post(1);
+    await reconcile();
+    const list = vi.spyOn(store.system, 'listEntryRefs');
+    // The stored state was verified before the window starts: the refs since then are read.
+    store.trustedStates.set(DB, {
+      ...(trusted() ?? expect.fail('no state')),
+      verifiedAt: new Date(FROM.getTime() - HOUR),
+    });
+
+    await reconcile();
+
+    expect(list.mock.calls[0]).toEqual([
+      new Date(FROM.getTime() - HOUR),
+      NOW,
+      null,
+      R5_REF_PAGE_SIZE,
+    ]);
+  });
+
+  it('an inconsistent history gives one verification_failed under the platform, no advance, no entry verified, a failed run', async () => {
+    await post(1);
+    await reconcile();
+    const before = trusted();
+    verified = [];
+    await post(2);
+    ledger.forkHistory();
+
+    await expect(reconcile()).resolves.toEqual({
+      found: { verification_failed: 1 },
+      appended: { verification_failed: 1 },
+    });
+
+    expect(store.discrepancies).toEqual([
+      expect.objectContaining({
+        tenantId: PLATFORM_TENANT_ID,
+        kind: 'verification_failed',
+        sourceKey: `state:${DB}`,
+        detectedBy: 'R5',
+        runId: lastRun()?.id,
+        expected: { txId: '1', txHash: Buffer.from(before?.txHash ?? []).toString('hex') },
+      }),
+    ]);
+    expect(trusted()?.txId).toBe(before?.txId);
+    expect(trusted()?.txHash).toEqual(before?.txHash);
+    expect(verified).toEqual([]);
+    expect(lastRun()?.status).toBe('failed');
+    // The stored state still says tx 1; the store is at tx 2.
+    expect(await metric(LEDGER_VERIFIED_TX_ID)).toBe(1);
+    expect(await metric(LEDGER_UNVERIFIED_TX_LAG)).toBe(1);
+  });
+
+  it('a trusted state ahead of the store fails the same way', async () => {
+    await post(1);
+    const ahead = { database: DB, txId: 9n, txHash: new Uint8Array(32).fill(7), verifiedAt: NOW };
+    store.trustedStates.set(DB, ahead);
+
+    await reconcile();
+
+    expect(store.discrepancies).toEqual([
+      expect.objectContaining({
+        tenantId: PLATFORM_TENANT_ID,
+        kind: 'verification_failed',
+        sourceKey: `state:${DB}`,
+      }),
+    ]);
+    expect(trusted()).toEqual(ahead);
+    expect(verified).toEqual([]);
+    expect(lastRun()?.status).toBe('failed');
+  });
+
+  it('the same failed proof twice appends one row', async () => {
+    await post(1);
+    store.trustedStates.set(DB, {
+      database: DB,
+      txId: 9n,
+      txHash: new Uint8Array(32),
+      verifiedAt: NOW,
+    });
+
+    await reconcile();
+    await expect(reconcile()).resolves.toEqual({
+      found: { verification_failed: 1 },
+      appended: { verification_failed: 0 },
+    });
+    expect(store.discrepancies).toHaveLength(1);
+  });
+
+  it('an entry whose hash differs from its ref → verification_failed under that tenant, the state still advances', async () => {
+    await post(1);
+    const bad = await post(2, { tenantId: TENANT_B, refHash: 'f'.repeat(64) });
+
+    await reconcile();
+
+    expect(store.discrepancies).toEqual([
+      expect.objectContaining({
+        tenantId: TENANT_B,
+        kind: 'verification_failed',
+        sourceKey: `ledger_entries:${bad.entryId}`,
+        detectedBy: 'R5',
+        expected: { entryId: bad.entryId, payloadHash: 'f'.repeat(64), immudbTxId: '2' },
+      }),
+    ]);
+    expect(trusted()?.txId).toBe(2n);
+    expect(lastRun()?.status).toBe('succeeded');
+  });
+
+  it('a lost compare-and-set fails the run without a finding, verifies nothing and does not retry', async () => {
+    await post(1);
+    const advance = vi.spyOn(store.system, 'advanceTrustedState').mockResolvedValue(false);
+
+    await expect(reconcile()).resolves.toEqual({ found: {}, appended: {} });
+
+    expect(advance).toHaveBeenCalledTimes(1);
+    expect(store.discrepancies).toEqual([]);
+    expect(verified).toEqual([]);
+    expect(lastRun()?.status).toBe('failed');
+  });
+
+  it('LEDGER_VERIFY=false: the check does not run and the state is untouched', async () => {
+    await post(1);
+    const advance = vi.spyOn(ledger, 'advanceTrustedState');
+
+    await reconcile(false);
+
+    expect(advance).not.toHaveBeenCalled();
+    expect(trusted()).toBeUndefined();
+    expect(verified).toEqual([]);
+    expect(lastRun()?.status).toBe('succeeded');
+  });
+
+  it('runs only inside SystemContext', async () => {
+    await expect(check.run({ runId: 'r', from: FROM, to: TO })).rejects.toMatchObject({
+      code: 'SYSTEM_CONTEXT_REQUIRED',
+    });
+  });
+});

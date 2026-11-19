@@ -114,4 +114,38 @@ describe('ImmudbLedgerAdapter', () => {
       new ImmudbLedgerAdapter(missing).verifyEntry(ENTRY_ID, HASH, TRUSTED),
     ).rejects.toBeInstanceOf(LedgerVerificationFailedException);
   });
+
+  it('first use: proves the current state from tx 0, so a pinned key still checks its signature', async () => {
+    const client = new RecordingImmudbClient();
+    await client.readWrite((tx) => tx.exec('INSERT'));
+    const state = await new ImmudbLedgerAdapter(client).advanceTrustedState(null);
+    expect(state).toMatchObject({ database: 'test', txId: 1n });
+    expect(client.statements.at(-1)).toMatchObject({
+      sql: 'verifyConsistency',
+      params: { trustedTxId: 0n, targetTxId: 1n },
+    });
+
+    const unsigned = new RecordingImmudbClient((s) => {
+      if (s.sql === 'verifyConsistency') {
+        throw new ImmudbError('verification-failed', 'state signature of tx 0 does not verify');
+      }
+      return [];
+    });
+    await expect(new ImmudbLedgerAdapter(unsigned).advanceTrustedState(null)).rejects.toMatchObject(
+      {
+        constructor: LedgerVerificationFailedException,
+        reason: 'state signature of tx 0 does not verify',
+      },
+    );
+  });
+
+  it('reports the current state unverified', async () => {
+    const client = new RecordingImmudbClient();
+    await expect(new ImmudbLedgerAdapter(client).currentState()).resolves.toEqual({
+      database: 'test',
+      txId: 0n,
+      txHash: new Uint8Array(32),
+    });
+    expect(client.statements).toEqual([]);
+  });
 });
