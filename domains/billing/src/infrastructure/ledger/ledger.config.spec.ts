@@ -96,6 +96,16 @@ describe('ledger namespace (owned by billing, L-11)', () => {
       ).toMatchObject({ enabled: true, verify: true, allowUnverified: false });
     });
 
+    it('accepts a pinned key given as a file (the compose mount)', () => {
+      expect(
+        ledgerConfig.parse({
+          ...PROD_ENABLED,
+          LEDGER_VERIFY: 'true',
+          IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE: '/etc/immudb-signing/signing.pub.pem',
+        }),
+      ).toMatchObject({ enabled: true, verify: true });
+    });
+
     it('LEDGER_ALLOW_UNVERIFIED=true is the only opt-out', () => {
       expect(
         ledgerConfig.parse({ ...PROD_ENABLED, LEDGER_ALLOW_UNVERIFIED: 'true' }),

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import type { ConfigType } from '@nestjs/config';
 import { z } from 'zod';
 import { defineConfigNamespace } from '../define-config-namespace.js';
@@ -12,11 +13,70 @@ export const IMMUDB_DEFAULT_ADMIN_PASSWORD = 'immudb';
  */
 export const IMMUDB_LOCAL_PASSWORD = 'Compose-local-App1!';
 
+/**
+ * First words of the comment line the compose `immudb-keygen` job writes above the generated
+ * development public key. The key itself is generated at start (no private key is committed), so
+ * this marker is what production recognises and refuses; it also matches `isKnownLocalSecret`.
+ */
+export const IMMUDB_DEV_SIGNING_PUBLIC_KEY_MARKER = 'compose-local development signing key';
+
 const HOST_PORT = /^[A-Za-z0-9.-]+:\d{1,5}$/;
 const IDENTIFIER = /^[a-z][a-z0-9_]{0,62}$/;
 const PEM_PUBLIC_KEY = /-----BEGIN PUBLIC KEY-----[\s\S]+-----END PUBLIC KEY-----/;
 
 const decodePem = (base64: string): string => Buffer.from(base64, 'base64').toString('utf8');
+
+interface SigningKeyEnv {
+  readonly IMMUDB_SERVER_SIGNING_PUBLIC_KEY?: string | undefined;
+  readonly IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE?: string | undefined;
+}
+
+type SigningKey =
+  | { readonly kind: 'none' }
+  | { readonly kind: 'pem'; readonly pem: string; readonly key: string }
+  | { readonly kind: 'invalid'; readonly key: string; readonly message: string };
+
+/**
+ * The pinned state-signing public key: the base64 PEM of `IMMUDB_SERVER_SIGNING_PUBLIC_KEY`, or the
+ * content of the file named by `IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE` (a PEM, or its base64; the
+ * compose stack mounts the generated key this way). The file is read at boot, once per parse.
+ */
+function resolveSigningKey(env: SigningKeyEnv): SigningKey {
+  const inline = env.IMMUDB_SERVER_SIGNING_PUBLIC_KEY;
+  const file = env.IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE;
+  if (inline !== undefined && file !== undefined) {
+    return {
+      kind: 'invalid',
+      key: 'IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE',
+      message:
+        'Set IMMUDB_SERVER_SIGNING_PUBLIC_KEY or IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE, not both',
+    };
+  }
+  if (file !== undefined) {
+    const key = 'IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE';
+    let content: string;
+    try {
+      content = readFileSync(file, 'utf8');
+    } catch {
+      return { kind: 'invalid', key, message: 'The signing public key file cannot be read' };
+    }
+    const pem = content.includes('-----BEGIN') ? content : decodePem(content.trim());
+    return PEM_PUBLIC_KEY.test(pem)
+      ? { kind: 'pem', pem, key }
+      : { kind: 'invalid', key, message: 'Expected a PEM "PUBLIC KEY" block (or its base64)' };
+  }
+  if (inline === undefined) return { kind: 'none' };
+  const key = 'IMMUDB_SERVER_SIGNING_PUBLIC_KEY';
+  const pem = decodePem(inline);
+  return PEM_PUBLIC_KEY.test(pem)
+    ? { kind: 'pem', pem, key }
+    : { kind: 'invalid', key, message: 'Expected the base64 encoding of a PEM "PUBLIC KEY" block' };
+}
+
+const pinnedPem = (env: SigningKeyEnv): string | undefined => {
+  const signing = resolveSigningKey(env);
+  return signing.kind === 'pem' ? signing.pem : undefined;
+};
 
 export const immudbEnvSchema = z
   .object({
@@ -47,20 +107,22 @@ export const immudbEnvSchema = z
     IMMUDB_ALLOW_INSECURE: zBool(false),
     // base64 of the PEM public key matching the server's --signingKey (state signatures).
     IMMUDB_SERVER_SIGNING_PUBLIC_KEY: zStr(),
+    // The same key as a file (a PEM or its base64), e.g. a mounted secret or the compose volume.
+    IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE: zStr(),
     IMMUDB_RUN_MIGRATIONS: zBool(false),
     ALLOW_KNOWN_LOCAL_SECRETS: zBool(false),
   })
   .superRefine((env, ctx) => {
-    const key = env.IMMUDB_SERVER_SIGNING_PUBLIC_KEY;
-    if (key !== undefined && !PEM_PUBLIC_KEY.test(decodePem(key))) {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['IMMUDB_SERVER_SIGNING_PUBLIC_KEY'],
-        message: 'Expected the base64 encoding of a PEM "PUBLIC KEY" block',
-      });
+    const signing = resolveSigningKey(env);
+    if (signing.kind === 'invalid') {
+      ctx.addIssue({ code: 'custom', path: [signing.key], message: signing.message });
     }
     if (env.NODE_ENV !== 'production') return;
     if (!env.ALLOW_KNOWN_LOCAL_SECRETS) {
+      // The development key of the compose stack (generated, marked): never pinned in production.
+      if (signing.kind === 'pem' && isKnownLocalSecret(signing.pem)) {
+        addKnownLocalSecretIssue(ctx, signing.key);
+      }
       if (isKnownLocalSecret(env.IMMUDB_PASSWORD)) addKnownLocalSecretIssue(ctx, 'IMMUDB_PASSWORD');
       const admin = env.IMMUDB_ADMIN_PASSWORD;
       if (admin === IMMUDB_DEFAULT_ADMIN_PASSWORD || isKnownLocalSecret(admin)) {
@@ -89,10 +151,7 @@ export const immudbEnvSchema = z
     timeoutMs: env.IMMUDB_TIMEOUT_MS,
     keepAliveIntervalMs: env.IMMUDB_KEEPALIVE_INTERVAL_MS,
     tls: env.IMMUDB_TLS,
-    serverSigningPublicKeyPem:
-      env.IMMUDB_SERVER_SIGNING_PUBLIC_KEY === undefined
-        ? undefined
-        : decodePem(env.IMMUDB_SERVER_SIGNING_PUBLIC_KEY),
+    serverSigningPublicKeyPem: pinnedPem(env),
     runMigrations: env.IMMUDB_RUN_MIGRATIONS,
   }));
 

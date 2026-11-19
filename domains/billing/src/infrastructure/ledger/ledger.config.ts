@@ -6,8 +6,8 @@ import { z } from 'zod';
  * The ledger switches (ledger design §6.2). `LEDGER_NAMESPACE` is a code constant, never env:
  * changing it would re-key every entry. Production guard (outbox plan Task 17, D3): an enabled
  * ledger needs `LEDGER_VERIFY=true` and a pinned server signing key
- * (`IMMUDB_SERVER_SIGNING_PUBLIC_KEY`, read here for its presence only: the immudb namespace owns
- * and validates it), unless `LEDGER_ALLOW_UNVERIFIED=true`. The namespace is loaded wherever the
+ * (`IMMUDB_SERVER_SIGNING_PUBLIC_KEY` or `IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE`, read here for
+ * presence only: the immudb namespace owns and validates it), unless `LEDGER_ALLOW_UNVERIFIED=true`. The namespace is loaded wherever the
  * ledger switch is read (the billing core, the ledger module), so such an app refuses to start.
  */
 export const ledgerEnvSchema = z
@@ -25,12 +25,14 @@ export const ledgerEnvSchema = z
     // Production only: run an enabled ledger without R5 or without a pinned signing key.
     LEDGER_ALLOW_UNVERIFIED: zBool(false),
     IMMUDB_SERVER_SIGNING_PUBLIC_KEY: zStr(),
+    IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE: zStr(),
   })
   .superRefine((env, ctx) => {
     if (env.NODE_ENV !== 'production' || !env.LEDGER_ENABLED || env.LEDGER_ALLOW_UNVERIFIED) return;
     const missing = [
       ...(env.LEDGER_VERIFY ? [] : (['LEDGER_VERIFY'] as const)),
-      ...(env.IMMUDB_SERVER_SIGNING_PUBLIC_KEY === undefined
+      ...(env.IMMUDB_SERVER_SIGNING_PUBLIC_KEY === undefined &&
+      env.IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE === undefined
         ? (['IMMUDB_SERVER_SIGNING_PUBLIC_KEY'] as const)
         : []),
     ];
@@ -40,7 +42,7 @@ export const ledgerEnvSchema = z
       code: 'custom',
       path: [first],
       message:
-        'An enabled ledger is verified in production: set LEDGER_VERIFY=true and IMMUDB_SERVER_SIGNING_PUBLIC_KEY (the public key of immudb --signingKey), or LEDGER_ALLOW_UNVERIFIED=true to run it unverified',
+        'An enabled ledger is verified in production: set LEDGER_VERIFY=true and IMMUDB_SERVER_SIGNING_PUBLIC_KEY or IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE (the public key of immudb --signingKey), or LEDGER_ALLOW_UNVERIFIED=true to run it unverified',
     });
   })
   .transform((env) => ({

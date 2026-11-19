@@ -710,6 +710,33 @@ notifications domain and the real-Citus journeys of B3.
 | internal error messages and stack traces hidden (problem+json, GraphQL, gRPC, `/health/ready`)                                                                                                                                                                                            | `exposeInternalErrors: !isProduction`                                                                               |
 | paired credentials (SMTP, Cassandra, Kafka SASL) must be set together; Stripe key prefixes checked                                                                                                                                                                                        | `mail`, `cassandra`, `kafka`, `stripe` schemas                                                                      |
 
+### immudb state signing key
+
+immudb signs the state it returns (`--signingKey`, an ECDSA P-256 private key). Reconciliation R5 pins the matching
+public key (`IMMUDB_SERVER_SIGNING_PUBLIC_KEY` or `_FILE`) and checks the signature of every state it advances the
+trusted state to, so a server that is not the one holding the key is refused (an unsigned server too). Production
+refuses an enabled ledger without `LEDGER_VERIFY=true` and a pinned key (`LEDGER_ALLOW_UNVERIFIED=true` opts out).
+
+- **Generating.** Anywhere offline, never in the repository:
+  `openssl ecparam -name prime256v1 -genkey -noout -out signing.key` (SEC1 `EC PRIVATE KEY`, which immudb parses),
+  then `openssl ec -in signing.key -pubout -out signing.pub.pem`. The local compose stack generates its own
+  development pair in the `immudb-signing` volume; its public file carries a `compose-local` marker line and the
+  `immudb` config namespace refuses it in production (unless `ALLOW_KNOWN_LOCAL_SECRETS=true`, set by compose only).
+- **Storing.** The private key goes to the secret store and is mounted into the immudb host only (file mode 0400
+  for the immudb user); no application ever sees it. The applications get the public key only, as the base64 PEM
+  (`IMMUDB_SERVER_SIGNING_PUBLIC_KEY`) or a mounted file (`IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE`).
+- **Rotating.** Rotation changes who may sign future states; it cannot re-sign the past. Plan it as: (1) stop the
+  reconcile cron (or let one run finish), (2) restart immudb with the new `--signingKey`, (3) roll the new public
+  key out to every app, (4) re-run R5. Until the apps pin the new key, R5 refuses the new server's states (a
+  signature failure is a `verification_failed` finding and the trusted state does not advance); the old key keeps
+  verifying nothing new. The trusted state in `billing.ledger_trusted_state` (tx id and hash) stays valid across a
+  rotation: it is a consistency anchor of the history, independent of the key, and the next advance is proven by
+  the dual proof from it to the new state. Do not clear that row to "fix" a rotation: that turns the next run
+  into a trust-on-first-use of whatever immudb then serves.
+- **Losing or replacing the server.** A fresh immudb (empty volume, any key) fails the dual proof against the stored
+  trusted state: R5 reports `verification_failed` and does not advance. That is the intended alarm; restore the
+  ledger volume rather than resetting the trusted state.
+
 ### Log redaction
 
 pino redacts these paths to `[REDACTED]` (`LOG_REDACT_PATHS`,
@@ -757,6 +784,8 @@ Prometheus scrape the pods directly. A separate metrics listener is a [known gap
       password or ACL user, `KAFKA_SSL` + SASL, `CASSANDRA_SSL` with `CASSANDRA_TLS_CA_PATH` and
       `CASSANDRA_REPLICATION_DATACENTERS`, SMTP with STARTTLS (`SMTP_REQUIRE_TLS`); S3/GCS credentials
       scoped to the bucket (`GCS_KEY_FILE` must be a `service_account` key, or use workload identity).
+- [ ] immudb runs with `--signingKey` (private key in the secret store, never the compose development key), apps pin the
+      public key, `LEDGER_VERIFY=true` ([immudb state signing key](#immudb-state-signing-key)).
 - [ ] Database roles created from the production SQL in [Database roles](#database-roles), with
       secret-store passwords; on a multi-node cluster, TLS (`verify-full`) and SCRAM between nodes.
 - [ ] Every app that uses the database has `DATABASE_URL` (`app_runtime`), `DATABASE_SYSTEM_URL` (`app_system`) and,

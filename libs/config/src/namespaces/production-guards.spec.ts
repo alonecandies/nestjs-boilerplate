@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { errorOf } from '../../test/error-of.js';
 import { EnvValidationError } from '../env/parse-env.js';
@@ -6,6 +9,7 @@ import { authConfig, DEV_JWT_ACCESS_SECRET } from './auth.config.js';
 import { cassandraConfig } from './cassandra.config.js';
 import { databaseConfig } from './database.config.js';
 import { grpcConfig } from './grpc.config.js';
+import { IMMUDB_DEV_SIGNING_PUBLIC_KEY_MARKER, immudbConfig } from './immudb.config.js';
 import { kafkaConfig } from './kafka.config.js';
 import { mailConfig } from './mail.config.js';
 import { redisConfig } from './redis.config.js';
@@ -519,5 +523,56 @@ describe('app', () => {
       appConfig.parse({ ...PROD, CORS_ORIGINS: 'https://app.example.com' }).corsOrigins,
     ).toEqual(['https://app.example.com']);
     expect(appConfig.parse({ CORS_ORIGINS: '*' }).corsOrigins).toEqual(['*']);
+  });
+});
+
+describe('immudb', () => {
+  const PEM =
+    '-----BEGIN PUBLIC KEY-----\nMFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE\n-----END PUBLIC KEY-----\n';
+  /** What `immudb-keygen` writes: a marker comment line, then the PEM. */
+  const COMPOSE_PEM = `# ${IMMUDB_DEV_SIGNING_PUBLIC_KEY_MARKER}, generated at start: not for production\n${PEM}`;
+  const REAL = {
+    ...PROD,
+    IMMUDB_PASSWORD: 'R3al-Secret-Value!',
+    IMMUDB_ADMIN_PASSWORD: 'R3al-Admin-Value!',
+    IMMUDB_TLS: 'true',
+  } as const;
+  const b64 = (text: string): string => Buffer.from(text).toString('base64');
+  const keyFile = (content: string): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'immudb-key-'));
+    const file = join(dir, 'signing.pub.pem');
+    writeFileSync(file, content);
+    return file;
+  };
+
+  it('rejects the compose development public key in production, inline or as a file', () => {
+    for (const env of [
+      { IMMUDB_SERVER_SIGNING_PUBLIC_KEY: b64(COMPOSE_PEM) },
+      { IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE: keyFile(COMPOSE_PEM) },
+      { IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE: keyFile(b64(COMPOSE_PEM)) },
+    ]) {
+      const error = errorOf(() => immudbConfig.parse({ ...REAL, ...env }));
+      expect(error.message).toContain(KNOWN_VALUE_MESSAGE);
+      expect(error.message).not.toContain('MFkwEwYH');
+    }
+  });
+
+  it('accepts the development key with ALLOW_KNOWN_LOCAL_SECRETS and a real key in production', () => {
+    const file = keyFile(COMPOSE_PEM);
+    expect(
+      immudbConfig.parse({
+        ...REAL,
+        ALLOW_KNOWN_LOCAL_SECRETS: 'true',
+        IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE: file,
+      }).serverSigningPublicKeyPem,
+    ).toContain('BEGIN PUBLIC KEY');
+    expect(
+      immudbConfig.parse({ ...REAL, IMMUDB_SERVER_SIGNING_PUBLIC_KEY: b64(PEM) })
+        .serverSigningPublicKeyPem,
+    ).toBe(PEM);
+    expect(
+      immudbConfig.parse({ ...REAL, IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE: keyFile(PEM) })
+        .serverSigningPublicKeyPem,
+    ).toBe(PEM);
   });
 });

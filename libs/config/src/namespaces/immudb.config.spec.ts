@@ -1,3 +1,6 @@
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { errorOf } from '../../test/error-of.js';
 import { validateAllEnv } from '../all-config.js';
@@ -56,6 +59,47 @@ describe('immudb config', () => {
     expect(
       immudbConfig.parse({ IMMUDB_SERVER_SIGNING_PUBLIC_KEY: encoded }).serverSigningPublicKeyPem,
     ).toBe(PEM);
+  });
+
+  describe('IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE', () => {
+    const write = (content: string): string => {
+      const file = join(mkdtempSync(join(tmpdir(), 'immudb-key-')), 'key.pem');
+      writeFileSync(file, content);
+      return file;
+    };
+
+    it('reads a PEM file as is (text before the PEM block included)', () => {
+      const file = write(PEM);
+      expect(
+        immudbConfig.parse({ IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE: file })
+          .serverSigningPublicKeyPem,
+      ).toBe(PEM);
+    });
+
+    it('reads a base64 file as well', () => {
+      const file = write(`${Buffer.from(PEM).toString('base64')}\n`);
+      expect(
+        immudbConfig.parse({ IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE: file })
+          .serverSigningPublicKeyPem,
+      ).toBe(PEM);
+    });
+
+    it('rejects a missing file, a non-PEM file and both variants together', () => {
+      const bad = [
+        { IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE: join(tmpdir(), 'immudb-no-such-key.pem') },
+        { IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE: write('not a key') },
+        {
+          IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE: write(PEM),
+          IMMUDB_SERVER_SIGNING_PUBLIC_KEY: Buffer.from(PEM).toString('base64'),
+        },
+      ];
+      for (const env of bad) {
+        const error = errorOf(() => immudbConfig.parse(env));
+        expect(error.issues.map((issue) => issue.path[0])).toContain(
+          'IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE',
+        );
+      }
+    });
   });
 
   describe('production guards', () => {

@@ -41,6 +41,7 @@ Budget: the stack is sized for **4 CPUs / 4 GB** of Docker Desktop memory (see [
 | `cassandra`             | `cassandra:5.0.9`                                 | 9042                         | —                   | notifications inbox (DC `datacenter1`)                                                     |
 | `cassandra-init`        | `cassandra:5.0.9` (cqlsh)                         | —                            | —                   | one-shot: keyspace `$CASSANDRA_KEYSPACE`                                                   |
 | `immudb`                | `codenotary/immudb:1.11.2` (distroless)           | 3322 (gRPC)                  | —                   | ledger store (append-only, verifiable SQL); pg-wire off; metrics 9497 in-network           |
+| `immudb-keygen`         | `apache/kafka:4.3.1` (openssl)                    | —                            | —                   | one-shot: development state-signing key pair into the `immudb-signing` volume (first run)  |
 | `immudb-init`           | `redis:8.10.2-alpine3.23` (busybox)               | —                            | —                   | one-shot: waits for immudb `/readyz`                                                       |
 | `kafka`                 | `apache/kafka:4.3.1` (KRaft, single node)         | 9094 (EXTERNAL listener)     | —                   | integration events                                                                         |
 | `kafka-init`            | `apache/kafka:4.3.1` (CLI)                        | —                            | —                   | one-shot: topics from `docker/kafka/topics.txt`                                            |
@@ -89,7 +90,7 @@ every app container listens on HTTP **3000** (API or health + metrics) and gRPC 
 
 ## Topologies & profiles
 
-- **No profile**: infrastructure only. The init jobs (`kafka-init`, `cassandra-init`, `storage-init`, `immudb-init`) run once per
+- **No profile**: infrastructure only. The init jobs (`kafka-init`, `cassandra-init`, `storage-init`, `immudb-keygen`, `immudb-init`) run once per
   `up`, idempotently, and exit 0.
 - **`monolith`** or **`microservices`**: never both. Each topology's edge app carries the network alias **`api`** and
   publishes host port 3000, so k6, docs and your browser don't care which one runs.
@@ -218,6 +219,15 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   answers browser CORS for the origins in `RUSTFS_CORS_ALLOWED_ORIGINS` (`DOCKER_S3_CORS_ORIGINS`, default
   `http://localhost:3000,http://localhost:5173` like the apps' `CORS_ORIGINS`), so a frontend can `PUT` to a
   presigned URL directly; `scripts/docker/check-infra.sh` asserts the preflight.
+- **immudb state signing (D3)**: `immudb-keygen` generates an ECDSA P-256 key pair into the `immudb-signing` volume on
+  its first run (the pair is kept afterwards). immudb starts with `--signingKey` on the private key (mounted read-only);
+  the monolith and billing-service mount the volume read-only and pin the public file through
+  `IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE`, and run with `LEDGER_VERIFY=true` (override with `LEDGER_VERIFY=false`), so
+  reconciliation R5 checks every state signature. No private key is committed: the key is local to the volume, and
+  the public file starts with a `compose-local` comment line that `NODE_ENV=production` refuses (the compose stack
+  opts out with `ALLOW_KNOWN_LOCAL_SECRETS`). Removing the `immudb-signing` volume makes the next start generate a new
+  key: see [SECURITY.md](SECURITY.md#immudb-state-signing-key) for what that means for the trusted state.
+  [`docker/immudb/README.md`](../docker/immudb/README.md) has the commands.
 - **immudb**: `immudb-init` only waits for readiness (the image has no shell, so no healthcheck; metrics and
   `/readyz` are on port 9497, in-network only; pg-wire is off). The
   database, the SELECT/INSERT-only application user and the tables come from the apps' migrate step
@@ -239,7 +249,7 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   replace only the default `CMD`. Release flow: [RELEASING.md](RELEASING.md).
 - **`infra-ready`**: `docker compose up --wait` only accepts a one-shot container that _exited_ when an enabled service
   depends on it with `service_completed_successfully`. Without an app profile nothing would, and `--wait` would fail
-  with `kafka-init exited (0)`. This idle 1 MB container depends on the four init jobs, and so means "infra bootstrapped".
+  with `kafka-init exited (0)`. This idle 1 MB container depends on the five init jobs, and so means "infra bootstrapped".
 
 `scripts/docker/check-infra.sh` boots the infra in an isolated project (`bp-infra-check`), asserts all of the above
 (topics + partitions + auto-create off, keyspace + DC, Citus + extensions + `uuidv7()`, the three roles, PgBouncer
