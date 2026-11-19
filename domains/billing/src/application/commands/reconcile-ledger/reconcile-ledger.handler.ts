@@ -13,6 +13,7 @@ import {
 import { R1InvariantCheck } from './checks/r1-invariant.js';
 import { R2MutationCheck } from './checks/r2-mutation.js';
 import { R3PaymentsCheck } from './checks/r3-payments.js';
+import { R4StripeCheck } from './checks/r4-stripe.js';
 import {
   type LedgerReconcileWindow,
   ReconcileLedgerCommand,
@@ -29,7 +30,7 @@ export function defaultReconcileWindow(now: Date, lookbackHours: number): Ledger
 
 /**
  * One reconciliation run (ledger design §4; outbox plan Task 15): `startRun` → every registered
- * check in order (R1, R2, R3; Tasks 16 and 17 add R4 and R5), each check's findings appended with
+ * check in order (R1, R2, R3, R4; Task 17 adds R5), each check's findings appended with
  * `appendDiscrepancies` (one call per kind, so the new rows are known per kind) → `finishRun`.
  * Findings are only appended, never corrected; their ids are deterministic, so a rerun or an
  * overlapping window adds no row. A check that throws (or whose findings cannot be stored) is
@@ -49,8 +50,9 @@ export class ReconcileLedgerHandler implements ICommandHandler<ReconcileLedgerCo
     r1: R1InvariantCheck,
     r2: R2MutationCheck,
     r3: R3PaymentsCheck,
+    r4: R4StripeCheck,
   ) {
-    this.checks = [r1, r2, r3];
+    this.checks = [r1, r2, r3, r4];
   }
 
   async execute(command: ReconcileLedgerCommand): Promise<LedgerRunCounts> {

@@ -21,6 +21,17 @@ export interface LedgerSource {
   readonly presentment: { readonly amount: bigint; readonly currency: string } | null;
 }
 
+/** The half-open window `[from, to)` of a balance-transaction listing. */
+export interface StripeListWindow {
+  readonly from: Date;
+  readonly to: Date;
+}
+
+/** Stripe's page size for the auto-paginated listings (its maximum). */
+const STRIPE_LIST_PAGE_SIZE = 100;
+/** Live secret or restricted keys; test keys start with `sk_test_` / `rk_test_`. */
+const LIVE_KEY = /^(sk|rk)_live_/;
+
 /** The fields of a balance transaction the posting rules read (`PostingBalanceTransaction`). */
 function toPostingTransaction(txn: Stripe.BalanceTransaction): PostingBalanceTransaction {
   return {
@@ -48,10 +59,15 @@ function presentmentOf(object: object): LedgerSource['presentment'] {
  */
 @Injectable()
 export class StripeService {
+  /** Whether the configured key is a live one: the `livemode` of everything this client lists. */
+  readonly livemode: boolean;
+
   constructor(
     @InjectStripe() readonly client: Stripe,
     @Inject(stripeConfig.KEY) private readonly cfg: StripeConfig,
-  ) {}
+  ) {
+    this.livemode = LIVE_KEY.test(cfg.secretKey);
+  }
 
   /**
    * Creates a hosted Checkout Session (`mode: 'payment'`). Pass an `idempotencyKey` derived from a
@@ -125,6 +141,33 @@ export class StripeService {
   async ledgerSource(objectType: LedgerSourceObjectType, objectId: string): Promise<LedgerSource> {
     try {
       return await this.fetchLedgerSource(objectType, objectId);
+    } catch (error) {
+      throw toPaymentDomainException(error) ?? error;
+    }
+  }
+
+  /**
+   * Every balance transaction with `created` in `[from, to)` (reconciliation R4), auto-paginated
+   * (100 per page; the next page is fetched only when the previous one is consumed), each with
+   * its `source` expanded so its owner resolves without another GET. Stripe's `created` is whole
+   * seconds: `created[gte] = ceil(from)`, `created[lt] = ceil(to)`. GETs only (naturally
+   * idempotent); never iterate it inside a unit of work.
+   * @throws DomainException the translated Stripe failure of the page that failed (as
+   *   `ledgerSource`); the rows yielded before it stay yielded
+   */
+  async *listBalanceTransactions(
+    window: StripeListWindow,
+  ): AsyncIterable<Stripe.BalanceTransaction> {
+    const list = this.client.balanceTransactions.list({
+      created: {
+        gte: Math.ceil(window.from.getTime() / 1000),
+        lt: Math.ceil(window.to.getTime() / 1000),
+      },
+      limit: STRIPE_LIST_PAGE_SIZE,
+      expand: ['data.source'],
+    });
+    try {
+      for await (const txn of list) yield txn;
     } catch (error) {
       throw toPaymentDomainException(error) ?? error;
     }

@@ -208,11 +208,11 @@ describe('BillingMessagingModule (L-12: the ledger-posting consumer and its ledg
     context = await boot([FakeImmudbModule]);
 
     expect(context.get(LedgerPort, { strict: false })).toBeInstanceOf(ImmudbLedgerAdapter);
-    // L-13: the reconciliation handler with R1-R3 and its hourly cron.
+    // L-13: the reconciliation handler with R1-R4 and its hourly cron.
     expect(context.get(ReconcileLedgerCron, { strict: false })).toBeInstanceOf(ReconcileLedgerCron);
     expect(
       context.get(ReconcileLedgerHandler, { strict: false }).checks.map((check) => check.name),
-    ).toEqual(['R1', 'R2', 'R3']);
+    ).toEqual(['R1', 'R2', 'R3', 'R4']);
   });
 
   it('LEDGER_ENABLED=true without ImmudbModule fails at boot, naming it', async () => {

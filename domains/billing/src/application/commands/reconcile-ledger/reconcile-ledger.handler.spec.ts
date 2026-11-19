@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { PLATFORM_TENANT_ID, SystemContext } from '@platform/common';
 import { register } from 'prom-client';
+import type Stripe from 'stripe';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CHARGE_DRAFT, LEDGER_TEST_TENANT as TENANT_A } from '../../../../test/ledger-fixtures.js';
 import { LEDGER_RECONCILE_GRACE_MS } from '../../../billing.constants.js';
@@ -12,11 +13,14 @@ import {
   LEDGER_RECONCILIATION_LAST_SUCCESS,
   LEDGER_RECONCILIATION_RUNS_TOTAL,
 } from '../../../infrastructure/ledger/ledger-metrics.js';
+import type { StripeService } from '../../../infrastructure/stripe/stripe.service.js';
 import { InMemoryLedger } from '../../../testing/in-memory-ledger.js';
 import { InMemoryLedgerStore } from '../../../testing/in-memory-ledger-store.js';
+import { StripeOwnerResolver } from '../../ledger/stripe-owner-resolver.js';
 import { R1InvariantCheck } from './checks/r1-invariant.js';
 import { R2MutationCheck } from './checks/r2-mutation.js';
 import { R3PaymentsCheck } from './checks/r3-payments.js';
+import { R4StripeCheck } from './checks/r4-stripe.js';
 import { ReconcileLedgerCommand } from './reconcile-ledger.command.js';
 import { ReconcileLedgerHandler } from './reconcile-ledger.handler.js';
 
@@ -52,6 +56,9 @@ describe('ReconcileLedgerHandler', () => {
   let r1: R1InvariantCheck;
   let r2: R2MutationCheck;
   let r3: R3PaymentsCheck;
+  let r4: R4StripeCheck;
+  /** What the fake Stripe lists for R4 (nothing by default). */
+  let balanceTransactions: Stripe.BalanceTransaction[];
   let handler: ReconcileLedgerHandler;
 
   const reconcile = (window?: { from: Date; to: Date }) =>
@@ -87,15 +94,58 @@ describe('ReconcileLedgerHandler', () => {
     r1 = new R1InvariantCheck(ledger);
     r2 = new R2MutationCheck(ledger);
     r3 = new R3PaymentsCheck(ledger, store.system);
-    handler = new ReconcileLedgerHandler(config, store.system, r1, r2, r3);
+    balanceTransactions = [];
+    const stripe = {
+      livemode: false,
+      async *listBalanceTransactions() {
+        yield* balanceTransactions;
+      },
+      retrievePaymentIntent: async () => null,
+    } as unknown as StripeService;
+    r4 = new R4StripeCheck(
+      ledger,
+      store.system,
+      stripe,
+      new StripeOwnerResolver(stripe),
+      store.outbox,
+    );
+    handler = new ReconcileLedgerHandler(config, store.system, r1, r2, r3, r4);
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it('runs R1, R2, R3 in order', () => {
-    expect(handler.checks.map((check) => check.name)).toEqual(['R1', 'R2', 'R3']);
+  it('runs R1, R2, R3, R4 in order', () => {
+    expect(handler.checks.map((check) => check.name)).toEqual(['R1', 'R2', 'R3', 'R4']);
+  });
+
+  it("appends R4's missing_entry with its detector and run id and keeps R4's outbox record", async () => {
+    balanceTransactions = [
+      {
+        id: 'txn_handler_lost',
+        object: 'balance_transaction',
+        amount: -5_000,
+        fee: 0,
+        net: -5_000,
+        currency: 'usd',
+        created: Math.floor(NOW.getTime() / 1_000) - 7_200,
+        reporting_category: 'payout',
+        source: { id: 'po_handler', object: 'payout' },
+      } as unknown as Stripe.BalanceTransaction,
+    ];
+
+    await expect(reconcile()).resolves.toEqual({
+      found: { missing_entry: 1 },
+      appended: { missing_entry: 1 },
+    });
+
+    const runId = onlyRun()?.id;
+    expect(onlyRun()?.status).toBe('succeeded');
+    expect(store.discrepancies.map((d) => [d.kind, d.detectedBy, d.runId, d.tenantId])).toEqual([
+      ['missing_entry', 'R4', runId, PLATFORM_TENANT_ID],
+    ]);
+    expect(store.outbox.records.map((row) => row.tenantId)).toEqual([PLATFORM_TENANT_ID]);
   });
 
   it('a clean ledger gives a succeeded run with zero counts over the default window', async () => {

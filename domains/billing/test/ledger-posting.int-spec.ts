@@ -2,13 +2,15 @@ import {
   LEDGER_POSTING_REQUESTED_EVENT,
   type LedgerPostingRequestedPayload,
 } from '@domain/billing-contracts';
+import { Global, Module } from '@nestjs/common';
 import { CqrsModule } from '@nestjs/cqrs';
 import { RbacModule } from '@platform/auth';
 import { PLATFORM_TENANT_ID } from '@platform/common';
 import { createEventEnvelope, type EventEnvelope } from '@platform/contracts';
 import { buildRlsContextSql } from '@platform/database';
 import { IMMUDB_TEST_IMAGE, ImmudbClient, ImmudbModule } from '@platform/immudb';
-import { InvalidEventException } from '@platform/transport';
+import { InvalidEventException, KafkaProducer } from '@platform/transport';
+import { FakeKafkaProducer } from '@platform/transport/testing';
 import { sql } from 'drizzle-orm';
 import postgres, { type Sql } from 'postgres';
 import { GenericContainer, type StartedTestContainer, Wait } from 'testcontainers';
@@ -109,6 +111,14 @@ const chargeA = message(
   { id: '0197c800-0000-5000-8000-00000000e001', tenantId: TENANT_A, actorId: A1 },
 );
 
+/** The apps' global Kafka producer (reconciliation R4 builds its outbox envelopes with it). */
+@Global()
+@Module({
+  providers: [{ provide: KafkaProducer, useValue: new FakeKafkaProducer({ source: 'billing' }) }],
+  exports: [KafkaProducer],
+})
+class FakeKafkaModule {}
+
 describe.skipIf(process.env['INTEGRATION'] !== '1')(
   'LedgerPostingConsumer posts to immudb and records its receipts (Citus + immudb)',
   () => {
@@ -173,6 +183,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       vi.spyOn(StripeService.prototype, 'ledgerSource').mockRejectedValue(new Error('no spy yet'));
       database = await startBillingDatabase([], {
         imports: [
+          FakeKafkaModule,
           CqrsModule.forRoot(),
           RbacModule.forRoot(),
           RbacModule.forFeature(BILLING_RBAC),

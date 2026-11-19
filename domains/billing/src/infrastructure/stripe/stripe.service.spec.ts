@@ -498,3 +498,140 @@ describe('StripeService.ledgerSource (L-12: the balance transactions of a money 
     });
   });
 });
+
+describe('StripeService.listBalanceTransactions (R4: the balance transactions of a window)', () => {
+  // Milliseconds inside a second: Stripe's `created` is whole seconds.
+  const FROM = new Date('2026-11-16T11:45:00.400Z');
+  const TO = new Date('2026-11-19T11:45:00.600Z');
+  const txn = (id: string) => ({
+    id,
+    object: 'balance_transaction',
+    amount: 2_500,
+    fee: 103,
+    net: 2_397,
+    currency: 'usd',
+    created: 1_794_000_000,
+    reporting_category: 'charge',
+    source: { id: `ch_${id}`, object: 'charge', metadata: {} },
+    status: 'available',
+    type: 'charge',
+  });
+  const page = (ids: readonly string[], hasMore: boolean) => ({
+    object: 'list',
+    url: '/v1/balance_transactions',
+    has_more: hasMore,
+    data: ids.map(txn),
+  });
+  const json = (status: number, body: unknown) =>
+    new Response(JSON.stringify(body), {
+      status,
+      headers: { 'content-type': 'application/json', 'request-id': 'req_unit' },
+    });
+
+  /** A service whose real SDK client talks to `answers` (one per request) instead of Stripe. */
+  function serviceOver(answers: Response[]): { service: StripeService; requests: URL[] } {
+    const requests: URL[] = [];
+    const fetchFn = async (input: string | URL | Request): Promise<Response> => {
+      requests.push(new URL(input instanceof Request ? input.url : String(input)));
+      return answers.shift() ?? json(500, { error: { type: 'api_error', message: 'no answer' } });
+    };
+    const client = new Stripe(cfg.secretKey, {
+      apiVersion: STRIPE_API_VERSION,
+      httpClient: Stripe.createFetchHttpClient(fetchFn),
+      maxNetworkRetries: 0,
+      telemetry: false,
+    });
+    return { service: new StripeService(client, cfg), requests };
+  }
+
+  const collect = async (service: StripeService) => {
+    const ids: string[] = [];
+    for await (const row of service.listBalanceTransactions({ from: FROM, to: TO })) {
+      ids.push(row.id);
+    }
+    return ids;
+  };
+
+  it('reads every page, created in [from, to) in whole seconds, with the source expanded', async () => {
+    const { service, requests } = serviceOver([
+      json(200, page(['txn_1', 'txn_2'], true)),
+      json(200, page(['txn_3'], true)),
+      json(200, page(['txn_4'], false)),
+    ]);
+
+    await expect(collect(service)).resolves.toEqual(['txn_1', 'txn_2', 'txn_3', 'txn_4']);
+
+    expect(requests).toHaveLength(3);
+    for (const url of requests) {
+      expect(url.pathname).toBe('/v1/balance_transactions');
+      expect(url.searchParams.get('created[gte]')).toBe(String(Math.ceil(FROM.getTime() / 1000)));
+      expect(url.searchParams.get('created[lt]')).toBe(String(Math.ceil(TO.getTime() / 1000)));
+      expect(url.searchParams.getAll('expand[0]')).toEqual(['data.source']);
+      expect(url.searchParams.get('limit')).toBe('100');
+    }
+    expect(requests.map((url) => url.searchParams.get('starting_after'))).toEqual([
+      null,
+      'txn_2',
+      'txn_3',
+    ]);
+  });
+
+  it('a whole-second window maps exactly: gte = from, lt = to', async () => {
+    const { service, requests } = serviceOver([json(200, page([], false))]);
+
+    for await (const _ of service.listBalanceTransactions({
+      from: new Date(1_794_000_000_000),
+      to: new Date(1_794_003_600_000),
+    })) {
+      expect.fail('no row expected');
+    }
+
+    expect(requests[0]?.searchParams.get('created[gte]')).toBe('1794000000');
+    expect(requests[0]?.searchParams.get('created[lt]')).toBe('1794003600');
+  });
+
+  it('a failing page is translated and thrown after the rows already read', async () => {
+    const { service } = serviceOver([
+      json(200, page(['txn_1'], true)),
+      json(500, { error: { type: 'api_error', message: 'down' } }),
+    ]);
+    const seen: string[] = [];
+
+    const failure = await (async () => {
+      for await (const row of service.listBalanceTransactions({ from: FROM, to: TO })) {
+        seen.push(row.id);
+      }
+    })().catch((error: unknown) => error);
+
+    expect(seen).toEqual(['txn_1']);
+    expect(failure).toBeInstanceOf(ExternalServiceException);
+    expect(failure).toMatchObject({ code: 'PAYMENT_PROVIDER_ERROR' });
+  });
+
+  it('a rate-limited listing is PAYMENT_PROVIDER_RATE_LIMITED', async () => {
+    const { service } = serviceOver([
+      json(429, { error: { type: 'rate_limit_error', message: 'slow down' } }),
+    ]);
+
+    await expect(collect(service)).rejects.toMatchObject({
+      code: 'PAYMENT_PROVIDER_RATE_LIMITED',
+    });
+  });
+});
+
+describe('StripeService.livemode (the mode of the configured key)', () => {
+  const serviceWith = (key: string) => {
+    const keyed = stripeConfig.parse({
+      STRIPE_SECRET_KEY: key,
+      STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET,
+    });
+    return new StripeService(createStripeClient(keyed), keyed);
+  };
+
+  it('is true for live secret and restricted keys only', () => {
+    expect(serviceWith('sk_test_unit').livemode).toBe(false);
+    expect(serviceWith('rk_test_unit').livemode).toBe(false);
+    expect(serviceWith('sk_live_unit').livemode).toBe(true);
+    expect(serviceWith('rk_live_unit').livemode).toBe(true);
+  });
+});

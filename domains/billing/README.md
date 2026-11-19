@@ -379,15 +379,15 @@ directly (no subquery, no helper or FK into identity); "–" means no policy, so
 - **Which principal each flow runs as** (no transaction spans the Stripe call, and each flow settles its principal before
   its unit of work opens):
 
-  | Flow                                 | Runs as                                                                                                                                                |
-  | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-  | Webhook, owner with tenant and user  | `runWithPrincipal({ userId, tenantId, roles: [] })` from the signed metadata, around one `@Transactional()` unit (`markProcessed`, payment lock, save) |
-  | Webhook, platform or user-less owner | `SystemContext.run('billing.platform-webhook')` and `stripeEvents.markProcessedAsPlatform` only: no runtime transaction, no payment looked up          |
-  | Webhook, payout (ledger enabled)     | `SystemContext.run('billing.platform-webhook')`: `outbox.insertAsPlatform`, then `stripeEvents.markProcessedAsPlatform`                                |
-  | Create checkout session              | the request principal; each repository call is its own unit of work, and no transaction spans the Stripe call                                          |
-  | List payments                        | the request principal; the `billing:read-all` check is in TypeScript first, then `elevate(billing:read-all)` for the whole-tenant listing only         |
-  | Purge Stripe events (hourly cron)    | `SystemContext.run('billing.purge-stripe-events')` and `stripeEvents.deleteProcessedBefore`                                                            |
-  | Reconcile the ledger (hourly cron)   | `SystemContext.run('billing.reconcile-ledger')`: `ledgerRuns.*`, `ledgerReconciliation.{listSucceededPayments, listEntryRefs, appendDiscrepancies}`    |
+  | Flow                                 | Runs as                                                                                                                                                                     |
+  | ------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | Webhook, owner with tenant and user  | `runWithPrincipal({ userId, tenantId, roles: [] })` from the signed metadata, around one `@Transactional()` unit (`markProcessed`, payment lock, save)                      |
+  | Webhook, platform or user-less owner | `SystemContext.run('billing.platform-webhook')` and `stripeEvents.markProcessedAsPlatform` only: no runtime transaction, no payment looked up                               |
+  | Webhook, payout (ledger enabled)     | `SystemContext.run('billing.platform-webhook')`: `outbox.insertAsPlatform`, then `stripeEvents.markProcessedAsPlatform`                                                     |
+  | Create checkout session              | the request principal; each repository call is its own unit of work, and no transaction spans the Stripe call                                                               |
+  | List payments                        | the request principal; the `billing:read-all` check is in TypeScript first, then `elevate(billing:read-all)` for the whole-tenant listing only                              |
+  | Purge Stripe events (hourly cron)    | `SystemContext.run('billing.purge-stripe-events')` and `stripeEvents.deleteProcessedBefore`                                                                                 |
+  | Reconcile the ledger (hourly cron)   | `SystemContext.run('billing.reconcile-ledger')`: `ledgerRuns.*`, `ledgerReconciliation.{listSucceededPayments, listEntryRefs, appendDiscrepancies, enqueueMissingPostings}` |
 
 - **System methods** (all `system` scope, pinned in `billing.system-methods.ts`):
   `stripeEvents.deleteProcessedBefore` and `stripeEvents.markProcessedAsPlatform`; the four shared `outbox.*`
@@ -568,10 +568,10 @@ and `test/ledger-posting.int-spec.ts` (Citus + immudb: a charge processed twice 
 balanced entry, one ref and the account rows; a payload of tenant B in A's envelope posts nothing; a payout posts on
 the platform tenant, its rows readable by the system pool only).
 
-**Reconciliation** (outbox plan Task 15, L-13 part 1). `ReconcileLedgerCron` (hourly, UTC, `@WithLock('billing:reconcile-ledger')`,
+**Reconciliation** (outbox plan Tasks 15-16, L-13). `ReconcileLedgerCron` (hourly, UTC, `@WithLock('billing:reconcile-ledger')`,
 nothing while `LEDGER_ENABLED=false`) sends `ReconcileLedgerCommand` inside `SystemContext.run('billing.reconcile-ledger', …)`
 over `[now − 15 min − LEDGER_RECONCILE_LOOKBACK_HOURS, now − 15 min)` (an explicit window wins, for a backfill). The
-handler starts a `ledger_reconciliation_runs` row, runs R1, R2, R3 in order, appends each check's findings
+handler starts a `ledger_reconciliation_runs` row, runs R1, R2, R3, R4 in order, appends each check's findings
 (`appendDiscrepancies`, one call per kind) and finishes the run `succeeded`, or `failed` when a check threw (the
 other checks still run, rows already appended stay). It never corrects anything; deterministic finding ids make
 reruns and overlapping windows append nothing new. **R1**: entries recorded in the window with fewer than two
@@ -580,11 +580,22 @@ ledger → `unbalanced_currency` (platform). **R2**: any immudb row with a revis
 (platform, `<table>:<id>`). **R3**: paid payments and refs over `[from − 24 h, to + 15 min)` in pages of 500, joined by
 tenant and payment id; reported for rows of the window only: `payment_without_entry`, `entry_without_payment`,
 `tenant_mismatch` (no such entry under the ref's tenant), `amount_mismatch` (presentment vs payment) and
-`status_mismatch` (refund and dispute refs vs the payment status). Metrics: `ledger_reconciliation_runs_total{status}`,
+`status_mismatch` (refund and dispute refs vs the payment status). **R4** (the self-healing path for a lost webhook,
+a `fee_unavailable` posting or a ledger enabled late): every Stripe balance transaction created in the window
+(`StripeService.listBalanceTransactions`, auto-paginated, source expanded) is looked up by
+`ledgerEntryId('stripe:txn:' + id)` among the refs of all tenants posted since `from` (so an entry posted during the
+grace period, or under another tenant than the metadata names today, is found). No entry → `missing_entry` and one
+`billing.ledger-posting.v1` record (`objectType: 'balance_transaction'`, envelope id
+`uuidv5('reconcile:' + runId + ':' + txnId)`, new per run) through `enqueueMissingPostings`, under the owner
+`StripeOwnerResolver` gives for the source (platform kinds: the platform tenant; an unresolved tenant-level owner: the
+platform tenant plus `tenant_unresolved`); the relay and `LedgerPostingConsumer` then post it. An entry whose net on
+`asset:stripe_balance`, movement on its fee account or currency differs → `stripe_amount_mismatch` (the ref's
+tenant). A Stripe failure fails R4 and keeps what was already enqueued. Metrics: `ledger_reconciliation_runs_total{status}`,
 `ledger_reconciliation_last_success_timestamp_seconds`, `ledger_discrepancies_total{kind}` (new rows only). Tests: one
 spec per check, `reconcile-ledger.handler.spec.ts`, `reconcile-ledger.cron.spec.ts` and
 `test/reconcile-ledger.int-spec.ts` (Citus + immudb: a clean run, then a paid payment without an entry and a ref under
-the wrong tenant, each finding readable by its tenant's elevated principal only).
+the wrong tenant, each finding readable by its tenant's elevated principal only; then a balance transaction without an
+entry healed through R4, a relay tick and the consumer, after which a run appends nothing).
 
 ## Gotchas
 
