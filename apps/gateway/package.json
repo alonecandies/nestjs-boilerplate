@@ -51,6 +51,7 @@
   "devDependencies": {
     "@platform/testing": "workspace:*",
     "@platform/outbox": "workspace:*",
+    "@platform/immudb": "workspace:*",
     "@nestjs/jwt": "catalog:",
     "@nestjs/testing": "catalog:",
     "cache-manager": "catalog:",

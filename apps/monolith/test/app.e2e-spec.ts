@@ -13,7 +13,11 @@ import {
   BillingCoreModule,
   BillingLocalAdapter,
   BillingPort,
+  ImmudbLedgerAdapter,
+  LedgerPort,
+  LedgerPostingConsumer,
 } from '@domain/billing';
+import { LEDGER_POSTING_REQUESTED_EVENT } from '@domain/billing-contracts';
 import { IdentityCoreModule } from '@domain/identity';
 import { USER_REGISTERED_EVENT } from '@domain/identity-contracts';
 import {
@@ -22,10 +26,12 @@ import {
   NotificationsPort,
 } from '@domain/notifications';
 import { HTTP_HEADERS, isUuidV7 } from '@platform/common';
+import { ImmudbClient } from '@platform/immudb';
+import { RecordingImmudbClient } from '@platform/immudb/testing';
 import { MetricsListener } from '@platform/observability';
 import { PARAMS_PROVIDER_TOKEN, type Params } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { AppModule } from '../src/app.module.js';
+import { AppModule, createAppModule } from '../src/app.module.js';
 import { bearer, expectProblem, graphql, multipartFile } from './support/http.js';
 import { createMonolithE2eApp, type MonolithE2e } from './support/monolith-e2e-app.js';
 
@@ -50,7 +56,8 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
   const inject = (...args: Parameters<MonolithE2e['app']['inject']>) => e2e.app.inject(...args);
 
   beforeAll(async () => {
-    e2e = await createMonolithE2eApp({ notificationStores: 'cassandra' });
+    // The Kafka consumers are connected (in-process) so the ledger-off case can pin their topics.
+    e2e = await createMonolithE2eApp({ notificationStores: 'cassandra', kafkaConsumers: true });
   });
 
   afterAll(async () => {
@@ -65,6 +72,12 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
     expect(imports).toEqual(
       expect.arrayContaining([IdentityCoreModule, NotificationsCoreModule, BillingCoreModule]),
     );
+  });
+
+  it('ledger off (the default LEDGER_ENABLED=false): no immudb client, no ledger-posting consumer', () => {
+    expect(() => e2e.app.get(ImmudbClient, { strict: false })).toThrow();
+    expect(() => e2e.app.get(LedgerPostingConsumer, { strict: false })).toThrow();
+    expect(e2e.consumers.getHandlerByPattern(LEDGER_POSTING_REQUESTED_EVENT.topic)).toBeNull();
   });
 
   it('binds every port to its LOCAL adapter (CommandBus/QueryBus, no gRPC)', () => {
@@ -88,7 +101,7 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
       expect(response.json()).toMatchObject({ status: 'ok' });
     });
 
-    it('GET /health/ready → 200 on postgres, cassandra and redis: an unreachable Kafka never un-readies the API', async () => {
+    it('GET /health/ready → 200 on postgres, cassandra and redis (no immudb): an unreachable Kafka never un-readies the API', async () => {
       // KAFKA_BROKERS points at a closed port: event publishing is best-effort, so the REST/GraphQL
       // API must stay in rotation during a broker outage.
       const response = await inject({ method: 'GET', url: '/health/ready' });
@@ -458,5 +471,55 @@ describe('monolith (real AppModule, local adapters, fakes at the network edges)'
       expect(keys).toHaveLength(1);
       expect(keys[0]).toMatch(/hello\.txt$/);
     });
+  });
+});
+
+describe('monolith with LEDGER_ENABLED=true (immudb, the ledger-posting consumer)', () => {
+  let e2e: MonolithE2e;
+  const immudb = new RecordingImmudbClient();
+
+  beforeAll(async () => {
+    vi.stubEnv('LEDGER_ENABLED', 'true');
+    // The session pool behind the readiness check: nothing listens there.
+    vi.stubEnv('IMMUDB_ADDRESS', '127.0.0.1:1');
+    // Defined now, after the env: the module reads LEDGER_ENABLED when it is defined.
+    e2e = await createMonolithE2eApp({
+      module: createAppModule(),
+      immudb,
+      notificationStores: 'cassandra',
+      kafkaConsumers: true,
+    });
+  });
+
+  afterAll(async () => {
+    await e2e?.app.close();
+    vi.unstubAllEnvs();
+  });
+
+  it('registers the ledger-posting handler on the app’s Kafka consumer', () => {
+    expect(e2e.consumers.getHandlerByPattern(LEDGER_POSTING_REQUESTED_EVENT.topic)).toEqual(
+      expect.any(Function),
+    );
+    expect(e2e.app.get(LedgerPostingConsumer, { strict: false })).toBeInstanceOf(
+      LedgerPostingConsumer,
+    );
+  });
+
+  it('binds LedgerPort to the immudb adapter over the global ImmudbClient', () => {
+    expect(e2e.app.get(ImmudbClient, { strict: false })).toBe(immudb);
+    expect(e2e.app.get(LedgerPort, { strict: false })).toBeInstanceOf(ImmudbLedgerAdapter);
+  });
+
+  it('GET /health/ready reports immudb: unreachable, it takes the API out of rotation', async () => {
+    const response = await e2e.app.inject({ method: 'GET', url: '/health/ready' });
+    const body = response.json<{ status: string; info: object; error: object }>();
+    expect(Object.keys({ ...body.info, ...body.error }).sort()).toEqual([
+      'cassandra',
+      'immudb',
+      'postgres',
+      'redis',
+    ]);
+    expect(response.statusCode).toBe(503);
+    expect(body.error).toMatchObject({ immudb: { status: 'down' } });
   });
 });

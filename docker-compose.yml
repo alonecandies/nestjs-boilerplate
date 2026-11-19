@@ -124,12 +124,16 @@ x-env-stripe: &env-stripe
   STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_compose_local_not_for_production}
   STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_compose_local_not_for_production}
 
-# immudb (ledger store). Wired into monolith and billing-service by ledger wave 2 (L-12). The app user
-# is provisioned by the apps' migrate step with SELECT + INSERT only; the admin password is immudb's
-# built-in default unless IMMUDB_ADMIN_PASSWORD was set before the volume was first created.
-# ChangeSQLPrivileges (re-applied by every migration run) ends the app user's open sessions; the
-# pools recover, but L-12 should migrate from one process (the migrate step) rather than every app.
+# immudb (ledger store) for the app that owns the ledger: monolith or billing-service, one per
+# topology. LEDGER_ENABLED (root .env, default false) switches the ledger on: the app then loads
+# immudb, consumes billing.ledger-posting.v1 and reports immudb in readiness; off, it never connects.
+# With the ledger on, the app provisions the SELECT + INSERT-only user and applies the ledger
+# migrations at boot (IMMUDB_RUN_MIGRATIONS; production: the app's `dist/migrate.js` job). Only that
+# one app migrates: ChangeSQLPrivileges (re-applied by every migration run) ends the app user's open
+# sessions, which the pools recover from. The admin password is immudb's built-in default unless
+# IMMUDB_ADMIN_PASSWORD was set before the volume was first created.
 x-env-immudb: &env-immudb
+  LEDGER_ENABLED: ${LEDGER_ENABLED:-false}
   IMMUDB_ADDRESS: immudb:3322
   IMMUDB_DATABASE: ${IMMUDB_DATABASE:-app}
   IMMUDB_PASSWORD: "${IMMUDB_PASSWORD:-Compose-local-App1!}"
@@ -687,6 +691,7 @@ services:
         - *env-mail
         - *env-storage
         - *env-stripe
+        - *env-immudb
         - *env-edge
       SERVICE_NAME: monolith
       KAFKA_GROUP_ID: monolith
@@ -705,6 +710,7 @@ services:
       kafka-init: { condition: service_completed_successfully }
       cassandra-init: { condition: service_completed_successfully }
       storage-init: { condition: service_completed_successfully }
+      immudb-init: { condition: service_completed_successfully }
     deploy:
       resources:
         limits: { cpus: "2.0", memory: 768M }
@@ -840,7 +846,7 @@ services:
       target: ${APP_TARGET:-runtime}
       args: { APP: billing-service }
     environment:
-      <<: [*env-base, *env-postgres, *env-stripe]
+      <<: [*env-base, *env-postgres, *env-stripe, *env-immudb]
       SERVICE_NAME: billing-service
       KAFKA_GROUP_ID: billing-service
       NODE_OPTIONS: --max-old-space-size=320
@@ -851,6 +857,7 @@ services:
       pgbouncer: { condition: service_healthy }
       redis: { condition: service_healthy }
       kafka-init: { condition: service_completed_successfully }
+      immudb-init: { condition: service_completed_successfully }
     deploy:
       resources:
         limits: { cpus: "1.0", memory: 448M }

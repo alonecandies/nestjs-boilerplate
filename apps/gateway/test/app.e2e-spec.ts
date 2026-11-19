@@ -13,11 +13,13 @@ import {
   BILLING_LOG_REDACT_PATHS,
   BillingGrpcAdapter,
   BillingPort,
+  LedgerPostingConsumer,
   stripeConfig,
 } from '@domain/billing';
 import { passwordConfig, refreshTokenConfig } from '@domain/identity';
 import { ConfigService } from '@nestjs/config';
 import { generateId, HTTP_HEADERS, isUuidV7 } from '@platform/common';
+import { ImmudbClient } from '@platform/immudb';
 import { MetricsListener } from '@platform/observability';
 import { outboxRelayToken } from '@platform/outbox';
 import { PARAMS_PROVIDER_TOKEN, type Params } from 'nestjs-pino';
@@ -78,6 +80,11 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
     for (const outbox of ['identity', 'billing']) {
       expect(() => e2e.app.get(outboxRelayToken(outbox), { strict: false }), outbox).toThrow();
     }
+  });
+
+  it('loads no ledger: neither an immudb client nor the ledger-posting consumer (billing owns both)', () => {
+    expect(() => e2e.app.get(ImmudbClient, { strict: false })).toThrow();
+    expect(() => e2e.app.get(LedgerPostingConsumer, { strict: false })).toThrow();
   });
 
   it('composes billing’s log redaction paths into the logger (the Stripe-Signature header is never logged)', () => {

@@ -32,6 +32,7 @@ import {
 } from '@domain/notifications/testing';
 import { getQueueToken } from '@nestjs/bullmq';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Type } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { buildFastifyOptions, configureHttpApp, setupApiDocs } from '@platform/bootstrap';
@@ -39,6 +40,7 @@ import { CASSANDRA_CLIENT } from '@platform/cassandra';
 import { appConfig } from '@platform/config';
 import { DRIZZLE, RlsElevation } from '@platform/database';
 import { GRAPHQL_PUB_SUB } from '@platform/graphql';
+import { ImmudbClient } from '@platform/immudb';
 import { MAIL_QUEUE, MailProcessor } from '@platform/mailer';
 import { type OutboxRelay, type OutboxTickResult, outboxRelayToken } from '@platform/outbox';
 import { REDIS_CLIENT } from '@platform/redis';
@@ -84,6 +86,7 @@ export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
  * | `BillingOutbox` + its system repository    | `InMemoryOutbox` (`outbox.billing`)          |
  * | `GRAPHQL_PUB_SUB`                          | in-process `PubSub`                          |
  * | `StorageService`                           | `InMemoryStorageService`                     |
+ * | `ImmudbClient` (`LEDGER_ENABLED=true` only) | `options.immudb`, when given                 |
  *
  * The Redis Socket.IO adapter is not connected (no Redis). The Kafka consumers are connected only
  * with `kafkaConsumers: true`, to an in-process server (`consumers.deliver()`), never to a broker.
@@ -107,6 +110,13 @@ export interface MonolithE2eOptions {
    * does in main.ts) to an in-process `InMemoryKafkaServer`, returned as `consumers`.
    */
   kafkaConsumers?: boolean;
+  /**
+   * The root module to boot instead of `AppModule`: one `createAppModule()` defined after the spec
+   * stubbed the env it reads at definition time (`LEDGER_ENABLED`).
+   */
+  module?: Type<unknown>;
+  /** Replaces the `ImmudbClient` of `ImmudbModule` (loaded only with `LEDGER_ENABLED=true`). */
+  immudb?: ImmudbClient;
 }
 
 export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
@@ -127,7 +137,7 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
   const mailQueue = createFakeQueue();
   const storage = new InMemoryStorageService();
 
-  const builder = Test.createTestingModule({ imports: [AppModule] })
+  const builder = Test.createTestingModule({ imports: [options.module ?? AppModule] })
     .overrideProvider(REDIS_CLIENT)
     .useValue(redis.asRedis())
     .overrideProvider(DRIZZLE)
@@ -184,6 +194,10 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     .useValue(storage)
     .overrideProvider(StripeEventsSystemRepository)
     .useValue(new InMemoryStripeEventsSystemRepository());
+
+  if (options.immudb !== undefined) {
+    builder.overrideProvider(ImmudbClient).useValue(options.immudb);
+  }
 
   if (options.notificationStores !== 'cassandra') {
     builder

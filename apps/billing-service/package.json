@@ -27,6 +27,7 @@
     "@platform/contracts": "workspace:*",
     "@domain/billing-contracts": "workspace:*",
     "@platform/database": "workspace:*",
+    "@platform/immudb": "workspace:*",
     "@platform/observability": "workspace:*",
     "@platform/redis": "workspace:*",
     "@platform/transport": "workspace:*",

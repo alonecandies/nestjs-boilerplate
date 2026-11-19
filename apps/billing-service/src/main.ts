@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import { ledgerConfig } from '@domain/billing';
 import { BILLING_GRPC_PACKAGE } from '@domain/billing-contracts';
 import { Logger } from '@nestjs/common';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
@@ -7,6 +8,7 @@ import { withTimeout } from '@platform/common';
 import { flushLogs } from '@platform/observability';
 import { connectGrpcServer } from '@platform/transport';
 import { AppModule } from './app.module.js';
+import { connectLedgerConsumer } from './ledger-consumer.js';
 
 /** Upper bound for releasing what a failed boot already opened (pools, sockets). */
 const FAILED_BOOT_CLOSE_TIMEOUT_MS = 5_000;
@@ -23,6 +25,9 @@ try {
   app = await createServiceApp(AppModule);
   // After every global enhancer is known (inheritAppConfig) and before startAllMicroservices.
   connectGrpcServer(app, [BILLING_GRPC_PACKAGE]);
+  // LEDGER_ENABLED=true only (the same switch AppModule was defined with): billing.ledger-posting.v1
+  // → LedgerPostingConsumer, in group `billing-service`. Otherwise the service joins no group.
+  connectLedgerConsumer(app, ledgerConfig.parse());
   await app.startAllMicroservices();
   // Last: the HTTP port (readiness probes) only opens once gRPC accepts calls.
   await listenMetrics(app);

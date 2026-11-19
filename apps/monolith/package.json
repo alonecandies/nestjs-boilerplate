@@ -26,6 +26,7 @@
     "@platform/common": "workspace:*",
     "@platform/config": "workspace:*",
     "@platform/database": "workspace:*",
+    "@platform/immudb": "workspace:*",
     "@domain/files": "workspace:*",
     "@platform/graphql": "workspace:*",
     "@domain/identity": "workspace:*",
