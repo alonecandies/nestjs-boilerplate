@@ -25,6 +25,7 @@ src/
 | `BillingGrpcModule`            | `BillingCoreModule` + `BillingGrpcController` (`billing.v1.BillingService`)                                                                         | billing-service  |
 | `BillingApiModule.forLocal()`  | `BillingController` + `BillingResolver` + `BillingPort → BillingLocalAdapter` (the app imports `BillingCoreModule` too)                             | monolith         |
 | `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule.register({ spec: BILLING_GRPC_PACKAGE, url })`    | gateway          |
+| `BillingMessagingModule`       | `LedgerPostingConsumer` + `BillingLedgerModule` (`LedgerPort`, `LedgerService`, the posting commands); only while `LEDGER_ENABLED=true`             | (Task 14 wiring) |
 
 Entry points: `@domain/billing/api` (edge: `BillingApiModule`, `BillingPort` and its adapters, gRPC client config,
 GraphQL/REST presentation, log-redaction paths; what the gateway imports) and `@domain/billing` (everything in
@@ -177,7 +178,8 @@ errors to gRPC statuses and `x-error-code` trailers, and `BillingGrpcAdapter` ma
 | ------------------------------ | -------- | -------------------------------------------------------------------------------------------------------------- |
 | `billing.payment-succeeded.v1` | `userId` | `{ paymentId, userId, stripeCheckoutSessionId, amountTotal, currency, paidAt }`; envelope id = domain event id |
 
-Billing consumes no topic.
+Billing consumes its own `billing.ledger-posting.v1` (`LedgerPostingConsumer`, `BillingMessagingModule`, only while
+`LEDGER_ENABLED=true`): see **Ledger (immudb)**.
 
 ## Stripe adapter (`infrastructure/stripe`)
 
@@ -532,8 +534,8 @@ currency, fees from the balance transaction (`application/ledger/posting-rules.t
 idempotent (`posted` / `replayed` / `conflict`) and validates the double-entry rules before any I/O. The
 immudb user may only `SELECT` and `INSERT`; every tenant read carries `tenant_id = @tenant` (immudb has no
 RLS). Tables: `infrastructure/ledger/migrations/001_ledger.sql` (`billingLedgerMigrations`). The webhook writes
-the `billing.ledger-posting.v1` rows (see **Ledger postings** above, `LEDGER_ENABLED`); the posting consumer and
-reconciliation arrive in ledger wave 2. Tests: `InMemoryLedger` (`@domain/billing/testing`) and the adapter run the same
+the `billing.ledger-posting.v1` rows (see **Ledger postings** above, `LEDGER_ENABLED`); reconciliation arrives in
+ledger wave 2. Tests: `InMemoryLedger` (`@domain/billing/testing`) and the adapter run the same
 contract spec (`src/testing/ledger.contract.test.ts`).
 
 Postgres keeps the receipts around the entries (outbox plan Task 11): `LedgerReceiptsRepository` writes refs, tenant
@@ -542,6 +544,28 @@ the form 0005's probe pinned), and `LedgerSystemRepository` is the system side (
 re-enqueued postings, platform refs and accounts, the trusted state and the runs). Findings have deterministic ids
 (`ledgerDiscrepancyId`: kind, source key and a hash of `expected`/`actual`), so an overlapping window or a rerun
 appends nothing new. `InMemoryLedgerStore` (`@domain/billing/testing`) is the twin of both.
+
+**Posting consumer** (outbox plan Task 13, L-12). `LedgerPostingConsumer` checks that the envelope's tenant and actor
+are the payload's (else `InvalidEventException`, dead-lettered), then runs `ProcessLedgerPostingCommand` as
+`{ userId, tenantId, roles: [] }`, or in `SystemContext.run('billing.ledger-posting', …)` for the platform tenant or
+a null user. The handler asks Stripe for the object's balance transactions (`StripeService.ledgerSource`, GETs, no
+unit of work open; three attempts 1 s and 2 s apart while Stripe has none, then one `fee_unavailable` finding), turns
+each into a draft (`draftFromBalanceTransaction`) and sends `PostLedgerEntryCommand` → `LedgerService.post` (the
+ledger tenant rule: a principal posts and reads only its own tenant, `SystemContext` any tenant, neither nothing;
+`LEDGER_TENANT_MISMATCH`, 403) → receipts: `posted` writes the ref with the immudb tx id, `replayed` a ref with a null
+tx id (the idempotent insert keeps an existing one), `conflict` one `post_conflict` finding. A principal's ref,
+tenant account rows and findings go through `LedgerReceiptsRepository`, its platform account rows through
+`recordPlatformAccounts` in a nested `SystemContext.run('billing.ledger-platform-accounts', …)`; in `SystemContext`
+everything goes through `LedgerSystemRepository` (a user-less tenant posting records only the platform's account
+rows). immudb `unavailable`, Stripe 5xx/429/network and Postgres connection or timeout errors become
+`KafkaRetriableException` (redelivered, never dead-lettered); anything else is dead-lettered. `BillingLedgerModule`
+binds `LedgerPort` to `ImmudbLedgerAdapter` while `LEDGER_ENABLED=true` (the app imports `ImmudbModule`) and to
+`DisabledLedger` (`LEDGER_DISABLED`, 503) otherwise. Metrics: `ledger_postings_total{outcome}`,
+`ledger_post_duration_seconds`, `ledger_discrepancies_total{kind}` (new rows only). Tests: `ledger.service.spec.ts`,
+`post-ledger-entry.handler.spec.ts`, `process-ledger-posting.handler.spec.ts`, `ledger-posting.consumer.spec.ts`
+and `test/ledger-posting.int-spec.ts` (Citus + immudb: a charge processed twice concurrently and once more leaves one
+balanced entry, one ref and the account rows; a payload of tenant B in A's envelope posts nothing; a payout posts on
+the platform tenant, its rows readable by the system pool only).
 
 ## Gotchas
 

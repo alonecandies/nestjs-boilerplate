@@ -1,0 +1,55 @@
+import { getOrCreateCounter, getOrCreateHistogram } from '@platform/observability';
+import type { LedgerPostOutcome } from '../../domain/ledger/ledger.types.js';
+import type { LedgerDiscrepancyKind } from '../../domain/ledger/ledger-discrepancy.js';
+
+export const LEDGER_POSTINGS_TOTAL = 'ledger_postings_total';
+export const LEDGER_POST_DURATION_SECONDS = 'ledger_post_duration_seconds';
+export const LEDGER_DISCREPANCIES_TOTAL = 'ledger_discrepancies_total';
+
+/** `LedgerPort.post` latency buckets: one immudb read-write transaction, retried on a conflict. */
+export const LEDGER_POST_DURATION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5];
+
+const postings = () =>
+  getOrCreateCounter({
+    name: LEDGER_POSTINGS_TOTAL,
+    help: 'Ledger entries the posting consumer posted, by outcome (posted, replayed, conflict)',
+    labelNames: ['outcome'],
+  });
+
+const postDuration = () =>
+  getOrCreateHistogram({
+    name: LEDGER_POST_DURATION_SECONDS,
+    help: 'Seconds one LedgerPort.post took (validation, the immudb transaction and its retries)',
+    buckets: LEDGER_POST_DURATION_BUCKETS,
+  });
+
+const discrepancies = () =>
+  getOrCreateCounter({
+    name: LEDGER_DISCREPANCIES_TOTAL,
+    help: 'New ledger discrepancy rows, by kind (an identical finding already stored is not counted)',
+    labelNames: ['kind'],
+  });
+
+/**
+ * The ledger's Prometheus series (prom-client's default registry through GM's `getOrCreate*`, so
+ * several apps in one process share them). Labels carry no tenant, user or amount.
+ */
+export const LedgerMetrics = Object.freeze({
+  /** One `LedgerPort.post` outcome. */
+  posted(outcome: LedgerPostOutcome['status']): void {
+    postings().inc({ outcome });
+  },
+
+  /** Starts timing one `LedgerPort.post`; call the result when it settled. */
+  startPost(): () => void {
+    const end = postDuration().startTimer();
+    return () => {
+      end();
+    };
+  },
+
+  /** `count` new discrepancy rows of `kind` (0 adds nothing). */
+  discrepancies(kind: LedgerDiscrepancyKind, count = 1): void {
+    if (count > 0) discrepancies().inc({ kind }, count);
+  },
+});

@@ -1,4 +1,4 @@
-import { Global, type INestApplicationContext, Module } from '@nestjs/common';
+import { Global, type INestApplicationContext, Module, type Type } from '@nestjs/common';
 import { CqrsModule, QueryBus } from '@nestjs/cqrs';
 import { Test } from '@nestjs/testing';
 import { RbacModule } from '@platform/auth';
@@ -12,23 +12,31 @@ import {
   SystemDatabase,
   TransactionHost,
 } from '@platform/database';
+import { ImmudbClient } from '@platform/immudb';
+import { RecordingImmudbClient } from '@platform/immudb/testing';
 import { DistributedLockService } from '@platform/redis';
 import { KafkaProducer } from '@platform/transport';
 import { FakeKafkaProducer } from '@platform/transport/testing';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRecordingDrizzle, installRlsTransactionHost } from '../test/billing-test.utils.js';
+import { LedgerService } from './application/ledger/ledger.service.js';
 import { BillingPort } from './application/ports/billing.port.js';
+import { LedgerPort } from './application/ports/ledger.port.js';
 import { ListPaymentsQuery } from './application/queries/list-payments/list-payments.query.js';
 import { PaymentsRepository } from './application/repositories/payments.repository.js';
 import { BillingApiModule } from './billing-api.module.js';
 import { BillingCoreModule } from './billing-core.module.js';
 import { BillingGrpcModule } from './billing-grpc.module.js';
+import { BillingMessagingModule } from './billing-messaging.module.js';
 import { BillingGrpcAdapter } from './infrastructure/adapters/grpc/billing-grpc.adapter.js';
 import { BillingLocalAdapter } from './infrastructure/adapters/local/billing-local.adapter.js';
+import { DisabledLedger } from './infrastructure/ledger/disabled-ledger.js';
+import { ImmudbLedgerAdapter } from './infrastructure/ledger/immudb-ledger.adapter.js';
 import { BillingOutbox } from './infrastructure/persistence/billing-outbox.js';
 import { BillingOutboxSystemRepository } from './infrastructure/persistence/drizzle-outbox.system-repository.js';
 import { StripeService } from './infrastructure/stripe/stripe.service.js';
 import { BillingGrpcController } from './presentation/grpc/billing-grpc.controller.js';
+import { LedgerPostingConsumer } from './presentation/messaging/ledger-posting.consumer.js';
 
 /**
  * What the apps' global infrastructure modules provide, faked (no Postgres, no Kafka): the real
@@ -147,5 +155,60 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
 
     expect(context.get(BillingPort, { strict: false })).toBeInstanceOf(BillingGrpcAdapter);
     expect(() => context?.get(PaymentsRepository, { strict: false })).toThrow();
+  });
+});
+
+describe('BillingMessagingModule (L-12: the ledger-posting consumer and its ledger)', () => {
+  let context: INestApplicationContext | undefined;
+
+  afterEach(async () => {
+    await context?.close();
+    context = undefined;
+    vi.unstubAllEnvs();
+  });
+
+  const boot = async (extra: Type[] = []) => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [
+        AppConfigModule.forRoot(),
+        RbacModule.forRoot(),
+        CqrsModule.forRoot(),
+        fakeInfrastructure().module,
+        ...extra,
+        BillingCoreModule,
+        BillingMessagingModule,
+      ],
+    }).compile();
+    return moduleRef.init();
+  };
+
+  it('LEDGER_ENABLED=false: the consumer resolves over a ledger that answers LEDGER_DISABLED', async () => {
+    context = await boot();
+
+    expect(context.get(LedgerPostingConsumer, { strict: false })).toBeInstanceOf(
+      LedgerPostingConsumer,
+    );
+    expect(context.get(LedgerPort, { strict: false })).toBeInstanceOf(DisabledLedger);
+    expect(context.get(LedgerService, { strict: false })).toBeInstanceOf(LedgerService);
+  });
+
+  it('LEDGER_ENABLED=true: LedgerPort is the immudb adapter over the global ImmudbClient', async () => {
+    vi.stubEnv('LEDGER_ENABLED', 'true');
+    @Global()
+    @Module({
+      providers: [{ provide: ImmudbClient, useValue: new RecordingImmudbClient() }],
+      exports: [ImmudbClient],
+    })
+    class FakeImmudbModule {}
+
+    context = await boot([FakeImmudbModule]);
+
+    expect(context.get(LedgerPort, { strict: false })).toBeInstanceOf(ImmudbLedgerAdapter);
+  });
+
+  it('LEDGER_ENABLED=true without ImmudbModule fails at boot, naming it', async () => {
+    vi.stubEnv('LEDGER_ENABLED', 'true');
+
+    await expect(boot()).rejects.toThrow(/ImmudbModule\.forRootAsync/);
   });
 });

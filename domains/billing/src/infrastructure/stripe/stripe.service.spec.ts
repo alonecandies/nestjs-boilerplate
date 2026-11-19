@@ -261,3 +261,240 @@ describe('StripeService.retrieveCheckoutSession and the pinned API version', () 
     expect(STRIPE_API_VERSION).toBe(Stripe.API_VERSION);
   });
 });
+
+describe('StripeService.ledgerSource (L-12: the balance transactions of a money object)', () => {
+  const bt = (id: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    object: 'balance_transaction',
+    amount: 2_500,
+    fee: 103,
+    net: 2_397,
+    currency: 'usd',
+    created: 1_794_182_400,
+    reporting_category: 'charge',
+    source: 'ch_1',
+    status: 'pending',
+    type: 'charge',
+    ...overrides,
+  });
+  /** What the poster keeps of a balance transaction (`PostingBalanceTransaction`). */
+  const posting = (id: string, overrides: Record<string, unknown> = {}) => {
+    const {
+      id: _id,
+      amount,
+      fee,
+      currency,
+      created,
+      reporting_category,
+      source,
+    } = bt(id, overrides);
+    return { id, amount, fee, currency, created, reporting_category, source };
+  };
+
+  it("a charge: its expanded balance transaction and the charge's presentment", async () => {
+    const service = createService();
+    const retrieve = vi.spyOn(service.client.charges, 'retrieve').mockResolvedValue({
+      id: 'ch_1',
+      object: 'charge',
+      amount: 2_600,
+      currency: 'EUR',
+      balance_transaction: bt('txn_1'),
+    } as never);
+
+    await expect(service.ledgerSource('charge', 'ch_1')).resolves.toEqual({
+      transactions: [posting('txn_1')],
+      pending: false,
+      presentment: { amount: 2_600n, currency: 'eur' },
+    });
+    expect(retrieve).toHaveBeenCalledWith('ch_1', { expand: ['balance_transaction'] });
+  });
+
+  it('a charge Stripe has no balance transaction for yet is pending', async () => {
+    const service = createService();
+    vi.spyOn(service.client.charges, 'retrieve').mockResolvedValue({
+      id: 'ch_1',
+      object: 'charge',
+      amount: 2_500,
+      currency: 'usd',
+      balance_transaction: null,
+    } as never);
+
+    await expect(service.ledgerSource('charge', 'ch_1')).resolves.toEqual({
+      transactions: [],
+      pending: true,
+      presentment: { amount: 2_500n, currency: 'usd' },
+    });
+  });
+
+  it('a refund: its balance transaction and, after refund.failed, the failure one', async () => {
+    const service = createService();
+    const retrieve = vi
+      .spyOn(service.client.refunds, 'retrieve')
+      .mockResolvedValueOnce({
+        id: 're_1',
+        object: 'refund',
+        amount: 1_000,
+        currency: 'usd',
+        balance_transaction: bt('txn_r', { amount: -1_000, fee: 0, reporting_category: 'refund' }),
+        failure_balance_transaction: null,
+      } as never)
+      .mockResolvedValueOnce({
+        id: 're_1',
+        object: 'refund',
+        amount: 1_000,
+        currency: 'usd',
+        balance_transaction: bt('txn_r', { amount: -1_000, fee: 0, reporting_category: 'refund' }),
+        failure_balance_transaction: bt('txn_rf', {
+          amount: 1_000,
+          fee: 0,
+          reporting_category: 'refund_failure',
+        }),
+      } as never);
+
+    await expect(service.ledgerSource('refund', 're_1')).resolves.toEqual({
+      transactions: [posting('txn_r', { amount: -1_000, fee: 0, reporting_category: 'refund' })],
+      pending: false,
+      presentment: { amount: 1_000n, currency: 'usd' },
+    });
+    await expect(service.ledgerSource('refund', 're_1')).resolves.toMatchObject({
+      transactions: [
+        { id: 'txn_r', reporting_category: 'refund' },
+        { id: 'txn_rf', reporting_category: 'refund_failure' },
+      ],
+      pending: false,
+    });
+    expect(retrieve).toHaveBeenCalledWith('re_1', {
+      expand: ['balance_transaction', 'failure_balance_transaction'],
+    });
+  });
+
+  it('a dispute: every entry of balance_transactions; none yet is pending', async () => {
+    const service = createService();
+    const retrieve = vi
+      .spyOn(service.client.disputes, 'retrieve')
+      .mockResolvedValueOnce({
+        id: 'du_1',
+        object: 'dispute',
+        amount: 2_500,
+        currency: 'usd',
+        balance_transactions: [
+          bt('txn_d1', { amount: -2_500, fee: 1_500, reporting_category: 'dispute' }),
+          bt('txn_d2', { amount: 2_500, fee: -1_500, reporting_category: 'dispute_reversal' }),
+        ],
+      } as never)
+      .mockResolvedValueOnce({
+        id: 'du_2',
+        object: 'dispute',
+        amount: 2_500,
+        currency: 'usd',
+        balance_transactions: [],
+      } as never);
+
+    await expect(service.ledgerSource('dispute', 'du_1')).resolves.toEqual({
+      transactions: [
+        posting('txn_d1', { amount: -2_500, fee: 1_500, reporting_category: 'dispute' }),
+        posting('txn_d2', { amount: 2_500, fee: -1_500, reporting_category: 'dispute_reversal' }),
+      ],
+      pending: false,
+      presentment: { amount: 2_500n, currency: 'usd' },
+    });
+    await expect(service.ledgerSource('dispute', 'du_2')).resolves.toMatchObject({
+      transactions: [],
+      pending: true,
+    });
+    expect(retrieve).toHaveBeenCalledWith('du_1');
+  });
+
+  it('a payout: its balance transaction (and the failure one once it failed), no presentment', async () => {
+    const service = createService();
+    const retrieve = vi.spyOn(service.client.payouts, 'retrieve').mockResolvedValue({
+      id: 'po_1',
+      object: 'payout',
+      amount: 10_000,
+      currency: 'usd',
+      balance_transaction: bt('txn_po', { amount: -10_000, fee: 0, reporting_category: 'payout' }),
+      failure_balance_transaction: bt('txn_pf', {
+        amount: 10_000,
+        fee: 0,
+        reporting_category: 'payout_reversal',
+      }),
+    } as never);
+
+    await expect(service.ledgerSource('payout', 'po_1')).resolves.toEqual({
+      transactions: [
+        posting('txn_po', { amount: -10_000, fee: 0, reporting_category: 'payout' }),
+        posting('txn_pf', { amount: 10_000, fee: 0, reporting_category: 'payout_reversal' }),
+      ],
+      pending: false,
+      presentment: null,
+    });
+    expect(retrieve).toHaveBeenCalledWith('po_1', {
+      expand: ['balance_transaction', 'failure_balance_transaction'],
+    });
+  });
+
+  it("a balance transaction (R4): itself, with its expanded source's presentment", async () => {
+    const service = createService();
+    const source = { id: 'ch_1', object: 'charge', amount: 2_600, currency: 'eur' };
+    const retrieve = vi
+      .spyOn(service.client.balanceTransactions, 'retrieve')
+      .mockResolvedValue(bt('txn_1', { source }) as never);
+
+    await expect(service.ledgerSource('balance_transaction', 'txn_1')).resolves.toEqual({
+      transactions: [posting('txn_1', { source })],
+      pending: false,
+      presentment: { amount: 2_600n, currency: 'eur' },
+    });
+    expect(retrieve).toHaveBeenCalledWith('txn_1', { expand: ['source'] });
+  });
+
+  it('a balance transaction id that is not expanded is fetched with one more GET', async () => {
+    const service = createService();
+    vi.spyOn(service.client.charges, 'retrieve').mockResolvedValue({
+      id: 'ch_1',
+      object: 'charge',
+      amount: 2_500,
+      currency: 'usd',
+      balance_transaction: 'txn_1',
+    } as never);
+    const retrieve = vi
+      .spyOn(service.client.balanceTransactions, 'retrieve')
+      .mockResolvedValue(bt('txn_1') as never);
+
+    await expect(service.ledgerSource('charge', 'ch_1')).resolves.toMatchObject({
+      transactions: [posting('txn_1')],
+      pending: false,
+    });
+    expect(retrieve).toHaveBeenCalledWith('txn_1');
+  });
+
+  it('a missing object (404) is thrown as PAYMENT_REQUEST_INVALID; 5xx and 429 are translated', async () => {
+    const service = createService();
+    vi.spyOn(service.client.charges, 'retrieve')
+      .mockRejectedValueOnce(
+        Stripe.errors.StripeError.generate({
+          statusCode: 404,
+          message: "No such charge: 'ch_gone'",
+          type: 'invalid_request_error',
+          code: 'resource_missing',
+        }),
+      )
+      .mockRejectedValueOnce(
+        Stripe.errors.StripeError.generate({ statusCode: 500, message: 'down', type: 'api_error' }),
+      )
+      .mockRejectedValueOnce(
+        new Stripe.errors.StripeRateLimitError({ message: 'slow down', type: 'rate_limit_error' }),
+      );
+
+    await expect(service.ledgerSource('charge', 'ch_gone')).rejects.toMatchObject({
+      code: 'PAYMENT_REQUEST_INVALID',
+      httpStatus: 422,
+    });
+    await expect(service.ledgerSource('charge', 'ch_1')).rejects.toMatchObject({
+      code: 'PAYMENT_PROVIDER_ERROR',
+    });
+    await expect(service.ledgerSource('charge', 'ch_1')).rejects.toMatchObject({
+      code: 'PAYMENT_PROVIDER_RATE_LIMITED',
+    });
+  });
+});

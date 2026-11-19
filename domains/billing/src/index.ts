@@ -18,7 +18,11 @@ export * from './api/index.js';
 // Application
 export * from './application/commands/create-checkout-session/create-checkout-session.command.js';
 export * from './application/commands/handle-stripe-webhook/handle-stripe-webhook.command.js';
-// Ledger (model; the posting request and the Stripe owner resolver of L-11)
+// The posting commands of L-12 (handlers registered by BillingLedgerModule).
+export * from './application/commands/post-ledger-entry/post-ledger-entry.command.js';
+export * from './application/commands/process-ledger-posting/process-ledger-posting.command.js';
+// Ledger (model; the posting request and the Stripe owner resolver of L-11; LedgerService of L-12)
+export * from './application/ledger/ledger.service.js';
 export * from './application/ledger/ledger-posting-request.js';
 export * from './application/ledger/posting-rules.js';
 export * from './application/ledger/stripe-owner-resolver.js';
@@ -42,6 +46,8 @@ export {
 } from './billing.constants.js';
 export * from './billing-core.module.js';
 export * from './billing-grpc.module.js';
+// The ledger-posting consumer's module (L-12; imported only while LEDGER_ENABLED=true).
+export * from './billing-messaging.module.js';
 // Domain
 export * from './domain/billing.errors.js';
 export * from './domain/events/payment-succeeded.event.js';
@@ -54,9 +60,12 @@ export * from './domain/ledger/ledger-discrepancy.js';
 export * from './domain/payment.aggregate.js';
 // Infrastructure
 export * from './infrastructure/ledger/billing-ledger.migrations.js';
+export * from './infrastructure/ledger/billing-ledger.module.js';
+export * from './infrastructure/ledger/disabled-ledger.js';
 export * from './infrastructure/ledger/immudb-ledger.adapter.js';
 // The `ledger` namespace (LEDGER_ENABLED, LEDGER_RECONCILE_LOOKBACK_HOURS, LEDGER_VERIFY).
 export * from './infrastructure/ledger/ledger.config.js';
+export * from './infrastructure/ledger/ledger-metrics.js';
 export { billingMigrations } from './infrastructure/persistence/billing.migrations.js';
 export {
   type BillingSchema,
@@ -80,5 +89,6 @@ export * from './infrastructure/stripe/stripe.errors.js';
 export * from './infrastructure/stripe/stripe.module.js';
 export * from './infrastructure/stripe/stripe.service.js';
 export type * from './infrastructure/stripe/stripe.types.js';
-// Presentation: the gRPC server (billing-service)
+// Presentation: the gRPC server (billing-service) and the ledger-posting consumer
 export * from './presentation/grpc/billing-grpc.controller.js';
+export * from './presentation/messaging/ledger-posting.consumer.js';

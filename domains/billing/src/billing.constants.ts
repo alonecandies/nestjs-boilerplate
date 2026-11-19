@@ -38,6 +38,13 @@ export const BillingErrorCode = {
   LEDGER_ENTRY_INVALID: 'LEDGER_ENTRY_INVALID',
   /** A ledger row failed proof verification against the trusted state. */
   LEDGER_VERIFICATION_FAILED: 'LEDGER_VERIFICATION_FAILED',
+  /**
+   * 403: a ledger post or read names a tenant other than the principal's (or the platform tenant
+   * outside `SystemContext`), or runs with neither a principal nor `SystemContext`.
+   */
+  LEDGER_TENANT_MISMATCH: 'LEDGER_TENANT_MISMATCH',
+  /** 503: the ledger is not enabled in this process (`LEDGER_ENABLED=false`). */
+  LEDGER_DISABLED: 'LEDGER_DISABLED',
 } as const;
 export type BillingErrorCode = (typeof BillingErrorCode)[keyof typeof BillingErrorCode];
 
