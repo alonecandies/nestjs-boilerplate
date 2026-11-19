@@ -55,7 +55,7 @@ Budget: the stack is sized for **4 CPUs / 4 GB** of Docker Desktop memory (see [
 | `identity-service`      | built (`APP=identity-service`)                    | 50051 (gRPC)                 | microservices       | AuthService + UsersService                                                                 |
 | `notifications-service` | built (`APP=notifications-service`)               | 50052 (gRPC)                 | microservices       | NotificationsService + Kafka consumers + mail                                              |
 | `billing-service`       | built (`APP=billing-service`)                     | 50053 (gRPC)                 | microservices       | BillingService (Stripe)                                                                    |
-| `prometheus`            | `prom/prometheus:v3.15.0`                         | 9090                         | observability       | scrapes every app's `/metrics` + exporters                                                 |
+| `prometheus`            | `prom/prometheus:v3.15.0`                         | 9090                         | observability       | scrapes every app's `/metrics` + exporters, evaluates the outbox and ledger alert rules    |
 | `grafana`               | `grafana/grafana:13.2.2`                          | **3300**                     | observability, logs | dashboards (admin/admin, anonymous viewer)                                                 |
 | `jaeger`                | `jaegertracing/jaeger:2.20.0`                     | 16686 (UI), 4317/4318 (OTLP) | observability       | traces (in-memory)                                                                         |
 | `postgres-exporter`     | `prometheuscommunity/postgres-exporter:v0.20.1`   | —                            | observability       | Postgres metrics                                                                           |
@@ -208,9 +208,14 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
 ## Bootstrap jobs & migrations
 
 - **Kafka topics** ([`docker/kafka/topics.txt`](../docker/kafka/topics.txt)) = the topic of every `<EVENT>_EVENT` contract in
-  `domains/*/contracts` + its `.dlq` twin (3 topics × 6 partitions + 3 `.dlq` × 1). Broker auto-creation is **off**, as in
+  `domains/*/contracts` + its `.dlq` twin (6 topics × 6 partitions + 6 `.dlq` × 1; `billing.ledger-posting.v1` is consumed only while `LEDGER_ENABLED=true`). Broker auto-creation is **off**, as in
   production: a missing topic fails loudly at consumer start instead of being created by a typo.
   `node scripts/docker/check-kafka-topics.mjs` (after `bun run build`) fails when the file drifts from the contracts.
+- **Outbox relays.** Whoever owns an outbox runs its relay (`OUTBOX_RELAY_ENABLED`, default on, needs
+  `DATABASE_SYSTEM_URL`): the monolith runs `identity` and `billing`, and in the microservices profile
+  identity-service and billing-service run one each, the gateway none. Only the holder of the Redis lock
+  `outbox-relay:<schema>` publishes, so scaling a service adds standbys, not duplicates. Events are published a
+  poll interval (500 ms) after the request answered; with Kafka down they wait in the table.
 - **Cassandra**: `cassandra-init` creates `CREATE KEYSPACE IF NOT EXISTS <CASSANDRA_KEYSPACE>` with
   `NetworkTopologyStrategy {'<CASSANDRA_DC>': 1}` (default `datacenter1`) and asserts the node's DC equals the apps'
   `CASSANDRA_LOCAL_DC`. Tables
@@ -481,7 +486,10 @@ Full teardown of a stack, volumes and network included: `docker compose --profil
   SD on the compose service names (port 3000): one target per replica, nothing for profiles that aren't running.
   It sets the `service` label itself. Job `host-apps` scrapes apps started on the host (`host.docker.internal:3000-3003`,
   `service="host:<port>"`). When the API runs in compose, `host:3000` is that same container through its published port.
-  The remote-write receiver is on for k6.
+  The remote-write receiver is on for k6. The alert rules of the outbox and the ledger
+  (`docker/prometheus/rules/{outbox,ledger}.rules.yml`, listed in `rule_files`) are mounted read-only at
+  `/etc/prometheus/rules`; edit one and `POST /-/reload`. No Alertmanager runs in compose: the alerts show on the
+  Prometheus Alerts page, and [OBSERVABILITY.md](OBSERVABILITY.md#outbox-and-ledger-alerts) says how to route them.
 - **Grafana** (http://localhost:3300, **3300** because 3000–3003 are the API/services host-dev ports): provisioned
   datasources (Prometheus, Jaeger, Loki, fixed UIDs) and the home dashboard **NestJS services overview**
   ([`docker/grafana/dashboards/nestjs-overview.json`](../docker/grafana/dashboards/nestjs-overview.json)):
@@ -664,5 +672,4 @@ Stated honestly: none of these are done yet.
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | Per-domain `@domain/<x>/api` subpath exports                           | the gateway image would stop shipping the domains' infrastructure (it is as large as the monolith today) |
 | Separate metrics listener                                              | `/metrics` could leave the API port; until then keep it off the public ingress + `METRICS_BEARER_TOKEN`  |
-| Transactional outbox                                                   | events are published after commit today; a crash between commit and publish can lose the event           |
 | Real-database integration specs for billing/notifications repositories | the CI `integration` job covers Postgres + Redis only through the existing `*:int` projects              |

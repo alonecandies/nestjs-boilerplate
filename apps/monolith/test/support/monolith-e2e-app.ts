@@ -2,10 +2,16 @@ import {
   BillingOutbox,
   BillingOutboxSystemRepository,
   billingSchema,
+  LedgerPort,
+  LedgerReceiptsRepository,
+  LedgerSystemRepository,
+  STRIPE_CLIENT,
   StripeEventsSystemRepository,
 } from '@domain/billing';
 import {
   createInMemoryBillingOutbox,
+  InMemoryLedger,
+  InMemoryLedgerStore,
   InMemoryStripeEventsSystemRepository,
 } from '@domain/billing/testing';
 import {
@@ -60,6 +66,7 @@ import {
   createL1OnlyCache,
   type FakeRows,
 } from './fake-infrastructure.js';
+import { FakeStripe } from './fake-stripe.js';
 import { InMemoryKafkaServer } from './in-memory-kafka.server.js';
 
 export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
@@ -87,6 +94,7 @@ export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
  * | `GRAPHQL_PUB_SUB`                          | in-process `PubSub`                          |
  * | `StorageService`                           | `InMemoryStorageService`                     |
  * | `ImmudbClient` (`LEDGER_ENABLED=true` only) | `options.immudb`, when given                 |
+ * | `LedgerPort`, `LedgerReceiptsRepository`, `LedgerSystemRepository`, the Stripe client (`options.ledger`) | `InMemoryLedger`, one `InMemoryLedgerStore` over billing's outbox, `FakeStripe` |
  *
  * The Redis Socket.IO adapter is not connected (no Redis). The Kafka consumers are connected only
  * with `kafkaConsumers: true`, to an in-process server (`consumers.deliver()`), never to a broker.
@@ -117,6 +125,13 @@ export interface MonolithE2eOptions {
   module?: Type<unknown>;
   /** Replaces the `ImmudbClient` of `ImmudbModule` (loaded only with `LEDGER_ENABLED=true`). */
   immudb?: ImmudbClient;
+  /**
+   * The ledger in memory (needs `LEDGER_ENABLED=true` and `module: createAppModule()`): `LedgerPort`
+   * is an `InMemoryLedger`, the receipts and the system repository one `InMemoryLedgerStore`
+   * writing into billing's in-memory outbox (so R4's re-enqueues are relayed like any row), and
+   * the Stripe client a `FakeStripe` (the real signature check, fake GETs). Returned as `ledger`.
+   */
+  ledger?: boolean;
 }
 
 export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
@@ -127,6 +142,14 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
   const identity = createInMemoryIdentityPersistence(undefined, { kafka });
   const billingOutbox = createInMemoryBillingOutbox({ kafka });
   const consumers = new InMemoryKafkaServer();
+  const ledger =
+    options.ledger === true
+      ? {
+          port: new InMemoryLedger(),
+          store: new InMemoryLedgerStore({ outbox: billingOutbox }),
+          stripe: new FakeStripe(),
+        }
+      : undefined;
   const postgres = createFakePostgres(
     { ...identitySchema, ...billingSchema },
     options.postgresRows,
@@ -198,6 +221,17 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
   if (options.immudb !== undefined) {
     builder.overrideProvider(ImmudbClient).useValue(options.immudb);
   }
+  if (ledger !== undefined) {
+    builder
+      .overrideProvider(LedgerPort)
+      .useValue(ledger.port)
+      .overrideProvider(LedgerReceiptsRepository)
+      .useValue(ledger.store.receipts)
+      .overrideProvider(LedgerSystemRepository)
+      .useValue(ledger.store.system)
+      .overrideProvider(STRIPE_CLIENT)
+      .useValue(ledger.stripe.client);
+  }
 
   if (options.notificationStores !== 'cassandra') {
     builder
@@ -256,6 +290,7 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     tickRelays,
     flushOutboxes,
     consumers,
+    ledger,
     postgres,
     cassandra,
     notifications,

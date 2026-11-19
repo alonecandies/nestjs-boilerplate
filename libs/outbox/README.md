@@ -118,6 +118,13 @@ leader gauge reads 0 and the backlog and age series of that outbox are removed, 
 processes never adds a former leader's stale value. `OutboxMetrics` is exported for code that drives
 a relay by hand.
 
+## Alerts
+
+`docker/prometheus/rules/outbox.rules.yml` alerts on these series (`scripts/prometheus-rules.spec.ts` pins them):
+`OutboxBacklogStuck` (oldest unpublished age above 300 s for 5 m, page), `OutboxPublishErrors` (any `error` rate for 10 m,
+ticket) and `OutboxNoLeader` (no `outbox_relay_leader == 1` for 5 m, page). The runbook is in
+[OBSERVABILITY.md](../../docs/OBSERVABILITY.md#outbox-and-ledger-alerts).
+
 ## Configuration
 
 Namespace `outbox` in `@platform/config` (`OUTBOX_RELAY_ENABLED`, `OUTBOX_POLL_INTERVAL_MS`,
@@ -133,3 +140,8 @@ Namespace `outbox` in `@platform/config` (`OUTBOX_RELAY_ENABLED`, `OUTBOX_POLL_I
   the transaction check when `txHost` is given); `pollUnpublished`, `markPublished`,
   `insertAsPlatform` and `deletePublishedBefore` behave as the SQL does and need `SystemContext`.
 - `describeOutboxTable(table, schema)`: the shape spec of a hand-declared outbox table.
+
+End to end: `apps/monolith/test/outbox.e2e-spec.ts` (request → row → tick → Kafka → consumer, a failing producer, a
+redelivered webhook) and `apps/monolith/test/ledger.e2e-spec.ts` (webhook → outbox → relay → consumer → ledger →
+reconciliation); the microservices topology in `apps/billing-service/test/app.e2e-spec.ts` and
+`apps/gateway/test/app.e2e-spec.ts`.

@@ -172,7 +172,11 @@ function withEdgeFakes(
 }
 
 /** A webhook exactly as Stripe sends it: raw JSON bytes + `Stripe-Signature` over them. */
-function signedWebhook(type: string, id = `evt_${generateId().replaceAll('-', '')}`) {
+function signedWebhook(
+  type: string,
+  id = `evt_${generateId().replaceAll('-', '')}`,
+  object: Record<string, unknown> = { id: 'cus_test_1', object: 'customer' },
+) {
   const json = JSON.stringify({
     id,
     object: 'event',
@@ -182,7 +186,7 @@ function signedWebhook(type: string, id = `evt_${generateId().replaceAll('-', ''
     livemode: false,
     pending_webhooks: 1,
     request: { id: null, idempotency_key: null },
-    data: { object: { id: 'cus_test_1', object: 'customer' } },
+    data: { object },
   });
   return {
     id,
@@ -190,6 +194,20 @@ function signedWebhook(type: string, id = `evt_${generateId().replaceAll('-', ''
     signature: Stripe.webhooks.generateTestHeaderString({ payload: json, secret: WEBHOOK_SECRET }),
   };
 }
+
+/** A paid charge of the owner `TENANT_ID`/`USER_ID`: what Stripe signs for a money event (L-11). */
+const chargeSucceeded = () =>
+  signedWebhook('charge.succeeded', undefined, {
+    id: 'ch_e2e_posting',
+    object: 'charge',
+    amount: 2_500,
+    currency: 'usd',
+    metadata: { tenantId: TENANT_ID, userId: USER_ID },
+  });
+
+/** The `billing.outbox` INSERTs the runtime pool executed (the posting records of the webhook). */
+const outboxInserts = (): ExecutedQuery[] =>
+  postgres.executed.filter(({ sql }) => sql.startsWith('insert into "billing"."outbox"'));
 
 describe('billing-service (real AppModule, fakes at the network edges)', () => {
   let app: NestFastifyApplication;
@@ -472,18 +490,43 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
       ]);
       expect(postgres.executed).toHaveLength(before);
     });
+
+    it('HandleStripeWebhook with a paid charge and LEDGER_ENABLED=false records the receipt and leaves no posting record', async () => {
+      const before = postgres.executed.length;
+      const webhook = chargeSucceeded();
+
+      await expect(
+        call(
+          billing.handleStripeWebhook({ payload: webhook.payload, signature: webhook.signature }),
+          'BillingService.HandleStripeWebhook',
+        ),
+      ).resolves.toEqual({
+        received: true,
+        eventId: webhook.id,
+        eventType: 'charge.succeeded',
+        duplicate: false,
+      });
+
+      // The receipt was written in the owner's unit of work; no billing.ledger-posting.v1 row.
+      const sent = postgres.executed.slice(before).map((query) => query.sql);
+      expect(sent).toContainEqual(expect.stringContaining('insert into "billing"."stripe_events"'));
+      expect(sent.some((sql) => sql.includes('"billing"."outbox"'))).toBe(false);
+    });
   });
 });
 
 describe('billing-service with LEDGER_ENABLED=true (immudb, the ledger-posting consumer)', () => {
   let app: NestFastifyApplication;
+  let client: ClientGrpcProxy;
+  let billing: BillingServiceClient;
   const kafka = new RecordingKafkaServer();
   const kafkaConsumers: unknown[] = [];
   const immudb = new RecordingImmudbClient();
 
   beforeAll(async () => {
+    const grpcUrl = `127.0.0.1:${await freePort()}`;
     const env = {
-      ...serviceEnv(`127.0.0.1:${await freePort()}`),
+      ...serviceEnv(grpcUrl),
       LEDGER_ENABLED: 'true',
       // The session pool behind the readiness check: nothing listens there.
       IMMUDB_ADDRESS: '127.0.0.1:1',
@@ -501,9 +544,15 @@ describe('billing-service with LEDGER_ENABLED=true (immudb, the ledger-posting c
       kafka,
       onKafkaConsumer: (options) => kafkaConsumers.push(options),
     });
+    client = new ClientGrpcProxy(
+      createGrpcClientOptions(grpcConfig.parse(), { spec: BILLING_GRPC_PACKAGE, url: grpcUrl })
+        .options,
+    );
+    billing = client.getService<BillingServiceClient>('BillingService');
   }, 60_000);
 
   afterAll(async () => {
+    client?.close();
     await app?.close();
     vi.unstubAllEnvs();
   }, 30_000);
@@ -531,5 +580,35 @@ describe('billing-service with LEDGER_ENABLED=true (immudb, the ledger-posting c
     expect(response.statusCode).toBe(503);
     expect(body.error).toMatchObject({ immudb: { status: 'down' } });
     expect(body.info).toMatchObject({ postgres: { status: 'up' }, redis: { status: 'up' } });
+  });
+
+  it('HandleStripeWebhook with a paid charge leaves one billing.ledger-posting.v1 record in the unit of work of its receipt', async () => {
+    const before = postgres.executed.length;
+    const webhook = chargeSucceeded();
+
+    await expect(
+      lastValueFrom(
+        billing.handleStripeWebhook({ payload: webhook.payload, signature: webhook.signature }),
+      ),
+    ).resolves.toMatchObject({
+      eventId: webhook.id,
+      eventType: 'charge.succeeded',
+      duplicate: false,
+    });
+
+    // BEGIN, RLS context, receipt, posting record, COMMIT: nothing reaches Kafka from the request.
+    const sent = postgres.executed.slice(before);
+    const insert = outboxInserts().filter((query) => postgres.executed.indexOf(query) >= before);
+    expect(insert).toHaveLength(1);
+    expect(insert[0]?.params).toEqual(
+      expect.arrayContaining([TENANT_ID, LEDGER_POSTING_REQUESTED_EVENT.topic]),
+    );
+    const sqls = sent.map((query) => query.sql);
+    expect(sqls[0]).toBe('BEGIN');
+    expect(sqls.at(-1)).toBe('COMMIT');
+    const receipt = sqls.findIndex((sql) => sql.includes('"billing"."stripe_events"'));
+    const posting = sqls.findIndex((sql) => sql.includes('"billing"."outbox"'));
+    expect(receipt).toBeGreaterThan(0);
+    expect(posting).toBeGreaterThan(receipt);
   });
 });

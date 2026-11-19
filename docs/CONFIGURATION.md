@@ -316,8 +316,9 @@ consumes)
 
 ### `outbox` — transactional outbox relay
 
-[`outbox.config.ts`](../libs/config/src/namespaces/outbox.config.ts) · not loaded by any app yet
-(the outbox relays are wired into the apps that own an outbox in outbox Task 7)
+[`outbox.config.ts`](../libs/config/src/namespaces/outbox.config.ts) · monolith, identity-service, billing-service
+(the apps that own an outbox; the gateway and notifications-service read no `OUTBOX_*`). Metrics and alerts:
+[OBSERVABILITY.md](OBSERVABILITY.md#outbox-and-ledger-alerts).
 
 | Variable                  | Default | Description                                                                            |
 | ------------------------- | ------- | -------------------------------------------------------------------------------------- |
@@ -563,6 +564,11 @@ enqueue invitation mail on the shared BullMQ `mail` queue: in production it need
 | `LEDGER_RECONCILE_LOOKBACK_HOURS` | `72`    | `1`–`720`. Window of the hourly reconciliation, back from now.                                                                                                                                                                                                                                                                                                |
 | `LEDGER_VERIFY`                   | `false` | Reconciliation R5: each run proves (dual proof, plus the state signature when `IMMUDB_SERVER_SIGNING_PUBLIC_KEY` or `_FILE` is set) that immudb extends the trusted state in `billing.ledger_trusted_state`, advances it by compare-and-set and verifies the new entries against their receipts. The first state is taken on trust (signature still checked). |
 | `LEDGER_ALLOW_UNVERIFIED`         | `false` | Production refuses `LEDGER_ENABLED=true` without `LEDGER_VERIFY=true` and `IMMUDB_SERVER_SIGNING_PUBLIC_KEY` (or `_FILE`); `true` is the only opt-out.                                                                                                                                                                                                        |
+
+`LEDGER_ENABLED=false` writes no posting rows, so enabling it later does not post what was paid before: run one
+`ReconcileLedgerCommand` with an explicit window over that period (reconciliation R4 re-enqueues every Stripe balance
+transaction without an entry; [domains/billing/README.md](../domains/billing/README.md#ledger-immudb)). The alert rules
+for the ledger series are in [OBSERVABILITY.md](OBSERVABILITY.md#outbox-and-ledger-alerts).
 
 ## App-local variables
 

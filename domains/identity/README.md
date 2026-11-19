@@ -338,19 +338,19 @@ app_runtime`:
 wraps `TransactionRunner.run`, never the other way round, and every id a flow needs for its principal (a new user, tenant
 or session) is generated before `BEGIN`. Both JWTs are signed before `BEGIN` too.
 
-| Flow                 | System lookup                  | Units of work and principals                                                                                                                                  |
-| -------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Login                | `users.findCredentialsByEmail` | argon2 outside; as `{ user, null }`: best-effort re-hash and the membership choice; as `{ user, tenant, roles }`: the activity touch and the session          |
-| Login, no membership | none                           | the personal workspace is planned first; as `{ user, newTenant, owner }`: `TenantBootstrap` and the session                                                   |
-| Register             | `users.existsByEmail`          | hash outside; ONE unit of work as `{ newUser, newTenant, owner }`: user, tenant, owner membership (`tenant-bootstrap`), session                               |
-| Refresh              | none                           | as `{ sub, null }`: user, session, membership; ONE unit of work as `{ sub, session tenant, roles }`: rotate and open the successor; reuse revokes all         |
-| Switch tenant        | none                           | as the caller: target membership and own row; ONE unit of work as `{ user, target, roles }`: rotate, touch, new session                                       |
-| Create tenant        | none                           | ONE unit of work as `{ user, newTenant, owner }`: `TenantBootstrap` and the read-back                                                                         |
-| Accept invitation    | `invitations.findByTokenHash`  | as the caller: own row, email match; ONE unit of work as `{ user, invitation tenant, invitation roles }`: `InvitationAcceptance`                              |
-| Staff switch-in      | none                           | as the caller: the staff flag and own row; as `{ staff, tenant, admin, staff }`: tenant read, token, audit row                                                |
-| Members, invitations | none                           | the request principal; `elevate(members:manage)` first in `CreateInvitation`, `UpdateMemberRoles`, `RemoveMember`; `elevate(tenant:manage)` in `RenameTenant` |
-| Purge cron           | `sessions.deleteExpired`       | `SystemContext.run('identity.purge-expired-sessions', …)`                                                                                                     |
-| `staff:grant`        | none                           | `app_owner` on `DATABASE_MIGRATION_URL`, through `users_owner_select` and `users_owner_update`                                                                |
+| Flow                 | System lookup                  | Units of work and principals                                                                                                                                                  |
+| -------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Login                | `users.findCredentialsByEmail` | argon2 outside; as `{ user, null }`: opportunistic re-hash (a failure is ignored) and the membership choice; as `{ user, tenant, roles }`: the activity touch and the session |
+| Login, no membership | none                           | the personal workspace is planned first; as `{ user, newTenant, owner }`: `TenantBootstrap` and the session                                                                   |
+| Register             | `users.existsByEmail`          | hash outside; ONE unit of work as `{ newUser, newTenant, owner }`: user, tenant, owner membership (`tenant-bootstrap`), session                                               |
+| Refresh              | none                           | as `{ sub, null }`: user, session, membership; ONE unit of work as `{ sub, session tenant, roles }`: rotate and open the successor; reuse revokes all                         |
+| Switch tenant        | none                           | as the caller: target membership and own row; ONE unit of work as `{ user, target, roles }`: rotate, touch, new session                                                       |
+| Create tenant        | none                           | ONE unit of work as `{ user, newTenant, owner }`: `TenantBootstrap` and the read-back                                                                                         |
+| Accept invitation    | `invitations.findByTokenHash`  | as the caller: own row, email match; ONE unit of work as `{ user, invitation tenant, invitation roles }`: `InvitationAcceptance`                                              |
+| Staff switch-in      | none                           | as the caller: the staff flag and own row; as `{ staff, tenant, admin, staff }`: tenant read, token, audit row                                                                |
+| Members, invitations | none                           | the request principal; `elevate(members:manage)` first in `CreateInvitation`, `UpdateMemberRoles`, `RemoveMember`; `elevate(tenant:manage)` in `RenameTenant`                 |
+| Purge cron           | `sessions.deleteExpired`       | `SystemContext.run('identity.purge-expired-sessions', …)`                                                                                                                     |
+| `staff:grant`        | none                           | `app_owner` on `DATABASE_MIGRATION_URL`, through `users_owner_select` and `users_owner_update`                                                                                |
 
 - **Justified elevation** lives in three `*.elevated.ts` services, one reason each, each asserting that the CLS principal
   matches its arguments: `TenantBootstrap` (`tenant-bootstrap`: the owner membership of a tenant created in the same

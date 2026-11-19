@@ -28,7 +28,7 @@ flowchart LR
   K -- push consumer --> GW
 ```
 
-Even inside the monolith, cross-context side effects (welcome notification, receipt, real-time push) travel through Kafka. A context never calls another context's handlers directly, so splitting a context into its own service changes wiring, not behaviour.
+Even inside the monolith, cross-context side effects (welcome notification, receipt, real-time push) travel through Kafka. A context never calls another context's handlers directly, so splitting a context into its own service changes wiring, not behaviour. The Postgres domains (identity, billing) hand their events to Kafka through a transactional outbox (section 6), the same in both topologies.
 
 Host ports (from [`docker-compose.yml`](../docker-compose.yml)): the API (monolith or gateway) on `3000`, identity-service gRPC on `50051`, notifications-service on `50052`, billing-service on `50053` (every service listens on `50051` inside its container). Grafana is on host port `3300`. See [DOCKER.md](DOCKER.md).
 
@@ -60,6 +60,7 @@ Three top-level folders, one dependency direction: `apps/*` (`@app/*`, the deplo
 | `libs/observability`                                                                         | pino logger (apps add their domains' redaction paths), nestjs-cls request context, Prometheus metrics, terminus health, OpenTelemetry, `@nestjs/observe`                                                                                                                                              |
 | `libs/config`                                                                                | The platform env namespaces, validated per namespace; domains define their own with the same helpers (see [CONFIGURATION.md](CONFIGURATION.md))                                                                                                                                                       |
 | `libs/database`                                                                              | Drizzle + postgres.js; the platform migration set, run before the domain sets the app passes, under one advisory lock; keyset pagination; the RLS context on `BEGIN`, `inUnitOfWork`, elevation, the `app_system` pool (`SystemDatabase`) and the boot guard                                          |
+| `libs/outbox`                                                                                | The transactional outbox: `OutboxWriter` (an event row in the caller's transaction), the system repository base and the leader `OutboxRelay` that publishes the rows to Kafka at least once. Names no domain; identity and billing each own their outbox table (section 6)                            |
 | `libs/mailer`                                                                                | BullMQ mail queue and worker; renders the template folders the app registers, with shared layout partials                                                                                                                                                                                             |
 | `libs/cassandra`, `libs/redis`, `libs/storage`, `libs/bootstrap`, `libs/testing`             | Platform adapters and app bootstrap helpers. Each has its own `README.md`                                                                                                                                                                                                                             |
 
@@ -88,7 +89,7 @@ flowchart TB
 What the layering does and does not promise:
 
 - Domain code is plain TypeScript and throws `DomainException` subclasses, never `HttpException`.
-- Application handlers depend on abstract repository ports (bound in the `XCoreModule`) **and directly on concrete services** where an abstraction would add nothing: their own context's infrastructure, only in the two exceptions above (`RegisterUserHandler` injects identity's `PasswordHasher`, `RefreshSessionHandler` identity's `TokenIssuer`, `HandleStripeWebhookHandler` billing's `StripeService`), or a platform library (`LogoutHandler` injects `AccessTokenDenylist` from `@platform/auth`, relays inject `KafkaProducer` from `@platform/transport`, `WelcomeUserHandler` injects `MailService` from `@platform/mailer`).
+- Application handlers depend on abstract repository ports (bound in the `XCoreModule`) **and directly on concrete services** where an abstraction would add nothing: their own context's infrastructure, only in the two exceptions above (`RegisterUserHandler` injects identity's `PasswordHasher`, `RefreshSessionHandler` identity's `TokenIssuer`, `HandleStripeWebhookHandler` billing's `StripeService`), or a platform library (`LogoutHandler` injects `AccessTokenDenylist` from `@platform/auth`, the notifications saga handler injects `KafkaProducer` from `@platform/transport`, `WelcomeUserHandler` injects `MailService` from `@platform/mailer`).
 - Folder names for repository ports differ per library: `application/persistence/` (identity), `application/ports/` (notifications), `application/repositories/` (billing).
 - `domains/files` is smaller: `domain/`, `application/` (`FilesService`, access policy) and `presentation/`, with storage provided by `@platform/storage`.
 
@@ -146,7 +147,7 @@ Each domain package exports a fixed set of modules:
 
 | Module                                                               | Contents                                                                                                                                                     | Imported by                                                                                      |
 | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| `IdentityCoreModule`, `NotificationsCoreModule`, `BillingCoreModule` | Command/query/event handlers, sagas, relays, repository bindings, crons                                                                                      | The monolith (directly, next to `XApiModule.forLocal()`), and each service through `XGrpcModule` |
+| `IdentityCoreModule`, `NotificationsCoreModule`, `BillingCoreModule` | Command/query/event handlers, sagas, outbox writers and relays (identity, billing), repository bindings, crons                                               | The monolith (directly, next to `XApiModule.forLocal()`), and each service through `XGrpcModule` |
 | `IdentityGrpcModule`, `NotificationsGrpcModule`, `BillingGrpcModule` | Core + the `@GrpcController()` classes                                                                                                                       | The matching service                                                                             |
 | `IdentityApiModule`, `NotificationsApiModule`, `BillingApiModule`    | Edge presentation; `.forLocal()` binds the local adapters (the app imports the core), `.forRemote()` registers gRPC clients; exported from `@domain/<x>/api` | Monolith (`forLocal`), gateway (`forRemote`)                                                     |
 | `NotificationsMessagingModule`                                       | Core + `IdentityEventsConsumer` and `BillingEventsConsumer` (inbound integration events)                                                                     | Monolith, notifications-service                                                                  |
@@ -178,7 +179,7 @@ What each `apps/*/src/app.module.ts` imports (besides `AppConfigModule.forRoot()
 Composition rules visible in the app modules:
 
 - **Import order matters.** `AuthModule` is imported before `AppThrottlerModule`: global guards run in registration order, and the throttler must see `req.user` to track per user.
-- **Kafka is not a readiness contributor** where events are publish-after-commit (monolith, identity, billing): a broker outage must not pull every replica out of rotation. notifications-service lists it because consuming is its job.
+- **Kafka is not a readiness contributor** where events leave through the outbox (monolith, identity, billing): a broker outage must not pull every replica out of rotation, and the events of that window wait in `<schema>.outbox` until the relay can publish them. notifications-service lists it because consuming is its job.
 - **The gateway owns no data**: no database, Cassandra, mailer, Stripe, CQRS or core module. An upstream outage degrades the affected routes (503 problem+json) instead of failing readiness.
 - **Cross-domain GraphQL fields live in the apps.** `Payment.user` (billing → identity) is resolved by `PaymentUserFieldResolver` (`apps/monolith/src/graphql`, `apps/gateway/src/graphql`) through identity's `users` DataLoader; billing exposes only `Payment.userId`, so no domain imports another.
 - Every app installs `provideCommonEnhancersAsync()` (validation pipes, `AllExceptionsFilter`, `TimeoutInterceptor`) and applies `CorrelationIdMiddleware` to all routes. The monolith and gateway also apply `MaintenanceModeMiddleware`.
@@ -195,7 +196,7 @@ Bootstrap (`main.ts`) adds the transports:
 
 Hybrid apps connect microservices with `inheritAppConfig: true`, so the global enhancers also wrap gRPC and Kafka handlers. That is why every global enhancer branches on `context.getType()` (section 8). Per-app details: [apps/monolith/README.md](../apps/monolith/README.md), [apps/gateway/README.md](../apps/gateway/README.md), [apps/identity-service/README.md](../apps/identity-service/README.md), [apps/notifications-service/README.md](../apps/notifications-service/README.md), [apps/billing-service/README.md](../apps/billing-service/README.md).
 
-## 6. CQRS: commands, queries, sagas, relays
+## 6. CQRS: commands, queries, sagas, the outbox and its relay
 
 `@nestjs/cqrs` (`CqrsModule.forRoot()` in every app that hosts a core). Commands and queries carry their result type, so `commandBus.execute()` is typed end to end:
 
@@ -204,31 +205,34 @@ export class RegisterUserCommand extends Command<AuthTokens> { … }
 export class GetUserByIdQuery extends Query<User> { … }
 ```
 
-| Building block  | Role                                                                                                                                                                                   | Examples                                                                                                               |
-| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Command handler | One write use case. Loads/creates an aggregate, persists it, then `commit()`s its domain events                                                                                        | `RegisterUserHandler`, `LoginHandler`, `HandleStripeWebhookHandler`, `CreateNotificationHandler`, `WelcomeUserHandler` |
-| Query handler   | Read use case, returns a contracts-package (ts-proto) shape                                                                                                                            | `GetUserByIdHandler`, `GetUsersByIdsHandler` (feeds the GraphQL `users` DataLoader), `ListPaymentsHandler`             |
-| Domain event    | Fact raised by an aggregate (`AggregateRoot.apply`), published on `commit()`                                                                                                           | `UserRegisteredEvent`, `PaymentSucceededEvent`, `NotificationCreatedEvent`                                             |
-| Event handler   | In-process reaction to a domain event                                                                                                                                                  | `UserRegisteredRelay`                                                                                                  |
-| **Relay**       | Event handler that turns a domain event into a Kafka integration event                                                                                                                 | `UserRegisteredRelay` → `identity.user-registered.v1`, `PaymentSucceededRelay` → `billing.payment-succeeded.v1`        |
-| **Saga**        | `@Saga()` stream mapping events to commands. Pure mapping only: an error inside the operator pipeline would complete the saga stream for good, so all I/O lives in the command handler | `NotificationsSagas.notificationCreated`: `NotificationCreatedEvent` → `PublishNotificationCreatedCommand`             |
-| Kafka consumer  | Presentation for inbound integration events: validates the envelope, dispatches a command                                                                                              | `IdentityEventsConsumer` → `WelcomeUserCommand`, `BillingEventsConsumer` → `SendPaymentReceiptCommand`                 |
-| Cron            | `@nestjs/schedule` job guarded by a Redis lock (`@WithLock`), so one replica runs it                                                                                                   | `PurgeExpiredSessionsCron`, `PurgeStripeEventsCron`, `DailyDigestCron`                                                 |
+| Building block  | Role                                                                                                                                                                                    | Examples                                                                                                               |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Command handler | One write use case. Loads/creates an aggregate, persists it, then `commit()`s its domain events                                                                                         | `RegisterUserHandler`, `LoginHandler`, `HandleStripeWebhookHandler`, `CreateNotificationHandler`, `WelcomeUserHandler` |
+| Query handler   | Read use case, returns a contracts-package (ts-proto) shape                                                                                                                             | `GetUserByIdHandler`, `GetUsersByIdsHandler` (feeds the GraphQL `users` DataLoader), `ListPaymentsHandler`             |
+| Domain event    | Fact raised by an aggregate (`AggregateRoot.apply`), published on `commit()`                                                                                                            | `UserRegisteredEvent`, `PaymentSucceededEvent`, `NotificationCreatedEvent`                                             |
+| Event handler   | In-process reaction to a domain event; none of them publishes to Kafka (that is the outbox's job)                                                                                       | (the sagas below react to domain events)                                                                               |
+| **Outbox**      | `OutboxWriter#enqueue` writes the integration event to `<schema>.outbox` in the transaction that changes the state; the leader `OutboxRelay` of that outbox publishes the rows to Kafka | `IdentityOutbox` → `identity.user-registered.v1`, `BillingOutbox` → `billing.payment-succeeded.v1`                     |
+| **Saga**        | `@Saga()` stream mapping events to commands. Pure mapping only: an error inside the operator pipeline would complete the saga stream for good, so all I/O lives in the command handler  | `NotificationsSagas.notificationCreated`: `NotificationCreatedEvent` → `PublishNotificationCreatedCommand`             |
+| Kafka consumer  | Presentation for inbound integration events: validates the envelope, dispatches a command                                                                                               | `IdentityEventsConsumer` → `WelcomeUserCommand`, `BillingEventsConsumer` → `SendPaymentReceiptCommand`                 |
+| Cron            | `@nestjs/schedule` job guarded by a Redis lock (`@WithLock`), so one replica runs it                                                                                                    | `PurgeExpiredSessionsCron`, `PurgeStripeEventsCron`, `DailyDigestCron`                                                 |
 
-**Commit after persistence.** Handlers wrap aggregates with `EventPublisher.mergeObjectContext()` and call `commit()` only after the write committed:
+**The outbox.** Identity and billing write every integration event to `<schema>.outbox` (`identity.outbox`, `billing.outbox`) in the transaction that changes the state it reports, through `OutboxWriter#enqueue` (`@platform/outbox`). The event commits or rolls back with the state, and nothing reaches Kafka from a request path:
 
 ```ts
-// RegisterUserHandler.execute (abridged)
-const tokens = await this.transaction.run(async () => {
-  await this.users.insert(user); // user + first session, one transaction
-  return this.sessionTokens.open(toUserRecord(user.toSnapshot()), command.client);
+// RegisterUserHandler.execute (abridged): one transaction, three writes
+const tokens = await this.sessionTokens.open(record, async () => {
+  await this.users.insert(user); // user + personal workspace + first session
+  await this.integrationEvents.userRegistered(registered); // → identity.outbox row
+  await this.integrationEvents.membershipCreated(membership); // → identity.outbox row
 });
-user.commit(); // → UserRegisteredEvent → UserRegisteredRelay → Kafka
+user.commit(); // in-process domain events only, after COMMIT
 ```
 
-`HandleStripeWebhookHandler` does the same around a `@Transactional()` method, so a rolled-back delivery never announces a payment.
+`HandleStripeWebhookHandler` does the same inside its `@Transactional()` method: the payment transition, the `stripe_events` receipt and the `billing.payment-succeeded.v1` or `billing.ledger-posting.v1` row commit together, so a rolled-back delivery never announces a payment and a failing enqueue fails the delivery (Stripe retries it).
 
-**Relays never throw.** Event handlers run detached from the request; a thrown error would only reach the CQRS `UnhandledExceptionBus`. Relays log the failure and move on. The record is already committed, so the gap is "committed but not published" (see [Known follow-ups](#12-known-follow-ups)).
+**The relay.** One `OutboxRelay` per outbox runs in every process that owns it, and only the holder of the Redis lock `outbox-relay:<schema>` publishes: poll the unpublished rows on the system pool, `KafkaProducer#publishStored` them in order (no Postgres transaction is open across a publish), mark the acknowledged rows. A failed publish ends the batch; the row and the later ones go out on a later tick. Delivery is therefore **at least once**, and every consumer deduplicates on the envelope id (below). A row the broker always refuses blocks its outbox until an operator acts (the `OutboxBacklogStuck` alert pages; [OBSERVABILITY.md](OBSERVABILITY.md#outbox-and-ledger-alerts)). Published rows are purged after `OUTBOX_RETENTION_HOURS`. Details: [libs/outbox/README.md](../libs/outbox/README.md). Notifications (Cassandra) and files (no store) do not use an outbox.
+
+**Exception: `notifications.notification-created.v1`.** The notifications context has no Postgres store behind it. `PublishNotificationCreatedHandler` publishes it directly after the inbox row was written, so a crash between the two loses the push (the inbox row stays). That is the one event path that is not transactional.
 
 **Idempotent consumers.** Inbound commands derive their ids from the business key, so redelivery and DLQ replays are harmless: `WelcomeUserHandler` creates the notification with idempotency key `welcome:<userId>` and enqueues mail with idempotency key `welcome-<userId>`; `SendPaymentReceiptHandler` uses `receipt:<paymentId>` / `receipt-<paymentId>`. `CreateNotificationHandler` derives the notification id from the key (`deriveNotificationId`).
 
@@ -238,15 +242,16 @@ Topics are named `<context>.<event-name>.v<major>` and declared once, as an `Eve
 
 | Topic                                   | Producer (relay / handler)                                     | Key     | Consumers                                                                 |
 | --------------------------------------- | -------------------------------------------------------------- | ------- | ------------------------------------------------------------------------- |
-| `identity.user-registered.v1`           | `UserRegisteredRelay` (identity core)                          | user id | `IdentityEventsConsumer` → welcome notification + welcome email           |
-| `identity.membership-created.v1`        | identity membership handlers (after commit)                    | user id | `IdentityEventsConsumer` → upsert the `(tenant, user)` mail recipient     |
-| `identity.membership-removed.v1`        | identity membership handlers (after commit)                    | user id | `IdentityEventsConsumer` → remove the `(tenant, user)` mail recipient     |
-| `billing.payment-succeeded.v1`          | `PaymentSucceededRelay` (billing core)                         | user id | `BillingEventsConsumer` → receipt notification + receipt email            |
+| `identity.user-registered.v1`           | `identity.outbox` (`IdentityOutbox`), relayed                  | user id | `IdentityEventsConsumer` → welcome notification + welcome email           |
+| `identity.membership-created.v1`        | `identity.outbox`, relayed                                     | user id | `IdentityEventsConsumer` → upsert the `(tenant, user)` mail recipient     |
+| `identity.membership-removed.v1`        | `identity.outbox`, relayed                                     | user id | `IdentityEventsConsumer` → remove the `(tenant, user)` mail recipient     |
+| `billing.payment-succeeded.v1`          | `billing.outbox` (`BillingOutbox`), relayed                    | user id | `BillingEventsConsumer` → receipt notification + receipt email            |
+| `billing.ledger-posting.v1`             | `billing.outbox`, relayed (Stripe money events)                | tenant  | `LedgerPostingConsumer` (billing) → ledger entries in immudb              |
 | `notifications.notification-created.v1` | `PublishNotificationCreatedHandler` (via `NotificationsSagas`) | user id | `NotificationPushConsumer` (edge) → Socket.IO room + GraphQL subscription |
 
-Keying by user id keeps one user's events ordered on one partition. All five are tenant-scoped: the envelope
+Keying by user id keeps one user's events ordered on one partition (`billing.ledger-posting.v1` is keyed by tenant id). The first five are tenant-scoped: the envelope
 `tenantId` names the tenant, and a consumer without one (or with the platform tenant) throws, so the message
-dead-letters (B4; see [SECURITY.md](SECURITY.md#tenant-isolation-outside-postgres)).
+dead-letters (B4; see [SECURITY.md](SECURITY.md#tenant-isolation-outside-postgres)). `billing.ledger-posting.v1` is tenant-scoped too, except platform money (payouts), whose envelope carries the nil platform tenant and no actor: `LedgerPostingConsumer` posts those inside `SystemContext`, and checks that the envelope's tenant and actor agree with the payload before anything runs.
 
 **Envelope.** Every record value is the same JSON envelope, validated with zod by the producer (`KafkaProducer.publish`) and by the consumer (`ParseEventEnvelopePipe`):
 
@@ -267,17 +272,17 @@ dead-letters (B4; see [SECURITY.md](SECURITY.md#tenant-isolation-outside-postgre
 }
 ```
 
-| Field           | Meaning                                                                                                                                                                     |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `id`            | uuid v7. The relays set it to the domain event id (the notification id for `notification-created`), so a re-publish carries the same id and consumers can deduplicate on it |
-| `type`          | Equals the topic for single-event topics                                                                                                                                    |
-| `version`       | Major version, taken from the topic's `.v<major>` suffix                                                                                                                    |
-| `occurredAt`    | ISO-8601 UTC time of the fact                                                                                                                                               |
-| `source`        | Producing service (`SERVICE_NAME`)                                                                                                                                          |
-| `tenantId`      | Optional. The tenant the event belongs to (the producer's principal by default); the nil UUID marks a platform event                                                        |
-| `actorId`       | Optional. The user who caused the event, or `null` for system work; consumers act as `{ userId: actorId, tenantId }`                                                        |
-| `correlationId` | From the originating request (nestjs-cls), for cross-service tracing                                                                                                        |
-| `payload`       | Topic-specific, zod schema in `domains/<x>/contracts/src/events/*.events.ts`                                                                                                |
+| Field           | Meaning                                                                                                                                                                                                                                                                                            |
+| --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `id`            | uuid. The domain event id (the notification id for `notification-created`; a uuid v5 of the Stripe event id for a ledger posting). The envelope is built and validated when the outbox row is written and published unchanged, so a resend carries the same id and consumers can deduplicate on it |
+| `type`          | Equals the topic for single-event topics                                                                                                                                                                                                                                                           |
+| `version`       | Major version, taken from the topic's `.v<major>` suffix                                                                                                                                                                                                                                           |
+| `occurredAt`    | ISO-8601 UTC time of the fact                                                                                                                                                                                                                                                                      |
+| `source`        | Producing service (`SERVICE_NAME`)                                                                                                                                                                                                                                                                 |
+| `tenantId`      | Optional. The tenant the event belongs to (the producer's principal by default); the nil UUID marks a platform event                                                                                                                                                                               |
+| `actorId`       | Optional. The user who caused the event, or `null` for system work; consumers act as `{ userId: actorId, tenantId }`                                                                                                                                                                               |
+| `correlationId` | From the originating request (nestjs-cls), for cross-service tracing                                                                                                                                                                                                                               |
+| `payload`       | Topic-specific, zod schema in `domains/<x>/contracts/src/events/*.events.ts`                                                                                                                                                                                                                       |
 
 Record headers: `x-event-type` and `x-correlation-id` (tools can route and trace without parsing JSON).
 
@@ -422,7 +427,7 @@ See [API.md](API.md) for the client-facing contract of each error.
 
 ### 10.1 Register → welcome notification + email (monolith)
 
-`POST /v1/auth/register` (or the GraphQL `register` mutation) is `@Public()` and `@RateLimit('identity.credentials')`. Everything runs in one process, but the welcome still goes through Kafka.
+`POST /v1/auth/register` (or the GraphQL `register` mutation) is `@Public()` and `@RateLimit('identity.credentials')`. Everything runs in one process, but the welcome still goes through the outbox and Kafka: the relay publishes after the request answered, at least once.
 
 ```mermaid
 sequenceDiagram
@@ -431,8 +436,8 @@ sequenceDiagram
   participant API as AuthController
   participant Port as AuthPort (AuthLocalAdapter)
   participant H as RegisterUserHandler
-  participant PG as Postgres
-  participant R as UserRegisteredRelay
+  participant PG as Postgres (identity.outbox)
+  participant R as OutboxRelay (identity)
   participant K as Kafka
   participant IC as IdentityEventsConsumer
   participant W as WelcomeUserHandler
@@ -443,11 +448,12 @@ sequenceDiagram
   C->>API: POST /v1/auth/register
   API->>Port: register(input)
   Port->>H: CommandBus.execute(RegisterUserCommand)
-  H->>PG: BEGIN, insert user + first session, COMMIT
+  H->>PG: BEGIN, insert user + workspace + first session + 2 outbox rows, COMMIT
   H-->>API: AuthTokens
   API-->>C: 201 tokens
-  H-)R: user.commit() emits UserRegisteredEvent
-  R-)K: publish identity.user-registered.v1 (key = user id)
+  R->>PG: poll unpublished rows (leader only, system pool)
+  R-)K: publishStored identity.user-registered.v1 + identity.membership-created.v1 (key = user id)
+  R->>PG: mark the acknowledged rows published
   K-)IC: consumer group monolith
   IC->>CS: identity.membership-created.v1 upserts the (tenant, user) recipient
   IC->>W: CommandBus.execute(WelcomeUserCommand)
@@ -478,10 +484,10 @@ sequenceDiagram
   C->>GW: POST /v1/auth/register
   GW->>GW: guards (public route), throttle, validate
   GW->>ID: gRPC AuthService/Register (deadline, breaker identity, x-request-id)
-  ID->>PG: insert user + session (one transaction)
+  ID->>PG: insert user, workspace, session and the outbox rows (one transaction)
   ID-->>GW: AuthTokens
   GW-->>C: 201 tokens
-  ID-)K: UserRegisteredRelay publishes identity.user-registered.v1
+  ID-)K: the identity OutboxRelay (leader) publishes identity.user-registered.v1
   K-)NS: IdentityEventsConsumer (group notifications-service)
   NS->>CS: upsert the (tenant, user) recipient (identity.membership-created.v1)
   NS->>CS: insert welcome notification (tenant from the envelope)
@@ -505,8 +511,8 @@ sequenceDiagram
   participant S as Stripe
   participant GW as gateway or monolith
   participant B as HandleStripeWebhookHandler
-  participant PG as Postgres
-  participant R as PaymentSucceededRelay
+  participant PG as Postgres (billing.outbox)
+  participant R as OutboxRelay (billing)
   participant K as Kafka
   participant BC as BillingEventsConsumer
   participant SR as SendPaymentReceiptHandler
@@ -519,12 +525,12 @@ sequenceDiagram
   alt duplicate delivery
     B-->>GW: received, duplicate true
   else first delivery, checkout.session.completed and paid
-    B->>PG: lock payment row, mark succeeded, COMMIT
-    B-)R: payment.commit() emits PaymentSucceededEvent
-    R-)K: publish billing.payment-succeeded.v1 (key = user id)
+    B->>PG: lock payment row, mark succeeded, enqueue billing.payment-succeeded.v1, COMMIT
     B-->>GW: received, duplicate false
   end
   GW-->>S: 200
+  R->>PG: poll unpublished rows (leader only)
+  R-)K: publishStored billing.payment-succeeded.v1 (key = user id), then mark published
   K-)BC: consumer group notifications-service or monolith
   BC->>SR: CommandBus.execute(SendPaymentReceiptCommand)
   SR->>CS: receipt notification (key receipt:paymentId), look up the (tenant, user) recipient
@@ -574,6 +580,37 @@ sequenceDiagram
 
 The breaker counts only upstream failures (`UNAVAILABLE`, `INTERNAL`, `DEADLINE_EXCEEDED`, …) toward its 50 % threshold. When it opens, every route that depends on that upstream fails fast with 503 for 5 s, then a half-open probe decides whether to close it. State changes are logged (`Circuit "identity" OPEN: failing fast`).
 
+### 10.5 Stripe money event → ledger → reconciliation
+
+With `LEDGER_ENABLED=true` (billing-service, or the monolith) every Stripe money event that moves a balance (`charge.succeeded`, `refund.*`, `charge.dispute.funds_*`, `payout.*`) leaves one `billing.ledger-posting.v1` row in the unit of work of its `stripe_events` receipt. The relay carries it to Kafka; `LedgerPostingConsumer` reads Stripe's balance transactions and posts balanced entries to immudb. Entry ids derive from the Stripe transaction id, so a redelivery or a replayed webhook is `replayed`, never a second entry. Reconciliation (R1-R5) runs hourly and only appends findings.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant S as Stripe
+  participant B as HandleStripeWebhookHandler
+  participant PG as Postgres (billing.outbox, ledger tables)
+  participant R as OutboxRelay (billing)
+  participant K as Kafka
+  participant LC as LedgerPostingConsumer
+  participant L as LedgerService
+  participant I as immudb
+  participant RC as ReconcileLedgerCron
+  S->>B: charge.succeeded (signed)
+  B->>PG: BEGIN, stripe_events receipt + billing.ledger-posting.v1 row, COMMIT
+  R->>PG: poll, then publishStored billing.ledger-posting.v1 (key = tenant id), mark published
+  K-)LC: billing.ledger-posting.v1
+  LC->>S: GET the charge and its balance transaction (no transaction open)
+  LC->>L: PostLedgerEntryCommand (as the envelope's tenant, or SystemContext for platform money)
+  L->>I: post entry (id = uuidv5 of the Stripe transaction)
+  LC->>PG: entry ref receipt (insert-only)
+  RC->>PG: hourly, SystemContext: R1-R4 read the ledger, Stripe and Postgres
+  RC->>I: R5: dual proof from the trusted state, then compare-and-set it in Postgres
+  RC->>PG: append ledger_discrepancies (never corrects)
+```
+
+The tables, the checks and the alerts: [domains/billing/README.md](../domains/billing/README.md#ledger-immudb), [OBSERVABILITY.md](OBSERVABILITY.md#outbox-and-ledger-alerts), [SECURITY.md](SECURITY.md#immudb-state-signing-key).
+
 ## 11. Deliberate decisions and pins
 
 Dependencies are the latest stable releases as of 2026-09, except these deliberate pins:
@@ -593,7 +630,7 @@ Other structural decisions:
 - **Workspace libs need no build in dev.** `exports["@repo/source"]` points at `src/*.ts` (typecheck, tests, dev), `default` at `dist/*.js` (production). Builds are SWC per package, orchestrated by Lerna/Nx. See [DEVELOPMENT.md](DEVELOPMENT.md) and [RELEASING.md](RELEASING.md).
 - **One codebase, two topologies** (section 1) instead of separate repos: the monolith is the default deployment; a context becomes a service by switching its `XApiModule` binding.
 - **Abstract classes as ports** so DI needs no string tokens, and contracts-package types on every port so both adapters are interchangeable.
-- **Publish after commit** for integration events, with idempotent consumers and DLQs (sections 6–7). Simple, but at-most-once on a crash between commit and publish.
+- **Transactional outbox** for the integration events of the Postgres domains: the event row commits with the state, one leader relay per outbox publishes it at least once, and idempotent consumers with DLQs absorb the duplicates (sections 6–7). The cost: events are published after the request answered (by default within `OUTBOX_POLL_INTERVAL_MS`, 500 ms), and a row the broker always refuses blocks its outbox until an operator acts.
 - **Edge authentication.** The gateway verifies JWTs and the denylist locally and forwards the caller in gRPC metadata.
 - **`UV_THREADPOOL_SIZE` must stay ≤ the container CPU quota.** Argon2 hashing runs on the libuv threadpool. Measured: 16 threads on a 2-CPU cap took p95 from 36 ms to 304 ms. See [PERFORMANCE.md](PERFORMANCE.md) and [CONFIGURATION.md](CONFIGURATION.md).
 
@@ -601,11 +638,11 @@ Other structural decisions:
 
 Stated honestly, none of these are done:
 
-| Follow-up                                        | Today                                                                                                                                                                                                                               |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Transactional outbox**                         | Integration events are published after commit. A crash or broker outage between commit and publish loses the event (the record stays). An outbox row written in the same transaction plus a relay would make delivery at-least-once |
-| **Per-domain `@domain/<x>/api` subpath exports** | The gateway imports `@domain/identity`, `@domain/notifications`, `@domain/billing` whole, so its image carries core code it never runs. Subpath exports for the API surface would slim it                                           |
-| **Separate metrics listener**                    | `/metrics` is served on the application HTTP port                                                                                                                                                                                   |
+| Follow-up                                        | Today                                                                                                                                                                                                                         |
+| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Outbox for notifications**                     | `notifications.notification-created.v1` is published directly: the notifications context has no Postgres store to hold an outbox row, so a crash between the inbox write and the publish loses the push (the inbox row stays) |
+| **Per-domain `@domain/<x>/api` subpath exports** | The gateway imports `@domain/identity`, `@domain/notifications`, `@domain/billing` whole, so its image carries core code it never runs. Subpath exports for the API surface would slim it                                     |
+| **Separate metrics listener**                    | `/metrics` is served on the application HTTP port                                                                                                                                                                             |
 
 ## See also
 

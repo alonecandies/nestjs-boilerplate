@@ -13,6 +13,11 @@ global:
   external_labels:
     env: local
 
+# Alert rules (outbox and ledger, outbox plan Task 19): mounted from docker/prometheus/rules. Prometheus
+# only evaluates them (no Alertmanager runs in compose); see docs/OBSERVABILITY.md for the routing.
+rule_files:
+  - /etc/prometheus/rules/*.rules.yml
+
 scrape_configs:
   - job_name: prometheus
     static_configs:

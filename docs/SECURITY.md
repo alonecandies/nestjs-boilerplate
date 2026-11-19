@@ -348,7 +348,12 @@ are sanitised before they reach the client.
 - Missing, forged or stale (> 300 s, the code constant `STRIPE_WEBHOOK_TOLERANCE_SEC` in `domains/billing/src/infrastructure/stripe/stripe.constants.ts`) signatures are a 422
   `INVALID_WEBHOOK_SIGNATURE` before any I/O.
 - Exactly-once processing: `INSERT INTO billing.stripe_events … ON CONFLICT DO NOTHING` inside the same
-  transaction as the payment update; duplicates answer `duplicate: true`.
+  transaction as the payment update; duplicates answer `duplicate: true`. The event's outbox rows
+  (`billing.payment-succeeded.v1`, and `billing.ledger-posting.v1` for a money event while
+  `LEDGER_ENABLED=true`) are inserted in that same transaction, so a rolled-back delivery announces
+  and posts nothing, and Stripe's retry runs it again. The owner (tenant and user) of a money event
+  comes only from the signed object's metadata (or its PaymentIntent's); an event with no tenant is
+  recorded for the platform and touches no payment.
 - `@Public()` and `@SkipRateLimit()` (it skips every throttler; Stripe retries any non-2xx).
 - Checkout redirect URLs come only from `STRIPE_SUCCESS_URL`/`STRIPE_CANCEL_URL`, never from the
   REST client (no open redirect). Client `Idempotency-Key`s are mapped per user, never forwarded to
@@ -545,8 +550,10 @@ it); it never falls back to `DATABASE_URL`.
   `SELECT, INSERT` on the three tenant ledger tables and `SELECT, INSERT, UPDATE` on the two local ones).
 - **Not a pool method:** `staff:grant` connects as `app_owner` on `DATABASE_MIGRATION_URL`.
 
-The pinned lists (12 methods when B3 shipped, 22 with the ledger's ten; program spec section 9 numbers the first
-group, the second is the B3 ruling below; the shared `outbox.*` methods are listed in `libs/outbox`):
+The pinned lists (12 methods when B3 shipped, 22 with the ledger's ten, 29 with the outbox's seven; program spec
+section 9 numbers the first group, the second is the B3 ruling below). The table lists the methods each domain defines
+itself; the shared `outbox.*` methods are in
+[System-method lists after this plan](#system-method-lists-after-this-plan):
 
 | Method                                        | Scope    | Used by (reason)                                                                                   |
 | --------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
@@ -575,6 +582,42 @@ group, the second is the B3 ruling below; the shared `outbox.*` methods are list
 
 Later phases add their own methods to the same pinned lists, with their per-table `app_system` grants and this
 table.
+
+### System-method lists after this plan
+
+Identity pins 13 methods and billing 16 (29 names in all, 4 of them shared). The four `outbox.*` methods come from
+`@platform/outbox` (`OUTBOX_SYSTEM_METHODS`); each domain with an outbox lists the ones its relay uses. All are `system`
+scope: the relay runs in `SystemContext.run('outbox.relay', …)`, the reconciliation in
+`SystemContext.run('billing.reconcile-ledger', …)`.
+
+| Domain   | Pinned list after this plan                                                                                                                                                          |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| identity | B3's ten (`users.*`, `invitations.findByTokenHash`, `sessions.deleteExpired`, `memberships.*`) plus `outbox.pollUnpublished`, `outbox.markPublished`, `outbox.deletePublishedBefore` |
+| billing  | B3's two (`stripeEvents.deleteProcessedBefore`, `stripeEvents.markProcessedAsPlatform`) plus the four `outbox.*` and the ten `ledger*` names of the table above                      |
+
+| Method                         | Scope  | What it does                                                                                                                |
+| ------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `outbox.pollUnpublished`       | system | the relay's multi-shard read of the oldest unpublished rows, no row lock, plus the backlog statistics                       |
+| `outbox.markPublished`         | system | stamps the rows the broker acknowledged: router statements, each with `tenant_id = $n`                                      |
+| `outbox.insertAsPlatform`      | system | billing only: rows for `PLATFORM_TENANT_ID` (payout postings, user-less webhooks), the only door for them; idempotent by id |
+| `outbox.deletePublishedBefore` | system | the relay's retention purge (`OUTBOX_RETENTION_HOURS`) of published rows, on every shard                                    |
+
+What keeps the outbox and the ledger inside the tenant rule:
+
+- **The runtime role cannot read `outbox`**: it holds `INSERT` only, under the policy `tenant_id = app.tenant_id()`, and an
+  enqueue is a plain `INSERT` without `RETURNING` in the caller's open transaction. Rows of another tenant, and of the
+  platform tenant, are refused (`OUTBOX_TENANT_MISMATCH`, `OUTBOX_PLATFORM_TENANT`, and the policy as the backstop).
+- **The relay publishes what was validated when it was stored**: `publishStored` re-checks the generic envelope schema and
+  `type === topic`, rebuilds the two headers from the envelope and reads nothing from CLS, so a row cannot be rewritten
+  into another tenant's event at publish time.
+- **The ledger consumer's principal comes from the envelope**: `LedgerPostingConsumer` rejects an envelope whose tenant or
+  actor differs from the payload's, then runs as `{ userId, tenantId, roles: [] }`; only the platform tenant and user-less
+  postings run in `SystemContext`. `LedgerService` refuses a tenant that is not the principal's and never lets a principal
+  touch `PLATFORM_TENANT_ID`.
+- **The ledger is append-only**: reconciliation appends findings and never corrects an entry. The runtime role reads the
+  ledger tables only when elevated, which the consumer's `roles: []` principal never is.
+- **No PII** in immudb, in the discrepancy JSON, in the logs of these paths or in any metric label (amounts are minor
+  units, ids are uuids, labels are `outbox`, `topic`, `outcome`, `kind`).
 
 ### Trust model
 
@@ -803,8 +846,11 @@ Prometheus scrape the pods directly. A separate metrics listener is a [known gap
 ## Known gaps
 
 - `/metrics` is served on the API port; a separate metrics listener is a planned follow-up.
-- Integration events are published after commit, with no transactional outbox: a crash between
-  commit and publish loses the event (not a security issue, but an audit-trail one).
+- `notifications.notification-created.v1` is published directly (the notifications context has no Postgres
+  store to hold an outbox row): a crash between the inbox write and the publish loses the push. The events of
+  identity and billing go through the transactional outbox and are delivered at least once.
+- A row the broker always refuses blocks its outbox until an operator acts (a batch stops at the first failed
+  publish; `OutboxBacklogStuck` pages), so a poison row delays that outbox's later events, not loses them.
 - WebSocket revocation is not instant: a live socket whose token is revoked is closed by the next
   sweep, up to `WS_REVOCATION_SWEEP_INTERVAL_MS` (30 s by default) later, on both transports.
   Socket.IO messages and new graphql-ws operations are refused at once (their guards re-check the

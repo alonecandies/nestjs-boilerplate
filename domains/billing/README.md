@@ -42,7 +42,7 @@ import { DATABASE_MIGRATIONS } from './database.migrations.js'; // [billingMigra
   imports: [
     AppConfigModule.forRoot(),
     ConfigModule.forFeature(grpcConfig), // GRPC_URL for connectGrpcServer in main.ts
-    // Readiness = Postgres + Redis. Kafka is deliberately NOT a contributor (best-effort publish).
+    // Readiness = Postgres + Redis. Kafka is deliberately NOT a contributor (events wait in billing.outbox).
     ObservabilityModule.forRoot({
       healthContributors: [DatabaseHealthIndicator, RedisHealthIndicator],
     }),
@@ -321,6 +321,31 @@ table on the `app_system` pool, publishes each row with `KafkaProducer.publishSt
 broker acknowledged it: delivery is at least once, and consumers dedupe on the stable envelope id. Nothing in
 billing publishes to Kafka from a request path. `outbox.insertAsPlatform` is the only way a `PLATFORM_TENANT_ID`
 row enters the table (the runtime policy refuses the nil tenant).
+
+The same unit of work carries the ledger's posting record: with `LEDGER_ENABLED=true`, a Stripe money event
+(`charge.succeeded`, `refund.*`, `charge.dispute.funds_*`) inserts its `billing.ledger-posting.v1` row next to its
+`stripe_events` receipt and the payment transition, and a payout does the same through `outbox.insertAsPlatform` and
+`markProcessedAsPlatform` (a crash between the two is healed by Stripe's redelivery: the insert is idempotent by its
+deterministic id). With `LEDGER_ENABLED=false` the receipts and transitions happen and no posting row is written. The
+relay and the posting consumer then make the ledger exactly-once in effect: entry ids derive from the Stripe
+transaction id, so a replayed webhook or a redelivered Kafka message is `replayed`, never a second entry.
+`notifications.notification-created.v1` is the only event left without an outbox (no Postgres store behind it).
+
+**Enabling the ledger later.** While `LEDGER_ENABLED=false` no posting row is written, so payments taken in that
+time have no entry. After enabling it, send one `ReconcileLedgerCommand` with an explicit window covering them (inside
+`SystemContext.run('billing.reconcile-ledger', …)`): R4 lists Stripe's balance transactions of the window, re-enqueues
+every one without an entry through `billing.outbox`, and the relay and the consumer post them. Later hourly runs find
+nothing to add.
+
+**Alerts and the topology tests.** The outbox and ledger alert rules are in
+`docker/prometheus/rules/{outbox,ledger}.rules.yml` (see docs/OBSERVABILITY.md). The path webhook → outbox → relay →
+consumer → ledger → reconciliation runs end to end, in memory, in `apps/monolith/test/ledger.e2e-spec.ts` (a signed
+`charge.succeeded` leaves one outbox row, a relay tick delivers it, one balanced entry and one ref exist, the same
+webhook and the same Kafka message again add nothing, `payout.paid` posts a platform entry, a reconcile run succeeds
+with zero findings and, after tampering with the ledger, reports `ledger_row_mutated`). The microservices topology:
+`apps/billing-service/test/app.e2e-spec.ts` (the webhook RPC leaves one posting record in the unit of work of its
+receipt with `LEDGER_ENABLED=true`, none with `false`) and `apps/gateway/test/app.e2e-spec.ts` (the edge forwards the
+raw bytes and answers as billing-service does).
 
 ## Data model (`billingSchema`, `infrastructure/persistence/billing.schema.ts`)
 

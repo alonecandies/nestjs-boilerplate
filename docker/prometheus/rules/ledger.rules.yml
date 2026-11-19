@@ -1,0 +1,56 @@
+# Ledger alerts (outbox plan Task 19). The series come from @domain/billing
+# (domains/billing/src/infrastructure/ledger/ledger-metrics.ts). They exist only in a process that runs
+# with LEDGER_ENABLED=true; with the ledger off nothing reports and no alert fires.
+# severity: page = wake someone; ticket = look at it in working hours.
+groups:
+  - name: ledger
+    rules:
+      # Reconciliation appended a finding (new rows only; an identical stored finding is not counted).
+      # Read ledger_discrepancies_total by `kind`, then billing.ledger_discrepancies.
+      - alert: LedgerDiscrepancy
+        expr: sum by (kind) (increase(ledger_discrepancies_total[1h])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Ledger reconciliation found {{ $labels.kind }}"
+          description: >-
+            {{ $value }} new ledger discrepancies of kind {{ $labels.kind }} in the last hour. Read
+            billing.ledger_discrepancies (expected and actual JSON, source_key) and fix the cause: the
+            ledger is append-only and reconciliation never corrects.
+
+      # The ledger or its proofs disagree with what was written: a row was rewritten (R2) or the dual
+      # proof of the trusted state failed (R5). Treat as an incident until explained.
+      - alert: LedgerTamperEvidence
+        expr: sum by (kind) (increase(ledger_discrepancies_total{kind=~"verification_failed|ledger_row_mutated"}[1h])) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "Ledger tamper evidence: {{ $labels.kind }}"
+          description: >-
+            {{ $labels.kind }} was recorded in the last hour. verification_failed: the immudb proofs do
+            not extend the trusted state (R5); ledger_row_mutated: a ledger row has a revision above 1
+            (R2). See docs/SECURITY.md, "immudb state signing key".
+
+      # A posting whose id exists with different content (same source key, another payload hash).
+      - alert: LedgerPostConflict
+        expr: sum(increase(ledger_postings_total{outcome="conflict"}[1h])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Ledger posting conflict"
+          description: >-
+            {{ $value }} postings in the last hour hit an existing entry id with a different payload
+            hash. The entry was not changed; a post_conflict row names the source key.
+
+      # The hourly reconciliation has not succeeded for 3 hours (it fails, or the cron does not run).
+      # The series appears with the first success after a start; max() ignores replicas that never ran it.
+      - alert: LedgerReconciliationStale
+        expr: time() - max(ledger_reconciliation_last_success_timestamp_seconds) > 10800
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "Ledger reconciliation has not succeeded for 3 hours"
+          description: >-
+            The last successful reconciliation run was {{ $value | humanizeDuration }} ago. Check
+            ledger_reconciliation_runs_total{status="failed"}, the billing service logs and immudb.
