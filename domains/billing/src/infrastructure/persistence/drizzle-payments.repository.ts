@@ -111,6 +111,7 @@ export class DrizzlePaymentsRepository implements PaymentsRepository {
         .set({
           amountTotal: s.amountTotal,
           currency: s.currency,
+          amountRefunded: s.amountRefunded,
           status: s.status,
           stripeCheckoutSessionId: s.stripeCheckoutSessionId,
           stripePaymentIntentId: s.stripePaymentIntentId,

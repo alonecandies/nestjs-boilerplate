@@ -974,6 +974,65 @@ describe('HandleStripeWebhookHandler', () => {
       });
     });
 
+    it('a full refund then refund.failed: the payment is succeeded again', async () => {
+      await deliver(money('charge.refunded', charge({ amount_refunded: 2_500 }), 'evt_ch_rf'));
+      expect(store.payment(paid.id)?.status).toBe(PaymentStatus.Refunded);
+
+      await deliver(money('refund.failed', refund({ status: 'failed' }), 'evt_re_failed'));
+
+      expect(store.payment(paid.id)).toMatchObject({
+        status: PaymentStatus.Succeeded,
+        amountRefunded: 0,
+        version: 2,
+      });
+      expectPosting('evt_re_failed', {
+        stripeEventType: 'refund.failed',
+        objectType: 'refund',
+        objectId: 're_1',
+      });
+    });
+
+    it('two partial refunds then one refund.failed: still partially_refunded by the other', async () => {
+      await deliver(money('charge.refunded', charge({ amount_refunded: 500 }), 'evt_ch_rf1'));
+      await deliver(money('charge.refunded', charge({ amount_refunded: 1_500 }), 'evt_ch_rf2'));
+      expect(store.payment(paid.id)).toMatchObject({
+        status: PaymentStatus.PartiallyRefunded,
+        amountRefunded: 1_500,
+      });
+
+      await deliver(
+        money('refund.failed', refund({ amount: 500, status: 'failed' }), 'evt_re_failed'),
+      );
+
+      expect(store.payment(paid.id)).toMatchObject({
+        status: PaymentStatus.PartiallyRefunded,
+        amountRefunded: 1_000,
+      });
+    });
+
+    it('a partial refund then refund.failed: succeeded again', async () => {
+      await deliver(money('charge.refunded', charge({ amount_refunded: 500 }), 'evt_ch_prf'));
+
+      await deliver(
+        money('refund.failed', refund({ amount: 500, status: 'failed' }), 'evt_re_failed'),
+      );
+
+      expect(store.payment(paid.id)).toMatchObject({
+        status: PaymentStatus.Succeeded,
+        amountRefunded: 0,
+      });
+    });
+
+    it('refund.failed with the ledger off still restores the payment, and writes no row', async () => {
+      await deliver(money('charge.refunded', charge({ amount_refunded: 2_500 }), 'evt_ch_rf'));
+      ledger.enabled = false;
+
+      await deliver(money('refund.failed', refund({ status: 'failed' }), 'evt_re_failed'));
+
+      expect(store.payment(paid.id)?.status).toBe(PaymentStatus.Succeeded);
+      expect(postings()).toEqual([]);
+    });
+
     it.each(['pending', 'requires_action', 'canceled'])(
       'refund.updated with status %s writes no row (and asks Stripe nothing)',
       async (status) => {

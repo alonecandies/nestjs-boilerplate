@@ -52,6 +52,8 @@ export const payments = billingPgSchema.table(
     // Minor units. int8 read as a JS number (exact up to 2^53); NULL until Stripe priced the session.
     amountTotal: bigint({ mode: 'number' }),
     currency: text(),
+    // Minor units Stripe reports refunded on the charge, net of failed refunds (0 until refunded).
+    amountRefunded: bigint({ mode: 'number' }).notNull().default(0),
     status: paymentStatusEnum().notNull().default(PaymentStatus.Pending),
     stripeCheckoutSessionId: text(),
     stripePaymentIntentId: text(),

@@ -8,7 +8,8 @@ describe('payment row mapper', () => {
     const payment = makePayment({
       amountTotal: 700,
       currency: 'gbp',
-      status: PaymentStatus.Succeeded,
+      amountRefunded: 200,
+      status: PaymentStatus.PartiallyRefunded,
       stripeCheckoutSessionId: 'cs_1',
       stripePaymentIntentId: 'pi_1',
       idempotencyKey: 'key-12345',
@@ -22,6 +23,7 @@ describe('payment row mapper', () => {
       ...row,
       amountTotal: row.amountTotal ?? null,
       currency: row.currency ?? null,
+      amountRefunded: row.amountRefunded ?? 0,
       status: row.status ?? PaymentStatus.Pending,
       stripeCheckoutSessionId: row.stripeCheckoutSessionId ?? null,
       stripePaymentIntentId: row.stripePaymentIntentId ?? null,

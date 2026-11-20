@@ -81,7 +81,7 @@ function moneyEventOf(event: Stripe.Event): MoneyEvent | null {
         objectType: 'charge',
         objectId: charge.id,
         posts: false,
-        transition: (payment, now) => payment.refund(full, now),
+        transition: (payment, now) => payment.refund(charge.amount_refunded, full, now),
       };
     }
     case 'refund.created':
@@ -94,14 +94,17 @@ function moneyEventOf(event: Stripe.Event): MoneyEvent | null {
         posts: event.data.object.status === 'succeeded',
         transition: null,
       };
-    case 'refund.failed':
+    case 'refund.failed': {
+      // Stripe returned the refund to the balance: the payment's status goes back with it.
+      const refund = event.data.object;
       return {
         ...tenantMoney,
         objectType: 'refund',
-        objectId: event.data.object.id,
+        objectId: refund.id,
         posts: true,
-        transition: null,
+        transition: (payment, now) => payment.failRefund(refund.amount, now),
       };
+    }
     case 'charge.dispute.funds_withdrawn':
       return {
         ...tenantMoney,
@@ -169,7 +172,9 @@ const PLATFORM_WEBHOOK_REASON = 'billing.platform-webhook';
  * session is actually paid), `async_payment_failed` → `failed`, `expired` → `expired`.
  *
  * Money events (L-11, `moneyEventOf`): `charge.succeeded`, `charge.refunded` (→ `refunded` or
- * `partially_refunded`), `refund.created` / `refund.updated` (status `succeeded`), `refund.failed`,
+ * `partially_refunded`, recording `amount_refunded`), `refund.created` / `refund.updated` (status
+ * `succeeded`), `refund.failed` (the refund taken off: → `partially_refunded` while other refunds
+ * remain, else `succeeded`),
  * `charge.dispute.funds_withdrawn` (→ `disputed`), `charge.dispute.funds_reinstated` (`disputed` →
  * `succeeded`) and `payout.paid` / `payout.failed`. While LEDGER_ENABLED, each event of the table
  * with a posting writes one `billing.ledger-posting.v1` row (envelope id `uuidv5(LEDGER_NAMESPACE,

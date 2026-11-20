@@ -337,8 +337,8 @@ describe('billingMigrations', () => {
   });
 
   describe('0006_ledger_system_reads (custom, outbox plan Task 11: spec §9 item 9)', () => {
-    it('is the seventh and last journal entry, after the ledger tables', () => {
-      expect(journalTags()).toEqual([
+    it('is the seventh journal entry, after the ledger tables', () => {
+      expect(journalTags().slice(0, 7)).toEqual([
         '0000_init',
         '0001_tenant_columns',
         '0002_distribute',
@@ -352,6 +352,18 @@ describe('billingMigrations', () => {
     it('only grants app_system SELECT on payments (ledgerReconciliation.listSucceededPayments)', () => {
       expect(statementsOf('0006_ledger_system_reads.sql')).toEqual([
         'GRANT SELECT ON TABLE billing.payments TO app_system;',
+      ]);
+    });
+  });
+
+  describe('0007_payment_amount_refunded (final review F2/F3: refunds net of failures)', () => {
+    it('is the eighth and last journal entry', () => {
+      expect(journalTags().slice(7)).toEqual(['0007_payment_amount_refunded']);
+    });
+
+    it('only adds payments.amount_refunded, 0 for existing rows', () => {
+      expect(statementsOf('0007_payment_amount_refunded.sql')).toEqual([
+        'ALTER TABLE "billing"."payments" ADD COLUMN "amount_refunded" bigint DEFAULT 0 NOT NULL;',
       ]);
     });
   });

@@ -1,5 +1,6 @@
 import { PLATFORM_TENANT_ID, SystemContext } from '@platform/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { makePayment } from '../../../../../test/billing-test.utils.js';
 import { LEDGER_TEST_TENANT as TENANT_A } from '../../../../../test/ledger-fixtures.js';
 import type {
   LedgerEntryDraft,
@@ -330,6 +331,24 @@ describe('R3PaymentsCheck (reconciliation R3: billing payments against the ledge
         status(disputedButSucceeded, { netRefunds: 0, openDisputes: 1 }),
       ]),
     );
+  });
+
+  it('a refund that failed after a full or partial refund leaves a status R3 agrees with (no status_mismatch)', async () => {
+    const later = new Date(PAID.getTime() + MINUTE);
+    const afterFull = makePayment({ status: PaymentStatus.Succeeded, amountTotal: 2_500 });
+    afterFull.refund(2_500, true, later);
+    afterFull.failRefund(2_500, later);
+    const afterPartial = makePayment({ status: PaymentStatus.Succeeded, amountTotal: 2_500 });
+    afterPartial.refund(500, false, later);
+    afterPartial.failRefund(500, later);
+    for (const aggregate of [afterFull, afterPartial]) {
+      const row = payment(TENANT_A, { id: aggregate.id, status: aggregate.status });
+      await posted('charge', row);
+      await posted('refund', row);
+      await posted('refund_failure', row);
+    }
+
+    await expect(run()).resolves.toEqual([]);
   });
 
   it('pairs a payment and its ref that sit on different pages', async () => {
