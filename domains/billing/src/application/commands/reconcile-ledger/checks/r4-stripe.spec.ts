@@ -8,9 +8,11 @@ import { LEDGER_TEST_TENANT as TENANT_A } from '../../../../../test/ledger-fixtu
 import { ledgerEntryId } from '../../../../domain/ledger/ledger.ids.js';
 import { LEDGER_NAMESPACE } from '../../../../domain/ledger/ledger.types.js';
 import type { LedgerDiscrepancyInput } from '../../../../domain/ledger/ledger-discrepancy.js';
+import { PaymentStatus } from '../../../../domain/payment-status.enum.js';
 import type { StripeService } from '../../../../infrastructure/stripe/stripe.service.js';
 import { InMemoryLedger } from '../../../../testing/in-memory-ledger.js';
 import { InMemoryLedgerStore } from '../../../../testing/in-memory-ledger-store.js';
+import { postingOwnerOf } from '../../../ledger/ledger-posting-request.js';
 import { draftFromBalanceTransaction } from '../../../ledger/posting-rules.js';
 import { StripeOwnerResolver } from '../../../ledger/stripe-owner-resolver.js';
 import type { LedgerEntryRef } from '../../../repositories/ledger-receipts.repository.js';
@@ -204,7 +206,24 @@ describe('R4StripeCheck (reconciliation R4: Stripe balance transactions against 
     expect(stripe.retrievePaymentIntent).not.toHaveBeenCalled();
   });
 
+  /** Tenant A's payment `PAYMENT_A` of `userId` (default: its owner, `USER_A`). */
+  const seedPaymentOfA = (userId = USER_A) =>
+    store.addPayments({
+      tenantId: TENANT_A,
+      id: PAYMENT_A,
+      userId,
+      status: PaymentStatus.Succeeded,
+      amountTotal: 2_500n,
+      currency: 'usd',
+      paidAt: new Date(CREATED * 1000),
+    });
+
+  /** The payload of the one record R4 enqueued. */
+  const enqueuedPayload = () =>
+    parseEventEnvelope(LEDGER_POSTING_REQUESTED_EVENT, records()[0]?.envelope).payload;
+
   it('a transaction without an entry: one missing_entry and one outbox record with the stated payload, envelope id and key', async () => {
+    seedPaymentOfA();
     stripe.pages = [[bt('txn_lost')]];
 
     const found = await run();
@@ -248,6 +267,51 @@ describe('R4StripeCheck (reconciliation R4: Stripe balance transactions against 
       paymentId: PAYMENT_A,
       livemode: false,
     });
+  });
+
+  it.each([
+    ['of another user of the tenant', () => seedPaymentOfA('0192f0c1-0000-7000-8000-00000000b001')],
+    ['that does not exist', () => undefined],
+    [
+      'of another tenant',
+      () =>
+        store.addPayments({
+          tenantId: TENANT_B,
+          id: PAYMENT_A,
+          userId: USER_A,
+          status: PaymentStatus.Succeeded,
+          amountTotal: 2_500n,
+          currency: 'usd',
+          paidAt: new Date(CREATED * 1000),
+        }),
+    ],
+  ])(
+    'a signed paymentId %s is not named: paymentId null, like the webhook',
+    async (_label, seed) => {
+      seed();
+      stripe.pages = [[bt('txn_lost')]];
+
+      await run();
+
+      expect(enqueuedPayload()).toMatchObject({
+        tenantId: TENANT_A,
+        userId: USER_A,
+        paymentId: null,
+      });
+      // The webhook path builds the same posting owner for the same lookup result.
+      expect(
+        postingOwnerOf({ tenantId: TENANT_A, userId: USER_A, paymentId: PAYMENT_A }, null),
+      ).toEqual({ tenantId: TENANT_A, userId: USER_A, paymentId: null });
+    },
+  );
+
+  it("the owner's own payment is named", async () => {
+    seedPaymentOfA();
+    stripe.pages = [[bt('txn_lost')]];
+
+    await run();
+
+    expect(enqueuedPayload()).toMatchObject({ paymentId: PAYMENT_A });
   });
 
   it('a ref whose entry the ledger does not return under its tenant is a missing entry too', async () => {

@@ -617,7 +617,8 @@ grace period, or under another tenant than the metadata names today, is found). 
 `billing.ledger-posting.v1` record (`objectType: 'balance_transaction'`, envelope id
 `uuidv5('reconcile:' + runId + ':' + txnId)`, new per run) through `enqueueMissingPostings`, under the owner
 `StripeOwnerResolver` gives for the source (platform kinds: the platform tenant; an unresolved tenant-level owner: the
-platform tenant plus `tenant_unresolved`); the relay and `LedgerPostingConsumer` then post it. An entry whose net on
+platform tenant plus `tenant_unresolved`), naming the signed payment only when `findPaymentsByIds` shows it is the
+owner's (`postingOwnerOf`, the webhook's check); the relay and `LedgerPostingConsumer` then post it. An entry whose net on
 `asset:stripe_balance`, movement on its fee account or currency differs → `stripe_amount_mismatch` (the ref's
 tenant). A Stripe failure fails R4 and keeps what was already enqueued. **R5** (Task 17, only with `LEDGER_VERIFY=true`;
 tamper evidence): reads `billing.ledger_trusted_state` for the immudb database, proves with `LedgerPort.advanceTrustedState`

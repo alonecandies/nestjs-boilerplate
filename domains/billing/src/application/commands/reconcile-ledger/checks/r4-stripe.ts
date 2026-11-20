@@ -16,6 +16,7 @@ import { StripeService } from '../../../../infrastructure/stripe/stripe.service.
 import {
   type LedgerPostingOwner,
   ledgerPostingRequest,
+  postingOwnerOf,
 } from '../../../ledger/ledger-posting-request.js';
 import {
   draftFromBalanceTransaction,
@@ -23,7 +24,10 @@ import {
   ledgerFeeAccountOf,
   ledgerKindOf,
 } from '../../../ledger/posting-rules.js';
-import { StripeOwnerResolver } from '../../../ledger/stripe-owner-resolver.js';
+import {
+  type ResolvedStripeOwner,
+  StripeOwnerResolver,
+} from '../../../ledger/stripe-owner-resolver.js';
 import { LedgerPort } from '../../../ports/ledger.port.js';
 import {
   type LedgerCursor,
@@ -45,7 +49,7 @@ export function r4EnvelopeId(runId: string, txnId: string): string {
 type Finding = Omit<LedgerDiscrepancyInput, 'detectedBy' | 'runId'>;
 
 /** The owner of platform money: no resolver call, never `tenant_unresolved`. */
-const PLATFORM_POSTING_OWNER: LedgerPostingOwner & { readonly unresolved: false } = Object.freeze({
+const PLATFORM_POSTING_OWNER: ResolvedStripeOwner = Object.freeze({
   tenantId: PLATFORM_TENANT_ID,
   userId: null,
   paymentId: null,
@@ -77,7 +81,9 @@ function movement(entry: LedgerEntry, account: string, currency: string): bigint
  *   `missing_entry` (source key `stripe:txn:<id>`) and one `billing.ledger-posting.v1` record
  *   through `enqueueMissingPostings` ("Envelope ids": id `r4EnvelopeId(runId, id)`, event
  *   `reconcile:<runId>` / `reconcile.missing_entry`, object `balance_transaction`), both under the
- *   owner `StripeOwnerResolver` gives for the expanded source; platform kinds go to the platform
+ *   owner `StripeOwnerResolver` gives for the expanded source (its signed payment id named only when
+ *   `findPaymentsByIds` shows it is the owner's, `postingOwnerOf`, as on the webhook path); platform
+ *   kinds go to the platform
  *   tenant without asking it. An unresolved owner of a tenant-level kind → both under the platform
  *   tenant, plus a `tenant_unresolved` finding. Each record is enqueued as soon as it is found, so a
  *   Stripe failure later in the listing fails the check and keeps what was enqueued;
@@ -166,7 +172,7 @@ export class R4StripeCheck implements ReconciliationCheck {
         livemode: this.stripe.livemode,
         created: txn.created,
       },
-      owner,
+      await this.postingOwner(owner),
       'balance_transaction',
       txn.id,
     );
@@ -205,6 +211,19 @@ export class R4StripeCheck implements ReconciliationCheck {
       });
     }
     return findings;
+  }
+
+  /**
+   * The posting owner, with the payment id the metadata signed checked like the webhook's
+   * (`postingOwnerOf`): the payment is read by `(tenant, id)` through the system method, and named
+   * only when it is the owner's.
+   */
+  private async postingOwner(owner: ResolvedStripeOwner): Promise<LedgerPostingOwner> {
+    if (owner.paymentId === null) return postingOwnerOf(owner, null);
+    const [payment] = await this.system.findPaymentsByIds([
+      { tenantId: owner.tenantId, id: owner.paymentId },
+    ]);
+    return postingOwnerOf(owner, payment ?? null);
   }
 }
 

@@ -20,6 +20,33 @@ export interface LedgerPostingSource {
 /** The owner of the posting and the payment it names (already checked to be the owner's). */
 export type LedgerPostingOwner = StripeOwner & { readonly paymentId: string | null };
 
+/** A payment as the ownership check reads it: its key and its user. */
+export interface PostingPaymentCandidate {
+  readonly tenantId: string;
+  readonly id: string;
+  readonly userId: string;
+}
+
+/**
+ * The posting owner of a Stripe owner and the payment found for the id its metadata signed (looked
+ * up under the owner's tenant, or `null`): that id is named only when the payment is the owner's,
+ * the same tenant and user; else `paymentId: null`. The webhook and reconciliation R4 both build
+ * their posting owner here, so the same Stripe object gives the same draft and payload hash.
+ */
+export function postingOwnerOf(
+  owner: StripeOwner & { readonly paymentId?: string | null },
+  payment: PostingPaymentCandidate | null,
+): LedgerPostingOwner {
+  const signed = owner.paymentId ?? null;
+  const owned =
+    signed !== null &&
+    payment !== null &&
+    payment.id === signed &&
+    payment.tenantId === owner.tenantId &&
+    payment.userId === owner.userId;
+  return { tenantId: owner.tenantId, userId: owner.userId, paymentId: owned ? signed : null };
+}
+
 export type LedgerPostingObjectType = LedgerPostingRequestedPayload['objectType'];
 
 /** The envelope options of a posting: every one set, none read from CLS but the correlation id. */

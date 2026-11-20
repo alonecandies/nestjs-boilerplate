@@ -27,6 +27,7 @@ import {
   type LedgerPostingObjectType,
   ledgerPostingRecord,
   ledgerPostingRequest,
+  postingOwnerOf,
 } from '../../ledger/ledger-posting-request.js';
 import { StripeOwnerResolver } from '../../ledger/stripe-owner-resolver.js';
 import { toPaymentSucceededPayload } from '../../mappers/payment.mapper.js';
@@ -486,7 +487,7 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
     if (!money.posts) return;
     const { payload, options } = ledgerPostingRequest(
       event,
-      { tenantId: owner.tenantId, userId: owner.userId, paymentId: payment?.id ?? null },
+      postingOwnerOf(owner, payment),
       money.objectType,
       money.objectId,
     );
@@ -501,7 +502,7 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
     const paymentId = owner.paymentId ?? null;
     if (paymentId === null) return null;
     const payment = await this.payments.findById(owner.tenantId, paymentId);
-    return payment !== null && payment.userId === owner.userId ? payment : null;
+    return postingOwnerOf(owner, payment).paymentId === null ? null : payment;
   }
 
   /** Loads the row-locked payment of `session`, applies `apply`, saves when it changed. */
