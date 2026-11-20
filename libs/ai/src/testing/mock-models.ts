@@ -162,6 +162,88 @@ export function mockHangingModel(chunks: readonly string[] = []): MockLanguageMo
   return Object.assign(model, { aborted });
 }
 
+/** One tool call a scripted model asks for: `input` is JSON-encoded as a provider sends it. */
+export interface MockToolCall {
+  readonly toolName: string;
+  readonly input: unknown;
+}
+
+/** What a scripted model answers on one step: text, tool calls, or both. */
+export interface MockModelTurn {
+  readonly text?: string;
+  readonly toolCalls?: readonly MockToolCall[];
+  readonly usage?: MockTokenUsage;
+}
+
+/** A turn, or a function of the call (its prompt holds the tool results of the step before). */
+export type MockModelScript = MockModelTurn | ((call: MockModelCall) => MockModelTurn);
+
+const TOOL_CALLS = { unified: 'tool-calls', raw: 'tool_calls' } as const;
+
+/**
+ * A model that answers its n-th call (`generate` or `stream`) with `turns[n]`, the last turn
+ * repeating: e.g. `[{ toolCalls: [{ toolName: 'x', input: {} }] }, { text: 'done' }]` calls a tool
+ * on the first step and answers on the second. Tool call ids are `call-<step>-<index>`.
+ */
+export function mockScriptedModel(turns: readonly MockModelScript[]): MockLanguageModelV4 {
+  if (turns.length === 0) throw new Error('mockScriptedModel needs at least one turn');
+  let step = 0;
+  const next = (call: MockModelCall) => {
+    const index = step;
+    step += 1;
+    const script = turns[Math.min(index, turns.length - 1)] as MockModelScript;
+    const turn = typeof script === 'function' ? script(call) : script;
+    const toolCalls = (turn.toolCalls ?? []).map((toolCall, position) => ({
+      type: 'tool-call' as const,
+      toolCallId: `call-${index}-${position}`,
+      toolName: toolCall.toolName,
+      input: JSON.stringify(toolCall.input),
+    }));
+    return {
+      turn,
+      toolCalls,
+      finishReason: toolCalls.length > 0 ? TOOL_CALLS : STOP,
+      usage: mockModelUsage(turn.usage),
+    };
+  };
+  return new MockLanguageModelV4({
+    doGenerate: async (call) => {
+      const { turn, toolCalls, finishReason, usage } = next(call);
+      return {
+        content: [
+          ...(turn.text === undefined ? [] : [{ type: 'text' as const, text: turn.text }]),
+          ...toolCalls,
+        ],
+        finishReason,
+        usage,
+        warnings: [],
+      };
+    },
+    doStream: async (call) => {
+      const { turn, toolCalls, finishReason, usage } = next(call);
+      const text: StreamPart[] =
+        turn.text === undefined
+          ? []
+          : [
+              { type: 'text-start', id: 't0' },
+              { type: 'text-delta', id: 't0', delta: turn.text },
+              { type: 'text-end', id: 't0' },
+            ];
+      return {
+        stream: simulateReadableStream<StreamPart>({
+          chunks: [
+            { type: 'stream-start', warnings: [] },
+            ...text,
+            ...toolCalls,
+            { type: 'finish', finishReason, usage },
+          ],
+          chunkDelayInMs: 0,
+        }),
+      };
+    },
+  });
+}
+
 /** A model whose every call fails with `error` (e.g. an `APICallError`). */
 export function mockFailingModel(error: unknown): MockLanguageModelV4 {
   return new MockLanguageModelV4({

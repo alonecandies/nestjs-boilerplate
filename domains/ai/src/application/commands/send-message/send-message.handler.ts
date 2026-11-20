@@ -20,6 +20,10 @@ import { SendMessageCommand } from './send-message.command.js';
  * 3. Write, in one unit of work as the caller: the conversation again, the assistant reply with the
  *    key and request hash first, the user message, the usage row and the conversation's `updatedAt`.
  *
+ * With tools bound, the call may run read-only tools as the caller (`AiChatTools`, at most
+ * `AI_MAX_TOOL_STEPS` model steps); its tool calls and results are stored between the user message
+ * and the reply.
+ *
  * A failed call stores no message and records a usage row with the failure outcome (`error`,
  * `timeout`); a call refused by a guard (disabled, model, input size) records nothing. Logs carry
  * ids, model and token counts only, never message text.
@@ -30,7 +34,7 @@ export class SendMessageHandler
   implements ICommandHandler<SendMessageCommand>
 {
   async execute({ request }: SendMessageCommand): Promise<SendMessageResult> {
-    requireCaller(request);
+    const caller = requireCaller(request);
     if (!this.config.enabled) throw new AiDisabledError();
     const requestHash = chatRequestHash(request);
 
@@ -45,12 +49,14 @@ export class SendMessageHandler
       result = await this.ai.generate({
         model,
         messages: this.promptOf(prepared.history, userMessage),
+        ...this.toolOptions(caller),
       });
     } catch (error) {
       await this.recordFailure(request, model, error, Math.round(performance.now() - startedAt));
       throw error;
     }
 
+    const steps = this.stepMessages(request, result.model, result.result.responseMessages);
     const reply = this.newMessage(request, {
       role: 'assistant',
       content: result.text,
@@ -74,7 +80,7 @@ export class SendMessageHandler
       outcome: 'success',
       createdAt: reply.createdAt,
     };
-    const stored = await this.store(userMessage, reply, usage);
+    const stored = await this.store(userMessage, reply, usage, steps);
     this.logger.debug(
       `AI chat turn conversation=${request.conversationId} message=${reply.id} model=${result.model} ` +
         `inputTokens=${usage.inputTokens} outputTokens=${usage.outputTokens} stored=${stored.kind}`,

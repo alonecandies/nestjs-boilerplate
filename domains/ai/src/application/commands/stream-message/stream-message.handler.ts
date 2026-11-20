@@ -38,6 +38,10 @@ interface StreamTurn {
  *   upstream call is then aborted here): outcome `aborted`;
  * - the call fails or times out after it started: outcome `error` / `timeout`, rethrown to the
  *   consumer.
+ * With tools bound, the deltas span every model step (`AI_MAX_TOOL_STEPS` at most); a complete turn
+ * stores the steps' tool calls and results between the user message and the reply, whose content
+ * is the last step's text. A cut turn stores only the text received.
+ *
  * With text received, the user message and an `incomplete` assistant reply (with the
  * `Idempotency-Key`, so a replay returns it) are stored with the usage row; without any, only the
  * usage row. Token counts of a cut call are unknown and recorded as 0.
@@ -48,7 +52,7 @@ export class StreamMessageHandler
   implements ICommandHandler<StreamMessageCommand>
 {
   async execute({ request }: StreamMessageCommand): Promise<AsyncIterable<ChatStreamEvent>> {
-    requireCaller(request);
+    const caller = requireCaller(request);
     if (!this.config.enabled) throw new AiDisabledError();
     const requestHash = chatRequestHash(request);
 
@@ -67,6 +71,7 @@ export class StreamMessageHandler
       model,
       messages: this.promptOf(prepared.history, userMessage),
       signal,
+      ...this.toolOptions(caller),
     });
     return this.run({
       request,
@@ -91,19 +96,28 @@ export class StreamMessageHandler
       }
       // Rejects on abort, timeout and upstream failure, whatever the text stream did.
       const total = await call.usage;
+      // With tools: the steps' calls and results, and the last step's text as the reply.
+      const responseMessages = await call.result.responseMessages;
+      const answer = await call.result.text;
       settled = true;
+      const steps = this.stepMessages(request, call.model, responseMessages);
       const usage: ChatStreamUsage = {
         inputTokens: total.inputTokens,
         outputTokens: total.outputTokens,
         costUsd: total.costUsd ?? null,
       };
-      const reply = this.reply(turn, text, 'complete', usage);
-      const stored = await this.store(turn.userMessage, reply, {
-        ...this.usageOf(turn, reply.id, 'success'),
-        inputTokens: usage.inputTokens,
-        outputTokens: usage.outputTokens,
-        costUsd: usage.costUsd,
-      });
+      const reply = this.reply(turn, steps.length === 0 ? text : answer, 'complete', usage);
+      const stored = await this.store(
+        turn.userMessage,
+        reply,
+        {
+          ...this.usageOf(turn, reply.id, 'success'),
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          costUsd: usage.costUsd,
+        },
+        steps,
+      );
       this.logger.debug(
         `AI chat stream conversation=${request.conversationId} message=${reply.id} ` +
           `model=${call.model} inputTokens=${usage.inputTokens} outputTokens=${usage.outputTokens} ` +

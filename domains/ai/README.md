@@ -7,8 +7,8 @@ The AI bounded context: per-tenant conversations, their messages and a usage log
 This package holds the persistence (schema, `0000_init`, repositories, in-memory twins) and the
 chat API: CQRS handlers, the REST controller (plain and Server-Sent Events streaming), the GraphQL
 resolver (queries, mutations and the `aiMessageStream` subscription), the `ai:chat` permission and
-the `ai.chat` rate-limit policy, wired into the monolith. Tools and the microservices topology come
-with the AI plan's later tasks.
+the `ai.chat` rate-limit policy, and the model's read-only tools, wired into the monolith. The
+microservices topology comes with the AI plan's later tasks.
 
 ## Entry points
 
@@ -16,14 +16,15 @@ with the AI plan's later tasks.
 | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `@domain/ai`         | Everything below: `AiCoreModule`, the repository ports, `aiSchema`, `aiMigrations` and the Drizzle repositories, plus `./api`.                                                                                                                                                                                                                                                 |
 | `@domain/ai/api`     | The edge surface: `AiApiModule`, `AiPort` and its request/result/stream shapes, the stream wire names (`AI_SSE_EVENTS`, `SSE_CONTENT_TYPE`, `aiMessageStreamTrigger`, `AiMessageStreamPush`), `AI_RBAC` / `AiPermission`, `aiRateLimitConfig` / `AI_RATE_LIMITS`, `AiChatErrorCode`, `AI_LIMITS`, the record types and their value lists. No persistence is reachable from it. |
-| `@domain/ai/testing` | `createInMemoryAiPersistence()` (the three twins over one store) and the fixtures `makeConversation`, `makeMessage`, `makeUsage`. Specs and `test/` code only.                                                                                                                                                                                                                 |
+| `@domain/ai/testing` | `createInMemoryAiPersistence()` (the three twins over one store), `FakeAiToolSources` (the tools' reads in memory, with the owners' checks) and the fixtures `makeConversation`, `makeMessage`, `makeUsage`. Specs and `test/` code only.                                                                                                                                      |
 
 Wiring (when an app owns the ai tables, the monolith now): `aiSchema` and `aiMigrations` go into
 `DatabaseModule.forRootAsync({ schema, migrations })` and the app's `migrate.ts`; the app imports
 `AiCoreModule` (the handlers, the Drizzle repositories bound to their ports, and
 `AiModule.forRootAsync()`) and then `AiApiModule.forLocal()` (REST, GraphQL resolver, RBAC feature,
 rate-limit policy, `AiPort` on the CQRS buses). The resolver expects the app's `AppGraphqlModule`
-and `GraphqlPubSubModule`.
+and `GraphqlPubSubModule`. For the tools the app binds `AiToolSources` globally to the owners'
+ports (the monolith's `AiToolSourcesModule`, below); without it no tools are offered.
 
 ## Chat API (REST `/v1/ai/conversations`)
 
@@ -93,6 +94,38 @@ outputTokens, costUsd }`, `null` on a key replay) or one `error` (an RFC 9457 pr
   or the same user in another tenant, receives nothing. Over HTTP, closing the mutation's request
   aborts the call like SSE; over graphql-ws the call is bounded by `AI_REQUEST_TIMEOUT_MS`.
 
+## Tools (`application/tools`)
+
+Every chat turn, streamed or not, offers the model three read-only tools (`AI_TOOLS`), each a zod
+strict input schema with no id field:
+
+| Tool                    | Reads (through `AiToolSources`)                       | Permission           |
+| ----------------------- | ----------------------------------------------------- | -------------------- |
+| `get_my_profile`        | `UsersPort.getUser(caller)`: id, email, name, roles   | none (self)          |
+| `list_my_notifications` | `NotificationsPort.list` of the caller's inbox        | `notifications:read` |
+| `list_my_payments`      | `BillingPort.listPayments` with the caller's `userId` | none (own payments)  |
+
+- **As the caller.** `AiChatTools.forCaller(principal)` binds the tools to the request's principal;
+  a tool runs only when the context's principal is that caller (none, or another one: an error, no
+  port call), takes tenant and user from it (never from the model), and reads through the owners'
+  ports and their own checks (runtime pool under RLS, inbox actor, own payments): never a system
+  context. A tool's permission is checked from the caller's roles (`PrincipalPermissions`).
+- **Composed in the app.** ai imports no other domain: `AiToolSources` (an ai port typed with the
+  owners' contracts) is bound by the composition root; the monolith's `AiToolSourcesModule`
+  forwards to `UsersPort`, `NotificationsPort` and `BillingPort` (like `Payment.user`).
+- **Bounded.** At most `AI_MAX_TOOL_STEPS` model steps (`stopWhen` in `@platform/ai`); each result is
+  JSON, free text clipped to `AI_TOOL_LIMITS.TEXT_MAX_CHARS`, lists to `MAX_ITEMS`, the whole to
+  `OUTPUT_MAX_CHARS` (items dropped from the end with `truncated: true`, else `{ truncated: true }`).
+- **Errors go to the model.** A refusal or failure is returned as `{ error: { code, message } }`
+  (`PRINCIPAL_MISSING`, `TOOL_CALLER_MISMATCH`, `PERMISSION_DENIED`, a domain refusal's own code,
+  or `TOOL_FAILED` with no detail, logged by error name only); the AI SDK answers an unknown tool or
+  invalid arguments with a tool error. The client gets the model's reply.
+- **Output is data.** The tools and what they read are fixed before the call; the system
+  instructions (`AI_TOOLS_SYSTEM_PROMPT`) tell the model that tool results are not instructions.
+- **Stored.** The steps' assistant tool calls and tool results are messages (`role` `assistant` /
+  `tool`, JSON parts) between the user message and the reply, so the next turn's history replays
+  them (a window never opens on a tool result). The reply is the last step's text.
+
 ## Data model (`aiSchema`, `infrastructure/persistence/ai.schema.ts`)
 
 Schema `ai`, history in `infrastructure/persistence/migrations` (bookkeeping
@@ -155,14 +188,16 @@ principal they are refused before `BEGIN` (`RLS_NO_PRINCIPAL`).
 
 ## Tests
 
-| Spec                                                                 | What                                                                                                                                                                                                                                                                             |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `infrastructure/persistence/ai.migrations.spec.ts`                   | Pins `0000_init`: one journal entry, statement order (tables, distribution, indexes, then RLS, grants, policies), the exact grants and policies, no FK, subquery, `CASE` or `IS NULL`.                                                                                           |
-| `testing/in-memory-ai-repositories.spec.ts`                          | The shared contract (`testing/ai-repositories.contract.test.ts`) on the in-memory twins.                                                                                                                                                                                         |
-| `infrastructure/persistence/ai.rls.int-spec.ts`                      | Citus 14.2, three roles, local execution off: distribution and colocation, forced RLS, grants, policies; per table the owner reads exactly its rows, others none, foreign inserts 42501, usage has no UPDATE or DELETE.                                                          |
-| `infrastructure/persistence/ai.repositories.rls.int-spec.ts`         | The same contract on the Drizzle repositories as `app_runtime`, plus one unit of work rolling back as a whole.                                                                                                                                                                   |
-| `application/commands/stream-message/stream-message.handler.spec.ts` | Mock streaming models: deltas in order then `done` and the stored exchange; a client abort or a consumer that stops reading aborts the model and stores one `incomplete` reply; no-text aborts and failures store usage only; key replay; refusals before the stream.            |
-| `apps/monolith/test/ai-stream.e2e-spec.ts`                           | Over a real connection: SSE deltas then `done`, disconnect aborts the mock model and stores `incomplete`, an `error` event after the headers, problem+json refusals and the `ai.chat` charge before the call; the GraphQL mirror; `aiMessageStream` delivered to its owner only. |
+| Spec                                                                 | What                                                                                                                                                                                                                                                                              |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `infrastructure/persistence/ai.migrations.spec.ts`                   | Pins `0000_init`: one journal entry, statement order (tables, distribution, indexes, then RLS, grants, policies), the exact grants and policies, no FK, subquery, `CASE` or `IS NULL`.                                                                                            |
+| `testing/in-memory-ai-repositories.spec.ts`                          | The shared contract (`testing/ai-repositories.contract.test.ts`) on the in-memory twins.                                                                                                                                                                                          |
+| `infrastructure/persistence/ai.rls.int-spec.ts`                      | Citus 14.2, three roles, local execution off: distribution and colocation, forced RLS, grants, policies; per table the owner reads exactly its rows, others none, foreign inserts 42501, usage has no UPDATE or DELETE.                                                           |
+| `infrastructure/persistence/ai.repositories.rls.int-spec.ts`         | The same contract on the Drizzle repositories as `app_runtime`, plus one unit of work rolling back as a whole.                                                                                                                                                                    |
+| `application/commands/stream-message/stream-message.handler.spec.ts` | Mock streaming models: deltas in order then `done` and the stored exchange; a client abort or a consumer that stops reading aborts the model and stores one `incomplete` reply; no-text aborts and failures store usage only; key replay; refusals before the stream.             |
+| `application/tools/ai-chat-tools.spec.ts`                            | Scripted mock model: each tool reads only the caller's data and is stored; the step limit; capped output; unknown tool and bad arguments; a failing port; tool output as data; no principal or another one; a missing permission; tools in a streamed turn; no sources, no tools. |
+| `apps/monolith/test/ai-tools.e2e-spec.ts`                            | Every tool through the real identity, notifications and billing ports in the monolith: the caller's profile and inbox only, the calls and results stored.                                                                                                                         |
+| `apps/monolith/test/ai-stream.e2e-spec.ts`                           | Over a real connection: SSE deltas then `done`, disconnect aborts the mock model and stores `incomplete`, an `error` event after the headers, problem+json refusals and the `ai.chat` charge before the call; the GraphQL mirror; `aiMessageStream` delivered to its owner only.  |
 
 ```bash
 bunx vitest run --project ai

@@ -51,6 +51,7 @@ import {
 } from '@platform/redis';
 import { StorageModule } from '@platform/storage';
 import { KafkaProducerModule } from '@platform/transport';
+import { AiToolSourcesModule } from './ai/ai-tool-sources.module.js';
 import { DATABASE_MIGRATIONS } from './database.migrations.js';
 import { PaymentUserFieldResolver } from './graphql/payment-user.resolver.js';
 
@@ -85,6 +86,10 @@ export function createAppModule(
   const ledgerImports = ledger.enabled
     ? [ImmudbModule.forRootAsync({ migrations: [billingLedgerMigrations] }), BillingMessagingModule]
     : [];
+  // One object each: `AiToolSourcesModule` imports the same ones (Nest keys them by reference).
+  const identityApi = IdentityApiModule.forLocal();
+  const notificationsApi = NotificationsApiModule.forLocal();
+  const billingApi = BillingApiModule.forLocal();
 
   @Module({
     imports: [
@@ -133,16 +138,18 @@ export function createAppModule(
       // Bounded contexts: every Core module, then the edge bound to the local adapters
       // (XApiModule.forLocal() does not import the core; @domain/<x>/api never reaches it).
       IdentityCoreModule,
-      IdentityApiModule.forLocal(),
+      identityApi,
       NotificationsCoreModule,
-      NotificationsApiModule.forLocal(),
+      notificationsApi,
       NotificationsMessagingModule,
       BillingCoreModule,
-      BillingApiModule.forLocal(),
+      billingApi,
       FilesModule,
-      // AI chat over OpenRouter (AI_ENABLED=false by default: the chat routes answer 503).
+      // AI chat over OpenRouter (AI_ENABLED=false by default: the chat routes answer 503), with
+      // read-only tools composed from the identity, notifications and billing ports.
       AiCoreModule,
       AiApiModule.forLocal(),
+      AiToolSourcesModule.forRoot([identityApi, notificationsApi, billingApi]),
       // LEDGER_ENABLED=true only: immudb (global ImmudbClient) + the ledger-posting consumer.
       ...ledgerImports,
     ],

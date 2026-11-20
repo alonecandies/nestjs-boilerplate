@@ -4,7 +4,9 @@
  *
  * Wiring: `aiSchema` and the migration set `aiMigrations` go into
  * `DatabaseModule.forRootAsync({ schema, migrations })`; the app imports `AiCoreModule` (handlers,
- * repositories, `AiModule`) then `AiApiModule.forLocal()`. In-memory twins: `@domain/ai/testing`.
+ * repositories, `AiModule`) then `AiApiModule.forLocal()`, and binds `AiToolSources` (globally) to the
+ * owners' ports for the model's read-only tools. In-memory twins and `FakeAiToolSources`:
+ * `@domain/ai/testing`.
  */
 
 // The core (handlers, repositories, model client) for the process that owns the ai tables.
@@ -15,6 +17,18 @@ export * from './api/index.js';
 export * from './application/repositories/conversations.repository.js';
 export * from './application/repositories/messages.repository.js';
 export * from './application/repositories/usage.repository.js';
+// Application: the chat tools and the sources the app binds to the owners' ports
+export { AI_TOOLS_SYSTEM_PROMPT, AiChatTools } from './application/tools/ai-chat-tools.js';
+export { AiToolSources } from './application/tools/ai-tool-sources.js';
+export {
+  AI_TOOL_NAMES,
+  AI_TOOLS,
+  type AiTool,
+  type AiToolCaller,
+  type AiToolContext,
+  AiToolErrorCode,
+  AiToolName,
+} from './application/tools/ai-tools.js';
 // Infrastructure
 export { aiMigrations } from './infrastructure/persistence/ai.migrations.js';
 export {

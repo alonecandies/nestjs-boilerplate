@@ -5,23 +5,33 @@ import {
   AiDisabledError,
   AiInputTooLargeError,
   AiModelNotAllowedError,
+  type AiSdkGenerateResult,
   AiTimeoutError,
 } from '@platform/ai';
-import { generateId } from '@platform/common';
+import { generateId, type Principal } from '@platform/common';
 import { type AiConfig, aiConfig } from '@platform/config';
 import { Transactional } from '@platform/database';
 import {
   ChatIdempotencyKeyReusedException,
   ConversationNotFoundException,
 } from '../../domain/ai.errors.js';
-import type { Conversation, Message, UsageOutcome, UsageRecord } from '../../domain/ai.types.js';
+import type {
+  Conversation,
+  Message,
+  MessageContent,
+  UsageOutcome,
+  UsageRecord,
+} from '../../domain/ai.types.js';
 import { historyWindow } from '../history-window.js';
 import type { SendMessageRequest } from '../ports/ai.port.js';
 import { ConversationsRepository } from '../repositories/conversations.repository.js';
 import { MessagesRepository } from '../repositories/messages.repository.js';
 import { UsageRepository } from '../repositories/usage.repository.js';
+import { AiChatTools, type AiToolCallOptions } from '../tools/ai-chat-tools.js';
 
 export type ModelMessage = AiCallInput['messages'][number];
+/** What a call added to the conversation: assistant messages and tool results, step by step. */
+export type ResponseMessage = AiSdkGenerateResult['responseMessages'][number];
 
 /** What the read before the call found. */
 export type Prepared =
@@ -42,6 +52,16 @@ const REFUSED_BEFORE_CALL = [AiDisabledError, AiModelNotAllowedError, AiInputToo
 export const toModelMessage = (message: Message): ModelMessage =>
   ({ role: message.role, content: message.content }) as unknown as ModelMessage;
 
+/** An assistant message that calls no tool: the turn's answer (stored as the reply). */
+const isAnswer = (message: ResponseMessage): boolean =>
+  message.role === 'assistant' &&
+  (typeof message.content === 'string' ||
+    !message.content.some((part) => part.type === 'tool-call'));
+
+/** SDK message content as stored in the `jsonb` column (plain JSON: no `undefined` fields). */
+const toMessageContent = (content: ResponseMessage['content']): MessageContent =>
+  typeof content === 'string' ? content : (JSON.parse(JSON.stringify(content)) as MessageContent);
+
 /**
  * The unit-of-work steps one chat turn shares, streamed or not (`SendMessageHandler`,
  * `StreamMessageHandler`):
@@ -56,6 +76,10 @@ export const toModelMessage = (message: Message): ModelMessage =>
  *
  * A call that failed before any reply stores no message and records a usage row with the failure
  * outcome (`recordFailure`); a call refused by a guard (disabled, model, input size) records nothing.
+ *
+ * Tools (`AiChatTools`, when the app binds `AiToolSources`): the call is offered the read-only
+ * tools bound to the caller (`toolOptions`), and the tool calls and results of its steps are stored
+ * as messages between the user message and the reply (`stepMessages`).
  */
 @Injectable()
 export abstract class ChatTurnHandler {
@@ -67,7 +91,35 @@ export abstract class ChatTurnHandler {
     protected readonly usage: UsageRepository,
     protected readonly ai: AiClient,
     @Inject(aiConfig.KEY) protected readonly config: AiConfig,
+    /** Always bound by `AiCoreModule`; optional so a spec can build a handler without tools. */
+    protected readonly tools?: AiChatTools,
   ) {}
+
+  /** The tools and their instructions for the caller's call; none when no sources are bound. */
+  protected toolOptions(caller: Principal): AiToolCallOptions | Record<string, never> {
+    return this.tools?.forCaller(caller) ?? {};
+  }
+
+  /**
+   * The intermediate messages of a call (assistant tool calls, tool results), in order, as rows of
+   * the conversation: every response message but a final answer, which is stored as the reply.
+   * Created after the user message and before the reply, so the uuidv7 ids keep that order.
+   */
+  protected stepMessages(
+    request: SendMessageRequest,
+    model: string,
+    response: readonly ResponseMessage[],
+  ): Message[] {
+    const last = response.at(-1);
+    const steps = last !== undefined && isAnswer(last) ? response.slice(0, -1) : response;
+    return steps.map((message) =>
+      this.newMessage(request, {
+        role: message.role,
+        content: toMessageContent(message.content),
+        model: message.role === 'assistant' ? model : null,
+      }),
+    );
+  }
 
   @Transactional()
   protected async prepare(request: SendMessageRequest, requestHash: string): Promise<Prepared> {
@@ -100,7 +152,12 @@ export abstract class ChatTurnHandler {
   }
 
   @Transactional()
-  protected async store(userMessage: Message, reply: Message, usage: UsageRecord): Promise<Stored> {
+  protected async store(
+    userMessage: Message,
+    reply: Message,
+    usage: UsageRecord,
+    steps: readonly Message[] = [],
+  ): Promise<Stored> {
     const { tenantId, conversationId } = reply;
     // As the caller, in this unit of work: the row-local messages policy cannot check who owns
     // the conversation a message names, so the conversation must be the caller's here.
@@ -116,6 +173,7 @@ export abstract class ChatTurnHandler {
       return { kind: 'replay', message: appended.message };
     }
     await this.messages.append(userMessage);
+    for (const step of steps) await this.messages.append(step);
     await this.usage.record(usage);
     await this.conversations.touch(tenantId, conversationId, reply.createdAt);
     return { kind: 'stored', message: appended.message };

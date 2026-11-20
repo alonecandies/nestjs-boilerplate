@@ -34,6 +34,8 @@ describe('@domain/ai entry points', () => {
       'aiMigrations',
       'DrizzleConversationsRepository',
       'AiCoreModule',
+      'AiToolSources',
+      'AiChatTools',
     ]) {
       expect(root).toHaveProperty(name);
       expect(api).not.toHaveProperty(name);

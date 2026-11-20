@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "AI bounded context: per-tenant conversations, messages and a usage log (Drizzle, Citus, RLS) and the chat API (REST, GraphQL, SSE and subscription streaming, RBAC, rate limit, idempotency) over @platform/ai.",
+  "description": "AI bounded context: per-tenant conversations, messages and a usage log (Drizzle, Citus, RLS) and the chat API (REST, GraphQL, SSE and subscription streaming, RBAC, rate limit, idempotency, read-only tools run as the caller) over @platform/ai.",
   "exports": {
     ".": {
       "@repo/source": "./src/index.ts",
@@ -32,6 +32,9 @@
     "db:studio": "drizzle-kit studio --port 4985"
   },
   "dependencies": {
+    "@domain/billing-contracts": "workspace:*",
+    "@domain/identity-contracts": "workspace:*",
+    "@domain/notifications-contracts": "workspace:*",
     "@platform/ai": "workspace:*",
     "@platform/auth": "workspace:*",
     "@platform/common": "workspace:*",
@@ -44,6 +47,7 @@
     "@nestjs/cqrs": "catalog:",
     "@nestjs/graphql": "catalog:",
     "@nestjs/swagger": "catalog:",
+    "ai": "catalog:",
     "class-transformer": "catalog:",
     "class-validator": "catalog:",
     "drizzle-orm": "catalog:",
@@ -57,7 +61,6 @@
     "@types/lodash-es": "catalog:",
     "drizzle-kit": "catalog:",
     "nestjs-cls": "catalog:",
-    "postgres": "catalog:",
-    "ai": "catalog:"
+    "postgres": "catalog:"
   }
 }

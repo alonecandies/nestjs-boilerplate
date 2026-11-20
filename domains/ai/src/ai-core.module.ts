@@ -12,6 +12,7 @@ import { ListMessagesHandler } from './application/queries/list-messages/list-me
 import { ConversationsRepository } from './application/repositories/conversations.repository.js';
 import { MessagesRepository } from './application/repositories/messages.repository.js';
 import { UsageRepository } from './application/repositories/usage.repository.js';
+import { AiChatTools } from './application/tools/ai-chat-tools.js';
 import { DrizzleConversationsRepository } from './infrastructure/persistence/drizzle-conversations.repository.js';
 import { DrizzleMessagesRepository } from './infrastructure/persistence/drizzle-messages.repository.js';
 import { DrizzleUsageRepository } from './infrastructure/persistence/drizzle-usage.repository.js';
@@ -24,6 +25,11 @@ import { DrizzleUsageRepository } from './infrastructure/persistence/drizzle-usa
  * Expects these global app-level modules: `AppConfigModule`, `CqrsModule.forRoot()` and
  * `DatabaseModule.forRootAsync({ schema: aiSchema, migrations: [aiMigrations] })` (with the other
  * contexts' schema and sets). Tests replace `AiModelProvider` with `MockAiModelProvider`.
+ *
+ * Tools: `AiChatTools` offers the model read-only tools when `AiToolSources` is bound (globally) by
+ * the app, which composes it from the owners' ports (`UsersPort`, `NotificationsPort`,
+ * `BillingPort`); without it no tools are offered. Also expects `PrincipalPermissions` (global,
+ * `RbacModule.forRoot()` through `AuthModule`).
  */
 @Module({
   imports: [ConfigModule.forFeature(aiConfig), AiModule.forRootAsync()],
@@ -35,6 +41,7 @@ import { DrizzleUsageRepository } from './infrastructure/persistence/drizzle-usa
     ListMessagesHandler,
     SendMessageHandler,
     StreamMessageHandler,
+    AiChatTools,
     { provide: ConversationsRepository, useClass: DrizzleConversationsRepository },
     { provide: MessagesRepository, useClass: DrizzleMessagesRepository },
     { provide: UsageRepository, useClass: DrizzleUsageRepository },
