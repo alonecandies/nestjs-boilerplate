@@ -2,8 +2,10 @@ import {
   LEDGER_POSTING_REQUESTED_EVENT,
   type LedgerPostingRequestedPayload,
 } from '@domain/billing-contracts';
+import { type ArgumentsHost, type ExecutionContext, Logger } from '@nestjs/common';
+import { EXCEPTION_FILTERS_METADATA, INTERCEPTORS_METADATA } from '@nestjs/common/constants.js';
 import type { CommandBus } from '@nestjs/cqrs';
-import { KafkaRetriableException } from '@nestjs/microservices';
+import { KafkaContext, KafkaRetriableException } from '@nestjs/microservices';
 import {
   DomainValidationException,
   ExternalServiceException,
@@ -14,8 +16,15 @@ import {
 } from '@platform/common';
 import { createEventEnvelope, type EventEnvelope } from '@platform/contracts';
 import { ImmudbError } from '@platform/immudb';
-import { InvalidEventException } from '@platform/transport';
+import {
+  DEFAULT_KAFKA_RETRY_OPTIONS,
+  InvalidEventException,
+  isRetriableKafkaHandlerError,
+  KafkaDeadLetterFilter,
+  KafkaRetryInterceptor,
+} from '@platform/transport';
 import { register } from 'prom-client';
+import { catchError, defer, lastValueFrom } from 'rxjs';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LEDGER_TEST_TENANT as TENANT_A } from '../../../test/ledger-fixtures.js';
 import { PostLedgerEntryCommand } from '../../application/commands/post-ledger-entry/post-ledger-entry.command.js';
@@ -242,35 +251,6 @@ describe('LedgerPostingConsumer', () => {
           code: '57014',
         }),
     ],
-    [
-      'a Postgres deadlock (40P01), after the post',
-      'ref',
-      () => Object.assign(new Error('deadlock detected'), { code: '40P01' }),
-    ],
-    [
-      'a Postgres deadlock (40P01) wrapped by drizzle, after the post',
-      'ref',
-      () =>
-        new Error('Failed query: insert …', {
-          cause: Object.assign(new Error('deadlock detected'), { code: '40P01' }),
-        }),
-    ],
-    [
-      'a Postgres serialization failure (40001), after the post',
-      'ref',
-      () =>
-        Object.assign(new Error('could not serialize access due to concurrent update'), {
-          code: '40001',
-        }),
-    ],
-    [
-      'a Postgres serialization failure (40001) wrapped by drizzle, after the post',
-      'ref',
-      () =>
-        new Error('Failed query: insert …', {
-          cause: Object.assign(new Error('could not serialize access'), { code: '40001' }),
-        }),
-    ],
   ])(
     '%s → KafkaRetriableException (redelivered, never dead-lettered)',
     async (_label, step, make) => {
@@ -289,6 +269,132 @@ describe('LedgerPostingConsumer', () => {
       expect((error as Error).cause).toBe(failure);
     },
   );
+
+  describe('deadlocks and serialization failures: the bounded Kafka retry budget, then the DLQ (G2)', () => {
+    const DLQ = `${LEDGER_POSTING_REQUESTED_EVENT.topic}.dlq`;
+    const contention: [string, () => Error][] = [
+      [
+        'a deadlock (40P01)',
+        () => Object.assign(new Error('deadlock detected'), { code: '40P01' }),
+      ],
+      [
+        'a deadlock (40P01) wrapped by drizzle',
+        () =>
+          new Error('Failed query: insert …', {
+            cause: Object.assign(new Error('deadlock detected'), { code: '40P01' }),
+          }),
+      ],
+      [
+        'a serialization failure (40001)',
+        () =>
+          Object.assign(new Error('could not serialize access due to concurrent update'), {
+            code: '40001',
+          }),
+      ],
+      [
+        'a serialization failure (40001) wrapped by drizzle',
+        () =>
+          new Error('Failed query: insert …', {
+            cause: Object.assign(new Error('could not serialize access'), { code: '40001' }),
+          }),
+      ],
+    ];
+    let sent: { topic: string }[];
+
+    /**
+     * One Kafka delivery through what `@KafkaConsumerController()` wraps the handler in: the retry
+     * interceptor (the default attempt budget, short delays) and the dead-letter filter.
+     */
+    const deliver = (message: EventEnvelope<LedgerPostingRequestedPayload>) => {
+      sent = [];
+      const producer = {
+        send: async (record: { topic: string }) => {
+          sent.push(record);
+          return [];
+        },
+      };
+      const context = new KafkaContext([
+        { key: TENANT_A, value: message, headers: {}, offset: '9' } as never,
+        0,
+        LEDGER_POSTING_REQUESTED_EVENT.topic,
+        {} as never,
+        () => Promise.resolve(),
+        producer as never,
+      ]);
+      const rpc = {
+        getType: () => 'rpc',
+        switchToRpc: () => ({ getContext: () => context, getData: () => message }),
+      } as unknown as ExecutionContext & ArgumentsHost;
+      const retry = new KafkaRetryInterceptor({ minDelayMs: 1, maxDelayMs: 2 });
+      return lastValueFrom(
+        retry
+          .intercept(rpc, { handle: () => defer(() => consumer.onLedgerPosting(message)) })
+          .pipe(catchError((error: unknown) => new KafkaDeadLetterFilter().catch(error, rpc))),
+      );
+    };
+
+    beforeEach(() => {
+      vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    });
+
+    it('the consumer is wrapped in the Kafka retry interceptor and the dead-letter filter', () => {
+      const interceptors: unknown[] = Reflect.getMetadata(
+        INTERCEPTORS_METADATA,
+        LedgerPostingConsumer,
+      );
+      const filters: unknown[] = Reflect.getMetadata(
+        EXCEPTION_FILTERS_METADATA,
+        LedgerPostingConsumer,
+      );
+      expect(interceptors.some((i) => i instanceof KafkaRetryInterceptor)).toBe(true);
+      expect(filters).toContain(KafkaDeadLetterFilter);
+    });
+
+    it.each(contention)(
+      '%s is thrown as is: retriable in-process, never KafkaRetriableException',
+      async (_label, make) => {
+        const failure = make();
+        vi.spyOn(store.receipts, 'recordEntryRef').mockRejectedValue(failure);
+
+        const error = await consumer.onLedgerPosting(envelope(payload())).then(
+          () => undefined,
+          (e: unknown) => e,
+        );
+
+        expect(error).toBe(failure);
+        expect(isRetriableKafkaHandlerError(error)).toBe(true);
+      },
+    );
+
+    it.each(contention)(
+      '%s within the budget: retried, then posted, nothing dead-lettered',
+      async (_label, make) => {
+        const record = vi.spyOn(store.receipts, 'recordEntryRef');
+        const attempts = DEFAULT_KAFKA_RETRY_OPTIONS.attempts;
+        for (let i = 1; i < attempts; i++) record.mockRejectedValueOnce(make());
+
+        await expect(deliver(envelope(payload()))).resolves.toBeUndefined();
+
+        expect(record).toHaveBeenCalledTimes(attempts);
+        expect(sent).toEqual([]);
+        expect(store.entryRefs).toEqual([expect.objectContaining({ tenantId: TENANT_A })]);
+      },
+    );
+
+    it.each(contention)(
+      '%s over the budget: dead-lettered, the partition moves on',
+      async (_label, make) => {
+        const record = vi.spyOn(store.receipts, 'recordEntryRef').mockRejectedValue(make());
+
+        await expect(deliver(envelope(payload()))).resolves.toBeNull();
+
+        expect(record).toHaveBeenCalledTimes(DEFAULT_KAFKA_RETRY_OPTIONS.attempts);
+        expect(sent).toEqual([expect.objectContaining({ topic: DLQ })]);
+        expect(store.discrepancies).toEqual([]);
+      },
+    );
+  });
 
   it('a Postgres outage after the post is retriable, and the redelivery records the ref as replayed', async () => {
     vi.spyOn(store.receipts, 'recordEntryRef').mockRejectedValueOnce(

@@ -33,11 +33,14 @@ const RETRIABLE_STRIPE_CODES: readonly string[] = [
 ];
 
 /**
- * Postgres failures worth a redelivery besides the connection codes of `isTransientConnectionError`:
- * statement, lock and idle-in-transaction timeouts, a deadlock (`40P01`) and a serialization
- * failure (`40001`): each aborts only this attempt, and the redelivery runs again from the start.
+ * Postgres failures worth an unbounded redelivery besides the connection codes of
+ * `isTransientConnectionError`: statement, lock and idle-in-transaction timeouts (an outage-like
+ * state that blocks every record anyway). A deadlock (`40P01`) or a serialization failure
+ * (`40001`) is NOT here: it is thrown as is, so `KafkaRetryInterceptor` (applied by
+ * `@KafkaConsumerController()`) retries it within its bounded budget (4 attempts with backoff) and
+ * `KafkaDeadLetterFilter` then dead-letters it, instead of blocking the partition forever.
  */
-const POSTGRES_RETRIABLE_CODES: readonly string[] = ['57014', '55P03', '25P03', '40P01', '40001'];
+const POSTGRES_RETRIABLE_CODES: readonly string[] = ['57014', '55P03', '25P03'];
 
 /**
  * `billing.ledger-posting.v1` → ledger entries (outbox plan Task 13, LG §3). The envelope must
@@ -47,11 +50,14 @@ const POSTGRES_RETRIABLE_CODES: readonly string[] = ['57014', '55P03', '25P03', 
  * `{ userId, tenantId, roles: [] }`, or inside `SystemContext.run('billing.ledger-posting', …)`
  * when the tenant is `PLATFORM_TENANT_ID` or the user is null.
  * Failures (the outcomes table): immudb `unavailable`, a Stripe 5xx, 429 or network error and a
- * Postgres connection, timeout, deadlock or serialization error (also after a post) become `KafkaRetriableException`, so
+ * Postgres connection or timeout error (also after a post) become `KafkaRetriableException`, so
  * kafkajs redelivers the record and it is never dead-lettered; the deterministic entry ids make the
- * redelivery `replayed`. Everything else (a tenant mismatch, an unbalanced draft, a Stripe 404,
- * `42501`) is thrown as is and `@KafkaConsumerController()` dead-letters it to
- * `billing.ledger-posting.v1.dlq` without a discrepancy.
+ * redelivery `replayed`. A Postgres deadlock (`40P01`) or serialization failure (`40001`) is thrown
+ * as is: `@KafkaConsumerController()`'s `KafkaRetryInterceptor` retries it in-process within its
+ * bounded budget, then dead-letters it. Everything else (a tenant mismatch, an unbalanced draft, a
+ * Stripe 404, `42501`) is thrown as is and `@KafkaConsumerController()` dead-letters it to
+ * `billing.ledger-posting.v1.dlq` without a discrepancy (the interceptor retries only what
+ * `isRetriableKafkaHandlerError` accepts).
  */
 @KafkaConsumerController()
 export class LedgerPostingConsumer {
@@ -106,9 +112,10 @@ function assertEnvelopeMatchesPayload(event: EventEnvelope<LedgerPostingRequeste
 }
 
 /**
- * True for the failures a redelivery can heal: immudb `unavailable`, a retriable Stripe failure,
- * and a Postgres connection, timeout, deadlock or serialization error anywhere in the cause chain
- * (drizzle wraps the driver's error).
+ * True for the failures an unbounded redelivery should wait out: immudb `unavailable`, a retriable
+ * Stripe failure, and a Postgres connection or timeout error anywhere in the cause chain (drizzle
+ * wraps the driver's error). Deadlocks and serialization failures are not: they take the bounded
+ * in-process retry budget instead.
  */
 export function isRetriableLedgerPostingError(error: unknown): boolean {
   if (error instanceof ImmudbError) return error.kind === 'unavailable';
