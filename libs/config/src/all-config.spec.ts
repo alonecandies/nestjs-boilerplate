@@ -31,6 +31,7 @@ describe('CONFIG_NAMESPACES', () => {
       'graphql',
       'mail',
       'storage',
+      'ai',
     ]);
   });
 });

@@ -11,6 +11,7 @@ export * from './define-config-namespace.js';
 export * from './env/env.helpers.js';
 export * from './env/parse-env.js';
 export * from './env/production-guards.js';
+export * from './namespaces/ai.config.js';
 export * from './namespaces/app.config.js';
 export * from './namespaces/auth.config.js';
 export * from './namespaces/cache.config.js';

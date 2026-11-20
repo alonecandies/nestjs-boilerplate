@@ -20,7 +20,7 @@ flowchart LR
   sets `ignoreEnvFile: true`. The single source of truth is `process.env`.
 - **Precedence:** real environment variables > `apps/<app>/.env` > root `.env` > schema default
   (Node never overrides a variable already set, and the later `--env-file` wins over the earlier).
-- **Namespaces.** Variables are grouped into 13 platform namespaces
+- **Namespaces.** Variables are grouped into 16 platform namespaces
   (`libs/config/src/namespaces/*.config.ts`, registered in `CONFIG_NAMESPACES` in
   [all-config.ts](../libs/config/src/all-config.ts)), the namespaces each domain owns
   (`domains/<x>/src/**/*.config.ts`: billing's `stripe`, identity's `password`, `refreshToken` and
@@ -118,6 +118,7 @@ it imports. A process ignores (and does not validate) variables of namespaces it
 | `graphql`                 |    ✓     |         ✓         |                  |                         |                 | `AppGraphqlModule`                                                                                   |
 | `mail`                    |    ✓     |                   |   ✓ (enqueue)    |            ✓            |                 | `AppMailerModule`                                                                                    |
 | `storage`                 |    ✓     |         ✓         |                  |                         |                 | `StorageModule`                                                                                      |
+| `ai`                      |          |                   |                  |                         |                 | `AiModule` (`@platform/ai`); not loaded by any app yet (the AI domain wires it)                      |
 | `files`                   |    ✓     |         ✓         |                  |                         |                 | `FilesModule`                                                                                        |
 | `stripe`                  |    ✓     |                   |                  |                         |        ✓        | `StripeModule`, `BillingCoreModule`                                                                  |
 | `ledger`                  |    ✓     |                   |                  |                         |        ✓        | `BillingCoreModule` (`@domain/billing`)                                                              |
@@ -531,6 +532,27 @@ enqueue invitation mail on the shared BullMQ `mail` queue: in production it need
 | `GCS_KEY_FILE`               | —                       | Service-account key file. Only `type: "service_account"` keys are accepted (checked at boot); unset = Application Default Credentials (use ADC for Workload Identity or federation).                                                    |
 | `STORAGE_ALLOW_INSECURE`     | `false`                 | Local compose stack only. Production requires https, non-loopback S3 endpoints and a Google GCS endpoint unless this is `true`.                                                                                                         |
 
+### `ai` — LLM calls through OpenRouter
+
+[`ai.config.ts`](../libs/config/src/namespaces/ai.config.ts) · not loaded by any app yet (`AiModule`,
+`@platform/ai`)
+
+| Variable                  | Default                        | Description                                                                                                                     |
+| ------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `AI_ENABLED`              | `false`                        | Off: nothing calls OpenRouter and every `AiClient` call throws 503 `AI_DISABLED`.                                               |
+| `OPENROUTER_API_KEY`      | —                              | Required when `AI_ENABLED=true`. A placeholder is refused in production. Never logged.                                          |
+| `OPENROUTER_BASE_URL`     | `https://openrouter.ai/api/v1` | OpenRouter API (or a proxy); https on a non-loopback host in production.                                                        |
+| `AI_DEFAULT_MODEL`        | `openai/gpt-4o-mini`           | Model of a request that names none (`<vendor>/<model>[:variant]`).                                                              |
+| `AI_ALLOWED_MODELS`       | —                              | CSV of other models a request may name; the default is always allowed, anything else is 422 `AI_MODEL_NOT_ALLOWED`.             |
+| `AI_FALLBACK_MODELS`      | —                              | CSV for OpenRouter's `models` routing, tried in order when the requested model fails; each must be allowed.                     |
+| `AI_MAX_OUTPUT_TOKENS`    | `1024`                         | Output cap of one call (1-32768); a request may ask for less, never more.                                                       |
+| `AI_REQUEST_TIMEOUT_MS`   | `60000`                        | Deadline of one call, a whole stream included (1000-600000); the upstream call is aborted and the caller gets 504 `AI_TIMEOUT`. |
+| `AI_MAX_RETRIES`          | `2`                            | AI SDK retries of retryable failures only (429, 5xx, network), 0-5.                                                             |
+| `AI_MAX_INPUT_CHARS`      | `32000`                        | Message text one call may send, history included; more is 422 `AI_INPUT_TOO_LARGE`.                                             |
+| `AI_HISTORY_MAX_MESSAGES` | `20`                           | History window of a conversation: the last N messages.                                                                          |
+| `AI_HISTORY_MAX_TOKENS`   | `8000`                         | Approximate token budget of that window (characters / 4).                                                                       |
+| `AI_MAX_TOOL_STEPS`       | `3`                            | Tool-calling steps of one request (1-10).                                                                                       |
+
 ### `files` — upload limits
 
 [`files.config.ts`](../domains/files/src/files.config.ts) (owned by the files domain) · gateway, monolith
@@ -627,6 +649,7 @@ Cross-field rules live in each schema's `superRefine`; a violation stops the pro
 | Kafka must use TLS (SASL never in plaintext) unless `KAFKA_ALLOW_INSECURE=true`                                                                                                                                                                                                                                                                                                    | `KAFKA_SSL`                                                                                                                         | `kafka.config.ts`                           |
 | Cassandra must use TLS unless `CASSANDRA_ALLOW_INSECURE=true`, and a process that creates the keyspace must use NetworkTopologyStrategy unless `CASSANDRA_ALLOW_SIMPLE_STRATEGY=true`                                                                                                                                                                                              | `CASSANDRA_SSL`, `CASSANDRA_REPLICATION_DATACENTERS`                                                                                | `cassandra.config.ts`                       |
 | immudb must use TLS unless `IMMUDB_ALLOW_INSECURE=true`; the local app password and immudb's default admin password are publicly known values                                                                                                                                                                                                                                      | `IMMUDB_TLS`, `IMMUDB_PASSWORD`, `IMMUDB_ADMIN_PASSWORD`                                                                            | `immudb.config.ts`                          |
+| OpenRouter (only with `AI_ENABLED=true`): the API key must not be a placeholder, and `OPENROUTER_BASE_URL` must be https on a non-loopback host                                                                                                                                                                                                                                    | `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`                                                                                         | `ai.config.ts`                              |
 | SMTP: not the Mailpit default (loopback on port 1025), no reserved sender domain, STARTTLS mandatory to a remote host, unless `SMTP_ALLOW_INSECURE=true`                                                                                                                                                                                                                           | `SMTP_HOST`, `MAIL_FROM`, `SMTP_REQUIRE_TLS`                                                                                        | `mail.config.ts`                            |
 | Storage endpoints must be https and non-loopback (S3), or https Google endpoints (GCS, including `GCS_PUBLIC_ENDPOINT`), unless `STORAGE_ALLOW_INSECURE=true`                                                                                                                                                                                                                      | `S3_ENDPOINT`, `S3_PUBLIC_ENDPOINT`, `GCS_API_ENDPOINT`, `GCS_PUBLIC_ENDPOINT`                                                      | `storage.config.ts`                         |
 | Stripe Checkout redirect URLs must be https and non-loopback unless `STRIPE_ALLOW_LOCAL_REDIRECTS=true`                                                                                                                                                                                                                                                                            | `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`                                                                                           | `stripe.config.ts`                          |

@@ -1,0 +1,39 @@
+{
+  "name": "@platform/ai",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "LLM calls through OpenRouter on the Vercel AI SDK: config-driven client with an on/off switch, a model allowlist, output and time bounds, cancellation, metrics and spans without content, and a mock-model test double.",
+  "exports": {
+    ".": {
+      "@repo/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "@repo/source": "./src/testing/index.ts",
+      "types": "./src/testing/index.ts",
+      "default": "./dist/testing/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project ai",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
+    "@platform/observability": "workspace:*",
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "@openrouter/ai-sdk-provider": "catalog:",
+    "@opentelemetry/api": "catalog:",
+    "ai": "catalog:"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "catalog:"
+  }
+}

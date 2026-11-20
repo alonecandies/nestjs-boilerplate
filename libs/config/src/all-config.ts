@@ -1,5 +1,6 @@
 import type { EnvSource } from './env/parse-env.js';
 import { EnvValidationError } from './env/parse-env.js';
+import { type AiConfig, aiConfig } from './namespaces/ai.config.js';
 import { type AppConfig, appConfig } from './namespaces/app.config.js';
 import { type AuthConfig, authConfig } from './namespaces/auth.config.js';
 import { type CacheConfig, cacheConfig } from './namespaces/cache.config.js';
@@ -39,6 +40,7 @@ export const CONFIG_NAMESPACES = {
   graphql: graphqlConfig,
   mail: mailConfig,
   storage: storageConfig,
+  ai: aiConfig,
 } as const;
 
 export type ConfigNamespaceName = keyof typeof CONFIG_NAMESPACES;
@@ -62,6 +64,7 @@ export interface AllConfig {
   graphql: GraphqlConfig;
   mail: MailConfig;
   storage: StorageConfig;
+  ai: AiConfig;
 }
 
 /** What `validateAllEnv` needs from a namespace: its name and a pure `parse(env)`. */
