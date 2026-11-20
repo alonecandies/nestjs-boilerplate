@@ -168,6 +168,29 @@ describe('@platform/database against PostgreSQL 18', () => {
       expect(await migrationRows(url, gadgetsMigrations)).toBe(1);
     });
 
+    it('refuses a database whose history predates the set baseline (a squashed set), naming the fix', async () => {
+      const url = await createDatabase('pre_squash');
+      const migrations = [platformMigrations, widgetsMigrations];
+      await runMigrations(url, { migrations, logger: silent });
+      // Rewrite widgets' bookkeeping as if the database had stopped part-way through an older,
+      // since-squashed history: its latest applied migration is older than the set's first one.
+      const client = postgres(url, { max: 1, onnotice: noop });
+      try {
+        const table = client`${client(widgetsMigrations.migrationsSchema)}.${client(widgetsMigrations.migrationsTable)}`;
+        await client`delete from ${table} where id <> (select min(id) from ${table})`;
+        await client`update ${table} set created_at = 1`;
+      } finally {
+        await client.end();
+      }
+      const error: unknown = await runMigrations(url, { migrations, logger: silent }).catch(
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(String((error as Error).cause)).toMatch(
+        /widgets.*older than the set's first migration.*recreate/is,
+      );
+    });
+
     it('counts what it applied when the bookkeeping schema is mixed-case', async () => {
       const url = await createDatabase('mixed_case');
       const mixed: DatabaseMigrationSet = {

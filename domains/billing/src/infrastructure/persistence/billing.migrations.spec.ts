@@ -119,6 +119,21 @@ describe('billingMigrations', () => {
     const firstIndexOf = (pattern: RegExp): number =>
       statements().findIndex((statement) => pattern.test(statement));
 
+    it('keeps the last stacked migration timestamp, so a database migrated before the squash skips it', () => {
+      const read = (folder: string): number[] =>
+        (
+          JSON.parse(readFileSync(join(folder, 'meta', '_journal.json'), 'utf8')) as {
+            entries: { when: number }[];
+          }
+        ).entries.map((entry) => entry.when);
+
+      const stacked = read(
+        join(import.meta.dirname, '..', '..', '..', 'test', 'stacked-history', 'migrations'),
+      );
+
+      expect(read(billingMigrations.folder)).toEqual([stacked.at(-1)]);
+    });
+
     it('is the only journal entry, with one snapshot', () => {
       expect(journalTags()).toEqual(['0000_init']);
       expect(readdirSync(join(billingMigrations.folder, 'meta')).toSorted()).toEqual([

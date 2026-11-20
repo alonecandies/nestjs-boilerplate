@@ -68,6 +68,21 @@ describe('identityMigrations', () => {
         .map((statement) => statement.trim())
         .filter((statement) => statement !== '');
 
+    it('keeps the last stacked migration timestamp, so a database migrated before the squash skips it', () => {
+      const read = (folder: string): number[] =>
+        (
+          JSON.parse(readFileSync(join(folder, 'meta', '_journal.json'), 'utf8')) as {
+            entries: { when: number }[];
+          }
+        ).entries.map((entry) => entry.when);
+
+      const stacked = read(
+        join(import.meta.dirname, '..', '..', '..', 'test', 'stacked-history', 'migrations'),
+      );
+
+      expect(read(identityMigrations.folder)).toEqual([stacked.at(-1)]);
+    });
+
     it('is the only journal entry, with one snapshot', () => {
       const journal = JSON.parse(
         readFileSync(join(identityMigrations.folder, 'meta', '_journal.json'), 'utf8'),

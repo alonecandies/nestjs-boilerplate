@@ -72,6 +72,11 @@ const journalSchema = z.object({
 
 /** Number of journal entries; a set whose folder has no drizzle journal fails the run. */
 function readJournalSize(set: DatabaseMigrationSet): number {
+  return readJournal(set).entries.length;
+}
+
+/** The set's parsed drizzle journal; a missing or invalid journal fails the run. */
+function readJournal(set: DatabaseMigrationSet): z.infer<typeof journalSchema> {
   const journalPath = join(set.folder, 'meta', '_journal.json');
   if (!existsSync(journalPath)) {
     throw new Error(
@@ -84,7 +89,7 @@ function readJournalSize(set: DatabaseMigrationSet): number {
       `Invalid drizzle migration journal: ${journalPath}\n${z.prettifyError(journal.error)}`,
     );
   }
-  return journal.data.entries.length;
+  return journal.data;
 }
 
 /**
@@ -127,6 +132,29 @@ async function countAppliedMigrations(sql: Sql, set: DatabaseMigrationSet): Prom
   return row?.count ?? 0;
 }
 
+/**
+ * A database whose latest applied migration is older than the set's FIRST journal entry was migrated
+ * by a history that has since been squashed into a new baseline (SH-12) and stopped part-way. drizzle
+ * would replay the baseline on top of it and fail with an opaque "already exists"; refuse it with the
+ * fix instead. A database at the squashed history's tip carries the baseline's own timestamp (the
+ * squash keeps it), so it passes and drizzle skips the baseline.
+ */
+async function assertNotOlderThanBaseline(sql: Sql, set: DatabaseMigrationSet): Promise<void> {
+  const firstWhen = readJournal(set).entries[0]?.when;
+  if (firstWhen === undefined) return;
+  const [row] = await sql<{ latest: string | null }[]>`
+    select max(created_at)::text as latest
+    from ${sql(set.migrationsSchema)}.${sql(set.migrationsTable)}`;
+  const latest = row?.latest === null || row?.latest === undefined ? null : Number(row.latest);
+  if (latest !== null && latest < firstWhen) {
+    throw new Error(
+      `Migration set "${set.name}": the database's latest applied migration (${latest}) is older than ` +
+        `the set's first migration (${firstWhen}); its history was squashed into a new baseline. ` +
+        'Recreate this database (for compose: docker compose down -v), then migrate again.',
+    );
+  }
+}
+
 async function applySet(
   sql: Sql,
   set: DatabaseMigrationSet,
@@ -134,6 +162,7 @@ async function applySet(
   logger: LoggerService,
 ): Promise<MigrationSetSummary> {
   const before = await countAppliedMigrations(sql, set);
+  if (before > 0) await assertNotOlderThanBaseline(sql, set);
   await migrate(drizzle({ client: sql }), {
     migrationsFolder: set.folder,
     migrationsSchema: set.migrationsSchema,
