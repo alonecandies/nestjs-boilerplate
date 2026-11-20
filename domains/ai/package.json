@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "AI bounded context: per-tenant conversations, messages and a usage log (Drizzle, Citus, RLS) and the chat API (REST, RBAC, rate limit, idempotency) over @platform/ai.",
+  "description": "AI bounded context: per-tenant conversations, messages and a usage log (Drizzle, Citus, RLS) and the chat API (REST, GraphQL, SSE and subscription streaming, RBAC, rate limit, idempotency) over @platform/ai.",
   "exports": {
     ".": {
       "@repo/source": "./src/index.ts",
@@ -37,12 +37,17 @@
     "@platform/common": "workspace:*",
     "@platform/config": "workspace:*",
     "@platform/database": "workspace:*",
+    "@platform/graphql": "workspace:*",
     "@platform/redis": "workspace:*",
     "@nestjs/common": "catalog:",
     "@nestjs/config": "catalog:",
     "@nestjs/cqrs": "catalog:",
+    "@nestjs/graphql": "catalog:",
     "@nestjs/swagger": "catalog:",
+    "class-transformer": "catalog:",
+    "class-validator": "catalog:",
     "drizzle-orm": "catalog:",
+    "graphql": "catalog:",
     "lodash-es": "catalog:",
     "zod": "catalog:"
   },

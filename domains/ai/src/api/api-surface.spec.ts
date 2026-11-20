@@ -4,15 +4,19 @@ import * as api from './index.js';
 
 const API_VALUES = [
   'AI_LIMITS',
+  'AI_MESSAGE_STREAM_TRIGGER',
   'AI_RATE_LIMITS',
   'AI_RBAC',
+  'AI_SSE_EVENTS',
   'AiApiModule',
   'AiChatErrorCode',
   'AiPermission',
   'AiPort',
   'MESSAGE_ROLES',
   'MESSAGE_STATUSES',
+  'SSE_CONTENT_TYPE',
   'USAGE_OUTCOMES',
+  'aiMessageStreamTrigger',
   'aiRateLimitConfig',
 ];
 

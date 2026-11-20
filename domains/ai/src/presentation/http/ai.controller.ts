@@ -5,9 +5,12 @@ import {
   Get,
   HttpCode,
   HttpStatus,
+  Logger,
   Param,
   Post,
   Query,
+  Req,
+  Res,
   SerializeOptions,
   StandardSchemaSerializerInterceptor,
   UseInterceptors,
@@ -25,6 +28,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiProduces,
   ApiServiceUnavailableResponse,
   ApiTags,
   ApiTooManyRequestsResponse,
@@ -32,11 +36,12 @@ import {
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
-import { Timeout } from '@platform/common';
+import { type RequestLike, Timeout, toProblemDetails } from '@platform/common';
 import { RateLimit } from '@platform/redis';
 import { AI_LIMITS } from '../../ai.constants.js';
 import { AiPermission } from '../../ai.permissions.js';
 import { AiPort } from '../../application/ports/ai.port.js';
+import { abortOnDisconnect } from '../client-disconnect.js';
 import { AI_RATE_LIMITS } from '../rate-limit/ai-rate-limit.js';
 import {
   type ConversationPageResponse,
@@ -59,12 +64,14 @@ import {
   toMessagePageResponse,
   toSendMessageResponse,
 } from './ai.dto.js';
+import { SSE_CONTENT_TYPE, type SseReply, writeChatSse } from './ai-sse.js';
 import { IdempotencyKey } from './idempotency-key.decorator.js';
 
 /**
- * `/v1/ai/conversations`: the caller's own conversations and the non-streaming chat turn. Depends
- * only on `AiPort`; tenant and user always come from the verified token. Every route needs
- * `ai:chat` (members and above); sending a message also charges the `ai.chat` policy.
+ * `/v1/ai/conversations`: the caller's own conversations and the chat turn (plain or streamed as
+ * Server-Sent Events). Depends only on `AiPort`; tenant and user always come from the verified
+ * token. Every route needs `ai:chat` (members and above); sending a message (either way) also
+ * charges the `ai.chat` policy.
  */
 @ApiTags('ai')
 @ApiBearerAuth()
@@ -74,6 +81,8 @@ import { IdempotencyKey } from './idempotency-key.decorator.js';
 @RequirePermissions(AiPermission.Chat)
 @UseInterceptors(StandardSchemaSerializerInterceptor)
 export class AiController {
+  private readonly logger = new Logger(AiController.name);
+
   constructor(private readonly ai: AiPort) {}
 
   @Post()
@@ -224,5 +233,86 @@ export class AiController {
       idempotencyKey,
     });
     return toSendMessageResponse(result);
+  }
+
+  @Post(':id/messages/stream')
+  @RateLimit(AI_RATE_LIMITS.CHAT)
+  // Bounded by AI_REQUEST_TIMEOUT_MS (the model call's deadline), not the default handler timeout.
+  @Timeout(0)
+  @ApiOperation({
+    summary: 'Send a message and stream the reply (Server-Sent Events)',
+    description:
+      'The same turn as `POST …/messages`, streamed as `text/event-stream`: `delta` events ' +
+      '(`{ text }`, in order), then one `done` (`{ message, replayed, usage }`, the stored reply) ' +
+      'or one `error` (a problem document). Refusals (404, 409, 422, 429, 503) are plain ' +
+      'problem+json responses, sent before any event. Closing the connection aborts the model ' +
+      'call; the reply so far is stored as `incomplete`.',
+  })
+  @ApiParam({ name: 'id', format: 'uuid' })
+  @ApiHeader({
+    name: 'Idempotency-Key',
+    required: false,
+    description: 'Replays with the same key and body stream the stored reply as a single `done`.',
+  })
+  @ApiProduces(SSE_CONTENT_TYPE)
+  @ApiOkResponse({
+    description: 'The event stream (`delta`…, then `done` or `error`).',
+    content: { [SSE_CONTENT_TYPE]: { schema: { type: 'string' } } },
+  })
+  @ApiBadRequestResponse({ description: 'Invalid body or Idempotency-Key.' })
+  @ApiNotFoundResponse({ description: 'No such conversation of yours (`CONVERSATION_NOT_FOUND`).' })
+  @ApiConflictResponse({
+    description: 'Idempotency-Key reused for another message (`IDEMPOTENCY_KEY_REUSED`).',
+  })
+  @ApiUnprocessableEntityResponse({
+    description:
+      'Model not allowed or input too long (`AI_MODEL_NOT_ALLOWED`, `AI_INPUT_TOO_LARGE`).',
+  })
+  @ApiTooManyRequestsResponse({
+    description: 'Over the `ai.chat` budget (charged before the model call).',
+  })
+  @ApiServiceUnavailableResponse({ description: 'AI is disabled (`AI_DISABLED`).' })
+  async streamMessage(
+    @Param('id', { schema: conversationIdParamSchema }) id: string,
+    @Body({ schema: sendMessageBodySchema }) body: SendMessageBody,
+    @IdempotencyKey() idempotencyKey: string | undefined,
+    @CurrentUser() user: AuthUser,
+    @Req() request: RequestLike,
+    @Res() reply: SseReply,
+  ): Promise<void> {
+    // Watch the connection before the turn starts: a client gone during the read aborts the call.
+    const disconnect = abortOnDisconnect(reply.raw);
+    try {
+      const events = await this.ai.streamMessage({
+        tenantId: user.tenantId,
+        userId: user.id,
+        conversationId: id,
+        content: body.content,
+        model: body.model,
+        idempotencyKey,
+        signal: disconnect.signal,
+      });
+      await writeChatSse(reply, events, {
+        signal: disconnect.signal,
+        problem: (error) => this.problemOf(error, request),
+      });
+    } finally {
+      disconnect.dispose();
+    }
+  }
+
+  /** The `error` event of a failure after the headers (the exception filter no longer can). */
+  private problemOf(error: unknown, request: RequestLike) {
+    const url = request.url ?? '';
+    const query = url.indexOf('?');
+    const problem = toProblemDetails(error, {
+      requestId: request.id,
+      instance: query === -1 ? url : url.slice(0, query),
+      exposeInternal: false,
+    });
+    const line = `AI stream failed after the headers: status=${problem.status} code=${problem.code}`;
+    if (problem.status >= 500) this.logger.warn(line);
+    else this.logger.debug(line);
+    return problem;
   }
 }

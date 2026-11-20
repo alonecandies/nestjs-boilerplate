@@ -40,8 +40,35 @@ export interface SendMessageResult {
   readonly replayed: boolean;
 }
 
+export interface StreamMessageRequest extends SendMessageRequest {
+  /**
+   * The client's cancellation: aborting it (the client disconnected) aborts the upstream call, and
+   * the reply so far is stored as `incomplete`.
+   */
+  readonly signal?: AbortSignal | undefined;
+}
+
+/** Tokens (and OpenRouter's cost, when reported) of the model call that produced a reply. */
+export interface ChatStreamUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly costUsd: number | null;
+}
+
 /**
- * The chat API as presentation code sees it (REST now; GraphQL and gRPC later). Bound to
+ * One event of a streamed chat turn: text `delta`s in order, then one `done` with the stored
+ * reply. A failure after the first event is thrown by the iterator instead of a `done`.
+ */
+export type ChatStreamEvent =
+  | { readonly type: 'delta'; readonly text: string }
+  | (SendMessageResult & {
+      readonly type: 'done';
+      /** `null` when this request made no model call (a stored reply replayed by its key). */
+      readonly usage: ChatStreamUsage | null;
+    });
+
+/**
+ * The chat API as presentation code sees it (REST and GraphQL now; gRPC later). Bound to
  * `AiLocalAdapter` (CQRS buses) by `AiApiModule.forLocal()`. Every request carries the caller's
  * tenant and user from the verified token; the handlers re-check them against the principal.
  */
@@ -62,4 +89,12 @@ export abstract class AiPort {
 
   /** Sends the user's message with the history window and stores the reply. */
   abstract sendMessage(input: SendMessageRequest): Promise<SendMessageResult>;
+
+  /**
+   * `sendMessage`, streamed. Resolves once the turn started: refusals (404, 409, 422, 503) reject
+   * here, before any event. The reply is stored when the stream ends; a stream cut short (the
+   * caller's `signal`, a consumer that stops reading, a failure after the first token) stores the
+   * text so far once, as an `incomplete` reply. An `Idempotency-Key` replay is a single `done`.
+   */
+  abstract streamMessage(input: StreamMessageRequest): Promise<AsyncIterable<ChatStreamEvent>>;
 }

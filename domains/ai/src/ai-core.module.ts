@@ -5,6 +5,7 @@ import { aiConfig } from '@platform/config';
 import { CreateConversationHandler } from './application/commands/create-conversation/create-conversation.handler.js';
 import { DeleteConversationHandler } from './application/commands/delete-conversation/delete-conversation.handler.js';
 import { SendMessageHandler } from './application/commands/send-message/send-message.handler.js';
+import { StreamMessageHandler } from './application/commands/stream-message/stream-message.handler.js';
 import { GetConversationHandler } from './application/queries/get-conversation/get-conversation.handler.js';
 import { ListConversationsHandler } from './application/queries/list-conversations/list-conversations.handler.js';
 import { ListMessagesHandler } from './application/queries/list-messages/list-messages.handler.js';
@@ -33,6 +34,7 @@ import { DrizzleUsageRepository } from './infrastructure/persistence/drizzle-usa
     DeleteConversationHandler,
     ListMessagesHandler,
     SendMessageHandler,
+    StreamMessageHandler,
     { provide: ConversationsRepository, useClass: DrizzleConversationsRepository },
     { provide: MessagesRepository, useClass: DrizzleMessagesRepository },
     { provide: UsageRepository, useClass: DrizzleUsageRepository },

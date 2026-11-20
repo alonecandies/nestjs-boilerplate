@@ -5,37 +5,40 @@ The AI bounded context: per-tenant conversations, their messages and a usage log
 [`@platform/ai`](../../libs/ai/README.md) (OpenRouter on the Vercel AI SDK).
 
 This package holds the persistence (schema, `0000_init`, repositories, in-memory twins) and the
-non-streaming chat API: CQRS handlers, the REST controller, the `ai:chat` permission and the
-`ai.chat` rate-limit policy, wired into the monolith. Streaming, GraphQL, tools and the
-microservices topology come with the AI plan's later tasks.
+chat API: CQRS handlers, the REST controller (plain and Server-Sent Events streaming), the GraphQL
+resolver (queries, mutations and the `aiMessageStream` subscription), the `ai:chat` permission and
+the `ai.chat` rate-limit policy, wired into the monolith. Tools and the microservices topology come
+with the AI plan's later tasks.
 
 ## Entry points
 
-| Entry                | What                                                                                                                                                                                                                                                      |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@domain/ai`         | Everything below: `AiCoreModule`, the repository ports, `aiSchema`, `aiMigrations` and the Drizzle repositories, plus `./api`.                                                                                                                            |
-| `@domain/ai/api`     | The edge surface: `AiApiModule`, `AiPort` and its request/result shapes, `AI_RBAC` / `AiPermission`, `aiRateLimitConfig` / `AI_RATE_LIMITS`, `AiChatErrorCode`, `AI_LIMITS`, the record types and their value lists. No persistence is reachable from it. |
-| `@domain/ai/testing` | `createInMemoryAiPersistence()` (the three twins over one store) and the fixtures `makeConversation`, `makeMessage`, `makeUsage`. Specs and `test/` code only.                                                                                            |
+| Entry                | What                                                                                                                                                                                                                                                                                                                                                                           |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `@domain/ai`         | Everything below: `AiCoreModule`, the repository ports, `aiSchema`, `aiMigrations` and the Drizzle repositories, plus `./api`.                                                                                                                                                                                                                                                 |
+| `@domain/ai/api`     | The edge surface: `AiApiModule`, `AiPort` and its request/result/stream shapes, the stream wire names (`AI_SSE_EVENTS`, `SSE_CONTENT_TYPE`, `aiMessageStreamTrigger`, `AiMessageStreamPush`), `AI_RBAC` / `AiPermission`, `aiRateLimitConfig` / `AI_RATE_LIMITS`, `AiChatErrorCode`, `AI_LIMITS`, the record types and their value lists. No persistence is reachable from it. |
+| `@domain/ai/testing` | `createInMemoryAiPersistence()` (the three twins over one store) and the fixtures `makeConversation`, `makeMessage`, `makeUsage`. Specs and `test/` code only.                                                                                                                                                                                                                 |
 
 Wiring (when an app owns the ai tables, the monolith now): `aiSchema` and `aiMigrations` go into
 `DatabaseModule.forRootAsync({ schema, migrations })` and the app's `migrate.ts`; the app imports
 `AiCoreModule` (the handlers, the Drizzle repositories bound to their ports, and
-`AiModule.forRootAsync()`) and then `AiApiModule.forLocal()` (REST, RBAC feature, rate-limit policy,
-`AiPort` on the CQRS buses).
+`AiModule.forRootAsync()`) and then `AiApiModule.forLocal()` (REST, GraphQL resolver, RBAC feature,
+rate-limit policy, `AiPort` on the CQRS buses). The resolver expects the app's `AppGraphqlModule`
+and `GraphqlPubSubModule`.
 
 ## Chat API (REST `/v1/ai/conversations`)
 
 Every route needs `ai:chat` (granted to members, so to admins and owners too); tenant and user come
 from the token, and every handler re-checks them against the principal (403 `TENANT_MISMATCH`).
 
-| Route                                    | What                                                                                                                                        |
-| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `POST /v1/ai/conversations`              | New conversation (`title?`, `model?` = `AI_DEFAULT_MODEL`, must be allowed: 422 `AI_MODEL_NOT_ALLOWED`). 503 `AI_DISABLED` while AI is off. |
-| `GET /v1/ai/conversations`               | The caller's conversations, newest first (`limit`, `cursor`).                                                                               |
-| `GET /v1/ai/conversations/:id`           | One of them; anyone else's is 404 `CONVERSATION_NOT_FOUND`.                                                                                 |
-| `DELETE /v1/ai/conversations/:id`        | Deletes it and its messages (usage rows stay). 204.                                                                                         |
-| `GET /v1/ai/conversations/:id/messages`  | Its messages, newest first (`limit`, `cursor`).                                                                                             |
-| `POST /v1/ai/conversations/:id/messages` | One chat turn (`content`, `model?`), optional `Idempotency-Key`; 201 `{ message, replayed }`. Rate limited by `ai.chat`.                    |
+| Route                                           | What                                                                                                                                        |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/ai/conversations`                     | New conversation (`title?`, `model?` = `AI_DEFAULT_MODEL`, must be allowed: 422 `AI_MODEL_NOT_ALLOWED`). 503 `AI_DISABLED` while AI is off. |
+| `GET /v1/ai/conversations`                      | The caller's conversations, newest first (`limit`, `cursor`).                                                                               |
+| `GET /v1/ai/conversations/:id`                  | One of them; anyone else's is 404 `CONVERSATION_NOT_FOUND`.                                                                                 |
+| `DELETE /v1/ai/conversations/:id`               | Deletes it and its messages (usage rows stay). 204.                                                                                         |
+| `GET /v1/ai/conversations/:id/messages`         | Its messages, newest first (`limit`, `cursor`).                                                                                             |
+| `POST /v1/ai/conversations/:id/messages`        | One chat turn (`content`, `model?`), optional `Idempotency-Key`; 201 `{ message, replayed }`. Rate limited by `ai.chat`.                    |
+| `POST /v1/ai/conversations/:id/messages/stream` | The same turn streamed as `text/event-stream` (see Streaming). Rate limited by `ai.chat`, charged before the call.                          |
 
 A chat turn (`SendMessageHandler`):
 
@@ -59,6 +62,36 @@ either way (a retry sends it again). Logs carry ids, model and token counts, nev
 `AI_CHAT_TENANT_LIMIT` per tenant per `AI_CHAT_TENANT_TTL_MS`, shared by every member (the
 policy's `tenant` budget of `@platform/redis`). The send route has no handler timeout (`@Timeout(0)`):
 `AI_REQUEST_TIMEOUT_MS` bounds it.
+
+## Streaming (SSE and GraphQL)
+
+`AiPort.streamMessage` (`StreamMessageHandler`) is the chat turn above with `AiClient.stream`: the
+same read, call and write units of work, the same idempotency and the same refusals, which reject
+before the stream starts (so they reach the client as plain errors). The stream yields each text
+delta, then stores the reply and yields `done`.
+
+- **SSE** (`POST …/messages/stream`): events `delta` `{ text }` in order, then exactly one `done`
+  `{ message, replayed, usage }` (`message` is REST `AiMessage`; `usage` `{ inputTokens,
+outputTokens, costUsd }`, `null` on a key replay) or one `error` (an RFC 9457 problem document,
+  e.g. 502 `AI_UPSTREAM_ERROR`, 504 `AI_TIMEOUT`). The controller takes the reply over from Fastify
+  (`@Res()` + `hijack()`), keeps the headers already set (request id, `RateLimit*`, CORS) and adds
+  `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`.
+- **Cancellation.** The response's `close` before it finished (`abortOnDisconnect`; the request's
+  own `close` fires once a POST body is read, so it cannot tell) aborts an `AbortController` whose
+  signal goes to `AiClient.stream`: no tokens are spent after the client left. A consumer that
+  stops reading aborts the call too. A stream cut short is stored exactly once: with text received,
+  the user message and an `incomplete` assistant reply (carrying the `Idempotency-Key`, so a replay
+  returns it) plus a usage row (`aborted`, `error` or `timeout`, tokens 0: unknown); without any
+  text, only the usage row.
+- **GraphQL.** The REST API is mirrored by `aiConversations`, `aiConversation(id)`,
+  `aiMessages(conversationId)`, `createAiConversation`, `deleteAiConversation(id)` and
+  `sendAiMessage`; `streamAiMessage(input)` runs the streamed turn, publishes each event to the
+  caller's `aiMessageStream(conversationId)` subscription (`DELTA`, then `DONE` or `ERROR`) and
+  resolves with the stored reply. The PubSub trigger is per `(tenant, user, conversation)` from the
+  token (`aiMessageStream:<tenantId>:<userId>:<conversationId>`) and the subscription filter checks
+  the payload's tenant, user and conversation again (the `notificationCreated` pattern): another user,
+  or the same user in another tenant, receives nothing. Over HTTP, closing the mutation's request
+  aborts the call like SSE; over graphql-ws the call is bounded by `AI_REQUEST_TIMEOUT_MS`.
 
 ## Data model (`aiSchema`, `infrastructure/persistence/ai.schema.ts`)
 
@@ -122,12 +155,14 @@ principal they are refused before `BEGIN` (`RLS_NO_PRINCIPAL`).
 
 ## Tests
 
-| Spec                                                         | What                                                                                                                                                                                                                    |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `infrastructure/persistence/ai.migrations.spec.ts`           | Pins `0000_init`: one journal entry, statement order (tables, distribution, indexes, then RLS, grants, policies), the exact grants and policies, no FK, subquery, `CASE` or `IS NULL`.                                  |
-| `testing/in-memory-ai-repositories.spec.ts`                  | The shared contract (`testing/ai-repositories.contract.test.ts`) on the in-memory twins.                                                                                                                                |
-| `infrastructure/persistence/ai.rls.int-spec.ts`              | Citus 14.2, three roles, local execution off: distribution and colocation, forced RLS, grants, policies; per table the owner reads exactly its rows, others none, foreign inserts 42501, usage has no UPDATE or DELETE. |
-| `infrastructure/persistence/ai.repositories.rls.int-spec.ts` | The same contract on the Drizzle repositories as `app_runtime`, plus one unit of work rolling back as a whole.                                                                                                          |
+| Spec                                                                 | What                                                                                                                                                                                                                                                                             |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `infrastructure/persistence/ai.migrations.spec.ts`                   | Pins `0000_init`: one journal entry, statement order (tables, distribution, indexes, then RLS, grants, policies), the exact grants and policies, no FK, subquery, `CASE` or `IS NULL`.                                                                                           |
+| `testing/in-memory-ai-repositories.spec.ts`                          | The shared contract (`testing/ai-repositories.contract.test.ts`) on the in-memory twins.                                                                                                                                                                                         |
+| `infrastructure/persistence/ai.rls.int-spec.ts`                      | Citus 14.2, three roles, local execution off: distribution and colocation, forced RLS, grants, policies; per table the owner reads exactly its rows, others none, foreign inserts 42501, usage has no UPDATE or DELETE.                                                          |
+| `infrastructure/persistence/ai.repositories.rls.int-spec.ts`         | The same contract on the Drizzle repositories as `app_runtime`, plus one unit of work rolling back as a whole.                                                                                                                                                                   |
+| `application/commands/stream-message/stream-message.handler.spec.ts` | Mock streaming models: deltas in order then `done` and the stored exchange; a client abort or a consumer that stops reading aborts the model and stores one `incomplete` reply; no-text aborts and failures store usage only; key replay; refusals before the stream.            |
+| `apps/monolith/test/ai-stream.e2e-spec.ts`                           | Over a real connection: SSE deltas then `done`, disconnect aborts the mock model and stores `incomplete`, an `error` event after the headers, problem+json refusals and the `ai.chat` charge before the call; the GraphQL mirror; `aiMessageStream` delivered to its owner only. |
 
 ```bash
 bunx vitest run --project ai

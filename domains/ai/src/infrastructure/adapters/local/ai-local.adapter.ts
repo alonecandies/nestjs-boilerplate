@@ -4,14 +4,17 @@ import type { CursorPage } from '@platform/common';
 import { CreateConversationCommand } from '../../../application/commands/create-conversation/create-conversation.command.js';
 import { DeleteConversationCommand } from '../../../application/commands/delete-conversation/delete-conversation.command.js';
 import { SendMessageCommand } from '../../../application/commands/send-message/send-message.command.js';
+import { StreamMessageCommand } from '../../../application/commands/stream-message/stream-message.command.js';
 import type {
   AiPort,
+  ChatStreamEvent,
   ConversationRequest,
   CreateConversationRequest,
   ListConversationsRequest,
   ListMessagesRequest,
   SendMessageRequest,
   SendMessageResult,
+  StreamMessageRequest,
 } from '../../../application/ports/ai.port.js';
 import { GetConversationQuery } from '../../../application/queries/get-conversation/get-conversation.query.js';
 import { ListConversationsQuery } from '../../../application/queries/list-conversations/list-conversations.query.js';
@@ -48,5 +51,9 @@ export class AiLocalAdapter implements AiPort {
 
   sendMessage(input: SendMessageRequest): Promise<SendMessageResult> {
     return this.commandBus.execute(new SendMessageCommand(input));
+  }
+
+  streamMessage(input: StreamMessageRequest): Promise<AsyncIterable<ChatStreamEvent>> {
+    return this.commandBus.execute(new StreamMessageCommand(input));
   }
 }
