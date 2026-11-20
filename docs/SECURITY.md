@@ -586,7 +586,7 @@ table.
 
 ### System-method lists after this plan
 
-Identity pins 13 methods and billing 16 (29 names in all, 4 of them shared). The four `outbox.*` methods come from
+Identity pins 13 methods and billing 17 (30 names in all, 4 of them shared). The four `outbox.*` methods come from
 `@platform/outbox` (`OUTBOX_SYSTEM_METHODS`); each domain with an outbox lists the ones its relay uses. All are `system`
 scope: the relay runs in `SystemContext.run('outbox.relay', …)`, the reconciliation in
 `SystemContext.run('billing.reconcile-ledger', …)`.
@@ -594,7 +594,7 @@ scope: the relay runs in `SystemContext.run('outbox.relay', …)`, the reconcili
 | Domain   | Pinned list after this plan                                                                                                                                                          |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | identity | B3's ten (`users.*`, `invitations.findByTokenHash`, `sessions.deleteExpired`, `memberships.*`) plus `outbox.pollUnpublished`, `outbox.markPublished`, `outbox.deletePublishedBefore` |
-| billing  | B3's two (`stripeEvents.deleteProcessedBefore`, `stripeEvents.markProcessedAsPlatform`) plus the four `outbox.*` and the ten `ledger*` names of the table above                      |
+| billing  | B3's two (`stripeEvents.deleteProcessedBefore`, `stripeEvents.markProcessedAsPlatform`) plus the four `outbox.*` and the eleven `ledger*` names of the table above                   |
 
 | Method                         | Scope  | What it does                                                                                                                |
 | ------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------- |
