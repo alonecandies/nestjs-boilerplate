@@ -197,7 +197,7 @@ export const auditEvents = identityPgSchema.table(
 // citus: tenant. The transactional outbox (@platform/outbox; outbox plan Task 5): identity's integration
 // events, inserted by the runtime role in the unit of work that changes the state they report, and
 // published by the relay on the system pool. The runtime role may only INSERT its own tenant's rows
-// (0010_outbox: no SELECT grant, one insert policy); app_system polls, marks and purges. Declared by
+// (0000_init: no SELECT grant, one insert policy); app_system polls, marks and purges. Declared by
 // hand with the exact shape of the shared outbox table (`describeOutboxTable` pins it): this file
 // cannot import @platform/outbox (drizzle-kit loads it without workspace packages).
 export const outbox = identityPgSchema.table(

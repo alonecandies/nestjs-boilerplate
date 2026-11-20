@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { billingMigrations } from './billing.migrations.js';
 
 /*
- * The five ledger tables (0005_ledger_tables, outbox plan Task 10, "Ledger tables") on Citus 14.2,
+ * The five ledger tables (0000_init, outbox plan Task 10, "Ledger tables") on Citus 14.2,
  * single node, local execution off (startRlsTestPostgres): ledger_accounts, ledger_entry_refs and
  * ledger_discrepancies distributed by tenant_id and colocated with app.tenant_colocation;
  * ledger_reconciliation_runs and ledger_trusted_state coordinator-local and system-only. All five
@@ -101,7 +101,7 @@ const insertLocal: Record<LocalTable, (tx: TransactionSql, key: string) => Promi
 };
 
 describe.skipIf(process.env['INTEGRATION'] !== '1')(
-  'billing ledger tables (0005_ledger_tables) on Citus, local execution off',
+  'billing ledger tables on Citus, local execution off',
   () => {
     let pg: RlsTestPostgres | undefined;
     let admin: Sql;

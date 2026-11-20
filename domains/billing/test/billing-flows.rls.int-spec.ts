@@ -43,7 +43,7 @@ import {
 /*
  * Billing's flows on the roles of production (B3-13, billing; the plan's Task 16 flow table): the
  * billing core on the three URLs of startRlsTestPostgres (local execution off), the app as
- * app_runtime under 0003's forced RLS, the system repository as app_system, a fake Stripe gateway
+ * app_runtime under the forced RLS, the system repository as app_system, a fake Stripe gateway
  * (real signature verification with the test secret, no network). Seeding and assertions go
  * through the superuser.
  * - Webhook, owner with tenant + user: one transaction as { user, tenant, [] }.

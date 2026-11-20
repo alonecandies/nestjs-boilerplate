@@ -24,7 +24,7 @@ import {
 } from './ledger-row.mapper.js';
 
 /**
- * The ledger receipts as the principal, on the runtime pool under 0005's insert-only RLS: one
+ * The ledger receipts as the principal, on the runtime pool under the ledger's insert-only RLS: one
  * `INSERT … ON CONFLICT DO NOTHING` per call, without a conflict target and without `RETURNING`
  * (the form Task 10's probe pinned for a non-elevated `app_runtime` principal on Citus: 1 row,
  * then 0), in the open unit of work or its own (`inUnitOfWork`). The affected-row count tells new

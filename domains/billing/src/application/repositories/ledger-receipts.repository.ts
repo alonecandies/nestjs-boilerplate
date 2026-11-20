@@ -31,7 +31,7 @@ export interface LedgerAccountRef {
 
 /**
  * The ledger receipts as the principal (the posting consumer's `{ userId, tenantId, roles: [] }`),
- * on the runtime pool under the insert-only RLS of 0005: each call is one plain
+ * on the runtime pool under the ledger's insert-only RLS: each call is one plain
  * `INSERT … ON CONFLICT DO NOTHING` (no conflict target, no `RETURNING`: the role cannot read the
  * rows unelevated) in the open unit of work or its own. A row of another tenant or of the platform
  * is refused by the policy (`42501`); without a principal nothing is sent (`RLS_NO_PRINCIPAL`).

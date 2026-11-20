@@ -464,6 +464,15 @@ Notes:
 - Migrations are forward-only. Write expand/contract changes (add a nullable column → backfill → enforce) so the old and new versions of the code can run side by side during a rollout.
 - One domain at a time: `bun run --filter @domain/identity db:generate --name <change>`. A hand-written domain migration: add `--custom` for an empty file registered in that domain's journal.
 - **A new history** starts with `bun run --filter @domain/<x> db:generate --name init`. Change its first statement from `CREATE SCHEMA "<x>";` to `CREATE SCHEMA IF NOT EXISTS "<x>";`: the migrator creates the schema first, for `<x>.__drizzle_migrations`. It is the only hand edit of generated SQL, and the domain's `*.migrations.spec.ts` checks it.
+- **Squashed baselines (SH-12, 2026-11-20).** identity's and billing's stacked histories (`0000_init` ..
+  `0010_outbox` and `0000_init` .. `0008_ledger_trusted_state_read_at`) are folded into one `0000_init` each: one
+  journal entry and one snapshot per domain, with the hand-written distribution calls, RLS, grants and policies in
+  the order of the next section. `*.squash.int-spec.ts` in each domain proves on Citus that the baseline builds the
+  same catalog as the stacked files, which stay under `domains/<x>/test/stacked-history/` as its fixture. The
+  platform set, the Cassandra CQL files and the immudb ledger migrations keep their histories. **A database
+  migrated before the squash must be recreated**: the new `0000_init` is newer than the last row of its
+  bookkeeping table, so the migrator would run it on top of the old tables and fail. Locally: `docker compose down -v`, then `bun run docker:infra` (this
+  also empties the other volumes).
 - SQL that belongs to no domain (extensions; grants and functions from B3) goes in the platform set: add `NNNN_name.sql` and its `meta/_journal.json` entry by hand ([libs/database/README.md](../libs/database/README.md#platform-migration-set)).
 - CI runs `bun run db:generate` and fails if it produces a diff or a new untracked file under `domains/*/src/infrastructure/persistence/migrations`. A `*.schema.ts` change without its migration cannot merge.
 - After merging branches that both generated migrations in one domain, run `bun run db:check`. It runs `drizzle-kit check` in every Postgres domain and fails when two snapshots share a parent; regenerate the later migration on top of the merged history. CI runs it too.
@@ -515,7 +524,8 @@ later without a rewrite. Background and probes:
 **Distribution migrations.** Each domain gets one hand-written migration,
 `bun run --filter @domain/<x> db:generate --custom --name distribute`, that holds only helper calls, in this
 order: reference tables (parents before children), then tenant-distributed, then user-distributed tables
-(identity and billing get theirs right after their B2 table tasks). Every table created **after** that migration
+(identity and billing got theirs right after their B2 table tasks; since the squash they are the calls right after
+each `CREATE TABLE` of the domain's `0000_init`). Every table created **after** that migration
 carries its own call in the migration that creates it, in the order CREATE TABLE → distribution call → indexes →
 foreign keys → RLS and policies: drizzle-kit writes foreign keys at the end of a generated file, so add the call by
 hand right after each `CREATE TABLE` (the CI drift check compares snapshots, not SQL). A coordinator-local table

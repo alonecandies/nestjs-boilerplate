@@ -15,7 +15,7 @@ import { identityMigrations } from './identity.migrations.js';
 import { identitySchema } from './identity.schema.js';
 
 /*
- * identity.outbox (0010_outbox, outbox plan Task 5) on Citus 14.2, single node, local execution off
+ * identity.outbox (0000_init, outbox plan Task 5) on Citus 14.2, single node, local execution off
  * (startRlsTestPostgres): distributed by tenant_id and colocated with app.tenant_colocation, RLS
  * enabled and forced, insert-only for app_runtime (its own tenant's rows), poll, mark and purge for
  * app_system. The real identity migration set runs as app_owner; every runtime case is raw
@@ -66,7 +66,7 @@ const PERMISSION_DENIED: SqlFailure = {
 };
 
 describe.skipIf(process.env['INTEGRATION'] !== '1')(
-  'identity.outbox (0010_outbox) on Citus, local execution off',
+  'identity.outbox on Citus, local execution off',
   () => {
     let pg: RlsTestPostgres | undefined;
     let admin: Sql;

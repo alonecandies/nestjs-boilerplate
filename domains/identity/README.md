@@ -267,7 +267,7 @@ last-owner concurrency and the invitation accept against Citus.
 | `identity.membership-removed.v1` | produced  | `userId` | `{ userId, removedAt }`                        |
 
 Envelope id = the domain event id (idempotent consumers). **Transactional outbox** (outbox plan
-Task 5): every event is a row of `identity.outbox` (`0010_outbox`: distributed by `tenant_id`, RLS
+Task 5): every event is a row of `identity.outbox` (distributed by `tenant_id`, RLS
 forced, insert-only for `app_runtime` under the policy `tenant_id = app.tenant_id()`, poll, mark and
 purge for `app_system`) written in the state change's transaction, so a failed insert fails the
 flow and a rollback takes the event with it. `OutboxModule.forFeature` runs the relay (Redis lock
@@ -294,17 +294,23 @@ The tables and the `tenant_role` enum live in the `identity` Postgres schema (`i
 them (`identity.users`). The schema file imports only `drizzle-orm` and a dependency-free relative file, so
 drizzle-kit can load it. Identity owns its migration history: `drizzle.config.ts` generates
 `src/infrastructure/persistence/migrations` (`bun run --filter @domain/identity db:generate`), bookkeeping in
-`identity.__drizzle_migrations`, and `identityMigrations` applies it after the platform set.
+`identity.__drizzle_migrations`, and `identityMigrations` applies it after the platform set. Since the final squash
+(SH-12) the history is one `0000_init.sql`: drizzle-kit's tables, enum, indexes and FKs, hand-edited into the sharding
+design's order (the tables in distribution order, each `app.*` call right after its `CREATE TABLE`, then its indexes;
+the FKs after every call; then forced RLS, the grants and the policies). The stacked files it replaced (`0000_init` ..
+`0010_outbox`) stay in `test/stacked-history/` as the fixture of `identity.squash.int-spec.ts`; a database migrated
+before the squash must be recreated
+([docs/DEVELOPMENT.md](../../docs/DEVELOPMENT.md#database-migrations-postgres--drizzle)).
 
-**Citus distribution** (`0008_distribute`, SH-5; only `SELECT app.*` calls, no-ops without Citus):
+**Citus distribution** (SH-5, in `0000_init`; `SELECT app.*` calls, no-ops without Citus):
 `users`, `tenants`, `memberships` are reference tables (parents first); `invitations` and
-`audit_events` are distributed by `tenant_id`, colocated with `app.tenant_colocation`; `sessions` is
+`audit_events` (and the outbox) are distributed by `tenant_id`, colocated with `app.tenant_colocation`; `sessions` is
 distributed by `user_id` in its own colocation group. The runner applies a fresh database's whole
 set in one transaction with local execution on for its own session, so the shards of tables created
 earlier in that transaction are created over the coordinator's own connection. A table added later
 carries its own `app.distribute_*` call right after its `CREATE TABLE`.
 
-**Row-level security** (`0009_rls`, B3; spec §8.2, row-local per the B3 ruling of 2026-11-17). RLS is enabled and
+**Row-level security** (B3; spec §8.2, row-local per the B3 ruling of 2026-11-17). RLS is enabled and
 forced on all six tables, so the owner is filtered too. Grants are explicit per table and role (deny by default, no
 default privileges); `identity.__drizzle_migrations` gets neither RLS nor a grant to an app role. Every policy uses
 only the row's own columns and `app.user_id()`, `app.tenant_id()`, `app.elevated()`, called directly. No policy
@@ -410,20 +416,26 @@ machine). Every spec starts a fresh Citus 14.2 container through `startRlsTestPo
   `users_email_unique` → `EMAIL_TAKEN`, `findByIds`, keyset + literal ILIKE search, the `isPlatformStaff` fresh read, DB
   defaults, the session FK cascade and compare-and-set rotation, and the trigram search index (`EXPLAIN` → `Bitmap Index
 Scan on users_search_trgm_idx`).
-- `infrastructure/persistence/identity.distribution.int-spec.ts` checks `0008_distribute`: kind, colocation group and shard
-  count of every table, then the repositories and the purge on the distributed tables.
-- `infrastructure/persistence/identity.rls.int-spec.ts` checks `0009_rls`. It runs raw postgres.js as `app_runtime`,
+- `infrastructure/persistence/identity.squash.int-spec.ts` (SH-12) applies the stacked history (`test/stacked-history/`)
+  to one fresh Citus and the squashed `0000_init` to another, both through the real runner as `app_owner` after the
+  platform set, and checks that the catalogs of `app` and `identity` are equal (`readSchemaCatalog`: tables, columns,
+  constraints, indexes, policies, table and column grants, enums, functions, triggers, and the Citus distribution with
+  its colocation groups and shard ranges).
+- `infrastructure/persistence/identity.distribution.int-spec.ts` checks the distribution calls: kind, colocation group
+  and shard count of every table, `0000_init`'s calls re-run without change, then the repositories and the purge on the
+  distributed tables.
+- `infrastructure/persistence/identity.rls.int-spec.ts` checks the RLS of `0000_init`. It runs raw postgres.js as `app_runtime`,
   `app_system` and `app_owner`, one transaction per case opened with `buildRlsContextSql`, against two tenants, and checks
   both paths of every policy with exact rows. A forbidden write leaves the superuser's snapshot unchanged. It also covers
   the grants, the no-context refusals and FORCE RLS on all six tables (and the outbox).
-- `infrastructure/persistence/identity.outbox.rls.int-spec.ts` checks `0010_outbox`: `identity.outbox` distributed by
+- `infrastructure/persistence/identity.outbox.rls.int-spec.ts` checks `identity.outbox`: distributed by
   `tenant_id` and colocated with `app.tenant_colocation`, RLS enabled and forced, exactly `INSERT` for `app_runtime` and
   `SELECT, INSERT, UPDATE, DELETE` for `app_system`, the single `outbox_insert` policy, the runtime insert of its own
   tenant's row only (no read, update or delete), and the poll and mark of `IdentityOutboxSystemRepository`.
 - `infrastructure/persistence/identity.repositories.rls.int-spec.ts` calls every public method of every runtime port
   standalone as the right principal (a typed table: a new port method without a case does not compile) and once with no
   principal, and the system repositories by their pinned methods.
-- `infrastructure/persistence/tenancy.repositories.int-spec.ts` runs the tenancy repositories under the 0009 policies,
+- `infrastructure/persistence/tenancy.repositories.int-spec.ts` runs the tenancy repositories under the RLS policies,
   the cross-tenant reads through the system repositories.
 - `test/identity-flows.rls.int-spec.ts` (17 cases) runs the real identity core on the three URLs, with the real RBAC and
   commands through the `CommandBus`: register, login (with and without a membership), refresh and reuse, switch tenant,

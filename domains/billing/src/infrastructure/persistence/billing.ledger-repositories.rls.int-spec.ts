@@ -38,7 +38,7 @@ import { BillingOutboxSystemRepository } from './drizzle-outbox.system-repositor
 /*
  * The ledger repositories (outbox plan Task 11) on the roles of production: the real DatabaseModule
  * on startRlsTestPostgres (Citus 14.2, local execution off), billing's migrations as app_owner, the
- * receipts repository as app_runtime under 0005's insert-only RLS (a non-elevated member, like the
+ * receipts repository as app_runtime under the ledger's insert-only RLS (a non-elevated member, like the
  * posting consumer's `roles: []` principal), the system repository as app_system inside
  * SystemContext. Seeding and assertions go through the superuser.
  * Opt-in (needs Docker):

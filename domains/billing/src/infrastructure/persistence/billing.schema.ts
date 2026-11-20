@@ -112,7 +112,7 @@ export const stripeEvents = billingPgSchema.table(
 // citus: tenant. The transactional outbox (@platform/outbox; outbox plan Task 6): billing's integration
 // events, inserted by the runtime role in the unit of work that changes the state they report (the
 // webhook's payment completion), and published by the relay on the system pool. The runtime role may
-// only INSERT its own tenant's rows (0004_outbox: no SELECT grant, one insert policy); app_system
+// only INSERT its own tenant's rows (0000_init: no SELECT grant, one insert policy); app_system
 // polls, marks, purges and is the only writer of PLATFORM_TENANT_ID rows (`outbox.insertAsPlatform`).
 // Declared by hand with the exact shape of the shared outbox table (`describeOutboxTable` pins it):
 // this file cannot import @platform/outbox (drizzle-kit loads it without workspace packages).
@@ -138,7 +138,7 @@ export const outbox = billingPgSchema.table(
 );
 
 /*
- * The ledger's Postgres side (0005_ledger_tables, outbox plan Task 10, "Ledger tables"; ledger design
+ * The ledger's Postgres side (0000_init, outbox plan Task 10, "Ledger tables"; ledger design
  * §5). The entries themselves live in immudb; these tables hold the receipts and bookkeeping around
  * them. No FK anywhere: billing has no cross-domain FK, and a distributed table cannot reference a
  * coordinator-local one, so payment_id, run_id and resolves_id are plain columns. Every table has

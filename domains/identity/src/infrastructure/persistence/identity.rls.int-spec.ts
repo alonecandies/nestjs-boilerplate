@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { identityMigrations } from './identity.migrations.js';
 
 /*
- * Identity RLS (0009_rls: forced RLS, explicit grants and the spec §8.2 policies, row-local per the
+ * Identity RLS (0000_init: forced RLS, explicit grants and the spec §8.2 policies, row-local per the
  * ruling of 2026-11-17: no policy reads another table) on Citus 14.2, single node, local execution
  * off (startRlsTestPostgres), so every shard statement runs over a remote connection as on a
  * cluster. Migrated as app_owner by the real runner; seeded as the superuser
@@ -100,7 +100,7 @@ class Rollback<T> extends Error {
 const sorted = (values: readonly string[]): string[] => [...values].sort();
 
 describe.skipIf(process.env['INTEGRATION'] !== '1')(
-  'identity RLS (0009_rls) on Citus, local execution off',
+  'identity RLS on Citus, local execution off',
   () => {
     let pg: RlsTestPostgres | undefined;
     let admin: Sql;
@@ -862,12 +862,12 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         }
       });
 
-      it('all six tables (and the outbox, 0010) have RLS enabled and forced; identity.__drizzle_migrations has neither and app_runtime cannot read it', async () => {
+      it('all six tables (and the outbox) have RLS enabled and forced; identity.__drizzle_migrations has neither and app_runtime cannot read it', async () => {
         const rows = await admin<{ name: string; enabled: boolean; forced: boolean }[]>`
           select c.relname as name, c.relrowsecurity as enabled, c.relforcerowsecurity as forced
           from pg_class c join pg_namespace n on n.oid = c.relnamespace
           where n.nspname = 'identity' and c.relkind = 'r' order by c.relname`;
-        // identity.outbox (0010_outbox) has its own spec: identity.outbox.rls.int-spec.ts.
+        // identity.outbox has its own spec: identity.outbox.rls.int-spec.ts.
         expect(rows).toEqual(
           sorted([...IDENTITY_TABLES, 'outbox', '__drizzle_migrations']).map((name) => ({
             name,

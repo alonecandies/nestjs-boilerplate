@@ -473,7 +473,7 @@ only the query, decides which rows a request sees (program spec section 8, B3). 
   table: Citus rejects subqueries in policies, and a helper that reads another distributed table fails on a shard
   (`XX000 cannot execute a distributed query from a query on a shard`). The per-table policies are in
   [`domains/identity/README.md`](../domains/identity/README.md#data-model-identityschemats--identityschema) and
-  [`domains/billing/README.md`](../domains/billing/README.md#row-level-security-0003_rlssql-b3-5b3-6-program-spec-82).
+  [`domains/billing/README.md`](../domains/billing/README.md#row-level-security-b3-5b3-6-program-spec-82).
   Rows with `tenant_id = PLATFORM_TENANT_ID` match no runtime policy; only the system pool reads or writes them.
 - **One principal per transaction.** The principal is final before a unit of work opens. A runtime repository reaches
   the database only through `inUnitOfWork`, which compares the CLS principal with what `BEGIN` applied and throws

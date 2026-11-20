@@ -12,7 +12,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { billingMigrations } from './billing.migrations.js';
 
 /*
- * Billing's row-level security (0003_rls, B3-5/B3-6, program spec §8.2) on citusdata/citus:14.2.0
+ * Billing's row-level security (0000_init, B3-5/B3-6, program spec §8.2) on citusdata/citus:14.2.0
  * with the three roles and local execution off (startRlsTestPostgres): every shard query goes over a
  * remote connection, so a context that did not reach the shards fails here as on a cluster.
  * The real runner applies the platform set and billing's history as app_owner; the fixture is seeded
@@ -242,7 +242,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         expect([...rows]).toEqual([
           { grantee: 'app_runtime', name: 'payments', privileges: 'INSERT,SELECT,UPDATE' },
           { grantee: 'app_runtime', name: 'stripe_events', privileges: 'INSERT,SELECT' },
-          // 0006_ledger_system_reads (outbox plan Task 11): reconciliation R3 reads payments.
+          // app_system's SELECT on payments (outbox plan Task 11): reconciliation R3 reads payments.
           { grantee: 'app_system', name: 'payments', privileges: 'SELECT' },
           { grantee: 'app_system', name: 'stripe_events', privileges: 'DELETE,INSERT,SELECT' },
         ]);
@@ -254,8 +254,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
             array_to_string(roles, ',') as roles
           from pg_policies where schemaname = 'billing' order by 1`;
         expect([...rows]).toEqual([
-          // 0004_outbox (outbox plan Task 6); billing.outbox.rls.int-spec.ts covers it.
-          // 0005_ledger_tables (outbox plan Task 10); billing.ledger.rls.int-spec.ts covers them.
+          // billing.outbox (outbox plan Task 6); billing.outbox.rls.int-spec.ts covers it.
+          // The ledger tables (outbox plan Task 10); billing.ledger.rls.int-spec.ts covers them.
           ...['ledger_accounts', 'ledger_discrepancies', 'ledger_entry_refs'].flatMap((table) => [
             { name: `${table}.${table}_insert`, command: 'INSERT', roles: 'app_runtime' },
             { name: `${table}.${table}_select`, command: 'SELECT', roles: 'app_runtime' },
@@ -522,7 +522,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         expect(changed).toEqual([1, EVENTS.length + 1]);
       });
 
-      it('app_system reads every payment (0006, reconciliation R3) but cannot write one, and cannot update stripe_events', async () => {
+      it('app_system reads every payment (reconciliation R3) but cannot write one, and cannot update stripe_events', async () => {
         await expect(plain(system, paymentIds)).resolves.toEqual(
           PAYMENTS.map((payment) => payment.id).toSorted(),
         );

@@ -25,7 +25,7 @@ import { toPaymentRow } from './payment-row.mapper.js';
 /*
  * Billing's repositories on the roles of production (B3-8, B3-11, B3-15): the real DatabaseModule
  * on the three URLs of startRlsTestPostgres (local execution off), migrations as app_owner, the app
- * as app_runtime under 0003's forced RLS, the system repository as app_system. Seeding and
+ * as app_runtime under the forced RLS, the system repository as app_system. Seeding and
  * assertions go through the superuser.
  * - Every public method of both runtime ports (a table the compiler keeps exhaustive), called
  *   standalone as the right principal, opens its own unit of work and returns the expected rows;

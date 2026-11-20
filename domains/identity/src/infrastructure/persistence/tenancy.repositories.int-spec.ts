@@ -30,10 +30,10 @@ import { DrizzleTenantsRepository } from './drizzle-tenants.repository.js';
 /*
  * identity's tenancy repositories against Citus 14.2 (single node, local execution off) with
  * identity's real migration history, on the three roles (test/identity-database.ts): every runtime
- * call runs as a principal under the 0009 policies (writes that need elevation inside
+ * call runs as a principal under the RLS policies (writes that need elevation inside
  * `database.elevated`), the cross-tenant reads through the system repositories, seeding and
  * constraint probes through the superuser. Opt-in: INTEGRATION=1 npx vitest run --project identity:int tenancy
- * The tables are distributed by identity's 0008_distribute (SH-5); every query carries its
+ * The tables are distributed by identity's 0000_init (SH-5); every query carries its
  * distribution column (sharding design §2.1).
  */
 

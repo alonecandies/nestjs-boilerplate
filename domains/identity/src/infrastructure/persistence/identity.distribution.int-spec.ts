@@ -30,9 +30,9 @@ import { identityMigrations } from './identity.migrations.js';
 import { type IdentitySchema, identitySchema } from './identity.schema.js';
 
 /*
- * SH-5: identity's distribution migration (0008_distribute) on Citus 14.2, single node, local
- * execution off (startRlsTestPostgres), so every shard statement goes over a remote connection as
- * on a cluster. The platform set and identity's whole history are applied as `app_owner` on a fresh
+ * SH-5: identity's distribution calls (in 0000_init since the SH-12 squash; 0008_distribute before)
+ * on Citus 14.2, single node, local execution off (startRlsTestPostgres), so every shard statement
+ * goes over a remote connection as on a cluster. The platform set and identity's whole history are applied as `app_owner` on a fresh
  * database by the real runner, in one transaction per set: the runner switches local execution on
  * for its own session, so the shards of a schema created earlier in the same transaction are
  * created over the coordinator's own connection. Seeding and the repositories use the superuser
@@ -170,20 +170,20 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       expect(session?.shards).toBeGreaterThan(1);
     });
 
-    it('is a no-op when applied twice: by the runner, and by re-running 0008 itself', async () => {
+    it("is a no-op when applied twice: by the runner, and by re-running 0000_init's distribution calls", async () => {
       const before = await distribution();
 
       const again = await migrate();
       expect(again.applied).toBe(0);
 
-      const statements = readFileSync(
-        join(identityMigrations.folder, '0008_distribute.sql'),
-        'utf8',
-      )
+      const statements = readFileSync(join(identityMigrations.folder, '0000_init.sql'), 'utf8')
         .split('--> statement-breakpoint')
         .map((statement) => statement.trim())
-        .filter((statement) => statement !== '');
-      expect(statements).toHaveLength(IDENTITY_TABLES.length);
+        .filter((statement) => /^SELECT app\./.test(statement));
+      expect(statements.map((statement) => /'([\w.]+)'/.exec(statement)?.[1])).toEqual([
+        ...IDENTITY_TABLES,
+        'identity.outbox',
+      ]);
       await owner.begin(async (tx) => {
         for (const statement of statements) await tx.unsafe(statement);
       });
