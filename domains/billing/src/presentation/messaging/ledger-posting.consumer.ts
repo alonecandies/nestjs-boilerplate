@@ -34,9 +34,10 @@ const RETRIABLE_STRIPE_CODES: readonly string[] = [
 
 /**
  * Postgres failures worth a redelivery besides the connection codes of `isTransientConnectionError`:
- * statement, lock and idle-in-transaction timeouts.
+ * statement, lock and idle-in-transaction timeouts, a deadlock (`40P01`) and a serialization
+ * failure (`40001`): each aborts only this attempt, and the redelivery runs again from the start.
  */
-const POSTGRES_TIMEOUT_CODES: readonly string[] = ['57014', '55P03', '25P03'];
+const POSTGRES_RETRIABLE_CODES: readonly string[] = ['57014', '55P03', '25P03', '40P01', '40001'];
 
 /**
  * `billing.ledger-posting.v1` → ledger entries (outbox plan Task 13, LG §3). The envelope must
@@ -46,7 +47,7 @@ const POSTGRES_TIMEOUT_CODES: readonly string[] = ['57014', '55P03', '25P03'];
  * `{ userId, tenantId, roles: [] }`, or inside `SystemContext.run('billing.ledger-posting', …)`
  * when the tenant is `PLATFORM_TENANT_ID` or the user is null.
  * Failures (the outcomes table): immudb `unavailable`, a Stripe 5xx, 429 or network error and a
- * Postgres connection or timeout error (also after a post) become `KafkaRetriableException`, so
+ * Postgres connection, timeout, deadlock or serialization error (also after a post) become `KafkaRetriableException`, so
  * kafkajs redelivers the record and it is never dead-lettered; the deterministic entry ids make the
  * redelivery `replayed`. Everything else (a tenant mismatch, an unbalanced draft, a Stripe 404,
  * `42501`) is thrown as is and `@KafkaConsumerController()` dead-letters it to
@@ -106,8 +107,8 @@ function assertEnvelopeMatchesPayload(event: EventEnvelope<LedgerPostingRequeste
 
 /**
  * True for the failures a redelivery can heal: immudb `unavailable`, a retriable Stripe failure,
- * and a Postgres connection or timeout error anywhere in the cause chain (drizzle wraps the
- * driver's error).
+ * and a Postgres connection, timeout, deadlock or serialization error anywhere in the cause chain
+ * (drizzle wraps the driver's error).
  */
 export function isRetriableLedgerPostingError(error: unknown): boolean {
   if (error instanceof ImmudbError) return error.kind === 'unavailable';
@@ -115,7 +116,7 @@ export function isRetriableLedgerPostingError(error: unknown): boolean {
   for (let current: unknown = error, depth = 0; current !== undefined && depth < 5; depth++) {
     if (isTransientConnectionError(current)) return true;
     const code = field(current, 'code');
-    if (typeof code === 'string' && POSTGRES_TIMEOUT_CODES.includes(code)) return true;
+    if (typeof code === 'string' && POSTGRES_RETRIABLE_CODES.includes(code)) return true;
     current = field(current, 'cause');
   }
   return false;

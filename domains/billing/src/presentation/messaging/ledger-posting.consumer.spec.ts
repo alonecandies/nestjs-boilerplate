@@ -242,6 +242,35 @@ describe('LedgerPostingConsumer', () => {
           code: '57014',
         }),
     ],
+    [
+      'a Postgres deadlock (40P01), after the post',
+      'ref',
+      () => Object.assign(new Error('deadlock detected'), { code: '40P01' }),
+    ],
+    [
+      'a Postgres deadlock (40P01) wrapped by drizzle, after the post',
+      'ref',
+      () =>
+        new Error('Failed query: insert …', {
+          cause: Object.assign(new Error('deadlock detected'), { code: '40P01' }),
+        }),
+    ],
+    [
+      'a Postgres serialization failure (40001), after the post',
+      'ref',
+      () =>
+        Object.assign(new Error('could not serialize access due to concurrent update'), {
+          code: '40001',
+        }),
+    ],
+    [
+      'a Postgres serialization failure (40001) wrapped by drizzle, after the post',
+      'ref',
+      () =>
+        new Error('Failed query: insert …', {
+          cause: Object.assign(new Error('could not serialize access'), { code: '40001' }),
+        }),
+    ],
   ])(
     '%s → KafkaRetriableException (redelivered, never dead-lettered)',
     async (_label, step, make) => {

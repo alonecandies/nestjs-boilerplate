@@ -585,8 +585,8 @@ tx id (the idempotent insert keeps an existing one), `conflict` one `post_confli
 tenant account rows and findings go through `LedgerReceiptsRepository`, its platform account rows through
 `recordPlatformAccounts` in a nested `SystemContext.run('billing.ledger-platform-accounts', …)`; in `SystemContext`
 everything goes through `LedgerSystemRepository` (a user-less tenant posting records only the platform's account
-rows). immudb `unavailable`, Stripe 5xx/429/network and Postgres connection or timeout errors become
-`KafkaRetriableException` (redelivered, never dead-lettered); anything else is dead-lettered. `BillingLedgerModule`
+rows). immudb `unavailable`, Stripe 5xx/429/network and Postgres connection, timeout, deadlock (`40P01`) or
+serialization (`40001`) errors become `KafkaRetriableException` (redelivered, never dead-lettered); anything else is dead-lettered. `BillingLedgerModule`
 binds `LedgerPort` to `ImmudbLedgerAdapter` while `LEDGER_ENABLED=true` (the app imports `ImmudbModule`) and to
 `DisabledLedger` (`LEDGER_DISABLED`, 503) otherwise. Metrics: `ledger_postings_total{outcome}`,
 `ledger_post_duration_seconds`, `ledger_discrepancies_total{kind}` (new rows only). Tests: `ledger.service.spec.ts`,
