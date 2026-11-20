@@ -25,5 +25,6 @@ export const GATEWAY_E2E_ENV: Readonly<Record<string, string>> = {
   IDENTITY_GRPC_URL: '127.0.0.1:1',
   NOTIFICATIONS_GRPC_URL: '127.0.0.1:1',
   BILLING_GRPC_URL: '127.0.0.1:1',
+  AI_GRPC_URL: '127.0.0.1:1',
   GRPC_DEADLINE_MS: '2000',
 };

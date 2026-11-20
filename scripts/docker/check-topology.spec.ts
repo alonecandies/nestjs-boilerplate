@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  aiJourney,
   appServices,
   type ComposeConfig,
   databaseApps,
@@ -22,8 +23,10 @@ interface Recorded {
   body: unknown;
 }
 
-/** A fetch double serving the two journey endpoints; `override` replaces one response. */
-function fakeApi(override: Partial<Record<'register' | 'me', Response>> = {}) {
+/** A fetch double serving the journey endpoints; `override` replaces one response. */
+function fakeApi(
+  override: Partial<Record<'register' | 'me' | 'aiCreate' | 'aiRead', Response>> = {},
+) {
   const calls: Recorded[] = [];
   let email = '';
   const fetchImpl: typeof fetch = async (input, init) => {
@@ -45,6 +48,14 @@ function fakeApi(override: Partial<Record<'register' | 'me', Response>> = {}) {
     }
     if (url.pathname === '/v1/auth/me') {
       return override.me ?? Response.json({ id: 'u-1', email }, { status: 200 });
+    }
+    if (url.pathname === '/v1/ai/conversations') {
+      return (
+        override.aiCreate ?? Response.json({ status: 503, code: 'AI_DISABLED' }, { status: 503 })
+      );
+    }
+    if (url.pathname === '/v1/ai/conversations/c-1') {
+      return override.aiRead ?? Response.json({ id: 'c-1' }, { status: 200 });
     }
     return new Response('not found', { status: 404 });
   };
@@ -123,12 +134,14 @@ describe('appServices', () => {
       'billing-service': { profiles: ['microservices'] },
       'identity-service': { profiles: ['microservices'] },
       'notifications-service': { profiles: ['microservices'] },
+      'ai-service': { profiles: ['microservices'] },
     },
   };
 
   it('returns only the services of the topology profile, sorted', () => {
     expect(appServices(config, 'monolith')).toEqual(['monolith']);
     expect(appServices(config, 'microservices')).toEqual([
+      'ai-service',
       'billing-service',
       'gateway',
       'identity-service',
@@ -138,11 +151,12 @@ describe('appServices', () => {
 });
 
 describe('smokeJourney', () => {
-  it('registers a fresh user, then reads it back with the access token', async () => {
+  it('registers a fresh user, reads it back, then reaches the AI chat API as that user', async () => {
     const api = fakeApi();
     const result = await smokeJourney('http://127.0.0.1:23000', api.fetchImpl);
     expect(result.email).toMatch(/^smoke-[0-9a-f-]{36}@example\.com$/);
     expect(result.userId).toBe('u-1');
+    expect(result.ai).toBe('disabled');
     expect(api.calls).toEqual([
       {
         method: 'POST',
@@ -151,6 +165,12 @@ describe('smokeJourney', () => {
         body: { email: result.email, password: SMOKE_PASSWORD, displayName: 'Topology Smoke' },
       },
       { method: 'GET', path: '/v1/auth/me', authorization: 'Bearer token-1', body: undefined },
+      {
+        method: 'POST',
+        path: '/v1/ai/conversations',
+        authorization: 'Bearer token-1',
+        body: { title: 'Topology Smoke' },
+      },
     ]);
   });
 
@@ -172,6 +192,37 @@ describe('smokeJourney', () => {
     const api = fakeApi({ me: Response.json({ id: 'u-2', email: 'someone@example.com' }) });
     await expect(smokeJourney('http://127.0.0.1:23000', api.fetchImpl)).rejects.toThrow(
       /expected "smoke-/,
+    );
+  });
+});
+
+describe('aiJourney', () => {
+  it('accepts 503 AI_DISABLED (AI off, the compose default)', async () => {
+    await expect(aiJourney('http://x.test', 't', fakeApi().fetchImpl)).resolves.toBe('disabled');
+  });
+
+  it('with AI on, creates a conversation and reads it back', async () => {
+    const api = fakeApi({ aiCreate: Response.json({ id: 'c-1' }, { status: 201 }) });
+    await expect(aiJourney('http://x.test', 't', api.fetchImpl)).resolves.toBe('enabled');
+    expect(api.calls.map((call) => `${call.method} ${call.path}`)).toEqual([
+      'POST /v1/ai/conversations',
+      'GET /v1/ai/conversations/c-1',
+    ]);
+  });
+
+  it('fails on a 503 that is not AI_DISABLED (an unreachable ai-service)', async () => {
+    const api = fakeApi({
+      aiCreate: Response.json({ status: 503, code: 'SERVICE_UNAVAILABLE' }, { status: 503 }),
+    });
+    await expect(aiJourney('http://x.test', 't', api.fetchImpl)).rejects.toThrow(
+      /expected AI_DISABLED/,
+    );
+  });
+
+  it('fails with the status and body on anything else', async () => {
+    const api = fakeApi({ aiCreate: new Response('{"code":"BOOM"}', { status: 502 }) });
+    await expect(aiJourney('http://x.test', 't', api.fetchImpl)).rejects.toThrow(
+      'POST /v1/ai/conversations: HTTP 502 (expected 201): {"code":"BOOM"}',
     );
   });
 });
@@ -212,9 +263,14 @@ describe('three-role wiring of the compose apps', () => {
         'identity-service': { profiles: ['microservices'], environment: wired },
         'billing-service': { profiles: ['microservices'], environment: wired },
         'notifications-service': { profiles: ['microservices'] },
+        'ai-service': { profiles: ['microservices'], environment: wired },
       },
     };
     expect(databaseApps(config, 'monolith')).toEqual(['monolith']);
-    expect(databaseApps(config, 'microservices')).toEqual(['billing-service', 'identity-service']);
+    expect(databaseApps(config, 'microservices')).toEqual([
+      'ai-service',
+      'billing-service',
+      'identity-service',
+    ]);
   });
 });

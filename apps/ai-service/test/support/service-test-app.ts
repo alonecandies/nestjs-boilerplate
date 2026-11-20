@@ -1,0 +1,42 @@
+import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
+import type { TestingModuleBuilder } from '@nestjs/testing';
+import { buildFastifyOptions, configureHttpApp } from '@platform/bootstrap';
+import { appConfig } from '@platform/config';
+import type { GrpcPackageSpec } from '@platform/contracts';
+import { createFastifyTestApp } from '@platform/testing';
+import { connectGrpcServer } from '@platform/transport';
+
+export interface ServiceTestAppOptions {
+  /** gRPC packages served on `GRPC_URL` (like `connectGrpcServer` in main.ts). */
+  grpc: readonly GrpcPackageSpec[];
+}
+
+/**
+ * Boots the service the way `main.ts` does — `createServiceApp` wiring → gRPC →
+ * `startAllMicroservices` — but from a `TestingModule`, so network-edge providers can be
+ * overridden with fakes. HTTP is exercised with `app.inject()` (no port bound); the gRPC server
+ * really listens on `GRPC_URL`. Close it with `app.close()`.
+ */
+export async function startServiceTestApp(
+  builder: TestingModuleBuilder,
+  options: ServiceTestAppOptions,
+): Promise<NestFastifyApplication> {
+  const config = appConfig.parse();
+  const app = await createFastifyTestApp(
+    builder,
+    async (created) => {
+      // = createServiceApp (no CORS/cookies/raw body/multipart). Signal hooks stay off: the test
+      // closes the app itself, and several apps may share one process.
+      await configureHttpApp(created, {
+        config,
+        cors: false,
+        cookies: false,
+        shutdownHooks: false,
+      });
+      connectGrpcServer(created, options.grpc);
+    },
+    { adapter: new FastifyAdapter(buildFastifyOptions(config)), appOptions: { bufferLogs: true } },
+  );
+  await app.startAllMicroservices();
+  return app;
+}

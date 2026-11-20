@@ -20,11 +20,15 @@ export {
 } from '../identity.constants.js';
 export { IDENTITY_RBAC, IdentityPermission } from '../identity.permissions.js';
 export { IdentityApiModule } from '../identity-api.module.js';
+// The UsersPort gRPC binding on its own, for a service that calls identity-service without serving
+// identity's edge (ai-service's chat tools); IdentityApiModule.forRemote() binds the same classes.
+export { IdentityGrpcCaller } from '../infrastructure/adapters/grpc/identity-grpc.caller.js';
 export {
   type IdentityGrpcClientConfig,
   identityGrpcClientConfig,
   identityGrpcClientEnvSchema,
 } from '../infrastructure/adapters/grpc/identity-grpc-client.config.js';
+export { UsersGrpcAdapter } from '../infrastructure/adapters/grpc/users-grpc.adapter.js';
 export { AuthPayloadModel } from '../presentation/graphql/models/auth-payload.model.js';
 export { UserModel } from '../presentation/graphql/models/user.model.js';
 export { UserConnectionModel } from '../presentation/graphql/models/user-connection.model.js';

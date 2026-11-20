@@ -3,6 +3,7 @@ import * as root from '../index.js';
 import * as api from './index.js';
 
 const API_VALUES = [
+  'AI_GRPC_UPSTREAM',
   'AI_LIMITS',
   'AI_MESSAGE_STREAM_TRIGGER',
   'AI_RATE_LIMITS',
@@ -10,12 +11,15 @@ const API_VALUES = [
   'AI_SSE_EVENTS',
   'AiApiModule',
   'AiChatErrorCode',
+  'AiGrpcAdapter',
   'AiPermission',
   'AiPort',
   'MESSAGE_ROLES',
   'MESSAGE_STATUSES',
   'SSE_CONTENT_TYPE',
   'USAGE_OUTCOMES',
+  'aiGrpcClientConfig',
+  'aiGrpcClientEnvSchema',
   'aiMessageStreamTrigger',
   'aiRateLimitConfig',
 ];
@@ -36,6 +40,7 @@ describe('@domain/ai entry points', () => {
       'AiCoreModule',
       'AiToolSources',
       'AiChatTools',
+      'AiGrpcModule',
     ]) {
       expect(root).toHaveProperty(name);
       expect(api).not.toHaveProperty(name);

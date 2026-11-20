@@ -22,7 +22,7 @@ export const GATEWAY_API_DOCS: ApiDocsOptions = {
   description:
     'API gateway of the microservices topology: REST under `/v1`, GraphQL at `/graphql` and the ' +
     'Socket.IO namespace `/notifications`, served here and executed by identity-, ' +
-    'notifications- and billing-service over gRPC. Access tokens are verified at the edge. ' +
+    'notifications-, billing- and ai-service over gRPC. Access tokens are verified at the edge. ' +
     'Errors are RFC 9457 `application/problem+json`.',
   version: '1.0.0',
 };

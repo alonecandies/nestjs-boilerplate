@@ -51,7 +51,7 @@ if ! node -e '
   const pooler = c.services.pgbouncer;
   if (!pooler) bad.push("service pgbouncer missing");
   else if ((pooler.profiles ?? []).length > 0) bad.push("pgbouncer must have no profile");
-  for (const name of ["monolith", "identity-service", "billing-service"]) {
+  for (const name of ["monolith", "identity-service", "billing-service", "ai-service"]) {
     const e = c.services[name]?.environment ?? {};
     const user = (key) => (e[key] ?? "").replace(/^postgres:\/\/([^:]+):.*@([^/]+)\/.*$/, "$1@$2");
     if (user("DATABASE_URL") !== "app_runtime@pgbouncer:6432") bad.push(name + ": DATABASE_URL");

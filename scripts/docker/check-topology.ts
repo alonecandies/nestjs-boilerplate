@@ -1,7 +1,9 @@
 // Topology smoke test (E-4). Boots one compose topology (monolith | microservices) with the app
 // images in an ISOLATED compose project on shifted host ports, waits until every container is
 // healthy and every app answers GET /health/ready, runs one REST journey through the edge API
-// (register, then GET /v1/auth/me with the returned token), proves that an app whose DATABASE_URL
+// (register, then GET /v1/auth/me with the returned token, then one AI chat call: 503 AI_DISABLED
+// from the app that runs AI, or a conversation it creates when the stack enables AI), proves that
+// an app whose DATABASE_URL
 // is the superuser refuses to start (the boot guard in `enforce`), and removes the project.
 //
 //   node scripts/docker/check-topology.ts up <monolith|microservices>     # builds the images
@@ -44,9 +46,13 @@ export interface ComposeConfig {
 /** Marker of the boot guard's refusal of a superuser runtime connection (libs/database boot-guard). */
 export const SUPERUSER_REFUSAL = 'runtime.not-superuser';
 
+/** How the AI chat API answered: AI off (the default) or a conversation created and read back. */
+export type SmokeAiOutcome = 'disabled' | 'enabled';
+
 export interface SmokeResult {
   readonly email: string;
   readonly userId: string;
+  readonly ai: SmokeAiOutcome;
 }
 
 export function isTopology(value: string | undefined): value is Topology {
@@ -144,7 +150,50 @@ async function readJson(
   return body as Record<string, unknown>;
 }
 
-/** POST /v1/auth/register (201, accessToken) then GET /v1/auth/me (200, same email). */
+/**
+ * POST /v1/ai/conversations as the fresh user (an owner: `ai:chat`). The edge answers through the
+ * app that runs AI (the monolith, or ai-service over gRPC): 503 `AI_DISABLED` while AI is off (the
+ * compose default), the code having crossed the hop; with AI on, 201 and the conversation reads back.
+ */
+export async function aiJourney(
+  baseUrl: string,
+  token: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<SmokeAiOutcome> {
+  const label = 'POST /v1/ai/conversations';
+  const response = await fetchImpl(new URL('/v1/ai/conversations', baseUrl), {
+    method: 'POST',
+    headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ title: 'Topology Smoke' }),
+  });
+  if (response.status === 503) {
+    const problem = await readJson(response, label, 503);
+    if (problem.code !== 'AI_DISABLED') {
+      throw new Error(
+        `${label}: 503 with code ${JSON.stringify(problem.code)}, expected AI_DISABLED`,
+      );
+    }
+    return 'disabled';
+  }
+  const created = await readJson(response, label, 201);
+  const id = typeof created.id === 'string' ? created.id : '';
+  const read = await readJson(
+    await fetchImpl(new URL(`/v1/ai/conversations/${id}`, baseUrl), {
+      headers: { authorization: `Bearer ${token}` },
+    }),
+    `GET /v1/ai/conversations/${id}`,
+    200,
+  );
+  if (id === '' || read.id !== id) {
+    throw new Error(`GET /v1/ai/conversations/${id} returned ${JSON.stringify(read.id)}`);
+  }
+  return 'enabled';
+}
+
+/**
+ * POST /v1/auth/register (201, accessToken), GET /v1/auth/me (200, same email), then the AI step
+ * (`aiJourney`).
+ */
 export async function smokeJourney(
   baseUrl: string,
   fetchImpl: typeof fetch = fetch,
@@ -177,7 +226,8 @@ export async function smokeJourney(
       `GET /v1/auth/me returned ${JSON.stringify(user.email)}, expected ${JSON.stringify(email)}`,
     );
   }
-  return { email, userId: typeof user.id === 'string' ? user.id : '' };
+  const ai = await aiJourney(baseUrl, token, fetchImpl);
+  return { email, userId: typeof user.id === 'string' ? user.id : '', ai };
 }
 
 function run(argv: readonly string[], env: NodeJS.ProcessEnv, capture = false): string {
@@ -344,7 +394,7 @@ async function up(topology: Topology): Promise<void> {
       console.info(`  ${probed}: superuser DATABASE_URL refused by the boot guard (${outcome})`);
     }
     console.info(
-      `[check-topology] OK: ${topology} registered ${result.email} and read it back in ${Math.round((Date.now() - started) / 1000)}s`,
+      `[check-topology] OK: ${topology} registered ${result.email} and read it back, AI ${result.ai}, in ${Math.round((Date.now() - started) / 1000)}s`,
     );
   } catch (error) {
     spawnSync('docker', compose('ps', '-a'), { env, stdio: 'inherit' });
@@ -375,7 +425,9 @@ async function main(argv: string[]): Promise<void> {
   const baseUrl = values['base-url'];
   if (command === 'smoke' && baseUrl !== undefined) {
     const result = await smokeJourney(baseUrl);
-    console.info(`[check-topology] journey OK against ${baseUrl} (${result.email})`);
+    console.info(
+      `[check-topology] journey OK against ${baseUrl} (${result.email}, AI ${result.ai})`,
+    );
     return;
   }
   if (command === 'up' && isTopology(topology)) {

@@ -3,7 +3,7 @@
 The **API gateway** of the microservices topology. It serves the same edge API as the
 [monolith](../monolith/README.md) — the same controllers, resolvers, Socket.IO gateway and push
 consumer — but every port is bound to a **gRPC adapter** (`XApiModule.forRemote()`) that calls
-identity-, notifications- or billing-service with a deadline, retry-on-`UNAVAILABLE`, a circuit
+identity-, notifications-, billing- or ai-service with a deadline, retry-on-`UNAVAILABLE`, a circuit
 breaker per upstream and the request/correlation ids in the metadata. It owns no data.
 
 ```
@@ -11,7 +11,8 @@ client ─► HTTP :3000 (Fastify) REST /v1 · GraphQL /graphql · Socket.IO /no
              │  JWT verified HERE (signature + Redis denylist), RBAC, throttling, validation
              ├── gRPC ─► identity-service      :50051  (AuthService, UsersService)
              ├── gRPC ─► notifications-service :50052  (NotificationsService)
-             └── gRPC ─► billing-service       :50053  (BillingService)
+             ├── gRPC ─► billing-service       :50053  (BillingService)
+             └── gRPC ─► ai-service            :50054  (AiService; StreamMessage server-streamed)
 Kafka notifications.notification-created.v1 (group `gateway-push`)
              └─► Socket.IO room t:{tid}:u:{uid} (Redis adapter) + GraphQL subscription (Redis PubSub)
 ```
@@ -26,7 +27,7 @@ outage becomes a 503 problem+json within `GRPC_DEADLINE_MS` without leaking inte
 ```bash
 bun run setup               # install + copy every .env.example to .env (never overwrites)
 bun run docker:infra        # local infrastructure from the root docker-compose.yml
-bun run dev:microservices   # gateway + identity + notifications + billing, all in watch mode
+bun run dev:microservices   # gateway + identity + notifications + billing + ai, all in watch mode
 bun run dev:gateway         # only the gateway (node --watch on the TS sources, no build step)
 ```
 
@@ -74,6 +75,7 @@ off.
 | Identity | `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/refresh`, `POST /v1/auth/logout`, `GET /v1/auth/me`, `GET /v1/users`, `GET /v1/users/:id`                                                                                                                                                                   |
 | Notifs   | `GET /v1/notifications`, `POST /v1/notifications/:id/read`; Socket.IO namespace `/notifications` (`auth: { token }`, websocket transport)                                                                                                                                                                                   |
 | Billing  | `POST /v1/billing/checkout-sessions`, `POST /v1/billing/webhooks/stripe` (raw bytes + signature forwarded to billing-service), `GET /v1/billing/payments`                                                                                                                                                                   |
+| AI       | `POST/GET /v1/ai/conversations`, `GET/DELETE /v1/ai/conversations/:id`, `GET/POST /v1/ai/conversations/:id/messages`, `POST /v1/ai/conversations/:id/messages/stream` (SSE from ai-service's server stream; closing the connection cancels the gRPC call)                                                                   |
 | Files    | `POST /v1/files` (streaming multipart), `POST /v1/files/presigned-uploads`, `GET /v1/files/download-url`, `DELETE /v1/files` — edge-only, straight to object storage                                                                                                                                                        |
 | GraphQL  | `POST /graphql`: `me`, `user`, `users`, `notifications`, `payments` (`Payment.user` composed here by `PaymentUserFieldResolver`, batched by the `users` DataLoader); mutations `register`, `login`, `refreshTokens`, `markNotificationRead`, `createCheckoutSession`, `createUploadUrl`; subscription `notificationCreated` |
 
@@ -118,6 +120,9 @@ The e2e suite boots the real `AppModule` with the production HTTP wiring and bin
 DomainExceptions as the gRPC adapters. Billing keeps its real gRPC adapter, pointed at a dead
 upstream, to assert the 503 mapping; `test/payment-user.e2e-spec.ts` binds `BillingPort` to a stub
 instead (`createGatewayE2eApp({ billing })`) to prove `Payment.user` over the remote ports.
+`test/ai.e2e-spec.ts` points `AI_GRPC_URL` at a stand-in ai-service on loopback (the real
+`AiGrpcController` over `FakeAiPort`, `@domain/ai/testing`): REST and SSE over the real gRPC hop,
+the caller in metadata, the codes back, and a disconnect cancelling the streamed call.
 `REDIS_CLIENT` → `InMemoryRedis`, `CACHE_MANAGER` → L1 only, `GRAPHQL_PUB_SUB` → in-process PubSub,
 `StorageService` → in-memory. `test/app.e2e-spec.ts` also asserts that the gateway never loads the
 `refreshToken`, `password` or `stripe` namespaces.

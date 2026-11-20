@@ -55,6 +55,7 @@ Budget: the stack is sized for **4 CPUs / 4 GB** of Docker Desktop memory (see [
 | `identity-service`      | built (`APP=identity-service`)                    | 50051 (gRPC)                 | microservices       | AuthService + UsersService                                                                 |
 | `notifications-service` | built (`APP=notifications-service`)               | 50052 (gRPC)                 | microservices       | NotificationsService + Kafka consumers + mail                                              |
 | `billing-service`       | built (`APP=billing-service`)                     | 50053 (gRPC)                 | microservices       | BillingService (Stripe)                                                                    |
+| `ai-service`            | built (`APP=ai-service`)                          | 50054 (gRPC)                 | microservices       | AiService (chat over OpenRouter, server-streamed turns; off unless `AI_ENABLED=true`)      |
 | `prometheus`            | `prom/prometheus:v3.15.0`                         | 9090                         | observability       | scrapes every app's `/metrics` + exporters, evaluates the outbox and ledger alert rules    |
 | `grafana`               | `grafana/grafana:13.2.2`                          | **3300**                     | observability, logs | dashboards (admin/admin, anonymous viewer)                                                 |
 | `jaeger`                | `jaegertracing/jaeger:2.20.0`                     | 16686 (UI), 4317/4318 (OTLP) | observability       | traces (in-memory)                                                                         |
@@ -68,19 +69,19 @@ Every host port binds **127.0.0.1 only** and can be moved with a `*_HOST_PORT` v
 listed at the bottom of [`.env.example`](../.env.example)), e.g. `POSTGRES_HOST_PORT=15432 docker compose up -d` when
 5432 is taken:
 
-| Variable                                                                              | Default               | Service                         |
-| ------------------------------------------------------------------------------------- | --------------------- | ------------------------------- |
-| `API_HOST_PORT`                                                                       | 3000                  | `monolith` or `gateway` (`api`) |
-| `POSTGRES_HOST_PORT` · `PGBOUNCER_HOST_PORT`                                          | 5432 · 6432           | postgres · pgbouncer            |
-| `REDIS_HOST_PORT` · `CASSANDRA_HOST_PORT`                                             | 6379 · 9042           | redis · cassandra               |
-| `KAFKA_HOST_PORT`                                                                     | 9094                  | kafka EXTERNAL listener         |
-| `MAILPIT_SMTP_HOST_PORT` · `MAILPIT_UI_HOST_PORT`                                     | 1025 · 8025           | mailpit                         |
-| `S3_HOST_PORT` · `S3_CONSOLE_HOST_PORT` · `GCS_HOST_PORT`                             | 9000 · 9001 · 4443    | rustfs (S3, console) · gcs      |
-| `IDENTITY_GRPC_HOST_PORT` · `NOTIFICATIONS_GRPC_HOST_PORT` · `BILLING_GRPC_HOST_PORT` | 50051 · 50052 · 50053 | the three services' gRPC        |
-| `PROMETHEUS_HOST_PORT` · `GRAFANA_HOST_PORT`                                          | 9090 · **3300**       | prometheus · grafana            |
-| `JAEGER_UI_HOST_PORT` · `OTLP_GRPC_HOST_PORT` · `OTLP_HTTP_HOST_PORT`                 | 16686 · 4317 · 4318   | jaeger                          |
-| `LOKI_HOST_PORT` · `ALLOY_HOST_PORT`                                                  | 3100 · 12345          | loki · alloy                    |
-| `KAFKA_UI_HOST_PORT` · `K6_DASHBOARD_HOST_PORT`                                       | 8080 · 5665           | kafka-ui · k6 live dashboard    |
+| Variable                                                                                                    | Default                       | Service                         |
+| ----------------------------------------------------------------------------------------------------------- | ----------------------------- | ------------------------------- |
+| `API_HOST_PORT`                                                                                             | 3000                          | `monolith` or `gateway` (`api`) |
+| `POSTGRES_HOST_PORT` · `PGBOUNCER_HOST_PORT`                                                                | 5432 · 6432                   | postgres · pgbouncer            |
+| `REDIS_HOST_PORT` · `CASSANDRA_HOST_PORT`                                                                   | 6379 · 9042                   | redis · cassandra               |
+| `KAFKA_HOST_PORT`                                                                                           | 9094                          | kafka EXTERNAL listener         |
+| `MAILPIT_SMTP_HOST_PORT` · `MAILPIT_UI_HOST_PORT`                                                           | 1025 · 8025                   | mailpit                         |
+| `S3_HOST_PORT` · `S3_CONSOLE_HOST_PORT` · `GCS_HOST_PORT`                                                   | 9000 · 9001 · 4443            | rustfs (S3, console) · gcs      |
+| `IDENTITY_GRPC_HOST_PORT` · `NOTIFICATIONS_GRPC_HOST_PORT` · `BILLING_GRPC_HOST_PORT` · `AI_GRPC_HOST_PORT` | 50051 · 50052 · 50053 · 50054 | the four services' gRPC         |
+| `PROMETHEUS_HOST_PORT` · `GRAFANA_HOST_PORT`                                                                | 9090 · **3300**               | prometheus · grafana            |
+| `JAEGER_UI_HOST_PORT` · `OTLP_GRPC_HOST_PORT` · `OTLP_HTTP_HOST_PORT`                                       | 16686 · 4317 · 4318           | jaeger                          |
+| `LOKI_HOST_PORT` · `ALLOY_HOST_PORT`                                                                        | 3100 · 12345                  | loki · alloy                    |
+| `KAFKA_UI_HOST_PORT` · `K6_DASHBOARD_HOST_PORT`                                                             | 8080 · 5665                   | kafka-ui · k6 live dashboard    |
 
 `S3_HOST_PORT` also feeds the apps' `S3_PUBLIC_ENDPOINT` and `KAFKA_HOST_PORT` the advertised EXTERNAL listener, so
 moving them keeps presigned URLs and host-side Kafka clients working. `GCS_HOST_PORT` likewise feeds fake-gcs's
@@ -116,6 +117,8 @@ flowchart LR
     G[gateway<br/>alias api :3000] -->|gRPC :50051| I[identity-service]
     G -->|gRPC| N[notifications-service]
     G -->|gRPC| B[billing-service]
+    G -->|gRPC, streaming| A[ai-service]
+    A -.->|tools, as the caller| I & N & B
   end
   M --> infra
   micro --> infra
@@ -131,7 +134,7 @@ Day-to-day workflow, scripts and debugging are in [DEVELOPMENT.md](DEVELOPMENT.m
    `bun run dev:microservices`. Every root `dev*` script first runs `bun run setup:env`, which copies each missing
    `.env` from its `.env.example` (never overwrites). The shared `@platform/config` defaults target the published ports
    (Kafka: `localhost:9094`, the EXTERNAL listener), but the per-app values that must differ live **only** in
-   `apps/*/.env` (`SERVICE_NAME`, `PORT` 3000/3001/3002/3003, `GRPC_URL` 0.0.0.0:50051/50052/50053,
+   `apps/*/.env` (`SERVICE_NAME`, `PORT` 3000/3001/3002/3003/3004, `GRPC_URL` 0.0.0.0:50051/50052/50053/50054,
    `DATABASE_RUN_MIGRATIONS=true`). Without those files every app would bind HTTP 3000 and gRPC 50051, and the
    monolith would boot against an empty schema. Starting an app another way (e.g. `bun run dev` inside `apps/<app>`)
    needs `bun run setup:env` once.
@@ -139,16 +142,17 @@ Day-to-day workflow, scripts and debugging are in [DEVELOPMENT.md](DEVELOPMENT.m
    `libs/`, `package.json` or `bun.lock` changes. Dependency layers stay cached, so a source change costs ~30 s.
    `APP_TARGET=dev` swaps in the `dev` target (TS sources, no compile step, see below).
 3. **Hybrid.** Services in Docker, one app on the host: the services publish their gRPC ports on the host-dev
-   defaults (50051/50052/50053 = the `IDENTITY/NOTIFICATIONS/BILLING_GRPC_URL` defaults `localhost:5005x`), so
-   `bun run dev:gateway` reaches them with the `.env` it creates. Start only the services you need
-   (`docker compose --profile microservices up -d --build --wait identity-service notifications-service billing-service`)
+   defaults (50051/50052/50053/50054 = the `IDENTITY/NOTIFICATIONS/BILLING/AI_GRPC_URL` defaults `localhost:5005x`),
+   so `bun run dev:gateway` reaches them with the `.env` it creates. Start only the services you need
+   (`docker compose --profile microservices up -d --build --wait identity-service notifications-service billing-service ai-service`)
    so the containerised gateway does not also claim host port 3000.
 
 Root `.env` vs. containers: Compose reads the root `.env` **only for `${VAR}` interpolation**. Containers get their
 environment from `docker-compose.yml` (plus an optional, gitignored **`.env.docker`**). Compose-only knobs are
 therefore prefixed `DOCKER_` or suffixed `_HOST_PORT`, so host-dev values (e.g. `NODE_ENV=development`) can never
 leak into containers. Deliberate pass-throughs: `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `CASSANDRA_KEYSPACE`,
-the Postgres/RustFS credentials.
+the Postgres/RustFS credentials, and `AI_ENABLED` / `OPENROUTER_API_KEY` (anchor `x-env-ai`: the monolith or
+ai-service; AI stays off unless both are set).
 
 ## Configuration of the app containers
 
@@ -248,7 +252,8 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   `02-roles.sql` creates the three roles (below).
   Tables come from the Drizzle migration sets, applied at boot under one advisory lock
   (`DATABASE_RUN_MIGRATIONS=true`): `@platform/database`'s platform set (schema `app`, `pg_trgm`), then the app's own
-  domain histories (identity-service: `identity`; billing-service: `billing`; monolith: both). In production, run
+  domain histories (identity-service: `identity`; billing-service: `billing`; ai-service: `ai`; monolith: all
+  three). In production, run
   them as a release job with the same image, from the app's folder (the image's `WORKDIR`):
   `docker compose run --rm --no-deps identity-service dist/migrate.js` (Kubernetes: a Job with
   `args: [dist/migrate.js]`) and set `DATABASE_RUN_MIGRATIONS=false`. The image's entrypoint is `node`, so the args
@@ -402,7 +407,7 @@ Compose builds the same targets (`APP_TARGET`, tag `boilerplate/<app>:${TAG:-loc
     from its `dist/` (swc `copyFiles`),
   - a declared runtime dependency of any closure package is not installed, or a workspace symlink dangles,
   - `dist/main.js` or `dist/instrument.js` is missing, or `dist/migrate.js` (the release job) for an app with a
-    `src/migrate.ts` (monolith, identity-service, billing-service).
+    `src/migrate.ts` (monolith, identity-service, billing-service, ai-service).
 
   It also removes install-only files (`bun.lock`, `bunfig.toml`, `patches/`) from the runtime tree.
 
@@ -602,8 +607,10 @@ Runs on pushes to `master` and on pull requests. Test layout and the integration
 topology with the app images in an isolated project (`bp-topology-<topology>`). It moves every
 `*_HOST_PORT` knob 20000 up (so the API is on `127.0.0.1:23000`) unless you set it, so your own
 stack keeps running. It waits for every healthcheck, then for `GET /health/ready` of every app from
-inside the compose network. Then it registers a user through the API and reads it back with
-`GET /v1/auth/me`, runs one throw-away container of the first database app (`monolith`, or `identity-service`) with
+inside the compose network. Then it registers a user through the API, reads it back with
+`GET /v1/auth/me` and, as that user, calls `POST /v1/ai/conversations`, which must answer from the app that runs AI
+(the monolith, or ai-service over gRPC): 503 `AI_DISABLED` with AI off (the default), or a conversation that reads
+back when the stack enables AI. It runs one throw-away container of the first database app (`monolith`, or `ai-service`) with
 `DATABASE_URL` set to the superuser, directly on `postgres:5432` (the boot guard in `enforce` must make it exit
 non-zero with a `runtime.not-superuser` finding), and removes the project. Before booting it checks that every
 database app is wired as in the table above. `KEEP=1` keeps it running, `NO_BUILD=1 TAG=<tag>`

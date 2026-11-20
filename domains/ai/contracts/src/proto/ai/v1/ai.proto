@@ -1,0 +1,166 @@
+syntax = "proto3";
+
+// AI bounded context: the caller's conversations and the chat turn, plain or server-streamed.
+// Every request carries the caller's active tenant and user (`req.user` at the gateway); the service
+// re-checks both against the principal in the call metadata.
+package ai.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+service AiService {
+  // Starts a conversation (refused while AI is disabled or for a model outside the allowlist).
+  rpc CreateConversation(CreateConversationRequest) returns (Conversation);
+  // The caller's conversations, newest first (keyset pages).
+  rpc ListConversations(ListConversationsRequest) returns (ConversationPage);
+  rpc GetConversation(GetConversationRequest) returns (Conversation);
+  // Deletes the conversation and its messages (usage records stay).
+  rpc DeleteConversation(DeleteConversationRequest) returns (google.protobuf.Empty);
+  // One page of the conversation's messages, newest first.
+  rpc ListMessages(ListMessagesRequest) returns (MessagePage);
+  // Sends the user's message with the history window and returns the stored reply.
+  rpc SendMessage(SendMessageRequest) returns (SendMessageResult);
+  // SendMessage, streamed: one `started` once the turn began (refusals are a status before it),
+  // then `delta`s in order and one `done`. Cancelling the call aborts the model call; the reply so
+  // far is stored as `incomplete`.
+  rpc StreamMessage(StreamMessageRequest) returns (stream StreamMessageEvent);
+}
+
+message CreateConversationRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  optional string title = 3;
+  // Defaults to AI_DEFAULT_MODEL; must be allowed.
+  optional string model = 4;
+}
+
+message Conversation {
+  string tenant_id = 1;
+  string id = 2;
+  // The owner: only this user reads or changes the conversation.
+  string user_id = 3;
+  // Absent until named.
+  optional string title = 4;
+  string model = 5;
+  google.protobuf.Timestamp created_at = 6;
+  google.protobuf.Timestamp updated_at = 7;
+}
+
+message ListConversationsRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  // 0 = the default page size.
+  int32 limit = 3;
+  // Opaque keyset cursor: the `next_cursor` of the previous page. Absent = first page.
+  optional string cursor = 4;
+}
+
+message ConversationPage {
+  repeated Conversation items = 1;
+  // Absent on the last page.
+  optional string next_cursor = 2;
+}
+
+message GetConversationRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string conversation_id = 3;
+}
+
+message DeleteConversationRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string conversation_id = 3;
+}
+
+message ListMessagesRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string conversation_id = 3;
+  // 0 = the default page size.
+  int32 limit = 4;
+  optional string cursor = 5;
+}
+
+message Message {
+  string tenant_id = 1;
+  string id = 2;
+  string conversation_id = 3;
+  // The conversation owner's.
+  string user_id = 4;
+  // "system" | "user" | "assistant" | "tool".
+  string role = 5;
+  // The content as JSON: a string, or an array of parts (text, tool calls, tool results).
+  string content_json = 6;
+  // "complete" | "incomplete".
+  string status = 7;
+  // The model that wrote an assistant message.
+  optional string model = 8;
+  optional int32 input_tokens = 9;
+  optional int32 output_tokens = 10;
+  optional string idempotency_key = 11;
+  optional string request_hash = 12;
+  google.protobuf.Timestamp created_at = 13;
+}
+
+message MessagePage {
+  repeated Message items = 1;
+  optional string next_cursor = 2;
+}
+
+message SendMessageRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string conversation_id = 3;
+  string content = 4;
+  // Defaults to the conversation's model; must be allowed.
+  optional string model = 5;
+  // The client's Idempotency-Key: a replay with the same body returns the stored reply.
+  optional string idempotency_key = 6;
+}
+
+message StreamMessageRequest {
+  string tenant_id = 1;
+  string user_id = 2;
+  string conversation_id = 3;
+  string content = 4;
+  optional string model = 5;
+  optional string idempotency_key = 6;
+}
+
+message SendMessageResult {
+  // The assistant's reply.
+  Message message = 1;
+  // True when an Idempotency-Key replay returned the stored reply (no model call).
+  bool replayed = 2;
+}
+
+// Tokens (and OpenRouter's cost, when reported) of the model call that produced a reply.
+message ChatUsage {
+  int32 input_tokens = 1;
+  int32 output_tokens = 2;
+  optional double cost_usd = 3;
+}
+
+message StreamMessageEvent {
+  oneof event {
+    StreamStarted started = 1;
+    StreamDelta delta = 2;
+    StreamDone done = 3;
+  }
+}
+
+// The turn began: the refusals (not found, key reused, model, disabled) are behind it.
+message StreamStarted {}
+
+message StreamDelta {
+  string text = 1;
+}
+
+message StreamDone {
+  // The stored reply.
+  Message message = 1;
+  bool replayed = 2;
+  // Absent when the request made no model call (a stored reply replayed by its key).
+  ChatUsage usage = 3;
+}

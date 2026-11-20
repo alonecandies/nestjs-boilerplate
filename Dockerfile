@@ -78,7 +78,7 @@ RUN --mount=type=cache,id=bun-install-cache,target=/var/cache/bun,sharing=locked
 # assemble-image.mjs prunes apps/domains/libs outside the closure, copies their dist/ and FAILS the build
 # on a missing asset (src/**/*.{proto,hbs,cql,sql,json} not in dist/), a missing runtime dependency,
 # a dangling workspace symlink or a missing dist/main.js / dist/instrument.js (and dist/migrate.js
-# for an app with a src/migrate.ts: monolith, identity-service, billing-service). PRUNE_NODE_MODULES
+# for an app with a src/migrate.ts: monolith, identity-, billing-, ai-service). PRUNE_NODE_MODULES
 # also drops *.d.ts, *.map, TS sources, docs and the `typescript` package from node_modules
 # (never read at runtime; ~35-40 % of the image: monolith 465 -> 294 MB). Build with
 # --build-arg PRUNE_NODE_MODULES=false to keep them.

@@ -157,7 +157,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        app: [gateway, monolith, identity-service, notifications-service, billing-service]
+        app:
+          [gateway, monolith, identity-service, notifications-service, billing-service, ai-service]
     steps:
       - uses: actions/checkout@v7
 

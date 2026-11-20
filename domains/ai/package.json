@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "AI bounded context: per-tenant conversations, messages and a usage log (Drizzle, Citus, RLS) and the chat API (REST, GraphQL, SSE and subscription streaming, RBAC, rate limit, idempotency, read-only tools run as the caller) over @platform/ai.",
+  "description": "AI bounded context: per-tenant conversations, messages and a usage log (Drizzle, Citus, RLS) and the chat API (REST, GraphQL, SSE and subscription streaming, RBAC, rate limit, idempotency, read-only tools run as the caller) over @platform/ai; served as ai.v1 over gRPC by ai-service (forRemote at the gateway).",
   "exports": {
     ".": {
       "@repo/source": "./src/index.ts",
@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@domain/billing-contracts": "workspace:*",
+    "@domain/ai-contracts": "workspace:*",
     "@domain/identity-contracts": "workspace:*",
     "@domain/notifications-contracts": "workspace:*",
     "@platform/ai": "workspace:*",
@@ -42,10 +43,13 @@
     "@platform/database": "workspace:*",
     "@platform/graphql": "workspace:*",
     "@platform/redis": "workspace:*",
+    "@platform/transport": "workspace:*",
+    "@grpc/grpc-js": "catalog:",
     "@nestjs/common": "catalog:",
     "@nestjs/config": "catalog:",
     "@nestjs/cqrs": "catalog:",
     "@nestjs/graphql": "catalog:",
+    "@nestjs/microservices": "catalog:",
     "@nestjs/swagger": "catalog:",
     "ai": "catalog:",
     "class-transformer": "catalog:",
@@ -53,14 +57,15 @@
     "drizzle-orm": "catalog:",
     "graphql": "catalog:",
     "lodash-es": "catalog:",
-    "zod": "catalog:"
+    "zod": "catalog:",
+    "nestjs-cls": "catalog:",
+    "rxjs": "catalog:"
   },
   "devDependencies": {
     "@platform/testing": "workspace:*",
     "@nestjs/core": "catalog:",
     "@types/lodash-es": "catalog:",
     "drizzle-kit": "catalog:",
-    "nestjs-cls": "catalog:",
     "postgres": "catalog:"
   }
 }

@@ -3,14 +3,18 @@
  * (Drizzle, distributed by tenant on Citus, under row-local RLS), over `@platform/ai`.
  *
  * Wiring: `aiSchema` and the migration set `aiMigrations` go into
- * `DatabaseModule.forRootAsync({ schema, migrations })`; the app imports `AiCoreModule` (handlers,
- * repositories, `AiModule`) then `AiApiModule.forLocal()`, and binds `AiToolSources` (globally) to the
- * owners' ports for the model's read-only tools. In-memory twins and `FakeAiToolSources`:
+ * `DatabaseModule.forRootAsync({ schema, migrations })`; the monolith imports `AiCoreModule`
+ * (handlers, repositories, `AiModule`) then `AiApiModule.forLocal()`; ai-service imports
+ * `AiGrpcModule` (the core + `ai.v1.AiService`) and the gateway `AiApiModule.forRemote()`. The
+ * process that runs the core binds `AiToolSources` (globally) to the owners' ports for the model's
+ * read-only tools. In-memory twins and `FakeAiToolSources`:
  * `@domain/ai/testing`.
  */
 
-// The core (handlers, repositories, model client) for the process that owns the ai tables.
+// The core (handlers, repositories, model client) for the process that owns the ai tables, and
+// ai.v1.AiService over it (ai-service).
 export { AiCoreModule } from './ai-core.module.js';
+export { AiGrpcModule } from './ai-grpc.module.js';
 // The edge surface (also `@domain/ai/api`): the API module, port, permission, policy, records.
 export * from './api/index.js';
 // Application: the persistence ports

@@ -1,3 +1,4 @@
+import { AiApiModule } from '@domain/ai/api';
 import { BILLING_LOG_REDACT_PATHS, BillingApiModule } from '@domain/billing/api';
 import { FilesModule } from '@domain/files/api';
 import { IdentityApiModule } from '@domain/identity/api';
@@ -26,7 +27,8 @@ import { PaymentUserFieldResolver } from './graphql/payment-user.resolver.js';
  * The API gateway of the microservices topology. It serves the SAME presentation as the monolith
  * (REST controllers, GraphQL resolvers, the Socket.IO gateway, the push consumer), but every port
  * is bound to a gRPC adapter (`.forRemote()`: deadline, retry-on-UNAVAILABLE, circuit breaker,
- * request/correlation ids in metadata) that calls identity-, notifications- or billing-service.
+ * request/correlation ids in metadata) that calls identity-, notifications-, billing- or ai-service
+ * (the AI chat turn streamed server-side over gRPC, then as SSE or a GraphQL subscription).
  * Access tokens are verified here, locally (+ the Redis denylist): no RPC per request for auth.
  *
  * Owns no data: no DatabaseModule, Cassandra, mailer, Stripe, CQRS or Core module. Files are
@@ -64,6 +66,8 @@ import { PaymentUserFieldResolver } from './graphql/payment-user.resolver.js';
     IdentityApiModule.forRemote(),
     NotificationsApiModule.forRemote(),
     BillingApiModule.forRemote(),
+    // AI chat (`ai:chat`, the `ai.chat` rate limit at the edge) → ai-service.
+    AiApiModule.forRemote(),
     FilesModule,
   ],
   providers: [

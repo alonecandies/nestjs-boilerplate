@@ -32,6 +32,7 @@ scrape_configs:
           - identity-service
           - notifications-service
           - billing-service
+          - ai-service
         type: A
         port: 9464
         refresh_interval: 15s
@@ -44,7 +45,7 @@ scrape_configs:
   # Apps started on the host (`bun run dev:*`), reached through host.docker.internal
   # (Docker Desktop built-in; `extra_hosts: host-gateway` in compose for Linux). Default host metrics
   # ports (METRICS_PORT in apps/*/.env.example): 9464 monolith|gateway, 9465 identity, 9466
-  # notifications, 9467 billing. Targets that are not running are simply `down`. Containers never
+  # notifications, 9467 billing, 9468 ai. Targets that are not running are simply `down`. Containers never
   # publish 9464, so these targets cannot duplicate the in-network `nestjs-apps` job.
   - job_name: host-apps
     metrics_path: /metrics
@@ -54,6 +55,7 @@ scrape_configs:
           - host.docker.internal:9465
           - host.docker.internal:9466
           - host.docker.internal:9467
+          - host.docker.internal:9468
     relabel_configs:
       - source_labels: [__address__]
         regex: "[^:]+:(\\d+)"

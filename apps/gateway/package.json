@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "API gateway (microservices topology): REST + GraphQL + Socket.IO edge whose ports call identity-, notifications- and billing-service over gRPC; Kafka push consumer; JWT verification, RBAC, throttling and docs at the edge.",
+  "description": "API gateway (microservices topology): REST + GraphQL + Socket.IO edge whose ports call identity-, notifications-, billing- and ai-service over gRPC; Kafka push consumer; JWT verification, RBAC, throttling and docs at the edge.",
   "scripts": {
     "dev": "node --watch --watch-preserve-output --env-file-if-exists=../../.env --env-file-if-exists=.env --enable-source-maps --conditions=@repo/source --import @swc-node/register/esm-register --import ./src/instrument.ts src/main.ts",
     "start:dev": "bun run dev",
@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@platform/auth": "workspace:*",
+    "@domain/ai": "workspace:*",
     "@domain/billing": "workspace:*",
     "@platform/bootstrap": "workspace:*",
     "@platform/common": "workspace:*",

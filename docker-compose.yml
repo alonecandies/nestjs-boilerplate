@@ -3,7 +3,7 @@
 #
 #   docker compose up -d --wait                                   # infra only (no profile)
 #   docker compose --profile monolith up -d --build --wait        # + monolith            :3000
-#   docker compose --profile microservices up -d --build --wait   # + gateway + 3 services :3000
+#   docker compose --profile microservices up -d --build --wait   # + gateway + 4 services :3000
 #   docker compose --profile citus up -d --wait                   # + one Citus worker (postgres-worker-1) and citus-init
 #   docker compose --profile observability up -d                  # + Prometheus, Grafana, Jaeger, exporters
 #   docker compose --profile logs up -d                           # + Loki + Alloy (container logs -> Grafana)
@@ -147,6 +147,14 @@ x-env-immudb: &env-immudb
   IMMUDB_PASSWORD: "${IMMUDB_PASSWORD:-Compose-local-App1!}"
   IMMUDB_ADMIN_PASSWORD: ${IMMUDB_ADMIN_PASSWORD:-immudb}
   IMMUDB_RUN_MIGRATIONS: "true"
+
+# AI chat through OpenRouter for the app that runs it: monolith or ai-service, one per topology.
+# Off unless the root .env sets AI_ENABLED=true and a real OPENROUTER_API_KEY (the other AI_* knobs
+# keep their defaults; add them to .env.docker to change them). Off, the chat routes answer 503
+# AI_DISABLED and nothing calls OpenRouter.
+x-env-ai: &env-ai
+  AI_ENABLED: ${AI_ENABLED:-false}
+  OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
 
 x-env-edge: &env-edge
   DOCS_ENABLED: ${DOCKER_DOCS_ENABLED:-true} # /docs (Scalar) + /openapi.json even in production mode
@@ -735,6 +743,7 @@ services:
         - *env-storage
         - *env-stripe
         - *env-immudb
+        - *env-ai
         - *env-edge
       SERVICE_NAME: monolith
       KAFKA_GROUP_ID: monolith
@@ -788,6 +797,7 @@ services:
       IDENTITY_GRPC_URL: identity-service:50051
       NOTIFICATIONS_GRPC_URL: notifications-service:50051
       BILLING_GRPC_URL: billing-service:50051
+      AI_GRPC_URL: ai-service:50051
     ports: ["127.0.0.1:${API_HOST_PORT:-3000}:3000"]
     networks:
       backend:
@@ -801,6 +811,7 @@ services:
       identity-service: { condition: service_started }
       notifications-service: { condition: service_started }
       billing-service: { condition: service_started }
+      ai-service: { condition: service_started }
     deploy:
       resources:
         limits: { cpus: "1.5", memory: 512M }
@@ -910,6 +921,40 @@ services:
       watch:
         - action: rebuild
           path: ./apps/billing-service
+          ignore: [node_modules/, dist/, test/]
+        - *watch-domains
+        - *watch-libs
+        - *watch-manifest
+        - *watch-lockfile
+
+  ai-service:
+    <<: *app
+    profiles: [microservices]
+    image: boilerplate/ai-service:${TAG:-local}
+    build:
+      context: .
+      target: ${APP_TARGET:-runtime}
+      args: { APP: ai-service }
+    environment:
+      <<: [*env-base, *env-postgres, *env-ai]
+      SERVICE_NAME: ai-service
+      NODE_OPTIONS: --max-old-space-size=320
+      GRPC_URL: 0.0.0.0:50051
+      # The model's read-only tools call the owners as the caller (channels connect on first use).
+      IDENTITY_GRPC_URL: identity-service:50051
+      NOTIFICATIONS_GRPC_URL: notifications-service:50051
+      BILLING_GRPC_URL: billing-service:50051
+    ports: ["127.0.0.1:${AI_GRPC_HOST_PORT:-50054}:50051"]
+    depends_on:
+      postgres: { condition: service_healthy }
+      pgbouncer: { condition: service_healthy }
+    deploy:
+      resources:
+        limits: { cpus: "1.0", memory: 448M }
+    develop:
+      watch:
+        - action: rebuild
+          path: ./apps/ai-service
           ignore: [node_modules/, dist/, test/]
         - *watch-domains
         - *watch-libs

@@ -42,3 +42,21 @@ export const AI_TOOL_LIMITS = {
   DEFAULT_ITEMS: 10,
   MAX_ITEMS: 20,
 } as const;
+
+/** gRPC circuit-breaker / operation name of the gateway's calls to ai-service (logs, metrics). */
+export const AI_GRPC_UPSTREAM = 'ai';
+
+/**
+ * Error codes with which ai-service answers for the model call or the caller, not for itself: the
+ * `ai` breaker does not count them as failures of ai-service (`isAiServiceAnswer`). The model call's
+ * codes are `@platform/ai`'s `AiErrorCode` (pinned by ai.constants.spec.ts, so the gateway's import
+ * graph needs no AI SDK).
+ */
+export const AI_SERVICE_ANSWER_CODES = [
+  'AI_DISABLED',
+  'AI_MODEL_NOT_ALLOWED',
+  'AI_INPUT_TOO_LARGE',
+  'AI_TIMEOUT',
+  'AI_UPSTREAM_ERROR',
+  ...Object.values(AiChatErrorCode),
+] as const;

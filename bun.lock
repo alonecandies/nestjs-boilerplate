@@ -43,6 +43,46 @@
         "yaml": "2.9.1",
       },
     },
+    "apps/ai-service": {
+      "name": "@app/ai-service",
+      "version": "0.0.0",
+      "dependencies": {
+        "@domain/ai": "workspace:*",
+        "@domain/ai-contracts": "workspace:*",
+        "@domain/billing": "workspace:*",
+        "@domain/billing-contracts": "workspace:*",
+        "@domain/identity": "workspace:*",
+        "@domain/identity-contracts": "workspace:*",
+        "@domain/notifications": "workspace:*",
+        "@domain/notifications-contracts": "workspace:*",
+        "@fastify/static": "catalog:",
+        "@grpc/grpc-js": "catalog:",
+        "@grpc/proto-loader": "catalog:",
+        "@nestjs/common": "catalog:",
+        "@nestjs/config": "catalog:",
+        "@nestjs/cqrs": "catalog:",
+        "@nestjs/microservices": "catalog:",
+        "@nestjs/platform-fastify": "catalog:",
+        "@platform/ai": "workspace:*",
+        "@platform/auth": "workspace:*",
+        "@platform/bootstrap": "workspace:*",
+        "@platform/common": "workspace:*",
+        "@platform/config": "workspace:*",
+        "@platform/contracts": "workspace:*",
+        "@platform/database": "workspace:*",
+        "@platform/observability": "workspace:*",
+        "@platform/transport": "workspace:*",
+        "class-transformer": "catalog:",
+        "class-validator": "catalog:",
+        "reflect-metadata": "catalog:",
+        "rxjs": "catalog:",
+      },
+      "devDependencies": {
+        "@nestjs/testing": "catalog:",
+        "@platform/testing": "workspace:*",
+        "drizzle-orm": "catalog:",
+      },
+    },
     "apps/billing-service": {
       "name": "@app/billing-service",
       "version": "0.0.0",
@@ -88,6 +128,7 @@
       "version": "0.0.0",
       "dependencies": {
         "@as-integrations/fastify": "catalog:",
+        "@domain/ai": "workspace:*",
         "@domain/billing": "workspace:*",
         "@domain/files": "workspace:*",
         "@domain/identity": "workspace:*",
@@ -271,13 +312,16 @@
       "name": "@domain/ai",
       "version": "0.0.0",
       "dependencies": {
+        "@domain/ai-contracts": "workspace:*",
         "@domain/billing-contracts": "workspace:*",
         "@domain/identity-contracts": "workspace:*",
         "@domain/notifications-contracts": "workspace:*",
+        "@grpc/grpc-js": "catalog:",
         "@nestjs/common": "catalog:",
         "@nestjs/config": "catalog:",
         "@nestjs/cqrs": "catalog:",
         "@nestjs/graphql": "catalog:",
+        "@nestjs/microservices": "catalog:",
         "@nestjs/swagger": "catalog:",
         "@platform/ai": "workspace:*",
         "@platform/auth": "workspace:*",
@@ -286,12 +330,15 @@
         "@platform/database": "workspace:*",
         "@platform/graphql": "workspace:*",
         "@platform/redis": "workspace:*",
+        "@platform/transport": "workspace:*",
         "ai": "catalog:",
         "class-transformer": "catalog:",
         "class-validator": "catalog:",
         "drizzle-orm": "catalog:",
         "graphql": "catalog:",
         "lodash-es": "catalog:",
+        "nestjs-cls": "catalog:",
+        "rxjs": "catalog:",
         "zod": "catalog:",
       },
       "devDependencies": {
@@ -299,8 +346,25 @@
         "@platform/testing": "workspace:*",
         "@types/lodash-es": "catalog:",
         "drizzle-kit": "catalog:",
-        "nestjs-cls": "catalog:",
         "postgres": "catalog:",
+      },
+    },
+    "domains/ai/contracts": {
+      "name": "@domain/ai-contracts",
+      "version": "0.0.0",
+      "dependencies": {
+        "@grpc/grpc-js": "catalog:",
+        "@nestjs/common": "catalog:",
+        "@nestjs/core": "catalog:",
+        "@nestjs/microservices": "catalog:",
+        "@platform/contracts": "workspace:*",
+        "protobufjs": "catalog:",
+        "reflect-metadata": "catalog:",
+        "rxjs": "catalog:",
+      },
+      "devDependencies": {
+        "@bufbuild/buf": "catalog:",
+        "ts-proto": "catalog:",
       },
     },
     "domains/billing": {
@@ -1097,6 +1161,8 @@
 
     "@apollo/utils.withrequired": ["@apollo/utils.withrequired@3.0.0", "", {}, "sha512-aaxeavfJ+RHboh7c2ofO5HHtQobGX4AgUujXP4CXpREHp9fQ9jPi6K9T1jrAKe7HIipoP0OJ1gd6JamSkFIpvA=="],
 
+    "@app/ai-service": ["@app/ai-service@workspace:apps/ai-service"],
+
     "@app/billing-service": ["@app/billing-service@workspace:apps/billing-service"],
 
     "@app/gateway": ["@app/gateway@workspace:apps/gateway"],
@@ -1282,6 +1348,8 @@
     "@css-inline/css-inline-win32-x64-msvc": ["@css-inline/css-inline-win32-x64-msvc@0.20.0", "", { "os": "win32", "cpu": "x64" }, "sha512-pdO/QXLRwuq/RxO5PSFMhmWGJSQOvkiDyV4RrewEkE7SOCY8HAYNhx1T0y0pj2WzxuVdbNQbpwiCHAdQNplUJw=="],
 
     "@domain/ai": ["@domain/ai@workspace:domains/ai"],
+
+    "@domain/ai-contracts": ["@domain/ai-contracts@workspace:domains/ai/contracts"],
 
     "@domain/billing": ["@domain/billing@workspace:domains/billing"],
 
