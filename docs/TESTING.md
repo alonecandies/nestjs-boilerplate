@@ -53,6 +53,8 @@ package (`<domain>-contracts`):
 
 Examples: `redis`, `identity`, `billing-contracts`, `gateway`, `gateway:e2e`, `identity-service:e2e`,
 `database:int`, `identity:int`. A new package gets its projects automatically. You do not need to register it.
+Project names must be unique, so a lib that shares a domain's folder name is `platform-<name>` (`libs/ai` is
+`platform-ai`, `domains/ai` is `ai`).
 One more project, `scripts`, runs the specs of the repo tooling (`scripts/**/*.spec.ts`, such as the layer boundary
 check) and the docs checks: `scripts/docs-catalogue.spec.ts` (error codes in API.md) and `scripts/docs-b3.spec.ts`
 (SECURITY.md lists exactly the system methods, elevation reasons and boot guard checks of the code, CONFIGURATION.md the

@@ -1,0 +1,50 @@
+{
+  "name": "@domain/ai",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "AI bounded context: per-tenant conversations, messages and a usage log (Drizzle, Citus, RLS) over @platform/ai.",
+  "exports": {
+    ".": {
+      "@repo/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./api": {
+      "@repo/source": "./src/api/index.ts",
+      "types": "./src/api/index.ts",
+      "default": "./dist/api/index.js"
+    },
+    "./testing": {
+      "@repo/source": "./src/testing/index.ts",
+      "types": "./src/testing/index.ts",
+      "default": "./dist/testing/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project ai",
+    "clean": "rimraf dist coverage",
+    "db:generate": "drizzle-kit generate",
+    "db:check": "drizzle-kit check",
+    "db:studio": "drizzle-kit studio --port 4985"
+  },
+  "dependencies": {
+    "@platform/common": "workspace:*",
+    "@platform/database": "workspace:*",
+    "@nestjs/common": "catalog:",
+    "drizzle-orm": "catalog:",
+    "lodash-es": "catalog:"
+  },
+  "devDependencies": {
+    "@platform/config": "workspace:*",
+    "@platform/testing": "workspace:*",
+    "@nestjs/core": "catalog:",
+    "@types/lodash-es": "catalog:",
+    "drizzle-kit": "catalog:",
+    "nestjs-cls": "catalog:",
+    "postgres": "catalog:"
+  }
+}

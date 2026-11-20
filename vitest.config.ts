@@ -29,7 +29,7 @@ export const SETUP_FILES = ['reflect-metadata', join(ROOT, 'vitest.setup.ts')];
 
 type WorkspaceDir = 'apps' | 'domains' | 'libs';
 
-interface WorkspacePackage {
+export interface WorkspacePackage {
   /** Vitest project name: the folder name, `<domain>-contracts` for domains/<domain>/contracts. */
   name: string;
   root: string;
@@ -90,8 +90,22 @@ const intProject = ({ name, root }: WorkspacePackage): TestProjectInlineConfigur
   },
 });
 
+/**
+ * Vitest needs unique project names: a lib that shares a domain's folder name (libs/ai, the
+ * platform client, and domains/ai, the context) is the project `platform-<name>`.
+ */
+export const withUniqueLibNames = (
+  libPackages: readonly WorkspacePackage[],
+  domainPackages: readonly WorkspacePackage[],
+): WorkspacePackage[] => {
+  const taken = new Set(domainPackages.map((pkg) => pkg.name));
+  return libPackages.map((pkg) =>
+    taken.has(pkg.name) ? { ...pkg, name: `platform-${pkg.name}` } : pkg,
+  );
+};
+
 const domains = packagesIn('domains');
-const libs = packagesIn('libs');
+const libs = withUniqueLibNames(packagesIn('libs'), domains);
 const apps = packagesIn('apps');
 
 /** Repo tooling under scripts/ (e.g. the layer boundary check), specs only. */

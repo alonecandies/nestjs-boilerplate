@@ -13,14 +13,21 @@ const EXEMPT_PREFIXES: readonly string[] = [];
 /** A line may name a domain only to assert that libs do NOT contain it. */
 const ALLOW_MARKER = 'vocabulary-allow';
 
+/** Domain folder names that are also generic words: only their package spellings count. */
+const GENERIC_DOMAIN_NAMES = new Set([
+  'files',
+  // `ai` is also the platform capability (@platform/ai, the AI SDK package `ai`).
+  'ai',
+]);
+
 /**
- * Words that name a business domain of this repo: every domains/<x> folder name (`files` is plain
- * English, so only its package spellings count) plus billing's vocabulary. Specs use the neutral
- * example vocabulary instead: orders, catalog, alerts, shipments.
+ * Words that name a business domain of this repo: every domains/<x> folder name (the generic ones
+ * by their package spellings only) plus billing's vocabulary. Specs use the neutral example
+ * vocabulary instead: orders, catalog, alerts, shipments.
  */
 const DOMAIN_WORDS: readonly string[] = [
   ...readdirSync(join(ROOT, 'domains'), { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && entry.name !== 'files')
+    .filter((entry) => entry.isDirectory() && !GENERIC_DOMAIN_NAMES.has(entry.name))
     .map((entry) => entry.name),
   'notification',
   'payment',
@@ -29,6 +36,8 @@ const DOMAIN_WORDS: readonly string[] = [
   'checkout',
   'files-service',
   '@domain/files',
+  'ai-service',
+  '@domain/ai',
 ];
 const escapeRegExp = (word: string): string => word.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
 /** A domain word between non-alphanumerics: `_`, `-`, `.` and camelCase humps are boundaries. */
@@ -65,6 +74,9 @@ describe('libs vocabulary: libs/ names no domain, specs and fixtures included', 
     expect(namesDomain("SERVICE_NAME: 'orders-service'")).toBe(false);
     expect(namesDomain('const shipmentId = orderPlaced.id;')).toBe(false);
     expect(namesDomain('copies the migration files')).toBe(false);
+    expect(namesDomain("import { generateText } from 'ai';")).toBe(false);
+    expect(namesDomain("import { ConversationsRepository } from '@domain/ai';")).toBe(true);
+    expect(namesDomain("SERVICE_NAME: 'ai-service'")).toBe(true);
   });
 
   it('finds no domain word outside the exempt paths', () => {

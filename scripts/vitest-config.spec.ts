@@ -3,13 +3,14 @@ import { join } from 'node:path';
 import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import {
+import config, {
   intHookTimeoutMs,
   SETUP_FILES,
   scriptsProject,
   UNIT_HOOK_TIMEOUT_MS,
   UNIT_TEST_TIMEOUT_MS,
   unitProject,
+  withUniqueLibNames,
 } from '../vitest.config.js';
 import { configureNestTestLogging } from '../vitest.setup.js';
 
@@ -41,6 +42,28 @@ describe('vitest.config.ts', () => {
     expect(intHookTimeoutMs({ TEST_POSTGRES_STARTUP_TIMEOUT_MS: '360000' })).toBe(420_000);
     // An invalid value fails in startTestPostgres itself; here it just keeps the default.
     expect(intHookTimeoutMs({ TEST_POSTGRES_STARTUP_TIMEOUT_MS: 'abc' })).toBe(180_000);
+  });
+
+  it('names a lib that shares a domain folder name platform-<name>, and leaves the others alone', () => {
+    const lib = (name: string) => ({ name, root: join(ROOT, 'libs', name) });
+    const domain = (name: string) => ({ name, root: join(ROOT, 'domains', name) });
+    expect(
+      withUniqueLibNames([lib('ai'), lib('redis')], [domain('ai'), domain('ai-contracts')]),
+    ).toEqual([
+      { name: 'platform-ai', root: join(ROOT, 'libs', 'ai') },
+      { name: 'redis', root: join(ROOT, 'libs', 'redis') },
+    ]);
+  });
+
+  it('gives every project of the repo a unique name (Vitest refuses duplicates)', () => {
+    const names = (config.test?.projects ?? []).map((project) =>
+      typeof project === 'object' && project !== null && 'test' in project
+        ? project.test?.name
+        : undefined,
+    );
+    expect(names).toContain('ai');
+    expect(names).toContain('platform-ai');
+    expect(new Set(names).size).toBe(names.length);
   });
 
   it('loads reflect-metadata first, then the repo setup file by absolute path', () => {

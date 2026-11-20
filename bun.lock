@@ -265,6 +265,26 @@
         "@platform/testing": "workspace:*",
       },
     },
+    "domains/ai": {
+      "name": "@domain/ai",
+      "version": "0.0.0",
+      "dependencies": {
+        "@nestjs/common": "catalog:",
+        "@platform/common": "workspace:*",
+        "@platform/database": "workspace:*",
+        "drizzle-orm": "catalog:",
+        "lodash-es": "catalog:",
+      },
+      "devDependencies": {
+        "@nestjs/core": "catalog:",
+        "@platform/config": "workspace:*",
+        "@platform/testing": "workspace:*",
+        "@types/lodash-es": "catalog:",
+        "drizzle-kit": "catalog:",
+        "nestjs-cls": "catalog:",
+        "postgres": "catalog:",
+      },
+    },
     "domains/billing": {
       "name": "@domain/billing",
       "version": "0.0.0",
@@ -1242,6 +1262,8 @@
     "@css-inline/css-inline-win32-arm64-msvc": ["@css-inline/css-inline-win32-arm64-msvc@0.20.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-1o8xla5ljVHS7SguH6nTV6uoAIMRZv+2MrcxfLRObpkUtCO7oKXDeWnia7XlmnLhDX8Ncx5bDOenZb1N35kCiA=="],
 
     "@css-inline/css-inline-win32-x64-msvc": ["@css-inline/css-inline-win32-x64-msvc@0.20.0", "", { "os": "win32", "cpu": "x64" }, "sha512-pdO/QXLRwuq/RxO5PSFMhmWGJSQOvkiDyV4RrewEkE7SOCY8HAYNhx1T0y0pj2WzxuVdbNQbpwiCHAdQNplUJw=="],
+
+    "@domain/ai": ["@domain/ai@workspace:domains/ai"],
 
     "@domain/billing": ["@domain/billing@workspace:domains/billing"],
 
