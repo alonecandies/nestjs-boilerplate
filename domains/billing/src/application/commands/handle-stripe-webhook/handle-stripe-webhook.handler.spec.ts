@@ -1078,6 +1078,19 @@ describe('HandleStripeWebhookHandler', () => {
       });
     });
 
+    it('a partial refund, a dispute and its reinstatement: partially_refunded again', async () => {
+      await deliver(money('charge.refunded', charge({ amount_refunded: 500 }), 'evt_ch_prf'));
+      await deliver(money('charge.dispute.funds_withdrawn', dispute(), 'evt_du_out'));
+      expect(store.payment(paid.id)?.status).toBe(PaymentStatus.Disputed);
+
+      await deliver(money('charge.dispute.funds_reinstated', dispute(), 'evt_du_in'));
+
+      expect(store.payment(paid.id)).toMatchObject({
+        status: PaymentStatus.PartiallyRefunded,
+        amountRefunded: 500,
+      });
+    });
+
     it('a transition that does not apply still writes the posting (the money moved)', async () => {
       const pending = makePayment({ userId: paid.userId, amountTotal: 2_500, currency: 'usd' });
       store.seed(pending);

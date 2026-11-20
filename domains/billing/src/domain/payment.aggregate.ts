@@ -361,12 +361,14 @@ export class Payment extends AggregateRoot {
   }
 
   /**
-   * Funds reinstated after a won dispute (`charge.dispute.funds_reinstated`): `disputed` →
-   * `succeeded`. Returns `false` from any other status.
+   * Funds reinstated after a won dispute (`charge.dispute.funds_reinstated`): `disputed` → the
+   * status before the dispute, from the refunded total: `partially_refunded` while refunds remain,
+   * else `succeeded`. Returns `false` from any other status.
    */
   reinstate(now: Date): boolean {
     if (this.state.status !== PaymentStatus.Disputed) return false;
-    this.state = { ...this.state, status: PaymentStatus.Succeeded, updatedAt: now };
+    const status = this.paidStatusOf(this.state.amountRefunded);
+    this.state = { ...this.state, status, updatedAt: now };
     return true;
   }
 

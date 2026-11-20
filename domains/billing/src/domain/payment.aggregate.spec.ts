@@ -485,6 +485,30 @@ describe('Payment aggregate', () => {
       });
     });
 
+    it('a partially refunded payment disputed then reinstated is partially_refunded again', () => {
+      const payment = at(PaymentStatus.Succeeded);
+      payment.refund(500, false, later);
+      expect(payment.dispute(later)).toBe(true);
+
+      expect(payment.reinstate(later)).toBe(true);
+
+      expect(payment.toSnapshot()).toMatchObject({
+        status: PaymentStatus.PartiallyRefunded,
+        amountRefunded: 500,
+        updatedAt: later,
+      });
+    });
+
+    it('a dispute reinstated after its only refund failed is succeeded', () => {
+      const payment = at(PaymentStatus.PartiallyRefunded, 500);
+      payment.dispute(later);
+      payment.failRefund(500, later);
+
+      expect(payment.reinstate(later)).toBe(true);
+
+      expect(payment.status).toBe(PaymentStatus.Succeeded);
+    });
+
     it.each([PaymentStatus.Pending, PaymentStatus.Failed, PaymentStatus.Expired])(
       'refuses every new transition from %s (no state change, no event)',
       (status) => {

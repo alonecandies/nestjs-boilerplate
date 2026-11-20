@@ -174,8 +174,8 @@ const PLATFORM_WEBHOOK_REASON = 'billing.platform-webhook';
  * Money events (L-11, `moneyEventOf`): `charge.succeeded`, `charge.refunded` (→ `refunded` or
  * `partially_refunded`, recording `amount_refunded`), `refund.created` / `refund.updated` (status
  * `succeeded`), `refund.failed` (the refund taken off: → `partially_refunded` while other refunds
- * remain, else `succeeded`),
- * `charge.dispute.funds_withdrawn` (→ `disputed`), `charge.dispute.funds_reinstated` (`disputed` →
+ * remain, else `succeeded`), `charge.dispute.funds_withdrawn` (→ `disputed`),
+ * `charge.dispute.funds_reinstated` (`disputed` → `partially_refunded` while refunds remain, else
  * `succeeded`) and `payout.paid` / `payout.failed`. While LEDGER_ENABLED, each event of the table
  * with a posting writes one `billing.ledger-posting.v1` row (envelope id `uuidv5(LEDGER_NAMESPACE,
  * evt id)`, key = tenant id) in the unit of work of its receipt; with the ledger off, transitions
