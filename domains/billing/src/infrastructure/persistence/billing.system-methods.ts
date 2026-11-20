@@ -37,6 +37,8 @@ export const BILLING_SYSTEM_METHODS = Object.freeze({
     ),
     /** 9: the entry refs of every tenant in a window, a keyset page by (tenant_id, entry_id). */
     listEntryRefs: defineSystemMethod('ledgerReconciliation.listEntryRefs', 'system'),
+    /** 9: the payments of R3's unpaired charge refs and R4's owners, by (tenant_id, id) keys. */
+    findPaymentsByIds: defineSystemMethod('ledgerReconciliation.findPaymentsByIds', 'system'),
     /** 10: the findings of a run, under their tenants (deterministic ids, append-only). */
     appendDiscrepancies: defineSystemMethod('ledgerReconciliation.appendDiscrepancies', 'system'),
     /** 10: R4's re-enqueued postings, outbox rows of any tenant. */

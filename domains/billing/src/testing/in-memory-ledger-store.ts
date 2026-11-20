@@ -5,9 +5,11 @@ import type { InMemoryOutbox } from '@platform/outbox/testing';
 import {
   assertLedgerListLimit,
   assertOutboxRecords,
+  assertPaymentKeys,
   assertPlatformAccounts,
   assertTrustedStateAdvance,
   type LedgerCursor,
+  type LedgerPaymentRow,
   type LedgerRunCounts,
   LedgerSystemRepository,
   PAID_PAYMENT_STATUSES,
@@ -59,7 +61,7 @@ export interface InMemoryLedgerStoreOptions {
  *   `DrizzleLedgerSystemRepository`; `enqueueMissingPostings` writes into `outbox` (relay it with
  *   the outbox's `pollUnpublished`/`markPublished`).
  * Every insert is idempotent by the table's primary key; refs and findings are never changed.
- * `payments` seeds what `listSucceededPayments` reads (`addPayments`).
+ * `payments` seeds what `listSucceededPayments` and `findPaymentsByIds` read (`addPayments`).
  */
 export class InMemoryLedgerStore {
   readonly entryRefs: LedgerEntryRef[] = [];
@@ -167,6 +169,17 @@ export class InMemoryLedgerSystemRepository extends LedgerSystemRepository {
     requireSystemContext('ledgerReconciliation.listEntryRefs');
     const rows = this.store.entryRefs.filter((row) => inWindow(row.postedAt, from, to));
     return page(rows, (row) => row.entryId, after, limit);
+  }
+
+  override async findPaymentsByIds(
+    keys: readonly LedgerCursor[],
+  ): Promise<readonly LedgerPaymentRow[]> {
+    assertPaymentKeys(keys);
+    if (keys.length === 0) return [];
+    requireSystemContext('ledgerReconciliation.findPaymentsByIds');
+    return this.store.payments
+      .filter((row) => keys.some((key) => key.tenantId === row.tenantId && key.id === row.id))
+      .map(({ tenantId, id, userId, status }) => ({ tenantId, id, userId, status }));
   }
 
   override async appendDiscrepancies(rows: readonly LedgerDiscrepancyInput[]): Promise<number> {

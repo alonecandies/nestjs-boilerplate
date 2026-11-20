@@ -52,6 +52,10 @@ const LEDGER_CALLS: Record<
     method: 'ledgerReconciliation.listEntryRefs',
     call: (r) => r.listEntryRefs(new Date(0), new Date(1), null, 10),
   },
+  findPaymentsByIds: {
+    method: 'ledgerReconciliation.findPaymentsByIds',
+    call: (r) => r.findPaymentsByIds([{ tenantId: PLATFORM_TENANT_ID, id: PLATFORM_TENANT_ID }]),
+  },
   appendDiscrepancies: {
     method: 'ledgerReconciliation.appendDiscrepancies',
     call: (r) => r.appendDiscrepancies([]),
@@ -104,7 +108,7 @@ const publicMethods = (prototype: object | null): string[] => {
 };
 
 describe('BILLING_SYSTEM_METHODS (spec §9: methods 5, 6, 8 (stripe_events half), 9-11 and G-1)', () => {
-  it('pins exactly the two stripe_events, four outbox and ten ledger methods, all in system scope', () => {
+  it('pins exactly the two stripe_events, four outbox and eleven ledger methods, all in system scope', () => {
     const methods = Object.values(BILLING_SYSTEM_METHODS).flatMap((repository) =>
       Object.values(repository).map(({ name, scope }) => ({ name, scope })),
     );
@@ -120,6 +124,8 @@ describe('BILLING_SYSTEM_METHODS (spec §9: methods 5, 6, 8 (stripe_events half)
       // Outbox plan Task 11: spec §9 items 9-11 and delta 4 (ruling 2).
       { name: 'ledgerReconciliation.listSucceededPayments', scope: 'system' },
       { name: 'ledgerReconciliation.listEntryRefs', scope: 'system' },
+      // Final review F4/F5: R3's unpaired refs and R4's owners, by payment key.
+      { name: 'ledgerReconciliation.findPaymentsByIds', scope: 'system' },
       { name: 'ledgerReconciliation.appendDiscrepancies', scope: 'system' },
       { name: 'ledgerReconciliation.enqueueMissingPostings', scope: 'system' },
       { name: 'ledgerEntryRefs.recordAsSystem', scope: 'system' },

@@ -407,6 +407,43 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         });
       });
 
+      it('findPaymentsByIds: the payments of the keys, any tenant or status, matched on tenant and id', async () => {
+        const rows = [
+          { tenantId: TENANT_A, id: id('g1'), userId: A1, status: PaymentStatus.Succeeded },
+          { tenantId: TENANT_B, id: id('g2'), userId: B1, status: PaymentStatus.Pending },
+          {
+            tenantId: PLATFORM_TENANT_ID,
+            id: id('g3'),
+            userId: A1,
+            status: PaymentStatus.Refunded,
+          },
+          { tenantId: TENANT_A, id: id('g4'), userId: A1, status: PaymentStatus.Succeeded },
+        ];
+        await db()
+          .superuser.insert(payments)
+          .values(rows.map((row) => ({ ...row, priceId: 'price_1', quantity: 1 })));
+        const [g1, g2, g3, g4] = rows as [
+          (typeof rows)[number],
+          (typeof rows)[number],
+          (typeof rows)[number],
+          (typeof rows)[number],
+        ];
+
+        const found = await inSystem(() =>
+          system.findPaymentsByIds([
+            { tenantId: g1.tenantId, id: g1.id },
+            { tenantId: g2.tenantId, id: g2.id },
+            { tenantId: g3.tenantId, id: g3.id },
+            // A cross pair of the keys' tenants and ids (g4 is TENANT_A's): no row.
+            { tenantId: TENANT_B, id: g4.id },
+            { tenantId: TENANT_A, id: id('g9') },
+          ]),
+        );
+
+        expect(found.toSorted((x, y) => x.id.localeCompare(y.id))).toEqual([g1, g2, g3]);
+        await expect(inSystem(() => system.findPaymentsByIds([]))).resolves.toEqual([]);
+      });
+
       it('listEntryRefs: every tenant, the platform included, posted in [from, to), in (tenant_id, id) order over three pages', async () => {
         const rows = [
           ref(TENANT_A, id('e1'), { postedAt: FROM }),
@@ -632,6 +669,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         const calls: Record<keyof LedgerSystemRepository, () => Promise<unknown>> = {
           listSucceededPayments: () => system.listSucceededPayments(FROM, TO, null, 10),
           listEntryRefs: () => system.listEntryRefs(FROM, TO, null, 10),
+          findPaymentsByIds: () => system.findPaymentsByIds([{ tenantId: TENANT_A, id: id('p1') }]),
           appendDiscrepancies: () => system.appendDiscrepancies([finding(TENANT_A, 'a')]),
           enqueueMissingPostings: () => system.enqueueMissingPostings([]),
           recordEntryRefs: () => system.recordEntryRefs([ref(TENANT_A, id('e1'))]),

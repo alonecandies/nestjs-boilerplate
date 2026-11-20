@@ -555,30 +555,31 @@ section 9 numbers the first group, the second is the B3 ruling below). The table
 itself; the shared `outbox.*` methods are in
 [System-method lists after this plan](#system-method-lists-after-this-plan):
 
-| Method                                        | Scope    | Used by (reason)                                                                                   |
-| --------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
-| `users.findCredentialsByEmail`                | pre-auth | login (spec 1): the credentials row by email                                                       |
-| `users.existsByEmail`                         | pre-auth | register pre-check (spec 2); the unique constraint still guards races                              |
-| `invitations.findByTokenHash`                 | pre-auth | accept invitation (spec 3): a multi-shard read, one index probe per shard                          |
-| `sessions.deleteExpired`                      | system   | the hourly purge, `identity.purge-expired-sessions` (spec 4): multi-shard `DELETE` slices          |
-| `stripeEvents.deleteProcessedBefore`          | system   | the hourly purge, `billing.purge-stripe-events` (spec 5)                                           |
-| `stripeEvents.markProcessedAsPlatform`        | system   | platform webhooks without a user, `billing.platform-webhook` (spec 8, `stripe_events` half)        |
-| `users.findByIdInTenant`                      | system   | `GET /v1/users/:id` and scoped `UsersPort` reads, `identity.user-directory`                        |
-| `users.listInTenant`                          | system   | `ListUsers`, `identity.user-directory`                                                             |
-| `users.findByIdsInTenant`                     | system   | `GetUsersByIds` (the GraphQL users DataLoader, `Payment.user`), `identity.user-directory`          |
-| `memberships.findMember`                      | system   | the member and profile after a role change, `identity.member-directory`                            |
-| `memberships.listMembers`                     | system   | `ListMembers` and GraphQL `tenantMembers`, `identity.member-directory`                             |
-| `memberships.listForUser`                     | system   | `ListMyTenants`, `identity.my-tenants`: every membership of the caller, across tenants             |
-| `ledgerReconciliation.listSucceededPayments`  | system   | reconciliation R3 (spec 9): paid payments of every tenant in a window, keyset by `(tenant_id, id)` |
-| `ledgerReconciliation.listEntryRefs`          | system   | reconciliation (spec 9): ledger entry refs of every tenant in a window, keyset                     |
-| `ledgerReconciliation.appendDiscrepancies`    | system   | reconciliation (spec 10): findings under their tenants, deterministic ids, append-only             |
-| `ledgerReconciliation.enqueueMissingPostings` | system   | reconciliation R4 (spec 10): re-enqueued ledger postings, outbox rows of any tenant                |
-| `ledgerEntryRefs.recordAsSystem`              | system   | the ledger-posting consumer in `SystemContext` (spec 10): refs of platform or user-less postings   |
-| `ledgerAccounts.recordPlatformAccounts`       | system   | ledger postings (outbox plan delta 4): `PLATFORM_TENANT_ID` account rows only                      |
-| `ledgerTrustedState.read`                     | system   | reconciliation R5 (spec 11): the stored trusted immudb state                                       |
-| `ledgerTrustedState.advance`                  | system   | reconciliation R5 (spec 11): compare-and-set after the dual proof                                  |
-| `ledgerRuns.start`                            | system   | the reconciliation cron (spec 11): a run starts                                                    |
-| `ledgerRuns.finish`                           | system   | the reconciliation cron (spec 11): a run finishes, once                                            |
+| Method                                        | Scope    | Used by (reason)                                                                                    |
+| --------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------- |
+| `users.findCredentialsByEmail`                | pre-auth | login (spec 1): the credentials row by email                                                        |
+| `users.existsByEmail`                         | pre-auth | register pre-check (spec 2); the unique constraint still guards races                               |
+| `invitations.findByTokenHash`                 | pre-auth | accept invitation (spec 3): a multi-shard read, one index probe per shard                           |
+| `sessions.deleteExpired`                      | system   | the hourly purge, `identity.purge-expired-sessions` (spec 4): multi-shard `DELETE` slices           |
+| `stripeEvents.deleteProcessedBefore`          | system   | the hourly purge, `billing.purge-stripe-events` (spec 5)                                            |
+| `stripeEvents.markProcessedAsPlatform`        | system   | platform webhooks without a user, `billing.platform-webhook` (spec 8, `stripe_events` half)         |
+| `users.findByIdInTenant`                      | system   | `GET /v1/users/:id` and scoped `UsersPort` reads, `identity.user-directory`                         |
+| `users.listInTenant`                          | system   | `ListUsers`, `identity.user-directory`                                                              |
+| `users.findByIdsInTenant`                     | system   | `GetUsersByIds` (the GraphQL users DataLoader, `Payment.user`), `identity.user-directory`           |
+| `memberships.findMember`                      | system   | the member and profile after a role change, `identity.member-directory`                             |
+| `memberships.listMembers`                     | system   | `ListMembers` and GraphQL `tenantMembers`, `identity.member-directory`                              |
+| `memberships.listForUser`                     | system   | `ListMyTenants`, `identity.my-tenants`: every membership of the caller, across tenants              |
+| `ledgerReconciliation.listSucceededPayments`  | system   | reconciliation R3 (spec 9): paid payments of every tenant in a window, keyset by `(tenant_id, id)`  |
+| `ledgerReconciliation.listEntryRefs`          | system   | reconciliation (spec 9): ledger entry refs of every tenant in a window, keyset                      |
+| `ledgerReconciliation.findPaymentsByIds`      | system   | reconciliation R3 and R4 (spec 9): payments by `(tenant_id, id)` key, any tenant, at most 1000 keys |
+| `ledgerReconciliation.appendDiscrepancies`    | system   | reconciliation (spec 10): findings under their tenants, deterministic ids, append-only              |
+| `ledgerReconciliation.enqueueMissingPostings` | system   | reconciliation R4 (spec 10): re-enqueued ledger postings, outbox rows of any tenant                 |
+| `ledgerEntryRefs.recordAsSystem`              | system   | the ledger-posting consumer in `SystemContext` (spec 10): refs of platform or user-less postings    |
+| `ledgerAccounts.recordPlatformAccounts`       | system   | ledger postings (outbox plan delta 4): `PLATFORM_TENANT_ID` account rows only                       |
+| `ledgerTrustedState.read`                     | system   | reconciliation R5 (spec 11): the stored trusted immudb state                                        |
+| `ledgerTrustedState.advance`                  | system   | reconciliation R5 (spec 11): compare-and-set after the dual proof                                   |
+| `ledgerRuns.start`                            | system   | the reconciliation cron (spec 11): a run starts                                                     |
+| `ledgerRuns.finish`                           | system   | the reconciliation cron (spec 11): a run finishes, once                                             |
 
 Later phases add their own methods to the same pinned lists, with their per-table `app_system` grants and this
 table.

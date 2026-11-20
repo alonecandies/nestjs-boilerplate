@@ -7,9 +7,11 @@ import { chunk } from 'lodash-es';
 import {
   assertLedgerListLimit,
   assertOutboxRecords,
+  assertPaymentKeys,
   assertPlatformAccounts,
   assertTrustedStateAdvance,
   type LedgerCursor,
+  type LedgerPaymentRow,
   type LedgerRunCounts,
   type LedgerSystemRepository,
   PAID_PAYMENT_STATUSES,
@@ -143,6 +145,33 @@ export class DrizzleLedgerSystemRepository implements LedgerSystemRepository {
         .limit(limit);
       return rows.map(fromLedgerEntryRefRow);
     });
+  }
+
+  async findPaymentsByIds(keys: readonly LedgerCursor[]): Promise<readonly LedgerPaymentRow[]> {
+    assertPaymentKeys(keys);
+    if (keys.length === 0) return [];
+    const wanted = new Set(keys.map((key) => `${key.tenantId}/${key.id}`));
+    // ONE array parameter per column, not `IN ($1…$n)`: the SQL text is the same for every batch
+    // size. The pairs are matched exactly below (the arrays alone also admit cross pairs).
+    const tenants = [...new Set(keys.map((key) => key.tenantId))];
+    const ids = [...new Set(keys.map((key) => key.id))];
+    const rows = await this.system.run(reconciliation.findPaymentsByIds, (db) =>
+      db
+        .select({
+          tenantId: payments.tenantId,
+          id: payments.id,
+          userId: payments.userId,
+          status: payments.status,
+        })
+        .from(payments)
+        .where(
+          and(
+            sql`${payments.tenantId} = any(${sql.param(tenants)}::uuid[])`,
+            sql`${payments.id} = any(${sql.param(ids)}::uuid[])`,
+          ),
+        ),
+    );
+    return rows.filter((row) => wanted.has(`${row.tenantId}/${row.id}`));
   }
 
   appendDiscrepancies(rows: readonly LedgerDiscrepancyInput[]): Promise<number> {

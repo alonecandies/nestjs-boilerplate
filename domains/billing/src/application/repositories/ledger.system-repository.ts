@@ -22,6 +22,14 @@ export interface PaidPaymentRow {
   readonly paidAt: Date;
 }
 
+/** A payment by key, as `findPaymentsByIds` reads it: its owner and status (no PII). */
+export interface LedgerPaymentRow {
+  readonly tenantId: string;
+  readonly id: string;
+  readonly userId: string;
+  readonly status: PaymentStatus;
+}
+
 /** Findings per kind (`found`) and the new rows among them (`appended`). */
 export interface LedgerRunCounts {
   readonly found: Readonly<Record<string, number>>;
@@ -36,7 +44,8 @@ export const PAID_PAYMENT_STATUSES: readonly PaymentStatus[] = Object.freeze([
   PaymentStatus.Disputed,
 ]);
 
-/** The largest page `listSucceededPayments` and `listEntryRefs` serve. */
+/** The largest page `listSucceededPayments` and `listEntryRefs` serve, and the most keys of one
+ * `findPaymentsByIds` call. */
 export const LEDGER_LIST_MAX_LIMIT = 1000;
 
 /**
@@ -70,6 +79,14 @@ export abstract class LedgerSystemRepository {
     after: LedgerCursor | null,
     limit: number,
   ): Promise<readonly LedgerEntryRef[]>;
+
+  /**
+   * `ledgerReconciliation.findPaymentsByIds`: the payments of `keys` (any tenant, any status),
+   * each matched on both its tenant and its id; a key with no such payment has no row. At most
+   * `LEDGER_LIST_MAX_LIMIT` keys; none reads nothing.
+   * @throws RangeError before any SQL when there are more keys
+   */
+  abstract findPaymentsByIds(keys: readonly LedgerCursor[]): Promise<readonly LedgerPaymentRow[]>;
 
   /**
    * `ledgerReconciliation.appendDiscrepancies`: appends the findings under their tenants, ids by
@@ -137,6 +154,13 @@ export abstract class LedgerSystemRepository {
 export function assertLedgerListLimit(limit: number): void {
   if (!Number.isInteger(limit) || limit < 1 || limit > LEDGER_LIST_MAX_LIMIT) {
     throw new RangeError(`ledger list limit must be an integer in 1..${LEDGER_LIST_MAX_LIMIT}`);
+  }
+}
+
+/** @throws RangeError when there are more than `LEDGER_LIST_MAX_LIMIT` payment keys */
+export function assertPaymentKeys(keys: readonly LedgerCursor[]): void {
+  if (keys.length > LEDGER_LIST_MAX_LIMIT) {
+    throw new RangeError(`at most ${LEDGER_LIST_MAX_LIMIT} payment keys per lookup`);
   }
 }
 

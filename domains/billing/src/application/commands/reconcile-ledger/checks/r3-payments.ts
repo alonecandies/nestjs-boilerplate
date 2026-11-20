@@ -7,6 +7,7 @@ import { LedgerPort } from '../../../ports/ledger.port.js';
 import {
   type LedgerCursor,
   LedgerSystemRepository,
+  PAID_PAYMENT_STATUSES,
   type PaidPaymentRow,
 } from '../../../repositories/ledger.system-repository.js';
 import type { LedgerEntryRef } from '../../../repositories/ledger-receipts.repository.js';
@@ -31,8 +32,10 @@ const count = (refs: readonly LedgerEntryRef[], kind: LedgerEntryKind) =>
  * whose payment and ref fall on either side of a window edge still pairs. Findings:
  * - a paid payment of the window without a `charge` ref → `payment_without_entry`
  *   (source key `payment:<id>`);
- * - a `charge` ref of the window with no payment id, or one that is not a listed paid payment of
- *   its tenant → `entry_without_payment` (the ref's source key);
+ * - a `charge` ref of the window with no payment id, or one that is not a paid payment of its
+ *   tenant → `entry_without_payment` (the ref's source key); a ref whose payment the window's list
+ *   does not hold (paid before the lookback) is looked up by id (`findPaymentsByIds`, batches of
+ *   `R3_PAGE_SIZE`) before it is reported;
  * - per payment of the window and each of its `charge` refs, from `LedgerPort.getEntry(ref tenant,
  *   entry id)`: no such entry under the ref's tenant → `tenant_mismatch`; a presentment amount or
  *   currency other than the payment's → `amount_mismatch`;
@@ -88,9 +91,15 @@ export class R3PaymentsCheck implements ReconciliationCheck {
       const status = statusFinding(payment, own);
       if (status !== null) found.push({ ...status, ...meta });
     }
-    for (const ref of refs) {
-      if (ref.kind !== 'charge' || !inWindow(ref.postedAt, ctx)) continue;
-      if (ref.paymentId !== null && paid.has(key(ref.tenantId, ref.paymentId))) continue;
+    const unpaired = refs.filter(
+      (ref) =>
+        ref.kind === 'charge' &&
+        inWindow(ref.postedAt, ctx) &&
+        !(ref.paymentId !== null && paid.has(key(ref.tenantId, ref.paymentId))),
+    );
+    const paidOutsideList = await this.paidByIds(unpaired);
+    for (const ref of unpaired) {
+      if (ref.paymentId !== null && paidOutsideList.has(key(ref.tenantId, ref.paymentId))) continue;
       found.push({
         tenantId: ref.tenantId,
         kind: 'entry_without_payment',
@@ -101,6 +110,27 @@ export class R3PaymentsCheck implements ReconciliationCheck {
       });
     }
     return found;
+  }
+
+  /**
+   * The keys of the paid payments `refs` name that the window's list did not hold (paid before the
+   * lookback, the ref recorded late): looked up by `(tenant, payment id)` in batches of
+   * `R3_PAGE_SIZE`, so a late ref pairs with its payment wherever its `paidAt` lies.
+   */
+  private async paidByIds(refs: readonly LedgerEntryRef[]): Promise<Set<string>> {
+    const keys = new Map<string, LedgerCursor>();
+    for (const ref of refs) {
+      if (ref.paymentId === null) continue;
+      keys.set(key(ref.tenantId, ref.paymentId), { tenantId: ref.tenantId, id: ref.paymentId });
+    }
+    const paid = new Set<string>();
+    const all = [...keys.values()];
+    for (let i = 0; i < all.length; i += R3_PAGE_SIZE) {
+      for (const row of await this.system.findPaymentsByIds(all.slice(i, i + R3_PAGE_SIZE))) {
+        if (PAID_PAYMENT_STATUSES.includes(row.status)) paid.add(key(row.tenantId, row.id));
+      }
+    }
+    return paid;
   }
 
   /** Every page of a keyset list, cursor = the last row's `(tenantId, id)`. */

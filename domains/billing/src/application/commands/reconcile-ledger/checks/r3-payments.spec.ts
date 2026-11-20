@@ -219,6 +219,26 @@ describe('R3PaymentsCheck (reconciliation R3: billing payments against the ledge
     );
   });
 
+  it('a charge ref posted days after its payment was paid (before the lookback) yields no finding', async () => {
+    const old = payment(TENANT_A, { paidAt: new Date(FROM.getTime() - 3 * 24 * 60 * MINUTE) });
+    await posted('charge', old, { postedAt: new Date(FROM.getTime() + MINUTE) });
+    const lookup = vi.spyOn(store.system, 'findPaymentsByIds');
+
+    await expect(run()).resolves.toEqual([]);
+    expect(lookup).toHaveBeenCalledExactlyOnceWith([{ tenantId: TENANT_A, id: old.id }]);
+  });
+
+  it('looks the unpaired refs up by payment id in batches of at most 500', async () => {
+    const early = Array.from({ length: R3_PAGE_SIZE + 1 }, () =>
+      payment(TENANT_A, { paidAt: new Date(FROM.getTime() - 2 * 24 * 60 * MINUTE) }),
+    );
+    for (const pay of early) await posted('charge', pay, { postedAt: FROM });
+    const lookup = vi.spyOn(store.system, 'findPaymentsByIds');
+
+    await expect(run()).resolves.toEqual([]);
+    expect(lookup.mock.calls.map(([keys]) => keys.length)).toEqual([R3_PAGE_SIZE, 1]);
+  });
+
   it('entry_without_payment: a charge ref of another tenant than its payment does not pair', async () => {
     const paid = payment(TENANT_A);
     const wrong = await posted('charge', paid, { refTenant: TENANT_B, entryTenant: TENANT_B });
