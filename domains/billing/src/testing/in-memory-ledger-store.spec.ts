@@ -126,24 +126,27 @@ describe('InMemoryLedgerStore (the twin of the two ledger repositories)', () => 
     const store = new InMemoryLedgerStore();
     const s1 = { database: 'ledger', txId: 1n, txHash: new Uint8Array([1]) };
     const s2 = { database: 'ledger', txId: 2n, txHash: new Uint8Array([2]) };
+    const READ_1 = new Date('2026-11-10T10:00:00.000Z');
+    const READ_2 = new Date('2026-11-10T11:00:00.000Z');
     await expect(
-      inSystem(() => store.system.advanceTrustedState('ledger', null, s1)),
+      inSystem(() => store.system.advanceTrustedState('ledger', null, s1, READ_1)),
     ).resolves.toBe(true);
     await expect(
-      inSystem(() => store.system.advanceTrustedState('ledger', null, s1)),
+      inSystem(() => store.system.advanceTrustedState('ledger', null, s1, READ_1)),
     ).resolves.toBe(false);
-    await expect(inSystem(() => store.system.advanceTrustedState('ledger', s1, s2))).resolves.toBe(
-      true,
-    );
-    await expect(inSystem(() => store.system.advanceTrustedState('ledger', s1, s2))).resolves.toBe(
-      false,
-    );
     await expect(
-      inSystem(() => store.system.advanceTrustedState('ledger', s2, s1)),
+      inSystem(() => store.system.advanceTrustedState('ledger', s1, s2, READ_2)),
+    ).resolves.toBe(true);
+    await expect(
+      inSystem(() => store.system.advanceTrustedState('ledger', s1, s2, READ_2)),
+    ).resolves.toBe(false);
+    await expect(
+      inSystem(() => store.system.advanceTrustedState('ledger', s2, s1, READ_2)),
     ).rejects.toThrow(/backwards/);
     await expect(inSystem(() => store.system.readTrustedState('ledger'))).resolves.toMatchObject({
       txId: 2n,
       txHash: new Uint8Array([2]),
+      readAt: READ_2,
     });
 
     await inSystem(() => store.system.startRun({ id: id('r1'), from: FROM, to: TO }));

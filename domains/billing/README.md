@@ -384,7 +384,7 @@ L = coordinator-local, system only.
 | `ledger_entry_refs` (T)          | `tenant_id`, `entry_id`, `source_key`, `payload_hash`, `immudb_tx_id int8` (NULL when replayed), `payment_id` (nullable), `kind`, `posted_at`; index `ledger_entry_refs_posted_at_idx` | `(tenant_id, entry_id)`       | S, I / S, I                         |
 | `ledger_discrepancies` (T)       | `tenant_id`, `id`, `kind`, `source_key`, `expected jsonb`, `actual jsonb`, `detected_by`, `run_id` (nullable), `resolves_id` (nullable)                                                | `(tenant_id, id)`             | S, I / S, I                         |
 | `ledger_reconciliation_runs` (L) | `id`, `from_ts`, `to_ts`, `status`, `counts jsonb`, `finished_at` (nullable)                                                                                                           | `(id)`                        | none / S, I, U                      |
-| `ledger_trusted_state` (L)       | `database`, `tx_id int8`, `tx_hash bytea`, `verified_at`                                                                                                                               | `(database)`                  | none / S, I, U                      |
+| `ledger_trusted_state` (L)       | `database`, `tx_id int8`, `tx_hash bytea`, `verified_at`, `read_at` (0008)                                                                                                             | `(database)`                  | none / S, I, U                      |
 
 - Each tenant table has two policies `TO app_runtime`: `<table>_select USING (tenant_id = app.tenant_id() AND
 app.elevated())` and `<table>_insert WITH CHECK (tenant_id = app.tenant_id())`. A principal inserts only its own
@@ -637,9 +637,11 @@ owner's (`postingOwnerOf`, the webhook's check); the relay and `LedgerPostingCon
 tenant). A Stripe failure fails R4 and keeps what was already enqueued. **R5** (Task 17, only with `LEDGER_VERIFY=true`;
 tamper evidence): reads `billing.ledger_trusted_state` for the immudb database, proves with `LedgerPort.advanceTrustedState`
 (dual proof, plus the state signature when `IMMUDB_SERVER_SIGNING_PUBLIC_KEY` pins a key) that the current state
-extends it, and advances the row by compare-and-set; then verifies (`VerifiableSQLGet`) every ref posted since
-`min(from, verifiedAt − 10 min)` whose tx id is above the old trusted one, or at most it and posted since
-`verifiedAt − 10 min` (a ref recorded after the last run read the state), or null (`replayed`). A failed proof → one
+extends it, and advances the row by compare-and-set, storing `read_at` (when this run read the state, before the
+proof); then verifies (`VerifiableSQLGet`) every ref posted since `min(from, the stored read_at)` until this run's read
+whose tx id is above the old trusted one, or at most it and posted since the stored `read_at` (a ref recorded after the
+last run read the state, however long its proof took; a state stored before migration 0008 has no `read_at`, so the
+next run verifies its whole window once), or null (`replayed`). A failed proof → one
 `verification_failed` under the platform tenant (`state:<db>`), no advance, no entry verified, the run `failed`; a lost
 compare-and-set → the run `failed`, no finding; an entry that does not verify → `verification_failed` under the ref's
 tenant (`ledger_entries:<id>`), the state still advances. No row yet: the current state is taken on trust (its signature

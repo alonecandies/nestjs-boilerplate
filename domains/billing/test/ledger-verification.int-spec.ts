@@ -176,8 +176,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       const ledger = await adapterOn(signed, { key: pinned, migrate: true });
       const check = new R5VerificationCheck(ledger, system);
       const verifyEntry = vi.spyOn(ledger, 'verifyEntry');
-      // Recorded well before this run: the next run's look-back for late refs
-      // (R5_VERIFIED_AT_OVERLAP_MS before the stored verifiedAt) does not reach them again.
+      // Recorded well before this run: the next run's look-back for late refs (posted since the
+      // read time this run stores) does not reach them again.
       const earlier = new Date(Date.now() - HOUR);
       const a = await post(ledger, TENANT_A, { postedAt: earlier });
       const b = await post(ledger, TENANT_B, { postedAt: earlier });

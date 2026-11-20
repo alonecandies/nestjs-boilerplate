@@ -113,6 +113,8 @@ const state = (txId: bigint, hash: number[]): LedgerTrustedState => ({
   txId,
   txHash: new Uint8Array(hash),
 });
+/** When R5 read the state it stores (`read_at`, millisecond precision). */
+const READ = new Date('2026-11-10T10:30:00.123Z');
 
 describe.skipIf(process.env['INTEGRATION'] !== '1')(
   'billing ledger repositories (app_runtime receipts, app_system ledger methods; local execution off)',
@@ -587,21 +589,21 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         const s2 = state(12n, [0x03, 0x04]);
         const s3 = state(13n, [0x05]);
         await expect(inSystem(() => system.readTrustedState('ledger'))).resolves.toBeNull();
-        await expect(inSystem(() => system.advanceTrustedState('ledger', null, s1))).resolves.toBe(
-          true,
-        );
-        await expect(inSystem(() => system.advanceTrustedState('ledger', null, s1))).resolves.toBe(
-          false,
-        );
-        await expect(inSystem(() => system.advanceTrustedState('ledger', s1, s2))).resolves.toBe(
-          true,
-        );
-        await expect(inSystem(() => system.advanceTrustedState('ledger', s1, s3))).resolves.toBe(
-          false,
-        );
+        await expect(
+          inSystem(() => system.advanceTrustedState('ledger', null, s1, READ)),
+        ).resolves.toBe(true);
+        await expect(
+          inSystem(() => system.advanceTrustedState('ledger', null, s1, READ)),
+        ).resolves.toBe(false);
+        await expect(
+          inSystem(() => system.advanceTrustedState('ledger', s1, s2, READ)),
+        ).resolves.toBe(true);
+        await expect(
+          inSystem(() => system.advanceTrustedState('ledger', s1, s3, READ)),
+        ).resolves.toBe(false);
         // The right tx id with another hash is stale too.
         await expect(
-          inSystem(() => system.advanceTrustedState('ledger', state(12n, [0xff]), s3)),
+          inSystem(() => system.advanceTrustedState('ledger', state(12n, [0xff]), s3, READ)),
         ).resolves.toBe(false);
         expect(await trustedRows()).toEqual([{ database: 'ledger', tx_id: '12', hash: '0304' }]);
 
@@ -611,34 +613,47 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           txId: 12n,
           txHash: new Uint8Array([0x03, 0x04]),
           verifiedAt: expect.any(Date),
+          readAt: READ,
         });
         expect(Object.getPrototypeOf(read?.txHash)).toBe(Uint8Array.prototype);
         // An equal state re-verified: allowed (no new transaction since).
-        await expect(inSystem(() => system.advanceTrustedState('ledger', s2, s2))).resolves.toBe(
-          true,
-        );
+        await expect(
+          inSystem(() => system.advanceTrustedState('ledger', s2, s2, READ)),
+        ).resolves.toBe(true);
         // Another database is its own row.
         await expect(
-          inSystem(() => system.advanceTrustedState('other', null, { ...s1, database: 'other' })),
+          inSystem(() =>
+            system.advanceTrustedState('other', null, { ...s1, database: 'other' }, READ),
+          ),
         ).resolves.toBe(true);
         expect(await trustedRows()).toHaveLength(2);
       });
 
       it('advanceTrustedState throws before SQL when to.txId < from.txId or a state names another database', async () => {
         const s2 = state(12n, [0x03]);
-        await inSystem(() => system.advanceTrustedState('ledger', null, s2));
+        await inSystem(() => system.advanceTrustedState('ledger', null, s2, READ));
         const before = await trustedRows();
         await expect(
-          inSystem(() => system.advanceTrustedState('ledger', s2, state(11n, [0x09]))),
+          inSystem(() => system.advanceTrustedState('ledger', s2, state(11n, [0x09]), READ)),
         ).rejects.toThrow(/backwards/);
         await expect(
           inSystem(() =>
-            system.advanceTrustedState('ledger', s2, { ...state(13n, [0x09]), database: 'other' }),
+            system.advanceTrustedState(
+              'ledger',
+              s2,
+              { ...state(13n, [0x09]), database: 'other' },
+              READ,
+            ),
           ),
         ).rejects.toThrow(/database/);
         await expect(
           inSystem(() =>
-            system.advanceTrustedState('ledger', { ...s2, database: 'other' }, state(13n, [0x09])),
+            system.advanceTrustedState(
+              'ledger',
+              { ...s2, database: 'other' },
+              state(13n, [0x09]),
+              READ,
+            ),
           ),
         ).rejects.toThrow(/database/);
         expect(await trustedRows()).toEqual(before);
@@ -676,7 +691,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           recordPlatformAccounts: () =>
             system.recordPlatformAccounts([account(PLATFORM_TENANT_ID, 'asset:bank')]),
           readTrustedState: () => system.readTrustedState('ledger'),
-          advanceTrustedState: () => system.advanceTrustedState('ledger', null, state(1n, [1])),
+          advanceTrustedState: () =>
+            system.advanceTrustedState('ledger', null, state(1n, [1]), READ),
           startRun: () => system.startRun({ id: id('r1'), from: FROM, to: TO }),
           finishRun: () => system.finishRun(id('r1'), 'failed', { found: {}, appended: {} }),
         };

@@ -16,6 +16,7 @@ import {
   type LedgerSystemRepository,
   PAID_PAYMENT_STATUSES,
   type PaidPaymentRow,
+  type StoredTrustedState,
 } from '../../application/repositories/ledger.system-repository.js';
 import type {
   LedgerAccountRef,
@@ -246,9 +247,7 @@ export class DrizzleLedgerSystemRepository implements LedgerSystemRepository {
     });
   }
 
-  readTrustedState(
-    database: string,
-  ): Promise<(LedgerTrustedState & { readonly verifiedAt: Date }) | null> {
+  readTrustedState(database: string): Promise<StoredTrustedState | null> {
     return this.system.run(trustedState.read, async (db) => {
       const [row] = await db
         .select({
@@ -256,6 +255,7 @@ export class DrizzleLedgerSystemRepository implements LedgerSystemRepository {
           txId: ledgerTrustedState.txId,
           txHash: ledgerTrustedState.txHash,
           verifiedAt: ledgerTrustedState.verifiedAt,
+          readAt: ledgerTrustedState.readAt,
         })
         .from(ledgerTrustedState)
         .where(eq(ledgerTrustedState.database, database));
@@ -269,20 +269,21 @@ export class DrizzleLedgerSystemRepository implements LedgerSystemRepository {
     database: string,
     from: LedgerTrustedState | null,
     to: LedgerTrustedState,
+    readAt: Date,
   ): Promise<boolean> {
     assertTrustedStateAdvance(database, from, to);
     return this.system.run(trustedState.advance, async (db) => {
       if (from === null) {
         const stored = await db
           .insert(ledgerTrustedState)
-          .values({ database, txId: to.txId, txHash: to.txHash, verifiedAt: sql`now()` })
+          .values({ database, txId: to.txId, txHash: to.txHash, verifiedAt: sql`now()`, readAt })
           .onConflictDoNothing({ target: ledgerTrustedState.database })
           .returning({ database: ledgerTrustedState.database });
         return stored.length > 0;
       }
       const result = await db
         .update(ledgerTrustedState)
-        .set({ txId: to.txId, txHash: to.txHash, verifiedAt: sql`now()` })
+        .set({ txId: to.txId, txHash: to.txHash, verifiedAt: sql`now()`, readAt })
         .where(
           and(
             eq(ledgerTrustedState.database, database),

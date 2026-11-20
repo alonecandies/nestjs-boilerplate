@@ -20,11 +20,7 @@ import type { R1InvariantCheck } from './r1-invariant.js';
 import type { R2MutationCheck } from './r2-mutation.js';
 import type { R3PaymentsCheck } from './r3-payments.js';
 import type { R4StripeCheck } from './r4-stripe.js';
-import {
-  R5_REF_PAGE_SIZE,
-  R5_VERIFIED_AT_OVERLAP_MS,
-  R5VerificationCheck,
-} from './r5-verification.js';
+import { R5_REF_PAGE_SIZE, R5VerificationCheck } from './r5-verification.js';
 
 const TENANT_B = '0192f0c1-0000-7000-8000-000000000002';
 const HOUR = 3_600_000;
@@ -146,6 +142,7 @@ describe('R5VerificationCheck (reconciliation R5: the trusted state and verified
       txId: 2n,
       txHash: current.txHash,
       verifiedAt: NOW,
+      readAt: NOW,
     });
     expect(verified.sort()).toEqual([a.entryId, b.entryId].sort());
     expect(lastRun()?.status).toBe('succeeded');
@@ -216,25 +213,88 @@ describe('R5VerificationCheck (reconciliation R5: the trusted state and verified
     ]);
   });
 
-  it('lists the refs since min(from, verifiedAt − overlap), page by page, up to when the state was read', async () => {
+  it('lists the refs since min(from, the stored read time), page by page, up to when the state was read', async () => {
     await post(1);
     await reconcile();
     const list = vi.spyOn(store.system, 'listEntryRefs');
-    // The stored state was verified before the window starts: the refs since a little before
-    // then are read.
+    // The stored state was read before the window starts: the refs since then are read.
     store.trustedStates.set(DB, {
       ...(trusted() ?? expect.fail('no state')),
-      verifiedAt: new Date(FROM.getTime() - HOUR),
+      verifiedAt: new Date(FROM.getTime() - HOUR / 2),
+      readAt: new Date(FROM.getTime() - HOUR),
     });
 
     await reconcile();
 
     expect(list.mock.calls[0]).toEqual([
-      new Date(FROM.getTime() - HOUR - R5_VERIFIED_AT_OVERLAP_MS),
+      new Date(FROM.getTime() - HOUR),
       NOW,
       null,
       R5_REF_PAGE_SIZE,
     ]);
+  });
+
+  it('stores when the state was read, before a proof that took longer than 10 minutes', async () => {
+    await post(1);
+    // The proof takes 30 minutes: the compare-and-set stamps verifiedAt 30 minutes after the read.
+    const advance = ledger.advanceTrustedState.bind(ledger);
+    vi.spyOn(ledger, 'advanceTrustedState').mockImplementation(async (from) => {
+      vi.setSystemTime(new Date(NOW.getTime() + 30 * 60_000));
+      return advance(from);
+    });
+
+    await reconcile();
+
+    expect(trusted()).toMatchObject({
+      txId: 1n,
+      readAt: NOW,
+      verifiedAt: new Date(NOW.getTime() + 30 * 60_000),
+    });
+  });
+
+  it('a proof longer than 10 minutes: a ref recorded during it is still verified by the next run', async () => {
+    await post(1);
+    // Posted to immudb before the state is read; its ref reaches Postgres a minute after the read,
+    // while the 30-minute proof runs (so this run's listing, up to the read, does not see it).
+    const late = await post(2, {
+      record: false,
+      postedAt: new Date(NOW.getTime() + 60_000),
+    });
+    const advance = ledger.advanceTrustedState.bind(ledger);
+    const slowProof = vi.spyOn(ledger, 'advanceTrustedState').mockImplementation(async (from) => {
+      vi.setSystemTime(new Date(NOW.getTime() + 30 * 60_000));
+      return advance(from);
+    });
+    await reconcile();
+    expect(trusted()?.txId).toBe(2n);
+    expect(verified).not.toContain(late.entryId);
+    store.insertEntryRef(late);
+    slowProof.mockRestore();
+    verified = [];
+
+    vi.setSystemTime(new Date(NOW.getTime() + HOUR));
+    await reconcile();
+
+    expect(verified).toEqual([late.entryId]);
+    expect(lastRun()?.status).toBe('succeeded');
+  });
+
+  it('a state stored without a read time (before 0008): the next run verifies every ref of its window once', async () => {
+    const a = await post(1);
+    const b = await post(2);
+    await reconcile();
+    store.trustedStates.set(DB, { ...(trusted() ?? expect.fail('no state')), readAt: null });
+    verified = [];
+
+    vi.setSystemTime(new Date(NOW.getTime() + HOUR));
+    await reconcile();
+    expect(verified.sort()).toEqual([a.entryId, b.entryId].sort());
+    expect(trusted()?.readAt).toEqual(new Date(NOW.getTime() + HOUR));
+    verified = [];
+
+    vi.setSystemTime(new Date(NOW.getTime() + 2 * HOUR));
+    await reconcile();
+    expect(verified).toEqual([]);
   });
 
   it('an inconsistent history gives one verification_failed under the platform, no advance, no entry verified, a failed run', async () => {
@@ -271,7 +331,13 @@ describe('R5VerificationCheck (reconciliation R5: the trusted state and verified
 
   it('a trusted state ahead of the store fails the same way', async () => {
     await post(1);
-    const ahead = { database: DB, txId: 9n, txHash: new Uint8Array(32).fill(7), verifiedAt: NOW };
+    const ahead = {
+      database: DB,
+      txId: 9n,
+      txHash: new Uint8Array(32).fill(7),
+      verifiedAt: NOW,
+      readAt: NOW,
+    };
     store.trustedStates.set(DB, ahead);
 
     await reconcile();
@@ -295,6 +361,7 @@ describe('R5VerificationCheck (reconciliation R5: the trusted state and verified
       txId: 9n,
       txHash: new Uint8Array(32),
       verifiedAt: NOW,
+      readAt: NOW,
     });
 
     await reconcile();

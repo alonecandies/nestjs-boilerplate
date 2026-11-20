@@ -250,8 +250,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
     };
     const before = await citusTables();
     const files = await applied();
-    // 0000_init .. 0007_payment_amount_refunded.
-    expect(files).toBe(8);
+    // 0000_init .. 0008_ledger_trusted_state_read_at.
+    expect(files).toBe(9);
     const first = app;
     app = undefined; // afterAll then closes only what is open, even if the boot below throws
     await first?.close();

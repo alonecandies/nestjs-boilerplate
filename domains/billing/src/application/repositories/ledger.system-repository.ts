@@ -36,6 +36,14 @@ export interface LedgerRunCounts {
   readonly appended: Readonly<Record<string, number>>;
 }
 
+/** A stored trusted state (`readTrustedState`). */
+export type StoredTrustedState = LedgerTrustedState & {
+  /** When the compare-and-set stored it (the database clock). */
+  readonly verifiedAt: Date;
+  /** When R5 read it, before its proof (R5's clock); null for a state stored before 0008. */
+  readonly readAt: Date | null;
+};
+
 /** The statuses `listSucceededPayments` returns: every status a paid payment can be in. */
 export const PAID_PAYMENT_STATUSES: readonly PaymentStatus[] = Object.freeze([
   PaymentStatus.Succeeded,
@@ -115,21 +123,24 @@ export abstract class LedgerSystemRepository {
    */
   abstract recordPlatformAccounts(rows: readonly LedgerAccountRef[]): Promise<number>;
 
-  /** `ledgerTrustedState.read`: the stored state of `database` and when it was verified, or null. */
-  abstract readTrustedState(
-    database: string,
-  ): Promise<(LedgerTrustedState & { readonly verifiedAt: Date }) | null>;
+  /**
+   * `ledgerTrustedState.read`: the stored state of `database`, when it was verified and when R5
+   * read it (`null` for a state stored before migration 0008), or null.
+   */
+  abstract readTrustedState(database: string): Promise<StoredTrustedState | null>;
 
   /**
    * `ledgerTrustedState.advance`: compare-and-set. With `from = null` it inserts `to` only when
    * `database` has no state yet; otherwise it replaces the state only while it still equals `from`
-   * (tx id and hash), stamping `verified_at`. `false` when it lost the race or the state is stale.
+   * (tx id and hash), stamping `verified_at` and storing `readAt` (when R5 read `to`). `false` when
+   * it lost the race or the state is stale.
    * @throws Error before any SQL when `to.txId < from.txId` or a state names another database
    */
   abstract advanceTrustedState(
     database: string,
     from: LedgerTrustedState | null,
     to: LedgerTrustedState,
+    readAt: Date,
   ): Promise<boolean>;
 
   /** `ledgerRuns.start`: records the run as `running` over `[from, to)` with zero counts. */

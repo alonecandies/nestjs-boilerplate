@@ -83,7 +83,7 @@ const LEDGER_CALLS: Record<
   },
   advanceTrustedState: {
     method: 'ledgerTrustedState.advance',
-    call: (r) => r.advanceTrustedState('ledger', null, STATE),
+    call: (r) => r.advanceTrustedState('ledger', null, STATE, new Date(0)),
   },
   startRun: {
     method: 'ledgerRuns.start',

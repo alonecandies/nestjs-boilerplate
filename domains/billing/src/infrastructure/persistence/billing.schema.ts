@@ -231,7 +231,8 @@ export const ledgerReconciliationRuns = billingPgSchema.table(
 );
 
 // citus: local. The last verified immudb state per database, advanced only by compare-and-set after
-// a dual proof (system only: no runtime grant, no policy).
+// a dual proof (system only: no runtime grant, no policy). `read_at`: when R5 read that state, the
+// cutoff of the next run's late refs (0008; null for a state stored before it).
 export const ledgerTrustedState = billingPgSchema.table(
   'ledger_trusted_state',
   {
@@ -239,6 +240,7 @@ export const ledgerTrustedState = billingPgSchema.table(
     txId: bigint({ mode: 'bigint' }).notNull(),
     txHash: bytea().notNull(),
     verifiedAt: timestamptz().notNull(),
+    readAt: timestamptz(),
     createdAt: timestamptz().notNull().defaultNow(),
   },
   (t) => [primaryKey({ name: 'ledger_trusted_state_database_pk', columns: [t.database] })],

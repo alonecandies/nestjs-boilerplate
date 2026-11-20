@@ -14,6 +14,7 @@ import {
   LedgerSystemRepository,
   PAID_PAYMENT_STATUSES,
   type PaidPaymentRow,
+  type StoredTrustedState,
 } from '../application/repositories/ledger.system-repository.js';
 import {
   assertTenantOwnedAccounts,
@@ -68,7 +69,7 @@ export class InMemoryLedgerStore {
   readonly accounts: LedgerAccountRef[] = [];
   readonly discrepancies: InMemoryLedgerDiscrepancy[] = [];
   readonly runs = new Map<string, InMemoryLedgerRun>();
-  readonly trustedStates = new Map<string, LedgerTrustedState & { verifiedAt: Date }>();
+  readonly trustedStates = new Map<string, StoredTrustedState>();
   readonly payments: PaidPaymentRow[] = [];
   readonly outbox: InMemoryOutbox;
   readonly receipts: InMemoryLedgerReceiptsRepository;
@@ -211,9 +212,7 @@ export class InMemoryLedgerSystemRepository extends LedgerSystemRepository {
     return rows.filter((row) => this.store.insertAccount(row)).length;
   }
 
-  override async readTrustedState(
-    database: string,
-  ): Promise<(LedgerTrustedState & { readonly verifiedAt: Date }) | null> {
+  override async readTrustedState(database: string): Promise<StoredTrustedState | null> {
     requireSystemContext('ledgerTrustedState.read');
     const stored = this.store.trustedStates.get(database);
     return stored === undefined
@@ -222,6 +221,7 @@ export class InMemoryLedgerSystemRepository extends LedgerSystemRepository {
           ...stored,
           txHash: new Uint8Array(stored.txHash),
           verifiedAt: new Date(stored.verifiedAt),
+          readAt: stored.readAt === null ? null : new Date(stored.readAt),
         };
   }
 
@@ -229,6 +229,7 @@ export class InMemoryLedgerSystemRepository extends LedgerSystemRepository {
     database: string,
     from: LedgerTrustedState | null,
     to: LedgerTrustedState,
+    readAt: Date,
   ): Promise<boolean> {
     assertTrustedStateAdvance(database, from, to);
     requireSystemContext('ledgerTrustedState.advance');
@@ -245,6 +246,7 @@ export class InMemoryLedgerSystemRepository extends LedgerSystemRepository {
       txId: to.txId,
       txHash: new Uint8Array(to.txHash),
       verifiedAt: this.store.now(),
+      readAt: new Date(readAt),
     });
     return true;
   }

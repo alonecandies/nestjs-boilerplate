@@ -357,13 +357,25 @@ describe('billingMigrations', () => {
   });
 
   describe('0007_payment_amount_refunded (final review F2/F3: refunds net of failures)', () => {
-    it('is the eighth and last journal entry', () => {
-      expect(journalTags().slice(7)).toEqual(['0007_payment_amount_refunded']);
+    it('is the eighth journal entry', () => {
+      expect(journalTags().slice(7, 8)).toEqual(['0007_payment_amount_refunded']);
     });
 
     it('only adds payments.amount_refunded, 0 for existing rows', () => {
       expect(statementsOf('0007_payment_amount_refunded.sql')).toEqual([
         'ALTER TABLE "billing"."payments" ADD COLUMN "amount_refunded" bigint DEFAULT 0 NOT NULL;',
+      ]);
+    });
+  });
+
+  describe('0008_ledger_trusted_state_read_at (re-review G3: R5 cutoff from the stored read time)', () => {
+    it('is the ninth and last journal entry', () => {
+      expect(journalTags().slice(8)).toEqual(['0008_ledger_trusted_state_read_at']);
+    });
+
+    it('only adds ledger_trusted_state.read_at, null for existing rows', () => {
+      expect(statementsOf('0008_ledger_trusted_state_read_at.sql')).toEqual([
+        'ALTER TABLE "billing"."ledger_trusted_state" ADD COLUMN "read_at" timestamp (3) with time zone;',
       ]);
     });
   });
