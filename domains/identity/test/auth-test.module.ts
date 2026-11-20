@@ -4,16 +4,42 @@ import { AuthModule, RbacModule } from '@platform/auth';
 import { signTestAccessToken, TEST_TENANT_ID } from '@platform/auth/testing';
 import { generateId, type TenantRole } from '@platform/common';
 import { AppConfigModule, type AuthConfig, authConfig, redisConfig } from '@platform/config';
-import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
+import {
+  DistributedLockService,
+  type LockBackend,
+  REDIS_CLIENT,
+  RedisKeyService,
+} from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import { IDENTITY_RBAC } from '../src/identity.permissions.js';
 
-/** Stands in for the global RedisModule (denylist + keys) — no connection. */
+/** A lock backend that always grants the lock (one process): the routine runs at once. */
+const INLINE_LOCKS = {
+  using: async (
+    _keys: string[],
+    _ttl: number,
+    _settings: unknown,
+    routine: (s: AbortSignal) => unknown,
+  ) => routine(new AbortController().signal),
+} as unknown as LockBackend;
+
+/**
+ * Stands in for the global RedisModule (denylist, keys, and `DistributedLockService` over an
+ * always-granting backend, which identity's outbox relay injects) — no connection.
+ */
 @Global()
 @Module({
   imports: [ConfigModule.forFeature(redisConfig)],
-  providers: [{ provide: REDIS_CLIENT, useValue: new InMemoryRedis().asRedis() }, RedisKeyService],
-  exports: [REDIS_CLIENT, RedisKeyService],
+  providers: [
+    { provide: REDIS_CLIENT, useValue: new InMemoryRedis().asRedis() },
+    RedisKeyService,
+    {
+      provide: DistributedLockService,
+      inject: [RedisKeyService],
+      useFactory: (keys: RedisKeyService) => new DistributedLockService(INLINE_LOCKS, keys),
+    },
+  ],
+  exports: [REDIS_CLIENT, RedisKeyService, DistributedLockService],
 })
 export class FakeRedisModule {}
 

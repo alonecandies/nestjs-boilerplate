@@ -4,6 +4,7 @@ The published language of the billing context: everything another context, a ser
 
 - **gRPC**: `billing.v1` (`BillingService`). The proto lives in `src/proto/billing/v1/billing.proto`, the ts-proto NestJS output in `src/generated/**` (committed, never edited by hand), and `BILLING_GRPC_PACKAGE` is the `GrpcPackageSpec` that `@platform/transport` takes to serve or call it.
 - **Kafka**: `PAYMENT_SUCCEEDED_EVENT` (`billing.payment-succeeded.v1`) with its zod payload schema `paymentSucceededPayload` / `PaymentSucceededPayload`. Billing produces it; notifications consumes it (payment receipt).
+- **Kafka**: `LEDGER_POSTING_REQUESTED_EVENT` (`billing.ledger-posting.v1`) with `ledgerPostingRequestedPayload` / `LedgerPostingRequestedPayload`: a Stripe money event to post to the immudb ledger (the nil tenant for platform money, `userId` and `paymentId` nullable). Billing produces it through its outbox and consumes it itself.
 
 It is a leaf package: it depends on `@platform/contracts` and third-party packages only, and other domains import billing only through it. `scripts/check-boundaries.mjs` enforces both rules.
 

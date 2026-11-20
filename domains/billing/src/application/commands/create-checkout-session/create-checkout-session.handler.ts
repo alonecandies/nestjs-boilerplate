@@ -2,7 +2,9 @@ import type { CheckoutSession } from '@domain/billing-contracts';
 import { Inject, Logger } from '@nestjs/common';
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { DomainConflictException, generateId } from '@platform/common';
+import { InjectMetric } from '@platform/observability';
 import type Stripe from 'stripe';
+import { CHECKOUT_WITHOUT_IDEMPOTENCY_KEY_METRIC } from '../../../billing.constants.js';
 import {
   CheckoutSessionClosedException,
   CheckoutUrlMissingException,
@@ -34,6 +36,10 @@ export const checkoutIdempotencyKey = (paymentId: string): string => `checkout-$
  * No database transaction spans the Stripe call (it may take seconds); each write is atomic on its
  * own and every step is safe to repeat. Every write is its own unit of work as the request
  * principal (`requireTenantPrincipal`, B3-13), so the payments policy admits only the caller's rows.
+ *
+ * The `Idempotency-Key` stays optional. A request without one is counted
+ * (`billing_checkout_without_idempotency_key_total`) and logged at debug with only the user and
+ * tenant ids, so the team can see how many clients skip it (S-4b).
  */
 @CommandHandler(CreateCheckoutSessionCommand)
 export class CreateCheckoutSessionHandler implements ICommandHandler<CreateCheckoutSessionCommand> {
@@ -43,10 +49,19 @@ export class CreateCheckoutSessionHandler implements ICommandHandler<CreateCheck
     private readonly payments: PaymentsRepository,
     private readonly stripe: StripeService,
     @Inject(stripeConfig.KEY) private readonly config: StripeConfig,
+    @InjectMetric(CHECKOUT_WITHOUT_IDEMPOTENCY_KEY_METRIC)
+    private readonly withoutIdempotencyKey: { inc(): void },
   ) {}
 
   async execute({ request }: CreateCheckoutSessionCommand): Promise<CheckoutSession> {
     requireTenantPrincipal(request.tenantId, request.userId);
+    if (request.idempotencyKey === undefined) {
+      this.withoutIdempotencyKey.inc();
+      this.logger.debug(
+        { userId: request.userId, tenantId: request.tenantId },
+        'Checkout request without an Idempotency-Key',
+      );
+    }
     const requestHash = checkoutRequestHash(request);
     const { payment, created } = await this.payments.create(
       Payment.initiate({

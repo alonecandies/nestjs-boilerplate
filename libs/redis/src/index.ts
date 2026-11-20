@@ -109,6 +109,11 @@ export {
 } from './throttler/rate-limit-headers.js';
 export { rateLimitKey } from './throttler/rate-limit-key.util.js';
 export {
+  RATE_LIMIT_DECISIONS_TOTAL,
+  type RateLimitOutcome,
+  recordRateLimitDecision,
+} from './throttler/rate-limit-metrics.js';
+export {
   RATE_LIMIT_POLICY_NAME,
   type RateLimitKeyKind,
   type RateLimitLockout,

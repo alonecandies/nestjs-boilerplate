@@ -69,13 +69,31 @@ const a2 = createPrincipal({ userId: A2, tenantId: TENANT_A, roles: ['member'] }
 const MARK_AS_PLATFORM = 'stripeEvents.markProcessedAsPlatform';
 const DELETE_PROCESSED = 'stripeEvents.deleteProcessedBefore';
 
-/** What the app's global infrastructure modules provide beyond Postgres: Kafka, faked. */
+/**
+ * The real lock service over a backend that always grants the lock: @WithLock on the purge cron
+ * (registered in onModuleInit below) and the outbox relay's injection (the relay is disabled here,
+ * OUTBOX_RELAY_ENABLED=false, so its polls never enter this spec's system-method pins).
+ */
+const locks = new DistributedLockService(
+  {
+    using: async (
+      _keys: string[],
+      _ttl: number,
+      _settings: unknown,
+      routine: (signal: AbortSignal) => Promise<unknown>,
+    ) => routine(new AbortController().signal),
+  } as unknown as LockBackend,
+  new RedisKeyService(redisConfig.parse({ REDIS_KEY_PREFIX: 'billing-int' })),
+);
+
+/** What the app's global infrastructure modules provide beyond Postgres: Kafka and locks, faked. */
 @Global()
 @Module({
   providers: [
     { provide: KafkaProducer, useValue: new FakeKafkaProducer({ source: 'billing-int' }) },
+    { provide: DistributedLockService, useValue: locks },
   ],
-  exports: [KafkaProducer],
+  exports: [KafkaProducer, DistributedLockService],
 })
 class FakeKafkaModule {}
 
@@ -140,18 +158,9 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     beforeAll(async () => {
       vi.stubEnv('STRIPE_SECRET_KEY', 'sk_test_billing_flows_int');
       vi.stubEnv('STRIPE_WEBHOOK_SECRET', TEST_WEBHOOK_SECRET);
+      vi.stubEnv('OUTBOX_RELAY_ENABLED', 'false');
       // @WithLock on the cron: the real lock service over a backend that always grants the lock.
-      new DistributedLockService(
-        {
-          using: async (
-            _keys: string[],
-            _ttl: number,
-            _settings: unknown,
-            routine: (signal: AbortSignal) => Promise<unknown>,
-          ) => routine(new AbortController().signal),
-        } as unknown as LockBackend,
-        new RedisKeyService(redisConfig.parse({ REDIS_KEY_PREFIX: 'billing-int' })),
-      ).onModuleInit();
+      locks.onModuleInit();
       database = await startBillingDatabase([], {
         imports: [
           CqrsModule.forRoot(),

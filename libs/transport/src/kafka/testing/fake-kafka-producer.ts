@@ -32,7 +32,9 @@ const DETACHED_EMITTER: KafkaEventEmitter = {
  * expect(producer.published(ORDER_PLACED_EVENT)[0]?.value.payload.orderId).toBe(id);
  * ```
  *
- * `failNextWith(error)` makes the next publish fail like a broker error would.
+ * `publishStored()` (the outbox relay's send) is checked exactly like the real producer's and
+ * recorded the same way. `failNextWith(error)` makes the next `publish()` or `publishStored()` fail
+ * like a broker error would.
  */
 @Injectable()
 export class FakeKafkaProducer extends KafkaProducer {
@@ -67,7 +69,7 @@ export class FakeKafkaProducer extends KafkaProducer {
     return this.published(contract).map((record) => record.value);
   }
 
-  /** Makes the next `publish()` reject as if the broker had failed with `error`. */
+  /** Makes the next `publish()` or `publishStored()` reject as if the broker had failed with `error`. */
   failNextWith(error: unknown = new Error('Simulated broker failure')): void {
     this.pendingFailure = error;
   }

@@ -26,6 +26,7 @@
     "@platform/common": "workspace:*",
     "@platform/config": "workspace:*",
     "@platform/database": "workspace:*",
+    "@platform/immudb": "workspace:*",
     "@domain/files": "workspace:*",
     "@platform/graphql": "workspace:*",
     "@domain/identity": "workspace:*",
@@ -59,10 +60,14 @@
   "devDependencies": {
     "@platform/testing": "workspace:*",
     "@domain/identity-contracts": "workspace:*",
+    "@platform/outbox": "workspace:*",
+    "@domain/billing-contracts": "workspace:*",
+    "@nestjs/microservices": "catalog:",
     "@nestjs/testing": "catalog:",
     "cache-manager": "catalog:",
     "drizzle-orm": "catalog:",
     "graphql": "catalog:",
-    "graphql-subscriptions": "catalog:"
+    "graphql-subscriptions": "catalog:",
+    "rxjs": "catalog:"
   }
 }

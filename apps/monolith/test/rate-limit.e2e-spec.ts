@@ -9,12 +9,28 @@ await vi.hoisted(async () => {
 });
 
 import { generateId } from '@platform/common';
+import { MetricsListener } from '@platform/observability';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { bearer, expectProblem, graphql } from './support/http.js';
 import { createMonolithE2eApp, type MonolithE2e } from './support/monolith-e2e-app.js';
 
 const LOGIN = 'mutation Login($input: LoginInput!) { login(input: $input) { accessToken } }';
 const WRONG = 'wrong password!!';
+
+/** `rate_limit_decisions_total` series of one scrape, keyed `throttler|scope|outcome`. */
+function decisionSeries(body: string): Map<string, number> {
+  const series = new Map<string, number>();
+  for (const line of body.split('\n')) {
+    const match = /^rate_limit_decisions_total\{([^}]*)\} (\S+)$/.exec(line);
+    if (match === null) continue;
+    const labels = Object.fromEntries(
+      [...(match[1] ?? '').matchAll(/(\w+)="([^"]*)"/g)].map(([, name, value]) => [name, value]),
+    );
+    expect(Object.keys(labels).sort()).toEqual(['outcome', 'scope', 'throttler']);
+    series.set(`${labels['throttler']}|${labels['scope']}|${labels['outcome']}`, Number(match[2]));
+  }
+  return series;
+}
 
 describe('monolith rate limits (spec §11, wave 1)', () => {
   let e2e: MonolithE2e;
@@ -113,6 +129,30 @@ describe('monolith rate limits (spec §11, wave 1)', () => {
       });
       expect(response.statusCode).not.toBe(429);
     }
+  });
+
+  it('counts every decision in rate_limit_decisions_total by throttler, scope and outcome (G-10)', async () => {
+    const scrape = async () => {
+      const result = await e2e.app.get(MetricsListener, { strict: false }).scrape();
+      expect(result.status).toBe(200);
+      return decisionSeries(result.body);
+    };
+    const delta = (after: Map<string, number>, before: Map<string, number>, series: string) =>
+      (after.get(series) ?? 0) - (before.get(series) ?? 0);
+    const before = await scrape();
+    // IDENTITY_CREDENTIALS_LIMIT=4 in this file: four allowed, then the fifth is refused.
+    for (let i = 0; i < 4; i += 1) expect((await rest('metrics@example.com')).statusCode).toBe(401);
+    expectProblem(await rest('metrics@example.com'), 429, 'RATE_LIMITED');
+    const afterRest = await scrape();
+    expect(delta(afterRest, before, 'auth|identity.credentials|allowed')).toBe(4);
+    expect(delta(afterRest, before, 'auth|identity.credentials|blocked')).toBe(1);
+    expect(delta(afterRest, before, 'graphql|cost|allowed')).toBe(0);
+
+    // A cost-charged GraphQL operation: the cost budget is charged (and counted) exactly once.
+    await inject(graphql(LOGIN, { input: { email: 'metrics-gql@example.com', password: WRONG } }));
+    const afterGraphql = await scrape();
+    expect(delta(afterGraphql, afterRest, 'graphql|cost|allowed')).toBe(1);
+    expect(delta(afterGraphql, afterRest, 'graphql|cost|blocked')).toBe(0);
   });
 
   it('Redis down: credential endpoints fail closed (503), other budgets fail open', async () => {

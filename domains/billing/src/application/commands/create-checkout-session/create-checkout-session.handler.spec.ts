@@ -1,4 +1,5 @@
 import type { CreateCheckoutSessionRequest } from '@domain/billing-contracts';
+import { Logger } from '@nestjs/common';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
 import {
   createPrincipal,
@@ -9,7 +10,7 @@ import {
   runWithPrincipal,
 } from '@platform/common';
 import { createMock, type Mocked } from '@platform/testing';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 import {
   InMemoryBillingStore,
   InMemoryPaymentsRepository,
@@ -32,6 +33,7 @@ describe('CreateCheckoutSessionHandler', () => {
   let store: InMemoryBillingStore;
   let stripe: Mocked<StripeService>;
   let handler: CreateCheckoutSessionHandler;
+  let withoutKey: { inc: Mock<() => void> };
   const userId = generateId();
   const principalOf = (user = userId, tenantId = TEST_TENANT_ID) =>
     createPrincipal({ userId: user, tenantId, roles: ['member'] });
@@ -55,11 +57,17 @@ describe('CreateCheckoutSessionHandler', () => {
     stripe.createCheckoutSession.mockResolvedValue(
       makeCheckoutSession({ id: 'cs_test_1', amount_total: 5_000, currency: 'usd' }),
     );
+    withoutKey = { inc: vi.fn<() => void>() };
     handler = new CreateCheckoutSessionHandler(
       new InMemoryPaymentsRepository(store),
       stripe as unknown as StripeService,
       testStripeConfig,
+      withoutKey,
     );
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it('records a pending payment, creates the session keyed by the payment id and binds it', async () => {
@@ -266,5 +274,53 @@ describe('CreateCheckoutSessionHandler', () => {
       code: 'TENANT_MISMATCH',
     });
     expect(stripe.createCheckoutSession).not.toHaveBeenCalled();
+  });
+
+  describe('requests without an Idempotency-Key (S-4b)', () => {
+    const debugSpy = () => vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
+
+    it('counts it once and logs one debug line with only userId and tenantId', async () => {
+      const debug = debugSpy();
+
+      const result = await run(request());
+
+      expect(withoutKey.inc).toHaveBeenCalledExactlyOnceWith();
+      expect(debug).toHaveBeenCalledExactlyOnceWith(
+        { userId, tenantId: TEST_TENANT_ID },
+        'Checkout request without an Idempotency-Key',
+      );
+      expect(result).toEqual({
+        id: 'cs_test_1',
+        url: 'https://checkout.stripe.com/c/pay/cs_test',
+        paymentId: expect.any(String),
+      });
+      expect(store.payment(result.paymentId)).toMatchObject({
+        idempotencyKey: null,
+        status: PaymentStatus.Pending,
+        stripeCheckoutSessionId: 'cs_test_1',
+      });
+    });
+
+    it('neither counts nor logs a request that sends a key, and returns the same shape', async () => {
+      const debug = debugSpy();
+
+      const result = await run(request({ idempotencyKey: 'order-60-key' }));
+
+      expect(withoutKey.inc).not.toHaveBeenCalled();
+      expect(debug).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        id: 'cs_test_1',
+        url: 'https://checkout.stripe.com/c/pay/cs_test',
+        paymentId: expect.any(String),
+      });
+      expect(store.payment(result.paymentId)).toMatchObject({ idempotencyKey: 'order-60-key' });
+    });
+
+    it('does not count a request refused for its tenant', async () => {
+      await expect(run(request({ tenantId: generateId() }))).rejects.toMatchObject({
+        code: 'TENANT_MISMATCH',
+      });
+      expect(withoutKey.inc).not.toHaveBeenCalled();
+    });
   });
 });

@@ -1,0 +1,49 @@
+{
+  "name": "@platform/outbox",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Transactional outbox: the outbox table type, the runtime writer that inserts an event in the caller's open transaction, the system repository base, the leader relay and its metrics.",
+  "exports": {
+    ".": {
+      "@repo/source": "./src/index.ts",
+      "types": "./src/index.ts",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "@repo/source": "./src/testing/index.ts",
+      "types": "./src/testing/index.ts",
+      "default": "./dist/testing/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "swc src -d dist --config-file ../../.swcrc --cli-config-file ../../swc.cli.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --config ../../vitest.config.ts --project outbox",
+    "clean": "rimraf dist coverage"
+  },
+  "dependencies": {
+    "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
+    "@platform/contracts": "workspace:*",
+    "@platform/database": "workspace:*",
+    "@platform/observability": "workspace:*",
+    "@platform/redis": "workspace:*",
+    "@platform/transport": "workspace:*",
+    "@nestjs-cls/transactional": "catalog:",
+    "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "drizzle-orm": "catalog:",
+    "nestjs-cls": "catalog:",
+    "zod": "catalog:"
+  },
+  "devDependencies": {
+    "@nestjs/core": "catalog:",
+    "@platform/testing": "workspace:*",
+    "@types/lodash-es": "catalog:",
+    "lodash-es": "catalog:",
+    "postgres": "catalog:",
+    "testcontainers": "catalog:"
+  }
+}

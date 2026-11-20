@@ -10,8 +10,10 @@
 import { sql } from 'drizzle-orm';
 import {
   bigint,
+  customType,
   index,
   integer,
+  jsonb,
   pgSchema,
   primaryKey,
   text,
@@ -29,6 +31,11 @@ export const billingPgSchema = pgSchema('billing');
 
 const timestamptz = () => timestamp({ withTimezone: true, precision: 3, mode: 'date' });
 
+/** `bytea` (drizzle-orm 0.45 has no built-in pg bytea column): raw bytes, a hash or a digest. */
+const bytea = customType<{ data: Uint8Array; driverData: Uint8Array }>({
+  dataType: () => 'bytea',
+});
+
 export const paymentStatusEnum = billingPgSchema.enum('payment_status', PAYMENT_STATUSES);
 
 // citus: tenant (distributed by tenant_id in SH-6). No FK to identity: tenant_id and user_id are plain
@@ -45,6 +52,8 @@ export const payments = billingPgSchema.table(
     // Minor units. int8 read as a JS number (exact up to 2^53); NULL until Stripe priced the session.
     amountTotal: bigint({ mode: 'number' }),
     currency: text(),
+    // Minor units Stripe reports refunded on the charge, net of failed refunds (0 until refunded).
+    amountRefunded: bigint({ mode: 'number' }).notNull().default(0),
     status: paymentStatusEnum().notNull().default(PaymentStatus.Pending),
     stripeCheckoutSessionId: text(),
     stripePaymentIntentId: text(),
@@ -100,10 +109,158 @@ export const stripeEvents = billingPgSchema.table(
   ],
 );
 
+// citus: tenant. The transactional outbox (@platform/outbox; outbox plan Task 6): billing's integration
+// events, inserted by the runtime role in the unit of work that changes the state they report (the
+// webhook's payment completion), and published by the relay on the system pool. The runtime role may
+// only INSERT its own tenant's rows (0004_outbox: no SELECT grant, one insert policy); app_system
+// polls, marks, purges and is the only writer of PLATFORM_TENANT_ID rows (`outbox.insertAsPlatform`).
+// Declared by hand with the exact shape of the shared outbox table (`describeOutboxTable` pins it):
+// this file cannot import @platform/outbox (drizzle-kit loads it without workspace packages).
+export const outbox = billingPgSchema.table(
+  'outbox',
+  {
+    tenantId: uuid().notNull(),
+    /** = the envelope id (the domain event's id). */
+    id: uuid().notNull(),
+    topic: text().notNull(),
+    key: text(),
+    envelope: jsonb().notNull(),
+    createdAt: timestamptz().notNull().defaultNow(),
+    publishedAt: timestamptz(),
+  },
+  (t) => [
+    primaryKey({ name: 'outbox_tenant_id_id_pk', columns: [t.tenantId, t.id] }),
+    // The relay's poll: the oldest unpublished rows by (created_at, id).
+    index('outbox_unpublished_idx').on(t.createdAt, t.id).where(sql`${t.publishedAt} IS NULL`),
+    // The retention purge of published rows.
+    index('outbox_published_at_idx').on(t.publishedAt).where(sql`${t.publishedAt} IS NOT NULL`),
+  ],
+);
+
+/*
+ * The ledger's Postgres side (0005_ledger_tables, outbox plan Task 10, "Ledger tables"; ledger design
+ * §5). The entries themselves live in immudb; these tables hold the receipts and bookkeeping around
+ * them. No FK anywhere: billing has no cross-domain FK, and a distributed table cannot reference a
+ * coordinator-local one, so payment_id, run_id and resolves_id are plain columns. Every table has
+ * forced RLS. The runtime role inserts only its own tenant's rows and reads the tenant tables only
+ * when elevated (the posting consumer's `roles: []` principal never is): its inserts are plain
+ * INSERTs without RETURNING. Neither app role may UPDATE or DELETE a tenant table: refs and
+ * discrepancies are append-only. PLATFORM_TENANT_ID rows and the two local tables are app_system's
+ * (billing's pinned ledger system methods).
+ */
+
+// citus: tenant. The immudb account id of each (tenant, account code, currency), recorded when a
+// posting first opens the account.
+export const ledgerAccounts = billingPgSchema.table(
+  'ledger_accounts',
+  {
+    tenantId: uuid().notNull(),
+    code: text().notNull(),
+    currency: text().notNull(),
+    immudbAccountId: uuid().notNull(),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      name: 'ledger_accounts_tenant_id_code_currency_pk',
+      columns: [t.tenantId, t.code, t.currency],
+    }),
+  ],
+);
+
+// citus: tenant. One receipt per immudb entry posted (or replayed): the reconciliation's view of the
+// ledger without reading immudb. Append-only.
+export const ledgerEntryRefs = billingPgSchema.table(
+  'ledger_entry_refs',
+  {
+    tenantId: uuid().notNull(),
+    entryId: uuid().notNull(),
+    sourceKey: text().notNull(),
+    payloadHash: text().notNull(),
+    /** NULL for a `replayed` outcome (no new immudb transaction); R5 verifies those refs too. */
+    immudbTxId: bigint({ mode: 'bigint' }),
+    paymentId: uuid(),
+    kind: text().notNull(),
+    postedAt: timestamptz().notNull(),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({
+      name: 'ledger_entry_refs_tenant_id_entry_id_pk',
+      columns: [t.tenantId, t.entryId],
+    }),
+    // The reconciliation's window scan (`posted_at` in [from, to)).
+    index('ledger_entry_refs_posted_at_idx').on(t.postedAt),
+  ],
+);
+
+// citus: tenant. Reconciliation and consumer findings, append-only: a correction is a new row
+// (`resolves_id`), never an update. The id is deterministic, so an identical finding is not appended twice.
+export const ledgerDiscrepancies = billingPgSchema.table(
+  'ledger_discrepancies',
+  {
+    tenantId: uuid().notNull(),
+    id: uuid().notNull(),
+    kind: text().notNull(),
+    sourceKey: text().notNull(),
+    expected: jsonb().notNull(),
+    actual: jsonb().notNull(),
+    detectedBy: text().notNull(),
+    runId: uuid(),
+    resolvesId: uuid(),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'ledger_discrepancies_tenant_id_id_pk', columns: [t.tenantId, t.id] }),
+  ],
+);
+
+// citus: local. One row per reconciliation run (system only: no runtime grant, no policy).
+export const ledgerReconciliationRuns = billingPgSchema.table(
+  'ledger_reconciliation_runs',
+  {
+    id: uuid().notNull(),
+    fromTs: timestamptz().notNull(),
+    toTs: timestamptz().notNull(),
+    status: text().notNull(),
+    counts: jsonb().notNull(),
+    finishedAt: timestamptz(),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ name: 'ledger_reconciliation_runs_id_pk', columns: [t.id] })],
+);
+
+// citus: local. The last verified immudb state per database, advanced only by compare-and-set after
+// a dual proof (system only: no runtime grant, no policy). `read_at`: when R5 read that state, the
+// cutoff of the next run's late refs (0008; null for a state stored before it).
+export const ledgerTrustedState = billingPgSchema.table(
+  'ledger_trusted_state',
+  {
+    database: text().notNull(),
+    txId: bigint({ mode: 'bigint' }).notNull(),
+    txHash: bytea().notNull(),
+    verifiedAt: timestamptz().notNull(),
+    readAt: timestamptz(),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  (t) => [primaryKey({ name: 'ledger_trusted_state_database_pk', columns: [t.database] })],
+);
+
 export type PaymentRow = typeof payments.$inferSelect;
 export type NewPaymentRow = typeof payments.$inferInsert;
 export type StripeEventRow = typeof stripeEvents.$inferSelect;
 
 /** Everything `DatabaseModule.forRootAsync({ schema })` needs from billing (monolith: spread it). */
-export const billingSchema = { paymentStatusEnum, payments, stripeEvents };
+export const billingSchema = {
+  paymentStatusEnum,
+  payments,
+  stripeEvents,
+  // Not `outbox`: the monolith spreads every context's schema into one object (identity has one too).
+  billingOutbox: outbox,
+  ledgerAccounts,
+  ledgerEntryRefs,
+  ledgerDiscrepancies,
+  ledgerReconciliationRuns,
+  ledgerTrustedState,
+};
 export type BillingSchema = typeof billingSchema;

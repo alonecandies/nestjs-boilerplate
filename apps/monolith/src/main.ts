@@ -33,8 +33,10 @@ async function bootstrap(): Promise<void> {
   try {
     // Socket.IO over the Redis adapter: `t:{tid}:u:{uid}` rooms span every replica.
     app.useWebSocketAdapter(await createRedisIoAdapter(app));
-    // Identity/billing events → notifications, notification-created → push. `inheritAppConfig`
-    // makes the global enhancers (cls, pipes, filter) apply to the consumers too.
+    // Identity/billing events → notifications, notification-created → push, and with
+    // LEDGER_ENABLED=true billing.ledger-posting.v1 → LedgerPostingConsumer (BillingMessagingModule,
+    // imported by AppModule only then). `inheritAppConfig` makes the global enhancers (cls, pipes,
+    // filter) apply to the consumers too.
     connectKafkaConsumer(app, { groupId: monolithConfig.parse().kafkaGroupId });
     setupApiDocs(app, MONOLITH_API_DOCS);
     await app.startAllMicroservices();

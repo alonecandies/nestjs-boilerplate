@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
-import { stripeConfig } from '@domain/billing';
+import { ledgerConfig, stripeConfig } from '@domain/billing';
 import { filesConfig } from '@domain/files';
 import {
   identityRateLimitConfig,
@@ -17,10 +17,14 @@ import { monolithConfig } from '../src/monolith.config.js';
 /**
  * The domain and app-local namespaces the monolith loads besides the platform ones: billing's
  * `stripe` (BillingCoreModule), identity's `password`, `refreshToken` and `staffSwitchIn` (IdentityCoreModule),
- * files' `files` (FilesModule) and its own `monolith` (main.ts).
+ * files' `files` (FilesModule), billing's `ledger` (LEDGER_ENABLED: immudb + the ledger-posting
+ * consumer) and its own `monolith` (main.ts). The platform `outbox` namespace (validated with every
+ * platform namespace) drives the identity and billing outbox relays; the platform `immudb` one
+ * configures the ledger store.
  */
 const NAMESPACES = [
   stripeConfig,
+  ledgerConfig,
   passwordConfig,
   refreshTokenConfig,
   staffSwitchInConfig,
@@ -50,8 +54,20 @@ describe('monolith .env.example', () => {
     expect(config.monolith.kafkaGroupId).toBe('monolith');
     expect(config.database.runMigrations).toBe(true);
     expect(config.cassandra.runMigrations).toBe(true);
-    for (const namespace of ['stripe', 'password', 'refreshToken', 'files']) {
+    for (const namespace of [
+      'stripe',
+      'password',
+      'refreshToken',
+      'files',
+      'outbox',
+      'ledger',
+      'immudb',
+    ]) {
       expect(config).toHaveProperty(namespace);
     }
+    // This process owns the identity and billing outboxes: their relays run here.
+    expect(config.outbox.relayEnabled).toBe(true);
+    // Off by default: the monolith boots without immudb.
+    expect(config.ledger.enabled).toBe(false);
   });
 });

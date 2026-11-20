@@ -1,7 +1,23 @@
-import { billingSchema, StripeEventsSystemRepository } from '@domain/billing';
-import { InMemoryStripeEventsSystemRepository } from '@domain/billing/testing';
+import {
+  BillingOutbox,
+  BillingOutboxSystemRepository,
+  billingSchema,
+  LedgerPort,
+  LedgerReceiptsRepository,
+  LedgerSystemRepository,
+  STRIPE_CLIENT,
+  StripeEventsSystemRepository,
+} from '@domain/billing';
+import {
+  createInMemoryBillingOutbox,
+  InMemoryLedger,
+  InMemoryLedgerStore,
+  InMemoryStripeEventsSystemRepository,
+} from '@domain/billing/testing';
 import {
   AuditEventsRepository,
+  IdentityOutbox,
+  IdentityOutboxSystemRepository,
   InvitationsRepository,
   InvitationsSystemRepository,
   identitySchema,
@@ -22,6 +38,7 @@ import {
 } from '@domain/notifications/testing';
 import { getQueueToken } from '@nestjs/bullmq';
 import { CACHE_MANAGER } from '@nestjs/cache-manager';
+import type { Type } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { buildFastifyOptions, configureHttpApp, setupApiDocs } from '@platform/bootstrap';
@@ -29,7 +46,9 @@ import { CASSANDRA_CLIENT } from '@platform/cassandra';
 import { appConfig } from '@platform/config';
 import { DRIZZLE, RlsElevation } from '@platform/database';
 import { GRAPHQL_PUB_SUB } from '@platform/graphql';
+import { ImmudbClient } from '@platform/immudb';
 import { MAIL_QUEUE, MailProcessor } from '@platform/mailer';
+import { type OutboxRelay, type OutboxTickResult, outboxRelayToken } from '@platform/outbox';
 import { REDIS_CLIENT } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import { StorageService } from '@platform/storage';
@@ -47,6 +66,8 @@ import {
   createL1OnlyCache,
   type FakeRows,
 } from './fake-infrastructure.js';
+import { FakeStripe } from './fake-stripe.js';
+import { InMemoryKafkaServer } from './in-memory-kafka.server.js';
 
 export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
 
@@ -68,10 +89,19 @@ export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
  * | BullMQ `mail` queue / `MailProcessor`      | recording queue / no worker                  |
  * | `CACHE_MANAGER`                            | real L1 tier only (L2 is node-redis)         |
  * | `KafkaProducer`                            | `FakeKafkaProducer` (records envelopes)      |
+ * | `IdentityOutbox` + its system repository   | `InMemoryOutbox` (`outbox.identity`)         |
+ * | `BillingOutbox` + its system repository    | `InMemoryOutbox` (`outbox.billing`)          |
  * | `GRAPHQL_PUB_SUB`                          | in-process `PubSub`                          |
  * | `StorageService`                           | `InMemoryStorageService`                     |
+ * | `ImmudbClient` (`LEDGER_ENABLED=true` only) | `options.immudb`, when given                 |
+ * | `LedgerPort`, `LedgerReceiptsRepository`, `LedgerSystemRepository`, the Stripe client (`options.ledger`) | `InMemoryLedger`, one `InMemoryLedgerStore` over billing's outbox, `FakeStripe` |
  *
- * The Kafka consumer and the Redis Socket.IO adapter are not connected (no broker / Redis).
+ * The Redis Socket.IO adapter is not connected (no Redis). The Kafka consumers are connected only
+ * with `kafkaConsumers: true`, to an in-process server (`consumers.deliver()`), never to a broker.
+ *
+ * Outbox: the request path writes integration events to the in-memory outboxes and publishes
+ * nothing. The app's own relays (one per outbox) never start (`OUTBOX_RELAY_ENABLED=false` and no
+ * system pool); a spec drives them with `tickRelays()`, which publishes to the fake producer.
  */
 export interface MonolithE2eOptions {
   /** Rows the fake Postgres answers a statement with (`sql` whitespace-normalised); default none. */
@@ -83,13 +113,43 @@ export interface MonolithE2eOptions {
    * spec that asserts the CQL the adapters send).
    */
   notificationStores?: 'in-memory' | 'cassandra';
+  /**
+   * Connects the app's Kafka consumers (`@KafkaEventPattern` handlers, as `connectKafkaConsumer`
+   * does in main.ts) to an in-process `InMemoryKafkaServer`, returned as `consumers`.
+   */
+  kafkaConsumers?: boolean;
+  /**
+   * The root module to boot instead of `AppModule`: one `createAppModule()` defined after the spec
+   * stubbed the env it reads at definition time (`LEDGER_ENABLED`).
+   */
+  module?: Type<unknown>;
+  /** Replaces the `ImmudbClient` of `ImmudbModule` (loaded only with `LEDGER_ENABLED=true`). */
+  immudb?: ImmudbClient;
+  /**
+   * The ledger in memory (needs `LEDGER_ENABLED=true` and `module: createAppModule()`): `LedgerPort`
+   * is an `InMemoryLedger`, the receipts and the system repository one `InMemoryLedgerStore`
+   * writing into billing's in-memory outbox (so R4's re-enqueues are relayed like any row), and
+   * the Stripe client a `FakeStripe` (the real signature check, fake GETs). Returned as `ledger`.
+   */
+  ledger?: boolean;
 }
 
 export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
   const config = appConfig.parse();
   const redis = new InMemoryRedis();
   const kafka = new FakeKafkaProducer({ source: config.serviceName });
-  const identity = createInMemoryIdentityPersistence();
+  // The outboxes build their envelopes with the app's producer (source = SERVICE_NAME).
+  const identity = createInMemoryIdentityPersistence(undefined, { kafka });
+  const billingOutbox = createInMemoryBillingOutbox({ kafka });
+  const consumers = new InMemoryKafkaServer();
+  const ledger =
+    options.ledger === true
+      ? {
+          port: new InMemoryLedger(),
+          store: new InMemoryLedgerStore({ outbox: billingOutbox }),
+          stripe: new FakeStripe(),
+        }
+      : undefined;
   const postgres = createFakePostgres(
     { ...identitySchema, ...billingSchema },
     options.postgresRows,
@@ -100,7 +160,7 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
   const mailQueue = createFakeQueue();
   const storage = new InMemoryStorageService();
 
-  const builder = Test.createTestingModule({ imports: [AppModule] })
+  const builder = Test.createTestingModule({ imports: [options.module ?? AppModule] })
     .overrideProvider(REDIS_CLIENT)
     .useValue(redis.asRedis())
     .overrideProvider(DRIZZLE)
@@ -131,6 +191,15 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     // The real RlsElevation needs an open runtime transaction; the inline runner opens none.
     .overrideProvider(RlsElevation)
     .useValue(identity.elevation)
+    // Each outbox is one in-memory array: the writer and the relay's system repository.
+    .overrideProvider(IdentityOutbox)
+    .useValue(identity.outbox)
+    .overrideProvider(IdentityOutboxSystemRepository)
+    .useValue(identity.outbox)
+    .overrideProvider(BillingOutbox)
+    .useValue(billingOutbox)
+    .overrideProvider(BillingOutboxSystemRepository)
+    .useValue(billingOutbox)
     .overrideProvider(CASSANDRA_CLIENT)
     .useValue(cassandra.client)
     .overrideProvider(getQueueToken(MAIL_QUEUE))
@@ -149,6 +218,21 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     .overrideProvider(StripeEventsSystemRepository)
     .useValue(new InMemoryStripeEventsSystemRepository());
 
+  if (options.immudb !== undefined) {
+    builder.overrideProvider(ImmudbClient).useValue(options.immudb);
+  }
+  if (ledger !== undefined) {
+    builder
+      .overrideProvider(LedgerPort)
+      .useValue(ledger.port)
+      .overrideProvider(LedgerReceiptsRepository)
+      .useValue(ledger.store.receipts)
+      .overrideProvider(LedgerSystemRepository)
+      .useValue(ledger.store.system)
+      .overrideProvider(STRIPE_CLIENT)
+      .useValue(ledger.stripe.client);
+  }
+
   if (options.notificationStores !== 'cassandra') {
     builder
       .overrideProvider(NotificationsRepository)
@@ -162,6 +246,9 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     async (created) => {
       await configureHttpApp(created, { config, shutdownHooks: false, processHandlers: false });
       setupApiDocs(created, MONOLITH_API_DOCS);
+      if (options.kafkaConsumers === true) {
+        created.connectMicroservice({ strategy: consumers }, { inheritAppConfig: true });
+      }
     },
     {
       adapter: new FastifyAdapter(buildFastifyOptions(config, { multipart: true })),
@@ -169,11 +256,41 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     },
   );
 
+  if (options.kafkaConsumers === true) await app.startAllMicroservices();
+
+  const relays = {
+    identity: app.get<string, OutboxRelay>(outboxRelayToken('identity'), { strict: false }),
+    billing: app.get<string, OutboxRelay>(outboxRelayToken('billing'), { strict: false }),
+  };
+  /** One tick of each relay (identity, then billing): poll → publish → mark. */
+  const tickRelays = async (): Promise<[OutboxTickResult, OutboxTickResult]> => {
+    const signal = new AbortController().signal;
+    return [await relays.identity.tick(signal), await relays.billing.tick(signal)];
+  };
+  /**
+   * Publishes everything the outboxes hold (ticks until both are empty), then forgets what the
+   * fake producer recorded: the next assertion sees only what comes after this point.
+   */
+  const flushOutboxes = async (): Promise<void> => {
+    for (let round = 0; round < 10; round += 1) {
+      const results = await tickRelays();
+      if (results.some((result) => result.failed)) throw new Error('an outbox relay tick failed');
+      if (identity.outbox.unpublished().length + billingOutbox.unpublished().length === 0) break;
+    }
+    kafka.clear();
+  };
+
   return {
     app,
     redis,
     kafka,
     identity,
+    outbox: { identity: identity.outbox, billing: billingOutbox },
+    relays,
+    tickRelays,
+    flushOutboxes,
+    consumers,
+    ledger,
     postgres,
     cassandra,
     notifications,

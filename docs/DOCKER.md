@@ -41,6 +41,7 @@ Budget: the stack is sized for **4 CPUs / 4 GB** of Docker Desktop memory (see [
 | `cassandra`             | `cassandra:5.0.9`                                 | 9042                         | —                   | notifications inbox (DC `datacenter1`)                                                     |
 | `cassandra-init`        | `cassandra:5.0.9` (cqlsh)                         | —                            | —                   | one-shot: keyspace `$CASSANDRA_KEYSPACE`                                                   |
 | `immudb`                | `codenotary/immudb:1.11.2` (distroless)           | 3322 (gRPC)                  | —                   | ledger store (append-only, verifiable SQL); pg-wire off; metrics 9497 in-network           |
+| `immudb-keygen`         | `apache/kafka:4.3.1` (openssl)                    | —                            | —                   | one-shot: development state-signing key pair into the `immudb-signing` volume (first run)  |
 | `immudb-init`           | `redis:8.10.2-alpine3.23` (busybox)               | —                            | —                   | one-shot: waits for immudb `/readyz`                                                       |
 | `kafka`                 | `apache/kafka:4.3.1` (KRaft, single node)         | 9094 (EXTERNAL listener)     | —                   | integration events                                                                         |
 | `kafka-init`            | `apache/kafka:4.3.1` (CLI)                        | —                            | —                   | one-shot: topics from `docker/kafka/topics.txt`                                            |
@@ -54,7 +55,7 @@ Budget: the stack is sized for **4 CPUs / 4 GB** of Docker Desktop memory (see [
 | `identity-service`      | built (`APP=identity-service`)                    | 50051 (gRPC)                 | microservices       | AuthService + UsersService                                                                 |
 | `notifications-service` | built (`APP=notifications-service`)               | 50052 (gRPC)                 | microservices       | NotificationsService + Kafka consumers + mail                                              |
 | `billing-service`       | built (`APP=billing-service`)                     | 50053 (gRPC)                 | microservices       | BillingService (Stripe)                                                                    |
-| `prometheus`            | `prom/prometheus:v3.15.0`                         | 9090                         | observability       | scrapes every app's `/metrics` + exporters                                                 |
+| `prometheus`            | `prom/prometheus:v3.15.0`                         | 9090                         | observability       | scrapes every app's `/metrics` + exporters, evaluates the outbox and ledger alert rules    |
 | `grafana`               | `grafana/grafana:13.2.2`                          | **3300**                     | observability, logs | dashboards (admin/admin, anonymous viewer)                                                 |
 | `jaeger`                | `jaegertracing/jaeger:2.20.0`                     | 16686 (UI), 4317/4318 (OTLP) | observability       | traces (in-memory)                                                                         |
 | `postgres-exporter`     | `prometheuscommunity/postgres-exporter:v0.20.1`   | —                            | observability       | Postgres metrics                                                                           |
@@ -89,7 +90,7 @@ every app container listens on HTTP **3000** (API or health + metrics) and gRPC 
 
 ## Topologies & profiles
 
-- **No profile**: infrastructure only. The init jobs (`kafka-init`, `cassandra-init`, `storage-init`, `immudb-init`) run once per
+- **No profile**: infrastructure only. The init jobs (`kafka-init`, `cassandra-init`, `storage-init`, `immudb-keygen`, `immudb-init`) run once per
   `up`, idempotently, and exit 0.
 - **`monolith`** or **`microservices`**: never both. Each topology's edge app carries the network alias **`api`** and
   publishes host port 3000, so k6, docs and your browser don't care which one runs.
@@ -207,9 +208,14 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
 ## Bootstrap jobs & migrations
 
 - **Kafka topics** ([`docker/kafka/topics.txt`](../docker/kafka/topics.txt)) = the topic of every `<EVENT>_EVENT` contract in
-  `domains/*/contracts` + its `.dlq` twin (3 topics × 6 partitions + 3 `.dlq` × 1). Broker auto-creation is **off**, as in
+  `domains/*/contracts` + its `.dlq` twin (6 topics × 6 partitions + 6 `.dlq` × 1; `billing.ledger-posting.v1` is consumed only while `LEDGER_ENABLED=true`). Broker auto-creation is **off**, as in
   production: a missing topic fails loudly at consumer start instead of being created by a typo.
   `node scripts/docker/check-kafka-topics.mjs` (after `bun run build`) fails when the file drifts from the contracts.
+- **Outbox relays.** Whoever owns an outbox runs its relay (`OUTBOX_RELAY_ENABLED`, default on, needs
+  `DATABASE_SYSTEM_URL`): the monolith runs `identity` and `billing`, and in the microservices profile
+  identity-service and billing-service run one each, the gateway none. Only the holder of the Redis lock
+  `outbox-relay:<schema>` publishes, so scaling a service adds standbys, not duplicates. Events are published a
+  poll interval (500 ms) after the request answered; with Kafka down they wait in the table.
 - **Cassandra**: `cassandra-init` creates `CREATE KEYSPACE IF NOT EXISTS <CASSANDRA_KEYSPACE>` with
   `NetworkTopologyStrategy {'<CASSANDRA_DC>': 1}` (default `datacenter1`) and asserts the node's DC equals the apps'
   `CASSANDRA_LOCAL_DC`. Tables
@@ -218,6 +224,15 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   answers browser CORS for the origins in `RUSTFS_CORS_ALLOWED_ORIGINS` (`DOCKER_S3_CORS_ORIGINS`, default
   `http://localhost:3000,http://localhost:5173` like the apps' `CORS_ORIGINS`), so a frontend can `PUT` to a
   presigned URL directly; `scripts/docker/check-infra.sh` asserts the preflight.
+- **immudb state signing (D3)**: `immudb-keygen` generates an ECDSA P-256 key pair into the `immudb-signing` volume on
+  its first run (the pair is kept afterwards). immudb starts with `--signingKey` on the private key (mounted read-only);
+  the monolith and billing-service mount the volume read-only and pin the public file through
+  `IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE`, and run with `LEDGER_VERIFY=true` (override with `LEDGER_VERIFY=false`), so
+  reconciliation R5 checks every state signature. No private key is committed: the key is local to the volume, and
+  the public file starts with a `compose-local` comment line that `NODE_ENV=production` refuses (the compose stack
+  opts out with `ALLOW_KNOWN_LOCAL_SECRETS`). Removing the `immudb-signing` volume makes the next start generate a new
+  key: see [SECURITY.md](SECURITY.md#immudb-state-signing-key) for what that means for the trusted state.
+  [`docker/immudb/README.md`](../docker/immudb/README.md) has the commands.
 - **immudb**: `immudb-init` only waits for readiness (the image has no shell, so no healthcheck; metrics and
   `/readyz` are on port 9497, in-network only; pg-wire is off). The
   database, the SELECT/INSERT-only application user and the tables come from the apps' migrate step
@@ -239,7 +254,7 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   replace only the default `CMD`. Release flow: [RELEASING.md](RELEASING.md).
 - **`infra-ready`**: `docker compose up --wait` only accepts a one-shot container that _exited_ when an enabled service
   depends on it with `service_completed_successfully`. Without an app profile nothing would, and `--wait` would fail
-  with `kafka-init exited (0)`. This idle 1 MB container depends on the four init jobs, and so means "infra bootstrapped".
+  with `kafka-init exited (0)`. This idle 1 MB container depends on the five init jobs, and so means "infra bootstrapped".
 
 `scripts/docker/check-infra.sh` boots the infra in an isolated project (`bp-infra-check`), asserts all of the above
 (topics + partitions + auto-create off, keyspace + DC, Citus + extensions + `uuidv7()`, the three roles, PgBouncer
@@ -471,7 +486,10 @@ Full teardown of a stack, volumes and network included: `docker compose --profil
   SD on the compose service names (port 3000): one target per replica, nothing for profiles that aren't running.
   It sets the `service` label itself. Job `host-apps` scrapes apps started on the host (`host.docker.internal:3000-3003`,
   `service="host:<port>"`). When the API runs in compose, `host:3000` is that same container through its published port.
-  The remote-write receiver is on for k6.
+  The remote-write receiver is on for k6. The alert rules of the outbox and the ledger
+  (`docker/prometheus/rules/{outbox,ledger}.rules.yml`, listed in `rule_files`) are mounted read-only at
+  `/etc/prometheus/rules`; edit one and `POST /-/reload`. No Alertmanager runs in compose: the alerts show on the
+  Prometheus Alerts page, and [OBSERVABILITY.md](OBSERVABILITY.md#outbox-and-ledger-alerts) says how to route them.
 - **Grafana** (http://localhost:3300, **3300** because 3000–3003 are the API/services host-dev ports): provisioned
   datasources (Prometheus, Jaeger, Loki, fixed UIDs) and the home dashboard **NestJS services overview**
   ([`docker/grafana/dashboards/nestjs-overview.json`](../docker/grafana/dashboards/nestjs-overview.json)):
@@ -654,5 +672,4 @@ Stated honestly: none of these are done yet.
 | ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | Per-domain `@domain/<x>/api` subpath exports                           | the gateway image would stop shipping the domains' infrastructure (it is as large as the monolith today) |
 | Separate metrics listener                                              | `/metrics` could leave the API port; until then keep it off the public ingress + `METRICS_BEARER_TOKEN`  |
-| Transactional outbox                                                   | events are published after commit today; a crash between commit and publish can lose the event           |
 | Real-database integration specs for billing/notifications repositories | the CI `integration` job covers Postgres + Redis only through the existing `*:int` projects              |

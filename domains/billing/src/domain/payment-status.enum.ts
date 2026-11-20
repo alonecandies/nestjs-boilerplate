@@ -7,7 +7,12 @@
  * Lifecycle of a payment:
  * `pending` → `succeeded` (Checkout paid) | `expired` (session expired unpaid) | `failed`
  * (session creation failed, or an async payment method was declined). `failed` → `pending` only
- * when the same idempotent checkout request is retried.
+ * when the same idempotent checkout request is retried. After payment (Stripe money webhooks,
+ * L-11): every refund event (`charge.refunded`, `refund.updated`, `refund.failed`) stores Stripe's
+ * current refunded total of the charge, and `succeeded` | `partially_refunded` | `refunded` take
+ * the status it gives (0 → `succeeded`, below the amount → `partially_refunded`, else
+ * `refunded`); `succeeded` | `partially_refunded` → `disputed` (`charge.dispute.funds_withdrawn`);
+ * `disputed` → the status the stored total gives (`charge.dispute.funds_reinstated`).
  */
 export enum PaymentStatus {
   Pending = 'pending',

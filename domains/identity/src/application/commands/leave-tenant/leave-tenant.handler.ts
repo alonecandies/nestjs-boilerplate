@@ -7,6 +7,7 @@ import {
 import { AUDIT_EVENT_TYPES } from '../../persistence/audit-events.repository.js';
 import { MembershipsRepository } from '../../persistence/memberships.repository.js';
 import { TransactionRunner } from '../../persistence/transaction-runner.js';
+import { IdentityIntegrationEvents } from '../../services/identity-integration-events.service.js';
 import { requireTenantActor } from '../../services/tenant-actor.js';
 import { TenantAuditLog } from '../../services/tenant-audit-log.service.js';
 import { LeaveTenantCommand } from './leave-tenant.command.js';
@@ -18,12 +19,20 @@ export class LeaveTenantHandler implements ICommandHandler<LeaveTenantCommand> {
     private readonly transactions: TransactionRunner,
     private readonly audit: TenantAuditLog,
     private readonly events: EventBus,
+    private readonly integrationEvents: IdentityIntegrationEvents,
   ) {}
 
   async execute({ tenantId, userId }: LeaveTenantCommand): Promise<void> {
     const principal = requireTenantActor(tenantId, userId);
     // A staff switch-in principal has no membership to leave.
     if (principal.staff) throw new TenantAccessDeniedException();
+    const removed = new MembershipRemovedEvent({
+      tenantId,
+      userId,
+      actorId: userId,
+      occurredAt: new Date(),
+    });
+    // The membership, its audit row and the `identity.membership-removed.v1` outbox row: one unit.
     await this.transactions.run(async () => {
       const owners = await this.memberships.countOwnersLocked(tenantId);
       const self = await this.memberships.find(tenantId, userId);
@@ -38,9 +47,9 @@ export class LeaveTenantHandler implements ICommandHandler<LeaveTenantCommand> {
         type: AUDIT_EVENT_TYPES.MEMBER_LEFT,
         data: { roles: [...self.roles] },
       });
+      await this.integrationEvents.membershipRemoved(removed);
     });
-    this.events.publish(
-      new MembershipRemovedEvent({ tenantId, userId, actorId: userId, occurredAt: new Date() }),
-    );
+    // Committed: in-process handlers see the removal.
+    this.events.publish(removed);
   }
 }

@@ -73,7 +73,7 @@ all five, and every topic is tenant-scoped: an envelope without a tenant dead-le
 
 | Surface  | Where                                                                                                                                                                                                                                                                                                               |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Ops      | `GET /health/live`, `GET /health/ready` (postgres, cassandra, redis — not Kafka: events are best-effort, a broker outage must not take the API out of rotation), `GET /metrics`, `GET /docs` (Scalar), `GET /openapi.json`, `GET /openapi.yaml`                                                                     |
+| Ops      | `GET /health/live`, `GET /health/ready` (postgres, cassandra, redis — not Kafka: events wait in the outbox, a broker outage must not take the API out of rotation), `GET /metrics`, `GET /docs` (Scalar), `GET /openapi.json`, `GET /openapi.yaml`                                                                  |
 | Identity | `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/refresh`, `POST /v1/auth/logout`, `GET /v1/auth/me`, `GET /v1/users`, `GET /v1/users/:id`                                                                                                                                                           |
 | Notifs   | `GET /v1/notifications`, `POST /v1/notifications/:id/read`; Socket.IO namespace `/notifications` (`auth: { token }`, websocket transport)                                                                                                                                                                           |
 | Billing  | `POST /v1/billing/checkout-sessions`, `POST /v1/billing/webhooks/stripe` (raw body, signature-verified), `GET /v1/billing/payments`                                                                                                                                                                                 |
@@ -106,7 +106,8 @@ Errors are RFC 9457 `application/problem+json` (`type`, `title`, `status`, `deta
   one `fatal` line and exits 1 (verified against no infrastructure: Postgres unreachable → exit 1
   after ~7 s). Once running, dependencies degrade per request (readiness turns 503 for Postgres,
   Cassandra or Redis, calls fail as problem+json) and reconnect on their own; a Kafka outage keeps
-  the app ready and only delays or drops integration events (logged, no outbox yet).
+  the app ready and only delays integration events: they wait in `identity.outbox` and
+  `billing.outbox`, and the relays publish them once the broker is back (at least once).
 - **Shutdown** (SIGTERM/SIGINT): Fastify stops accepting, in-flight requests and Kafka messages
   finish, then pools/clients close and logs flush; a hard deadline (`SHUTDOWN_TIMEOUT_MS`) exits 1
   if anything hangs.

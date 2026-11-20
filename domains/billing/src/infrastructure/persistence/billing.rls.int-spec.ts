@@ -229,7 +229,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         ]);
       });
 
-      it('grants app_runtime S, I, U on payments and S, I on stripe_events; app_system S, I, D on stripe_events only', async () => {
+      it('grants app_runtime S, I, U on payments and S, I on stripe_events; app_system S, I, D on stripe_events and S on payments', async () => {
         const rows = await admin<{ grantee: string; name: string; privileges: string }[]>`
           select a.grantee::regrole::text as grantee, c.relname as name,
             string_agg(a.privilege_type, ',' order by a.privilege_type) as privileges
@@ -242,16 +242,25 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         expect([...rows]).toEqual([
           { grantee: 'app_runtime', name: 'payments', privileges: 'INSERT,SELECT,UPDATE' },
           { grantee: 'app_runtime', name: 'stripe_events', privileges: 'INSERT,SELECT' },
+          // 0006_ledger_system_reads (outbox plan Task 11): reconciliation R3 reads payments.
+          { grantee: 'app_system', name: 'payments', privileges: 'SELECT' },
           { grantee: 'app_system', name: 'stripe_events', privileges: 'DELETE,INSERT,SELECT' },
         ]);
       });
 
-      it('has exactly the five app_runtime policies, none for any other role', async () => {
+      it('has exactly the five app_runtime policies, the outbox and ledger policies, none for any other role', async () => {
         const rows = await admin<{ name: string; command: string; roles: string }[]>`
           select tablename || '.' || policyname as name, cmd as command,
             array_to_string(roles, ',') as roles
           from pg_policies where schemaname = 'billing' order by 1`;
         expect([...rows]).toEqual([
+          // 0004_outbox (outbox plan Task 6); billing.outbox.rls.int-spec.ts covers it.
+          // 0005_ledger_tables (outbox plan Task 10); billing.ledger.rls.int-spec.ts covers them.
+          ...['ledger_accounts', 'ledger_discrepancies', 'ledger_entry_refs'].flatMap((table) => [
+            { name: `${table}.${table}_insert`, command: 'INSERT', roles: 'app_runtime' },
+            { name: `${table}.${table}_select`, command: 'SELECT', roles: 'app_runtime' },
+          ]),
+          { name: 'outbox.outbox_insert', command: 'INSERT', roles: 'app_runtime' },
           { name: 'payments.payments_insert', command: 'INSERT', roles: 'app_runtime' },
           { name: 'payments.payments_select', command: 'SELECT', roles: 'app_runtime' },
           { name: 'payments.payments_update', command: 'UPDATE', roles: 'app_runtime' },
@@ -513,8 +522,15 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         expect(changed).toEqual([1, EVENTS.length + 1]);
       });
 
-      it('app_system has no grant on payments, and cannot update stripe_events', async () => {
-        expect(await failure(plain(system, paymentIds))).toEqual(NO_PRIVILEGE);
+      it('app_system reads every payment (0006, reconciliation R3) but cannot write one, and cannot update stripe_events', async () => {
+        await expect(plain(system, paymentIds)).resolves.toEqual(
+          PAYMENTS.map((payment) => payment.id).toSorted(),
+        );
+        expect(
+          await failure(
+            plain(system, (tx) => tx`update billing.payments set quantity = 9`, { commit: true }),
+          ),
+        ).toEqual(NO_PRIVILEGE);
         expect(
           await failure(
             plain(system, (tx) => insertPayment(tx, PLATFORM_TENANT_ID, A1), { commit: true }),

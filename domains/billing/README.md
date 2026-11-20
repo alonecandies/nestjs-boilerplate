@@ -11,20 +11,21 @@ Layers follow the hexagonal/CQRS layout of the monorepo:
 src/
   domain/          Payment aggregate (status machine), PaymentSucceededEvent, errors, PaymentStatus
   application/     commands (CreateCheckoutSession, HandleStripeWebhook), query (ListPayments),
-                   PaymentSucceededRelay (→ Kafka), BillingPort, repository abstractions, mapper
-  infrastructure/  billing.schema.ts (Drizzle), Drizzle repositories, local + gRPC port adapters, the Stripe adapter (stripe/)
+                   BillingPort, repository abstractions, mappers (contract, payment-succeeded payload)
+  infrastructure/  billing.schema.ts (Drizzle), Drizzle repositories, billing's outbox (BillingOutbox, its system repository), local + gRPC port adapters, the Stripe adapter (stripe/)
   presentation/    REST BillingController, GraphQL BillingResolver, gRPC BillingGrpcController
   billing-core.module.ts · billing-grpc.module.ts · billing-api.module.ts
 ```
 
 ## Modules and wiring
 
-| Module                         | Contents                                                                                                                                         | Used by          |
-| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------- |
-| `BillingCoreModule`            | CQRS handlers, `PaymentSucceededRelay`, Drizzle repositories, the Stripe adapter (`StripeModule.forRootAsync()`)                                 | (via the others) |
-| `BillingGrpcModule`            | `BillingCoreModule` + `BillingGrpcController` (`billing.v1.BillingService`)                                                                      | billing-service  |
-| `BillingApiModule.forLocal()`  | `BillingController` + `BillingResolver` + `BillingPort → BillingLocalAdapter` (the app imports `BillingCoreModule` too)                          | monolith         |
-| `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule.register({ spec: BILLING_GRPC_PACKAGE, url })` | gateway          |
+| Module                         | Contents                                                                                                                                                             | Used by          |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------- |
+| `BillingCoreModule`            | CQRS handlers, Drizzle repositories, billing's outbox and its relay (`OutboxModule.forFeature`), the Stripe adapter (`StripeModule.forRootAsync()`)                  | (via the others) |
+| `BillingGrpcModule`            | `BillingCoreModule` + `BillingGrpcController` (`billing.v1.BillingService`)                                                                                          | billing-service  |
+| `BillingApiModule.forLocal()`  | `BillingController` + `BillingResolver` + `BillingPort → BillingLocalAdapter` (the app imports `BillingCoreModule` too)                                              | monolith         |
+| `BillingApiModule.forRemote()` | `BillingController` + `BillingResolver` + `BillingPort → BillingGrpcAdapter` + `GrpcClientsModule.register({ spec: BILLING_GRPC_PACKAGE, url })`                     | gateway          |
+| `BillingMessagingModule`       | `LedgerPostingConsumer` + `BillingLedgerModule` (`LedgerPort`, `LedgerService`, the posting commands, reconciliation and its cron); only while `LEDGER_ENABLED=true` | (Task 14 wiring) |
 
 Entry points: `@domain/billing/api` (edge: `BillingApiModule`, `BillingPort` and its adapters, gRPC client config,
 GraphQL/REST presentation, log-redaction paths; what the gateway imports) and `@domain/billing` (everything in
@@ -41,7 +42,7 @@ import { DATABASE_MIGRATIONS } from './database.migrations.js'; // [billingMigra
   imports: [
     AppConfigModule.forRoot(),
     ConfigModule.forFeature(grpcConfig), // GRPC_URL for connectGrpcServer in main.ts
-    // Readiness = Postgres + Redis. Kafka is deliberately NOT a contributor (best-effort publish).
+    // Readiness = Postgres + Redis. Kafka is deliberately NOT a contributor (events wait in billing.outbox).
     ObservabilityModule.forRoot({
       healthContributors: [DatabaseHealthIndicator, RedisHealthIndicator],
     }),
@@ -177,7 +178,8 @@ errors to gRPC statuses and `x-error-code` trailers, and `BillingGrpcAdapter` ma
 | ------------------------------ | -------- | -------------------------------------------------------------------------------------------------------------- |
 | `billing.payment-succeeded.v1` | `userId` | `{ paymentId, userId, stripeCheckoutSessionId, amountTotal, currency, paidAt }`; envelope id = domain event id |
 
-Billing consumes no topic.
+Billing consumes its own `billing.ledger-posting.v1` (`LedgerPostingConsumer`, `BillingMessagingModule`, only while
+`LEDGER_ENABLED=true`): see **Ledger (immudb)**.
 
 ## Stripe adapter (`infrastructure/stripe`)
 
@@ -242,11 +244,61 @@ failure marks the payment `failed`; a retry with the same key reopens it and get
    - `checkout.session.completed` / `async_payment_succeeded` (paid) → `succeeded` + `PaymentSucceededEvent`
      (a completed-but-`unpaid` session, i.e. a delayed payment method, stays `pending`);
    - `checkout.session.async_payment_failed` → `failed`; `checkout.session.expired` → `expired`;
+   - the money events of **Ledger postings** below (refunds, disputes, payouts);
    - any other signed event → acknowledged and ignored.
 3. The whole delivery runs as the `{ userId, tenantId }` signed into the session and PaymentIntent metadata, so it can touch
    only that tenant's rows. An event without a usable owner (payouts, unattributed fees, pre-tenancy sessions) is recorded
    for the platform tenant through the `markProcessedAsPlatform` system method and nothing else.
-4. After COMMIT the aggregate's events are published; `PaymentSucceededRelay` sends the Kafka event.
+4. In the same unit of work, after `markProcessed` and `save`, a completed payment enqueues
+   `billing.payment-succeeded.v1` on `billing.outbox` (`BillingOutbox`). After COMMIT the aggregate's events go to
+   the in-process event bus; the outbox relay publishes the row to Kafka.
+
+**Ledger postings** (outbox plan Task 12, L-11). The webhook also handles Stripe's money events. While
+`LEDGER_ENABLED=true`, each event with a posting writes one `billing.ledger-posting.v1` row in the unit of work of its
+receipt (envelope id `uuidv5(LEDGER_NAMESPACE, <evt id>)`, key = tenant id, actor = the user; the billing consumer
+posts it to immudb). With the ledger off (the default) receipts and transitions still happen and no row is written.
+
+| Stripe event                                                   | Owner from                              | Payment transition                                                               | Posting row                            |
+| -------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------- |
+| `checkout.session.completed`, `async_payment_succeeded` (paid) | session metadata                        | → `succeeded`                                                                    | none                                   |
+| `charge.succeeded`                                             | charge metadata, else its PaymentIntent | none                                                                             | `charge`, `ch_…`                       |
+| `charge.refunded`                                              | same                                    | records the charge's **current** `amount_refunded`, read from Stripe (see below) | none                                   |
+| `refund.created` with status `succeeded`                       | the refund's PaymentIntent              | none                                                                             | `refund`, `re_…`                       |
+| `refund.updated`                                               | same                                    | records the charge's current `amount_refunded` (see below)                       | `refund`, `re_…` at status `succeeded` |
+| `refund.failed`                                                | same                                    | records the charge's current `amount_refunded` (see below)                       | `refund`, `re_…`                       |
+| `charge.dispute.funds_withdrawn`                               | the dispute's PaymentIntent             | → `disputed`                                                                     | `dispute`, `du_…`                      |
+| `charge.dispute.funds_reinstated`                              | same                                    | `disputed` → the status the stored `amount_refunded` gives                       | `dispute`, `du_…`                      |
+| `payout.paid`, `payout.failed`                                 | none: the platform                      | none                                                                             | `payout`, `po_…`                       |
+
+- The owner comes from `StripeOwnerResolver`: the object's own signed metadata, else its PaymentIntent's (checkout
+  signs `{ paymentId, userId, tenantId }` onto it), read with at most one GET (`StripeService.retrievePaymentIntent`)
+  **before** the unit of work opens. No Stripe call is made while a transaction is open.
+- Refund state is order-independent: every refund event (`charge.refunded`, `refund.updated`, `refund.failed`) reads
+  the charge (`StripeService.retrieveCharge`, one GET before the unit of work) and stores Stripe's **current**
+  `amount_refunded` as `payments.amount_refunded`, an absolute value, never a delta. The status follows from it
+  (`Payment.refund`): `0` → `succeeded`, below `amount_total` → `partially_refunded`, at least `amount_total` →
+  `refunded`; a `disputed` payment records the total and stays disputed. A replayed, late or reordered event (a
+  failure arriving after a later refund, a `charge.refunded` arriving after its refund failed) converges on Stripe's
+  state. A failing charge read fails the delivery before anything is written, and Stripe retries it. Postings are
+  unchanged: each money movement still posts per event. Rows paid before migration 0007 show `amount_refunded = 0`
+  until their next refund event sets the true total.
+- An owner that cannot be resolved (no metadata, a missing PaymentIntent, a tenant that is not a UUID, the nil
+  tenant) is recorded as a platform receipt with a warning: no payment is touched and no row is written
+  (reconciliation R4 posts the balance transaction later).
+- The payment is the one the metadata names, and only when it belongs to the owner's tenant and user; otherwise
+  nothing moves and the row carries `paymentId: null`. A transition that does not apply (a refund of a pending
+  payment, a repeat) is acknowledged with a warning; the posting row is still written, since the money moved.
+- Payouts are platform money: `SystemContext.run('billing.platform-webhook')`, `outbox.insertAsPlatform` first (nil
+  tenant and key, null user and actor), then `stripeEvents.markProcessedAsPlatform`. Both are idempotent, so a crash
+  between them is healed by Stripe's redelivery.
+- Events without a posting or a transition (a `refund.created` still pending, a `refund.updated` of no charge, and
+  with the ledger off `charge.succeeded`, `refund.created` and `payout.*`) resolve their owner from their own metadata
+  only, like any other event.
+
+**Stripe event types to enable** on the webhook endpoint: `checkout.session.completed`,
+`checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`,
+`charge.succeeded`, `charge.refunded`, `refund.created`, `refund.updated`, `refund.failed`,
+`charge.dispute.funds_withdrawn`, `charge.dispute.funds_reinstated`, `payout.paid` and `payout.failed`.
 
 Unknown payments and impossible transitions are acknowledged with a warning (a retry could never succeed).
 A paid session with no usable currency (none in the event, none stored) is one of them: the payment stays
@@ -272,10 +324,40 @@ the role's `statement_timeout` (a timed-out one is retried at half the span), so
 method refuses outside the context). It needs `ScheduleModule.forRoot()` and `RedisModule` in the
 app (billing-service and the monolith import both).
 
-**Consistency.** The relay publishes after commit and only logs failures, so a crash between COMMIT and the Kafka
-ack loses the event. Guaranteed delivery needs a transactional outbox (a `billing_outbox` row written inside the
-webhook transaction, relayed by a poller); the envelope id is already the stable domain event id, so consumers
-dedupe replays either way.
+**Consistency.** `billing.payment-succeeded.v1` goes through a transactional outbox (`@platform/outbox`, G-1):
+the webhook's unit of work inserts the row into `billing.outbox` (a plain `INSERT` as the signed owner: key = user
+id, envelope id = the `PaymentSucceededEvent` id, `occurredAt` = `paidAt`, tenant and actor = the owner), so the
+event commits or rolls back with the payment. A failing enqueue fails the delivery: no receipt, no transition,
+and Stripe retries it. The outbox relay (one leader per process set, Redis lock `outbox-relay:billing`) polls the
+table on the `app_system` pool, publishes each row with `KafkaProducer.publishStored` and marks it only after the
+broker acknowledged it: delivery is at least once, and consumers dedupe on the stable envelope id. Nothing in
+billing publishes to Kafka from a request path. `outbox.insertAsPlatform` is the only way a `PLATFORM_TENANT_ID`
+row enters the table (the runtime policy refuses the nil tenant).
+
+The same unit of work carries the ledger's posting record: with `LEDGER_ENABLED=true`, a Stripe money event
+(`charge.succeeded`, `refund.*`, `charge.dispute.funds_*`) inserts its `billing.ledger-posting.v1` row next to its
+`stripe_events` receipt and the payment transition, and a payout does the same through `outbox.insertAsPlatform` and
+`markProcessedAsPlatform` (a crash between the two is healed by Stripe's redelivery: the insert is idempotent by its
+deterministic id). With `LEDGER_ENABLED=false` the receipts and transitions happen and no posting row is written. The
+relay and the posting consumer then make the ledger exactly-once in effect: entry ids derive from the Stripe
+transaction id, so a replayed webhook or a redelivered Kafka message is `replayed`, never a second entry.
+`notifications.notification-created.v1` is the only event left without an outbox (no Postgres store behind it).
+
+**Enabling the ledger later.** While `LEDGER_ENABLED=false` no posting row is written, so payments taken in that
+time have no entry. After enabling it, send one `ReconcileLedgerCommand` with an explicit window covering them (inside
+`SystemContext.run('billing.reconcile-ledger', …)`): R4 lists Stripe's balance transactions of the window, re-enqueues
+every one without an entry through `billing.outbox`, and the relay and the consumer post them. Later hourly runs find
+nothing to add.
+
+**Alerts and the topology tests.** The outbox and ledger alert rules are in
+`docker/prometheus/rules/{outbox,ledger}.rules.yml` (see docs/OBSERVABILITY.md). The path webhook → outbox → relay →
+consumer → ledger → reconciliation runs end to end, in memory, in `apps/monolith/test/ledger.e2e-spec.ts` (a signed
+`charge.succeeded` leaves one outbox row, a relay tick delivers it, one balanced entry and one ref exist, the same
+webhook and the same Kafka message again add nothing, `payout.paid` posts a platform entry, a reconcile run succeeds
+with zero findings and, after tampering with the ledger, reports `ledger_row_mutated`). The microservices topology:
+`apps/billing-service/test/app.e2e-spec.ts` (the webhook RPC leaves one posting record in the unit of work of its
+receipt with `LEDGER_ENABLED=true`, none with `false`) and `apps/gateway/test/app.e2e-spec.ts` (the edge forwards the
+raw bytes and answers as billing-service does).
 
 ## Data model (`billingSchema`, `infrastructure/persistence/billing.schema.ts`)
 
@@ -288,6 +370,30 @@ Both tables are distributed by `tenant_id` on Citus, colocated with `app.tenant_
 tenant tables): `0002_distribute.sql` (SH-6). The primary key and every unique index start with `tenant_id`, and no
 FK reaches another domain, so a query by `(tenant_id, …)` goes to one shard. Rows created before B2 belong to the platform tenant (nil
 UUID): no tenant can list them.
+
+### Ledger tables (`0005_ledger_tables.sql`, outbox plan Task 10, ledger design §5)
+
+The receipts and bookkeeping around the immudb ledger (the entries themselves live in immudb). Every table also has
+`created_at`; no FK (`payment_id`, `run_id` and `resolves_id` are plain columns); all five have RLS enabled and forced.
+T = distributed by `tenant_id` inline, right after its `CREATE TABLE`, colocated with `app.tenant_colocation`;
+L = coordinator-local, system only.
+
+| Table (kind)                     | Columns                                                                                                                                                                                | PK                            | Grants `app_runtime` / `app_system` |
+| -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- | ----------------------------------- |
+| `ledger_accounts` (T)            | `tenant_id`, `code`, `currency`, `immudb_account_id uuid`                                                                                                                              | `(tenant_id, code, currency)` | S, I / S, I                         |
+| `ledger_entry_refs` (T)          | `tenant_id`, `entry_id`, `source_key`, `payload_hash`, `immudb_tx_id int8` (NULL when replayed), `payment_id` (nullable), `kind`, `posted_at`; index `ledger_entry_refs_posted_at_idx` | `(tenant_id, entry_id)`       | S, I / S, I                         |
+| `ledger_discrepancies` (T)       | `tenant_id`, `id`, `kind`, `source_key`, `expected jsonb`, `actual jsonb`, `detected_by`, `run_id` (nullable), `resolves_id` (nullable)                                                | `(tenant_id, id)`             | S, I / S, I                         |
+| `ledger_reconciliation_runs` (L) | `id`, `from_ts`, `to_ts`, `status`, `counts jsonb`, `finished_at` (nullable)                                                                                                           | `(id)`                        | none / S, I, U                      |
+| `ledger_trusted_state` (L)       | `database`, `tx_id int8`, `tx_hash bytea`, `verified_at`, `read_at` (0008)                                                                                                             | `(database)`                  | none / S, I, U                      |
+
+- Each tenant table has two policies `TO app_runtime`: `<table>_select USING (tenant_id = app.tenant_id() AND
+app.elevated())` and `<table>_insert WITH CHECK (tenant_id = app.tenant_id())`. A principal inserts only its own
+  tenant's rows and reads them only when elevated (the posting consumer's `roles: []` principal never is), so its
+  inserts are plain `INSERT`s without `RETURNING`. An idempotent runtime insert uses `INSERT … ON CONFLICT DO
+NOTHING` without a conflict target: the int spec pins that it reports 1 row, then 0, for a non-elevated principal
+  on Citus.
+- Neither app role may `UPDATE` or `DELETE` a tenant table: entry refs and discrepancies are append-only.
+  `PLATFORM_TENANT_ID` rows and the two local tables belong to `app_system`.
 
 ### Row-level security (`0003_rls.sql`, B3-5/B3-6, program spec §8.2)
 
@@ -303,25 +409,32 @@ directly (no subquery, no helper or FK into identity); "–" means no policy, so
 
 - Elevation (`billing:read-all`) widens the payments read to the tenant; it never writes another member's payment,
   and a `SELECT … FOR UPDATE` of another member's payment returns nothing even when elevated.
-- `app_system` (BYPASSRLS) gets `SELECT, INSERT, DELETE` on `stripe_events` only (the Stripe-event system methods)
-  and nothing on `payments`. Rows with `tenant_id = PLATFORM_TENANT_ID` match no runtime policy: only `app_system`
+- `app_system` (BYPASSRLS) gets `SELECT, INSERT, DELETE` on `stripe_events` (the Stripe-event system methods) and,
+  since `0006_ledger_system_reads`, `SELECT` on `payments` (reconciliation R3's
+  `ledgerReconciliation.listSucceededPayments`); it never writes a payment. Rows with `tenant_id = PLATFORM_TENANT_ID` match no runtime policy: only `app_system`
   reads or writes them.
 - **Which principal each flow runs as** (no transaction spans the Stripe call, and each flow settles its principal before
   its unit of work opens):
 
-  | Flow                                 | Runs as                                                                                                                                                |
-  | ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-  | Webhook, owner with tenant and user  | `runWithPrincipal({ userId, tenantId, roles: [] })` from the signed metadata, around one `@Transactional()` unit (`markProcessed`, payment lock, save) |
-  | Webhook, platform or user-less owner | `SystemContext.run('billing.platform-webhook')` and `stripeEvents.markProcessedAsPlatform` only: no runtime transaction, no payment looked up          |
-  | Create checkout session              | the request principal; each repository call is its own unit of work, and no transaction spans the Stripe call                                          |
-  | List payments                        | the request principal; the `billing:read-all` check is in TypeScript first, then `elevate(billing:read-all)` for the whole-tenant listing only         |
-  | Purge Stripe events (hourly cron)    | `SystemContext.run('billing.purge-stripe-events')` and `stripeEvents.deleteProcessedBefore`                                                            |
+  | Flow                                 | Runs as                                                                                                                                                                                                                                   |
+  | ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | Webhook, owner with tenant and user  | `runWithPrincipal({ userId, tenantId, roles: [] })` from the signed metadata, around one `@Transactional()` unit (`markProcessed`, payment lock, save)                                                                                    |
+  | Webhook, platform or user-less owner | `SystemContext.run('billing.platform-webhook')` and `stripeEvents.markProcessedAsPlatform` only: no runtime transaction, no payment looked up                                                                                             |
+  | Webhook, payout (ledger enabled)     | `SystemContext.run('billing.platform-webhook')`: `outbox.insertAsPlatform`, then `stripeEvents.markProcessedAsPlatform`                                                                                                                   |
+  | Create checkout session              | the request principal; each repository call is its own unit of work, and no transaction spans the Stripe call                                                                                                                             |
+  | List payments                        | the request principal; the `billing:read-all` check is in TypeScript first, then `elevate(billing:read-all)` for the whole-tenant listing only                                                                                            |
+  | Purge Stripe events (hourly cron)    | `SystemContext.run('billing.purge-stripe-events')` and `stripeEvents.deleteProcessedBefore`                                                                                                                                               |
+  | Reconcile the ledger (hourly cron)   | `SystemContext.run('billing.reconcile-ledger')`: `ledgerRuns.*`, `ledgerReconciliation.{listSucceededPayments, listEntryRefs, findPaymentsByIds, appendDiscrepancies, enqueueMissingPostings}`, `ledgerTrustedState.{read, advance}` (R5) |
 
-- **System methods** (two, both `system` scope, pinned in `billing.system-methods.ts`):
-  `stripeEvents.deleteProcessedBefore` and `stripeEvents.markProcessedAsPlatform`. Only
-  `drizzle-stripe-events.system-repository.ts` names `SystemDatabase`. Every process that runs the billing core needs
-  `DATABASE_SYSTEM_URL`; without it a platform webhook fails with `SYSTEM_DATABASE_UNAVAILABLE` and Stripe retries.
-  The ledger phase adds its methods to the same list, with their grants.
+- **System methods** (all `system` scope, pinned in `billing.system-methods.ts`):
+  `stripeEvents.deleteProcessedBefore` and `stripeEvents.markProcessedAsPlatform`; the four shared `outbox.*`
+  methods; and the ledger's eleven (outbox plan Task 11, spec §9 items 9-11 and delta 4, plus `findPaymentsByIds` from
+  the final review):
+  `ledgerReconciliation.{listSucceededPayments, listEntryRefs, findPaymentsByIds, appendDiscrepancies, enqueueMissingPostings}`,
+  `ledgerEntryRefs.recordAsSystem`, `ledgerAccounts.recordPlatformAccounts`, `ledgerTrustedState.{read, advance}` and
+  `ledgerRuns.{start, finish}`. Only the three `drizzle-*.system-repository.ts` files name `SystemDatabase`. Every
+  process that runs the billing core needs `DATABASE_SYSTEM_URL`; without it a platform webhook fails with
+  `SYSTEM_DATABASE_UNAVAILABLE` and Stripe retries.
 
 `payment_status` enum: `pending`, `succeeded`, `failed`, `expired`, `refunded`, `partially_refunded`, `disputed`.
 Constraint and index names are explicit snake_case (`payments_tenant_id_id_pk`). The tables and the enum live in the `billing` Postgres schema
@@ -340,18 +453,26 @@ transaction would carry no RLS context.
 
 `stripe` namespace (`src/infrastructure/stripe/stripe.config.ts`, owned by billing; production rejects the dev placeholders, the compose fallbacks and local redirect URLs): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`
 (redirect URLs are never taken from REST clients: no open redirect), `STRIPE_MAX_NETWORK_RETRIES`,
-`STRIPE_TIMEOUT_MS`. Gateway: `BILLING_GRPC_URL` (`billingGrpcClient` namespace, `src/infrastructure/adapters/grpc/billing-grpc-client.config.ts`), `GRPC_DEADLINE_MS` (platform `grpc`).
+`STRIPE_TIMEOUT_MS`. `ledger` namespace (`src/infrastructure/ledger/ledger.config.ts`): `LEDGER_ENABLED` (false),
+`LEDGER_RECONCILE_LOOKBACK_HOURS` (72, 1-720), `LEDGER_VERIFY` (false). Gateway: `BILLING_GRPC_URL` (`billingGrpcClient` namespace, `src/infrastructure/adapters/grpc/billing-grpc-client.config.ts`), `GRPC_DEADLINE_MS` (platform `grpc`).
 
 ## Tests
 
 `bunx vitest run --project billing` — no infrastructure needed:
 
-- `payment.aggregate.spec.ts` — status machine, event applied once, idempotent replays.
+- `payment.aggregate.spec.ts` — status machine (also `refund`, `dispute`, `reinstate`), event applied once,
+  idempotent replays.
+- `application/ledger/*.spec.ts` — `StripeOwnerResolver` (no Stripe call with metadata, exactly one PaymentIntent GET
+  otherwise, unresolved owners) and the ledger-posting record (deterministic envelope id, key, actor, platform record).
 - Handlers: checkout (mocked `StripeService`: idempotency per user, key reuse 409, failure → `failed` → retry,
   missing URL), webhook (real signature verification with `stripe.webhooks.generateTestHeaderString`: valid,
   duplicate, ignored type, invalid/missing/tampered signature, async payments, expiry, unknown payment, rollback on
-  infrastructure error, events published only after the transaction), list (limit normalisation).
-- Mappers (contract + row), relay (`FakeKafkaProducer`, failure swallowed), local adapter (bus mapping), gRPC
+  infrastructure error, events published only after the transaction, the outbox record enqueued after
+  `markProcessed` and `save` and before COMMIT, nothing enqueued otherwise, a failing enqueue rolling back; each money
+  event of the ledger table with its transition and its exact posting record, duplicates, unresolved owners, the
+  ledger off, no Stripe call inside the unit of work, and the payout's two system methods in order), list (limit
+  normalisation).
+- Mappers (contract, row, the payment-succeeded payload), local adapter (bus mapping), gRPC
   adapter (null normalisation, metadata, error mapping), gRPC controller (bus mapping, zod payload schemas).
 - Drizzle repositories: real Drizzle SQL generation on a recording postgres.js fake (ON CONFLICT targets,
   `FOR UPDATE`, optimistic lock, prepared list statements).
@@ -359,12 +480,16 @@ transaction would carry no RLS context.
   every table and enum in the `billing` schema, the match with `drizzle.config.ts`, the baseline's
   `CREATE SCHEMA IF NOT EXISTS "billing";` first statement, `0002_distribute` holding only the two
   `app.distribute_by_tenant` calls, and `0003_rls` holding exactly the forced RLS, the five policies (no subquery)
-  and one grant per table and role.
+  and one grant per table and role, `0004_outbox` holding the plan's outbox SQL in order
+  (`describeOutboxTable` pins the table's shape), and `0005_ledger_tables` holding the five ledger tables in order
+  (each tenant table's distribution call right after its `CREATE`, no FK, no `REVOKE`, the contract's grants and
+  policies), and `0006_ledger_system_reads` holding only `app_system`'s `SELECT` on `payments`.
 - `infrastructure/stripe/*.spec.ts` — the Stripe adapter: SDK error mapping, signature verification (valid, forged, stale, re-serialised, missing, not JSON), Checkout params and idempotency key, module wiring and the invalid-key boot failure.
 - `billing.controller.spec.ts` — Fastify app with the real `AuthModule` guards (tokens from `signTestAccessToken`, `@platform/auth/testing`):
   401/403, 400 validation (body, query, `Idempotency-Key`), serialisation, raw-body webhook, OpenAPI document.
 - `billing.resolver.spec.ts` — Apollo on Fastify: payments (owner as `userId`; billing defines no `user` field), RBAC, input validation.
-- `test/stripe-webhook.flow.spec.ts` — raw body → controller → local adapter → handler → relay → Kafka fake.
+- `test/stripe-webhook.flow.spec.ts` — raw body → controller → local adapter → handler → outbox (in memory) → one
+  relay tick → Kafka fake.
 - `billing.modules.spec.ts` — DI wiring of `BillingGrpcModule`, `BillingApiModule.forLocal()` / `.forRemote()`.
 - `Payment.user` is tested where it is composed: `apps/monolith/test/payment-user.e2e-spec.ts` (local ports, ONE
   batched `GetUsersByIds`) and `apps/gateway/test/payment-user.e2e-spec.ts` (remote ports, ONE `GetUsersByIds` RPC).
@@ -391,7 +516,8 @@ nothing; metadata naming another tenant's payment touches neither tenant; a malf
 event through `markProcessedAsPlatform` with no runtime transaction; a failing save rolls the receipt back and the retry
 applies it; checkout calls Stripe with no applied RLS context; a member lists only their own payments, an admin lists the
 tenant's (elevated, ending with the transaction); the purge deletes the old events of every tenant and the platform
-tenant. Across the file the system methods used are exactly the two pinned ones.
+tenant. Across the file the system methods used are exactly the two pinned ones (the outbox relay is off there:
+`OUTBOX_RELAY_ENABLED=false`).
 `infrastructure/persistence/billing.distribution.int-spec.ts` (`startRlsTestPostgres()`: local execution off, the
 history applied as `app_owner`): both tables distributed by `tenant_id` and colocated with `app.tenant_colocation`,
 `0002` re-applied without change, the purge removing exactly the old events of tenants on every shard and of the
@@ -405,6 +531,39 @@ own Stripe events only, UPDATE and DELETE `42501`), platform rows invisible to e
 by `app_system`, no context returning or changing nothing, forced RLS (the owner reads nothing), the exact grants and
 policies, and nothing on `billing.__drizzle_migrations`. A superuser snapshot after every case proves that no
 forbidden write changed a row.
+`infrastructure/persistence/billing.outbox.rls.int-spec.ts` (`0004_outbox`, local execution off): `billing.outbox`
+distributed by `tenant_id` and colocated, RLS enabled and forced, exactly `INSERT` for `app_runtime` and `SELECT,
+INSERT, UPDATE, DELETE` for `app_system`, the one `outbox_insert` policy; a principal inserts only its own tenant's
+rows (another tenant's, the nil tenant's and a tenant-less principal's are refused); runtime reads and writes are
+`42501`; the system repository polls and marks; a row written by `insertAsPlatform` is invisible to and unchangeable
+by every runtime principal, elevated or not, and is returned by the poll.
+`infrastructure/persistence/billing.ledger.rls.int-spec.ts` (`0005_ledger_tables`, local execution off): the three
+tenant tables distributed by `tenant_id` and colocated, the two local ones not in `pg_dist_partition`; forced RLS and
+no FK on all five; exactly the contract's grants and policies. Per tenant table: a non-elevated member inserts its
+own tenant's row, another tenant's or the nil tenant's is refused; it reads nothing without elevation and only its
+tenant's rows with it (never another tenant's or the platform's, which `app_system` reads); `UPDATE` and `DELETE`
+are `42501` for `app_runtime`, elevated or not, and for `app_system`. Local tables: runtime `SELECT` and `INSERT` are
+`42501`, `app_system` inserts, reads and updates. The probe for the receipts repository: `INSERT … ON CONFLICT DO
+NOTHING` (no target, no `RETURNING`) on `ledger_entry_refs` as a non-elevated member reports 1 row, then 0. Without
+an RLS context nothing is readable.
+`infrastructure/persistence/billing.ledger-repositories.rls.int-spec.ts` (outbox plan Task 11, local execution off):
+the receipts repository as a non-elevated member (`recordEntryRef` true then false, another tenant's or the
+platform's ref `42501`, `recordAccounts` idempotent and refusing platform-owned rows before SQL, `appendDiscrepancy`
+true then false, no principal refused before BEGIN) and the ledger system repository as `app_system` (both lists
+return every tenant's rows, the platform's included, in `(tenant_id, id)` order over three pages within `[from, to)`;
+`appendDiscrepancies`, `enqueueMissingPostings`, `recordEntryRefs` and `recordPlatformAccounts` count new rows only;
+the trusted-state compare-and-set; a run finishes once; every method refused outside `SystemContext`).
+`test/webhook-outbox.int-spec.ts` (the real core on the three URLs, the module's relay off): a paid webhook for tenant
+A leaves the payment succeeded, the receipt and one outbox row under A; a replay adds no row; one tick of a real
+`OutboxRelay` publishes an envelope that parses with `PAYMENT_SUCCEEDED_EVENT` and marks the row; with the row's id
+pre-seeded through the system pool, the delivery fails and leaves the payment pending and no receipt.
+`test/webhook-ledger.int-spec.ts` (`LEDGER_ENABLED=true`): `charge.succeeded` for tenant A commits the receipt and A's
+posting row together, a replay leaves one row, a forced outbox failure (the deterministic id pre-seeded) leaves
+neither, `charge.refunded` moves the payment to `refunded`, and metadata naming tenant A with a payment of tenant B
+changes no payment of B (its row says `paymentId: null`).
+`test/webhook-platform.int-spec.ts` (`LEDGER_ENABLED=true`): `payout.paid` writes one nil-tenant posting row and its
+platform receipt, a redelivery is a duplicate, no runtime principal (elevated or not) can read the row, and one relay
+tick publishes it with the nil tenant in the envelope.
 
 ## Ledger (immudb)
 
@@ -413,10 +572,89 @@ balance transaction (`sourceKey = stripe:txn:<id>`, entry id = uuidv5 of it), po
 currency, fees from the balance transaction (`application/ledger/posting-rules.ts`). `LedgerPort.post` is
 idempotent (`posted` / `replayed` / `conflict`) and validates the double-entry rules before any I/O. The
 immudb user may only `SELECT` and `INSERT`; every tenant read carries `tenant_id = @tenant` (immudb has no
-RLS). Tables: `infrastructure/ledger/migrations/001_ledger.sql` (`billingLedgerMigrations`). Not wired
-into the apps yet: the posting consumer, reconciliation and `LEDGER_ENABLED` arrive with the outbox
-(ledger waves 1-2). Tests: `InMemoryLedger` (`@domain/billing/testing`) and the adapter run the same
+RLS). Tables: `infrastructure/ledger/migrations/001_ledger.sql` (`billingLedgerMigrations`). The webhook writes
+the `billing.ledger-posting.v1` rows (see **Ledger postings** above, `LEDGER_ENABLED`); reconciliation is below.
+Tests: `InMemoryLedger` (`@domain/billing/testing`) and the adapter run the same
 contract spec (`src/testing/ledger.contract.test.ts`).
+
+Postgres keeps the receipts around the entries (outbox plan Task 11): `LedgerReceiptsRepository` writes refs, tenant
+account rows and findings as the principal (plain `INSERT … ON CONFLICT DO NOTHING`, no target and no `RETURNING`,
+the form 0005's probe pinned), and `LedgerSystemRepository` is the system side (reconciliation lists, findings,
+re-enqueued postings, platform refs and accounts, the trusted state and the runs). Findings have deterministic ids
+(`ledgerDiscrepancyId`: kind, source key and a hash of `expected`/`actual`), so an overlapping window or a rerun
+appends nothing new. `InMemoryLedgerStore` (`@domain/billing/testing`) is the twin of both.
+
+**Posting consumer** (outbox plan Task 13, L-12). `LedgerPostingConsumer` checks that the envelope's tenant and actor
+are the payload's (else `InvalidEventException`, dead-lettered), then runs `ProcessLedgerPostingCommand` as
+`{ userId, tenantId, roles: [] }`, or in `SystemContext.run('billing.ledger-posting', …)` for the platform tenant or
+a null user. The handler asks Stripe for the object's balance transactions (`StripeService.ledgerSource`, GETs, no
+unit of work open; three attempts 1 s and 2 s apart while Stripe has none, then one `fee_unavailable` finding), turns
+each into a draft (`draftFromBalanceTransaction`) and sends `PostLedgerEntryCommand` → `LedgerService.post` (the
+ledger tenant rule: a principal posts and reads only its own tenant, `SystemContext` any tenant, neither nothing;
+`LEDGER_TENANT_MISMATCH`, 403) → receipts: `posted` writes the ref with the immudb tx id, `replayed` a ref with a null
+tx id (the idempotent insert keeps an existing one), `conflict` one `post_conflict` finding. A principal's ref,
+tenant account rows and findings go through `LedgerReceiptsRepository`, its platform account rows through
+`recordPlatformAccounts` in a nested `SystemContext.run('billing.ledger-platform-accounts', …)`; in `SystemContext`
+everything goes through `LedgerSystemRepository` (a user-less tenant posting records only the platform's account
+rows). immudb `unavailable`, Stripe 5xx/429/network and Postgres connection or timeout errors become
+`KafkaRetriableException` (redelivered, never dead-lettered). A Postgres deadlock (`40P01`) or serialization failure
+(`40001`) is thrown as is: `@KafkaConsumerController()`'s `KafkaRetryInterceptor` retries it in-process within its
+bounded budget (4 attempts with backoff), then it is dead-lettered, so a stuck posting never blocks its partition
+(replay the DLQ, or reconciliation R4 posts it). Anything else is dead-lettered. `BillingLedgerModule`
+binds `LedgerPort` to `ImmudbLedgerAdapter` while `LEDGER_ENABLED=true` (the app imports `ImmudbModule`) and to
+`DisabledLedger` (`LEDGER_DISABLED`, 503) otherwise. Metrics: `ledger_postings_total{outcome}`,
+`ledger_post_duration_seconds`, `ledger_discrepancies_total{kind}` (new rows only). Tests: `ledger.service.spec.ts`,
+`post-ledger-entry.handler.spec.ts`, `process-ledger-posting.handler.spec.ts`, `ledger-posting.consumer.spec.ts`
+and `test/ledger-posting.int-spec.ts` (Citus + immudb: a charge processed twice concurrently and once more leaves one
+balanced entry, one ref and the account rows; a payload of tenant B in A's envelope posts nothing; a payout posts on
+the platform tenant, its rows readable by the system pool only).
+
+**Reconciliation** (outbox plan Tasks 15-17, L-13, L-14). `ReconcileLedgerCron` (hourly, UTC, `@WithLock('billing:reconcile-ledger')`,
+nothing while `LEDGER_ENABLED=false`) sends `ReconcileLedgerCommand` inside `SystemContext.run('billing.reconcile-ledger', …)`
+over `[now − 15 min − LEDGER_RECONCILE_LOOKBACK_HOURS, now − 15 min)` (an explicit window wins, for a backfill). The
+handler starts a `ledger_reconciliation_runs` row, runs R1, R2, R3, R4 (and R5) in order, appends each check's findings
+(`appendDiscrepancies`, one call per kind) and finishes the run `succeeded`, or `failed` when a check threw (the
+other checks still run, rows already appended stay). It never corrects anything; deterministic finding ids make
+reruns and overlapping windows append nothing new. **R1**: entries recorded in the window with fewer than two
+postings or unbalanced in a currency → `unbalanced_entry` (the entry's tenant); debit ≠ credit per currency over the
+ledger → `unbalanced_currency` (platform). **R2**: any immudb row with a revision above 1 → `ledger_row_mutated`
+(platform, `<table>:<id>`). **R3**: paid payments and refs over `[from − 24 h, to + 15 min)` in pages of 500, joined by
+tenant and payment id; a charge ref whose payment that list does not hold (paid before the lookback) is looked up by
+`(tenant, payment id)` (`findPaymentsByIds`, batches of 500) before it counts as `entry_without_payment`; reported for
+rows of the window only: `payment_without_entry`, `entry_without_payment`,
+`tenant_mismatch` (no such entry under the ref's tenant), `amount_mismatch` (presentment vs payment) and
+`status_mismatch` (refund and dispute refs vs the payment status). **R4** (the self-healing path for a lost webhook,
+a `fee_unavailable` posting or a ledger enabled late): every Stripe balance transaction created in the window
+(`StripeService.listBalanceTransactions`, auto-paginated, source expanded) is looked up by
+`ledgerEntryId('stripe:txn:' + id)` among the refs of all tenants posted since `from` (so an entry posted during the
+grace period, or under another tenant than the metadata names today, is found). No entry → `missing_entry` and one
+`billing.ledger-posting.v1` record (`objectType: 'balance_transaction'`, envelope id
+`uuidv5('reconcile:' + runId + ':' + txnId)`, new per run) through `enqueueMissingPostings`, under the owner
+`StripeOwnerResolver` gives for the source (platform kinds: the platform tenant; an unresolved tenant-level owner: the
+platform tenant plus `tenant_unresolved`), naming the signed payment only when `findPaymentsByIds` shows it is the
+owner's (`postingOwnerOf`, the webhook's check); the relay and `LedgerPostingConsumer` then post it. An entry whose net on
+`asset:stripe_balance`, movement on its fee account or currency differs → `stripe_amount_mismatch` (the ref's
+tenant). A Stripe failure fails R4 and keeps what was already enqueued. **R5** (Task 17, only with `LEDGER_VERIFY=true`;
+tamper evidence): reads `billing.ledger_trusted_state` for the immudb database, proves with `LedgerPort.advanceTrustedState`
+(dual proof, plus the state signature when `IMMUDB_SERVER_SIGNING_PUBLIC_KEY` pins a key) that the current state
+extends it, and advances the row by compare-and-set, storing `read_at` (when this run read the state, before the
+proof); then verifies (`VerifiableSQLGet`) every ref posted since `min(from, the stored read_at)` until this run's read
+whose tx id is above the old trusted one, or at most it and posted since the stored `read_at` (a ref recorded after the
+last run read the state, however long its proof took; a state stored before migration 0008 has no `read_at`, so the
+next run verifies its whole window once), or null (`replayed`). A failed proof → one
+`verification_failed` under the platform tenant (`state:<db>`), no advance, no entry verified, the run `failed`; a lost
+compare-and-set → the run `failed`, no finding; an entry that does not verify → `verification_failed` under the ref's
+tenant (`ledger_entries:<id>`), the state still advances. No row yet: the current state is taken on trust (its signature
+still checked), with a warning. In production `LEDGER_ENABLED=true` refuses to start without `LEDGER_VERIFY=true` and a
+pinned key, unless `LEDGER_ALLOW_UNVERIFIED=true`. Metrics: `ledger_reconciliation_runs_total{status}`,
+`ledger_reconciliation_last_success_timestamp_seconds`, `ledger_discrepancies_total{kind}` (new rows only),
+`ledger_verified_tx_id` and `ledger_unverified_tx_lag` (R5). Tests: one
+spec per check, `reconcile-ledger.handler.spec.ts`, `reconcile-ledger.cron.spec.ts` and
+`test/reconcile-ledger.int-spec.ts` (Citus + immudb: a clean run, then a paid payment without an entry and a ref under
+the wrong tenant, each finding readable by its tenant's elevated principal only; then a balance transaction without an
+entry healed through R4, a relay tick and the consumer, after which a run appends nothing), and
+`test/ledger-verification.int-spec.ts` (immudb `--signingKey` + Citus: real proofs, another pinned key, an unsigned
+server, a server restarted on an empty volume).
 
 ## Gotchas
 

@@ -12,6 +12,7 @@ import { normalizeTenantName, toMyTenantContract } from '../../mappers/tenancy.m
 import { MembershipsRepository } from '../../persistence/memberships.repository.js';
 import { TransactionRunner } from '../../persistence/transaction-runner.js';
 import { UsersRepository } from '../../persistence/users.repository.js';
+import { IdentityIntegrationEvents } from '../../services/identity-integration-events.service.js';
 import { requireSelf } from '../../services/tenant-actor.js';
 import { TenantBootstrap } from '../../services/tenant-bootstrap.elevated.js';
 import { CreateTenantCommand } from './create-tenant.command.js';
@@ -19,7 +20,8 @@ import { CreateTenantCommand } from './create-tenant.command.js';
 /**
  * `POST /v1/tenants` (plan B3 Task 12 flow table): the tenant id is generated first, then ONE unit
  * of work as `{ user, newTenant, ['owner'] }`: tenant and owner membership (`tenant-bootstrap`),
- * and the read-back of the new membership (only that principal sees the new tenant's row).
+ * the read-back of the new membership (only that principal sees the new tenant's row) and the
+ * `identity.membership-created.v1` outbox row.
  */
 @CommandHandler(CreateTenantCommand)
 export class CreateTenantHandler implements ICommandHandler<CreateTenantCommand> {
@@ -29,6 +31,7 @@ export class CreateTenantHandler implements ICommandHandler<CreateTenantCommand>
     private readonly bootstrap: TenantBootstrap,
     private readonly users: UsersRepository,
     private readonly events: EventBus,
+    private readonly integrationEvents: IdentityIntegrationEvents,
   ) {}
 
   async execute({ userId, name }: CreateTenantCommand): Promise<MyTenant> {
@@ -39,7 +42,16 @@ export class CreateTenantHandler implements ICommandHandler<CreateTenantCommand>
     if (ownerUser === null) throw new EntityNotFoundException('User', userId);
     const id = generateId();
     const owner = createPrincipal({ userId, tenantId: id, roles: ['owner'] });
-    // Tenant and owner membership in one transaction: never a tenant without an owner.
+    const created = new MembershipCreatedEvent({
+      tenantId: id,
+      userId,
+      email: ownerUser.email,
+      displayName: ownerUser.displayName,
+      actorId: userId,
+      occurredAt: new Date(),
+    });
+    // Tenant, owner membership and its outbox row in one transaction: never a tenant without an
+    // owner, never an owner membership without its event.
     const membership = await runWithPrincipal(owner, () =>
       this.transactions.run(async () => {
         await this.bootstrap.create(
@@ -47,22 +59,15 @@ export class CreateTenantHandler implements ICommandHandler<CreateTenantCommand>
           userId,
           null,
         );
-        return (await this.memberships.listForUser(userId)).find((m) => m.tenantId === id);
+        const mine = (await this.memberships.listForUser(userId)).find((m) => m.tenantId === id);
+        if (mine !== undefined) await this.integrationEvents.membershipCreated(created);
+        return mine;
       }),
     );
     if (membership === undefined)
       throw new Error(`Tenant ${id} was created without its owner membership`);
-    // Committed: publish the owner membership.
-    this.events.publish(
-      new MembershipCreatedEvent({
-        tenantId: id,
-        userId,
-        email: ownerUser.email,
-        displayName: ownerUser.displayName,
-        actorId: userId,
-        occurredAt: new Date(),
-      }),
-    );
+    // Committed: in-process handlers see the owner membership.
+    this.events.publish(created);
     return toMyTenantContract(membership);
   }
 }

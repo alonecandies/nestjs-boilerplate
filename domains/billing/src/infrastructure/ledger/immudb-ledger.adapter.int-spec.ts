@@ -63,8 +63,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('ImmudbLedgerAdapter on immu
     const immudb = admin?.get(ImmudbClient);
     if (immudb === undefined) throw new Error('admin not booted');
     const now = toEpochMicros(new Date());
-    const entry = (id: string) =>
-      `INSERT INTO ledger_entries (id, source_key, tenant_id, kind, payment_id, stripe_object, presentment_amount, presentment_currency, payload_hash, occurred_at_us, recorded_at_us, schema_version) VALUES ('${id}', 'forged:${id}', '${CHARGE_DRAFT.tenantId}', 'adjustment', '', '', 0, '', '${'0'.repeat(64)}', ${now}, ${now}, 1)`;
+    const entry = (id: string, recordedUs = now) =>
+      `INSERT INTO ledger_entries (id, source_key, tenant_id, kind, payment_id, stripe_object, presentment_amount, presentment_currency, payload_hash, occurred_at_us, recorded_at_us, schema_version) VALUES ('${id}', 'forged:${id}', '${CHARGE_DRAFT.tenantId}', 'adjustment', '', '', 0, '', '${'0'.repeat(64)}', ${now}, ${recordedUs}, 1)`;
     const posting = (entryId: string, line: number, debit: number, credit: number) =>
       `INSERT INTO ledger_postings (id, entry_id, line, tenant_id, account_id, currency, debit, credit) VALUES ('${entryId}:${line}', '${entryId}', ${line}, '${CHARGE_DRAFT.tenantId}', 'acct', 'usd', ${debit}, ${credit})`;
     await immudb.readWrite(async (tx) => {
@@ -73,14 +73,32 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('ImmudbLedgerAdapter on immu
       await tx.exec(entry('forged-unbalanced'));
       await tx.exec(posting('forged-unbalanced', 1, 5, 0));
       await tx.exec(posting('forged-unbalanced', 2, 0, 4));
+      // Recorded before the window: R1 never reads it (the query is bounded by the window).
+      await tx.exec(entry('forged-before-window', now - 10_000_000n));
+      await tx.exec(posting('forged-before-window', 1, 5, 0));
     });
     const found = await adapter.findUnbalanced({ fromUs: now - 1n, toUs: now + 60_000_000n });
     expect(found).toEqual(
       expect.arrayContaining([
-        { entryId: 'forged-one-line', currency: null, debit: 0n, credit: 0n, postings: 1 },
-        { entryId: 'forged-unbalanced', currency: 'usd', debit: 5n, credit: 4n, postings: 2 },
+        {
+          entryId: 'forged-one-line',
+          tenantId: CHARGE_DRAFT.tenantId,
+          currency: null,
+          debit: 0n,
+          credit: 0n,
+          postings: 1,
+        },
+        {
+          entryId: 'forged-unbalanced',
+          tenantId: CHARGE_DRAFT.tenantId,
+          currency: 'usd',
+          debit: 5n,
+          credit: 4n,
+          postings: 2,
+        },
       ]),
     );
+    expect(found.map((row) => row.entryId)).not.toContain('forged-before-window');
   });
 
   it('detects a row rewritten by a superuser (R2) and fails its verification', async () => {

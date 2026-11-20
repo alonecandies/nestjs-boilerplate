@@ -12,6 +12,7 @@ import {
   createEventEnvelope,
   type EventContract,
   type EventEnvelope,
+  eventEnvelopeSchema,
   KAFKA_HEADERS,
 } from '@platform/contracts';
 import { ClsService } from 'nestjs-cls';
@@ -77,6 +78,23 @@ export interface KafkaProducerOptions {
 }
 
 const DEFAULT_CONNECT_RETRY = { retries: 2, minDelayMs: 1_000, maxDelayMs: 5_000 } as const;
+
+/**
+ * The generic envelope schema `publishStored` checks: every envelope field, any payload but a
+ * present one. Built once at module load.
+ */
+const STORED_ENVELOPE_SCHEMA = eventEnvelopeSchema(
+  z.unknown().refine((payload) => payload !== undefined, { message: 'payload is required' }),
+);
+
+/** `x-event-type` and, when the envelope carries one, `x-correlation-id`: read from the envelope only. */
+function headersOf(envelope: EventEnvelope<unknown>): Record<string, string> {
+  const headers: Record<string, string> = { [KAFKA_HEADERS.EVENT_TYPE]: envelope.type };
+  if (envelope.correlationId !== undefined) {
+    headers[KAFKA_HEADERS.CORRELATION_ID] = envelope.correlationId;
+  }
+  return headers;
+}
 
 /**
  * Publishes integration events as validated `EventEnvelope`s. Every method takes the event's
@@ -165,11 +183,7 @@ export class KafkaProducer implements OnApplicationBootstrap {
     options: KafkaPublishOptions = {},
   ): KafkaOutgoingRecord<TPayload> {
     const envelope = this.createEnvelope(contract, payload, options);
-    const headers: Record<string, string> = { [KAFKA_HEADERS.EVENT_TYPE]: envelope.type };
-    if (envelope.correlationId !== undefined) {
-      headers[KAFKA_HEADERS.CORRELATION_ID] = envelope.correlationId;
-    }
-    return { key: options.key ?? null, value: envelope, headers };
+    return { key: options.key ?? null, value: envelope, headers: headersOf(envelope) };
   }
 
   /** Validates and publishes one event. Resolves with the envelope that was sent. */
@@ -178,8 +192,41 @@ export class KafkaProducer implements OnApplicationBootstrap {
     payload: NoInfer<TPayload>,
     options: KafkaPublishOptions = {},
   ): Promise<EventEnvelope<TPayload>> {
-    const { topic } = contract;
     const record = this.createRecord(contract, payload, options);
+    await this.send(contract.topic, record);
+    return record.value;
+  }
+
+  /**
+   * Sends an envelope that was built and validated when it was stored (the outbox relay): checks
+   * the generic envelope schema and `envelope.type === topic`, rebuilds the two headers from the
+   * envelope, reads nothing from CLS and changes no field (the object is sent as given). Resolves
+   * once the broker acknowledged the record.
+   * @throws InvalidEventException a malformed envelope or one of another topic (nothing is sent)
+   * @throws ExternalServiceException `PUBLISH_FAILED` when the broker fails
+   */
+  async publishStored(
+    topic: string,
+    envelope: EventEnvelope<unknown>,
+    key: string | null,
+  ): Promise<void> {
+    const parsed = STORED_ENVELOPE_SCHEMA.safeParse(envelope);
+    if (!parsed.success) {
+      throw InvalidEventException.forTopic(topic, parsed.error.issues, { cause: parsed.error });
+    }
+    if (envelope.type !== topic) {
+      throw InvalidEventException.forTopic(topic, [
+        { path: ['type'], message: `Expected "${topic}"`, code: 'invalid_value' },
+      ]);
+    }
+    await this.send(topic, { key, value: envelope, headers: headersOf(envelope) });
+  }
+
+  /** Dispatches a record and maps a broker failure to `ExternalServiceException`. */
+  private async send<TPayload>(
+    topic: string,
+    record: KafkaOutgoingRecord<TPayload>,
+  ): Promise<void> {
     try {
       await this.dispatch(topic, record);
     } catch (error) {
@@ -190,7 +237,6 @@ export class KafkaProducer implements OnApplicationBootstrap {
         details: { topic, eventId: record.value.id },
       });
     }
-    return record.value;
   }
 
   /** Sends a validated record. `FakeKafkaProducer` overrides this to record instead. */

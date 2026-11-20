@@ -14,5 +14,7 @@ identity.membership-removed.v1:6:1:retention.ms=604800000
 identity.membership-removed.v1.dlq:1:1:retention.ms=1209600000
 billing.payment-succeeded.v1:6:1:retention.ms=604800000
 billing.payment-succeeded.v1.dlq:1:1:retention.ms=1209600000
+billing.ledger-posting.v1:6:1:retention.ms=604800000
+billing.ledger-posting.v1.dlq:1:1:retention.ms=1209600000
 notifications.notification-created.v1:6:1:retention.ms=604800000
 notifications.notification-created.v1.dlq:1:1:retention.ms=1209600000

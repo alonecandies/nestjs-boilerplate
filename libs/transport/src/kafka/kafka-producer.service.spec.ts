@@ -183,6 +183,140 @@ describe('KafkaProducer', () => {
     });
   });
 
+  describe('publishStored', () => {
+    const TENANT = '0197a000-0000-7000-8000-0000000000a1';
+    const ACTOR = '0197a000-0000-7000-8000-00000000000a';
+
+    /** An envelope built (and validated) earlier, by another process with its own CLS. */
+    const stored = (correlationId?: string) =>
+      new KafkaProducer(new FakeClientKafka(), { source: 'origin-service' }).createEnvelope(
+        FIXTURE_USER_REGISTERED_EVENT,
+        userRegistered(),
+        {
+          occurredAt: new Date('2026-09-03T00:00:00.000Z'),
+          tenantId: TENANT,
+          actorId: ACTOR,
+          correlationId,
+        },
+      );
+
+    it('sends the key and the stored envelope unchanged, with headers rebuilt from it', async () => {
+      const client = new FakeClientKafka();
+      const producer = new KafkaProducer(client, { source: 'relay-service' });
+      const envelope = stored('corr-stored');
+      const copy = structuredClone(envelope);
+
+      await producer.publishStored(FIXTURE_USER_REGISTERED_EVENT.topic, envelope, 'key-1');
+
+      expect(client.emitted).toHaveLength(1);
+      const [{ topic, record } = { topic: '', record: undefined }] = client.emitted;
+      expect(topic).toBe('fixture.user-registered.v1');
+      expect(record?.value).toBe(envelope);
+      expect(record).toEqual({
+        key: 'key-1',
+        value: copy,
+        headers: {
+          'x-event-type': 'fixture.user-registered.v1',
+          'x-correlation-id': 'corr-stored',
+        },
+      });
+      expect(envelope).toEqual(copy);
+      expect(envelope).toMatchObject({
+        source: 'origin-service',
+        occurredAt: '2026-09-03T00:00:00.000Z',
+        tenantId: TENANT,
+        actorId: ACTOR,
+      });
+    });
+
+    it('sends a null key and no correlation header when the envelope has none', async () => {
+      const client = new FakeClientKafka();
+      const producer = new KafkaProducer(client, { source: 'svc' }, newCls());
+      await producer.publishStored(FIXTURE_USER_REGISTERED_EVENT.topic, stored(), null);
+      expect(client.emitted[0]?.record.key).toBeNull();
+      expect(client.emitted[0]?.record.headers).toEqual({
+        'x-event-type': 'fixture.user-registered.v1',
+      });
+    });
+
+    it('ignores the CLS correlation id of the publishing process', async () => {
+      const cls = newCls();
+      const client = new FakeClientKafka();
+      const producer = new KafkaProducer(client, { source: 'svc' }, cls);
+      const envelope = stored('corr-stored');
+      await cls.run(async () => {
+        cls.set(CLS_ID, 'req-relay');
+        cls.set(RPC_CLS_KEYS.CORRELATION_ID, 'corr-relay');
+        await producer.publishStored(FIXTURE_USER_REGISTERED_EVENT.topic, envelope, null);
+      });
+      expect(client.emitted[0]?.record.value.correlationId).toBe('corr-stored');
+      expect(client.emitted[0]?.record.headers['x-correlation-id']).toBe('corr-stored');
+
+      const bare = stored();
+      await cls.run(async () => {
+        cls.set(CLS_ID, 'req-relay-2');
+        await producer.publishStored(FIXTURE_USER_REGISTERED_EVENT.topic, bare, null);
+      });
+      expect(client.emitted[1]?.record.value).not.toHaveProperty('correlationId');
+      expect(client.emitted[1]?.record.headers).not.toHaveProperty('x-correlation-id');
+    });
+
+    it('refuses an envelope of another topic before anything is sent', async () => {
+      const client = new FakeClientKafka();
+      const producer = new KafkaProducer(client, { source: 'svc' });
+      const error: unknown = await producer
+        .publishStored(FIXTURE_ORDER_PLACED_EVENT.topic, stored(), null)
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(InvalidEventException);
+      expect(error).toMatchObject({
+        code: KAFKA_ERROR_CODES.INVALID_EVENT,
+        details: { topic: FIXTURE_ORDER_PLACED_EVENT.topic },
+      });
+      expect((error as InvalidEventException).issues).toEqual([
+        expect.objectContaining({ path: 'type' }),
+      ]);
+      expect(client.emitted).toHaveLength(0);
+    });
+
+    it.each([
+      ['no id', (e: Record<string, unknown>) => ({ ...e, id: undefined })],
+      ['an id that is not a uuid', (e: Record<string, unknown>) => ({ ...e, id: 'x' })],
+      ['no payload', (e: Record<string, unknown>) => ({ ...e, payload: undefined })],
+      ['a bad occurredAt', (e: Record<string, unknown>) => ({ ...e, occurredAt: 'yesterday' })],
+      ['a version 0', (e: Record<string, unknown>) => ({ ...e, version: 0 })],
+    ])('refuses a malformed envelope (%s) before anything is sent', async (_name, mutate) => {
+      const client = new FakeClientKafka();
+      const producer = new KafkaProducer(client, { source: 'svc' });
+      const envelope = mutate({ ...stored() }) as unknown as ReturnType<typeof stored>;
+      await expect(
+        producer.publishStored(FIXTURE_USER_REGISTERED_EVENT.topic, envelope, null),
+      ).rejects.toBeInstanceOf(InvalidEventException);
+      await expect(
+        producer.publishStored(
+          FIXTURE_USER_REGISTERED_EVENT.topic,
+          null as unknown as ReturnType<typeof stored>,
+          null,
+        ),
+      ).rejects.toBeInstanceOf(InvalidEventException);
+      expect(client.emitted).toHaveLength(0);
+    });
+
+    it('wraps a broker error in ExternalServiceException PUBLISH_FAILED', async () => {
+      const client = new FakeClientKafka();
+      client.reply = () => throwError(() => new Error('KafkaJSNumberOfRetriesExceeded'));
+      const producer = new KafkaProducer(client, { source: 'svc' });
+      const envelope = stored();
+      const error: unknown = await producer
+        .publishStored(FIXTURE_USER_REGISTERED_EVENT.topic, envelope, null)
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ExternalServiceException);
+      expect(error).toMatchObject({
+        code: KAFKA_ERROR_CODES.PUBLISH_FAILED,
+        details: { topic: 'fixture.user-registered.v1', eventId: envelope.id },
+      });
+    });
+  });
+
   it('retries the connect and resolves false (never rejects) when the broker stays down', async () => {
     const client = new FakeClientKafka();
     client.connect.mockRejectedValue(new Error('ECONNREFUSED'));
@@ -241,6 +375,25 @@ describe('FakeKafkaProducer', () => {
     expect(fake.records).toHaveLength(1);
     fake.clear();
     expect(fake.records).toHaveLength(0);
+  });
+
+  it('records publishStored like publish, and fails it on failNextWith', async () => {
+    const fake = new FakeKafkaProducer();
+    const envelope = fake.createEnvelope(FIXTURE_USER_REGISTERED_EVENT, userRegistered());
+    fake.failNextWith(new Error('down'));
+    await expect(
+      fake.publishStored(FIXTURE_USER_REGISTERED_EVENT.topic, envelope, 'k'),
+    ).rejects.toBeInstanceOf(ExternalServiceException);
+    await fake.publishStored(FIXTURE_USER_REGISTERED_EVENT.topic, envelope, 'k');
+    expect(fake.records).toEqual([
+      {
+        topic: FIXTURE_USER_REGISTERED_EVENT.topic,
+        key: 'k',
+        value: envelope,
+        headers: { 'x-event-type': FIXTURE_USER_REGISTERED_EVENT.topic },
+      },
+    ]);
+    expect(fake.envelopes(FIXTURE_USER_REGISTERED_EVENT)[0]).toBe(envelope);
   });
 
   it('is a KafkaProducer (drop-in for overrideProvider)', () => {

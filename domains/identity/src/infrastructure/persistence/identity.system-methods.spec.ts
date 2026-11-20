@@ -1,8 +1,10 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { OUTBOX_SYSTEM_METHODS, OutboxSystemRepository } from '@platform/outbox';
 import { describe, expect, it } from 'vitest';
 import { DrizzleInvitationsSystemRepository } from './drizzle-invitations.system-repository.js';
 import { DrizzleMembershipsSystemRepository } from './drizzle-memberships.system-repository.js';
+import { IdentityOutboxSystemRepository } from './drizzle-outbox.system-repository.js';
 import { DrizzleSessionsSystemRepository } from './drizzle-sessions.system-repository.js';
 import { DrizzleUsersSystemRepository } from './drizzle-users.system-repository.js';
 import { IDENTITY_SYSTEM_METHODS } from './identity.system-methods.js';
@@ -25,7 +27,7 @@ const flat = Object.entries(IDENTITY_SYSTEM_METHODS).flatMap(([, methods]) =>
 );
 
 describe('identity system methods (the doors to the app_system pool)', () => {
-  it('pins exactly the plan methods (spec §9: 1-3, 5) and the ruling directory reads', () => {
+  it('pins exactly the plan methods (spec §9: 1-3, 5, 6), the ruling directory reads and the purge', () => {
     expect(flat.toSorted()).toEqual(
       [
         // Plan B3 Task 11 (spec §9).
@@ -41,6 +43,11 @@ describe('identity system methods (the doors to the app_system pool)', () => {
         ['memberships.findMember', 'system'],
         ['memberships.listMembers', 'system'],
         ['memberships.listForUser', 'system'],
+        // Outbox plan Task 5 (spec §9 item 6, ruling 1): the relay's poll, mark and purge.
+        // Identity writes no platform rows: no outbox.insertAsPlatform.
+        ['outbox.pollUnpublished', 'system'],
+        ['outbox.markPublished', 'system'],
+        ['outbox.deletePublishedBefore', 'system'],
       ].toSorted(),
     );
   });
@@ -54,16 +61,35 @@ describe('identity system methods (the doors to the app_system pool)', () => {
     }
   });
 
+  it('the outbox entries are the shared @platform/outbox methods, never insertAsPlatform', () => {
+    expect(IDENTITY_SYSTEM_METHODS.outbox).toEqual({
+      pollUnpublished: OUTBOX_SYSTEM_METHODS.poll,
+      markPublished: OUTBOX_SYSTEM_METHODS.markPublished,
+      deletePublishedBefore: OUTBOX_SYSTEM_METHODS.deletePublishedBefore,
+    });
+    expect(Object.values(IDENTITY_SYSTEM_METHODS.outbox)).not.toContain(
+      OUTBOX_SYSTEM_METHODS.insertAsPlatform,
+    );
+  });
+
   it('each Drizzle system repository implements exactly its pinned methods', () => {
-    const publicMethods = (prototype: object): string[] =>
-      Object.getOwnPropertyNames(prototype)
-        .filter((name) => name !== 'constructor')
-        .toSorted();
+    /** Public methods along the prototype chain (a subclass of a shared base inherits them). */
+    const publicMethods = (prototype: object | null): string[] => {
+      const names = new Set<string>();
+      for (let at = prototype; at !== null && at !== Object.prototype; ) {
+        for (const name of Object.getOwnPropertyNames(at)) {
+          if (name !== 'constructor') names.add(name);
+        }
+        at = Object.getPrototypeOf(at) as object | null;
+      }
+      return [...names].toSorted();
+    };
     const repositories = {
       users: DrizzleUsersSystemRepository,
       invitations: DrizzleInvitationsSystemRepository,
       sessions: DrizzleSessionsSystemRepository,
       memberships: DrizzleMembershipsSystemRepository,
+      outbox: IdentityOutboxSystemRepository,
     };
     expect(Object.keys(repositories).toSorted()).toEqual(
       Object.keys(IDENTITY_SYSTEM_METHODS).toSorted(),
@@ -72,11 +98,29 @@ describe('identity system methods (the doors to the app_system pool)', () => {
       const pinned = Object.keys(
         IDENTITY_SYSTEM_METHODS[name as keyof typeof IDENTITY_SYSTEM_METHODS],
       ).toSorted();
-      expect(publicMethods(repository.prototype), name).toEqual(pinned);
+      // The outbox repository also inherits insertAsPlatform, which identity does not pin and
+      // never calls (checked below): its SystemMethod is not in identity's list.
+      const inherited = name === 'outbox' ? ['insertAsPlatform'] : [];
+      expect(publicMethods(repository.prototype), name).toEqual(
+        [...pinned, ...inherited].toSorted(),
+      );
     }
+    expect(Object.getPrototypeOf(IdentityOutboxSystemRepository.prototype)).toBe(
+      OutboxSystemRepository.prototype,
+    );
   });
 
-  it('the *.system-repository.ts files under infrastructure are exactly the four Drizzle ones', () => {
+  it('no identity source calls insertAsPlatform or names its system method (no platform-tenant rows)', () => {
+    const CALLS = /\.insertAsPlatform\s*\(|OUTBOX_SYSTEM_METHODS\.insertAsPlatform\b/;
+    expect(CALLS.test('await repository.insertAsPlatform(records)')).toBe(true);
+    expect(CALLS.test('OUTBOX_SYSTEM_METHODS.insertAsPlatform')).toBe(true);
+    const calling = sources(SRC)
+      .filter((file) => CALLS.test(readFileSync(file, 'utf8')))
+      .map((file) => relative(SRC, file));
+    expect(calling).toEqual([]);
+  });
+
+  it('the *.system-repository.ts files under infrastructure are exactly the five Drizzle ones', () => {
     const files = sources(join(SRC, 'infrastructure'))
       .filter((file) => file.endsWith('.system-repository.ts'))
       .map((file) => relative(SRC, file))
@@ -85,6 +129,7 @@ describe('identity system methods (the doors to the app_system pool)', () => {
       [
         'infrastructure/persistence/drizzle-invitations.system-repository.ts',
         'infrastructure/persistence/drizzle-memberships.system-repository.ts',
+        'infrastructure/persistence/drizzle-outbox.system-repository.ts',
         'infrastructure/persistence/drizzle-sessions.system-repository.ts',
         'infrastructure/persistence/drizzle-users.system-repository.ts',
       ].toSorted(),
@@ -103,6 +148,7 @@ describe('identity system methods (the doors to the app_system pool)', () => {
       [
         'infrastructure/persistence/drizzle-invitations.system-repository.ts',
         'infrastructure/persistence/drizzle-memberships.system-repository.ts',
+        'infrastructure/persistence/drizzle-outbox.system-repository.ts',
         'infrastructure/persistence/drizzle-sessions.system-repository.ts',
         'infrastructure/persistence/drizzle-users.system-repository.ts',
       ].toSorted(),

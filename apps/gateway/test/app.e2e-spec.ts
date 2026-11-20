@@ -13,12 +13,15 @@ import {
   BILLING_LOG_REDACT_PATHS,
   BillingGrpcAdapter,
   BillingPort,
+  LedgerPostingConsumer,
   stripeConfig,
 } from '@domain/billing';
 import { passwordConfig, refreshTokenConfig } from '@domain/identity';
 import { ConfigService } from '@nestjs/config';
-import { generateId, HTTP_HEADERS, isUuidV7 } from '@platform/common';
+import { DomainValidationException, generateId, HTTP_HEADERS, isUuidV7 } from '@platform/common';
+import { ImmudbClient } from '@platform/immudb';
 import { MetricsListener } from '@platform/observability';
+import { outboxRelayToken } from '@platform/outbox';
 import { PARAMS_PROVIDER_TOKEN, type Params } from 'nestjs-pino';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createGatewayE2eApp, type GatewayE2e } from './support/gateway-e2e-app.js';
@@ -71,6 +74,17 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
       expect(config.get(namespace.namespace), namespace.namespace).toBeUndefined();
       expect(() => e2e.app.get(namespace.KEY, { strict: false }), namespace.namespace).toThrow();
     }
+  });
+
+  it('runs no outbox relay: the edge owns no outbox (identity and billing relay in their services)', () => {
+    for (const outbox of ['identity', 'billing']) {
+      expect(() => e2e.app.get(outboxRelayToken(outbox), { strict: false }), outbox).toThrow();
+    }
+  });
+
+  it('loads no ledger: neither an immudb client nor the ledger-posting consumer (billing owns both)', () => {
+    expect(() => e2e.app.get(ImmudbClient, { strict: false })).toThrow();
+    expect(() => e2e.app.get(LedgerPostingConsumer, { strict: false })).toThrow();
   });
 
   it('composes billing’s log redaction paths into the logger (the Stripe-Signature header is never logged)', () => {
@@ -406,5 +420,91 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
         expect.stringMatching(/report\.csv$/),
       ]);
     });
+  });
+});
+
+/*
+ * The Stripe webhook through the gateway (outbox plan Task 19): the edge forwards the exact bytes and
+ * the signature to billing-service and answers with what it answered. It owns no outbox, no ledger
+ * and no Stripe key: the posting record of a money event is written by billing-service (its own e2e
+ * pins that), so the edge's answer is the same with the ledger on or off.
+ */
+describe('gateway: the Stripe webhook is forwarded to billing-service unchanged', () => {
+  const handleStripeWebhook = vi.fn();
+  const billing = { createCheckoutSession: vi.fn(), handleStripeWebhook, listPayments: vi.fn() };
+  let e2e: GatewayE2e;
+
+  const body = JSON.stringify({
+    id: 'evt_gateway_e2e',
+    object: 'event',
+    type: 'charge.succeeded',
+    data: { object: { id: 'ch_gateway_e2e', object: 'charge' } },
+  });
+  const post = (signature?: string) =>
+    e2e.app.inject({
+      method: 'POST',
+      url: '/v1/billing/webhooks/stripe',
+      headers: {
+        'content-type': 'application/json',
+        ...(signature === undefined ? {} : { 'stripe-signature': signature }),
+      },
+      payload: body,
+    });
+
+  beforeAll(async () => {
+    e2e = await createGatewayE2eApp({ billing: billing as unknown as BillingPort });
+  });
+
+  afterAll(async () => {
+    await e2e?.app.close();
+  });
+
+  it('answers 200 without a token with billing-service’s answer, after handing it the raw bytes and the signature', async () => {
+    handleStripeWebhook.mockResolvedValueOnce({
+      received: true,
+      eventId: 'evt_gateway_e2e',
+      eventType: 'charge.succeeded',
+      duplicate: false,
+    });
+
+    const response = await post('t=1,v1=signature');
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toEqual({
+      received: true,
+      eventId: 'evt_gateway_e2e',
+      eventType: 'charge.succeeded',
+      duplicate: false,
+    });
+    expect(handleStripeWebhook).toHaveBeenCalledOnce();
+    const [forwarded] = handleStripeWebhook.mock.calls[0] as [
+      { payload: Buffer; signature: string },
+    ];
+    expect(forwarded.signature).toBe('t=1,v1=signature');
+    expect(Buffer.isBuffer(forwarded.payload) && forwarded.payload.toString('utf8')).toBe(body);
+  });
+
+  it('a redelivery is acknowledged as billing-service says (duplicate: true)', async () => {
+    handleStripeWebhook.mockResolvedValueOnce({
+      received: true,
+      eventId: 'evt_gateway_e2e',
+      eventType: 'charge.succeeded',
+      duplicate: true,
+    });
+
+    const response = await post('t=1,v1=signature');
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({ duplicate: true });
+  });
+
+  it('billing-service refusing the signature is the answer: 422, not retried or rewritten', async () => {
+    handleStripeWebhook.mockRejectedValueOnce(
+      new DomainValidationException('Invalid webhook signature', {
+        code: 'INVALID_WEBHOOK_SIGNATURE',
+      }),
+    );
+
+    expectProblem(await post('t=1,v1=forged'), 422, 'INVALID_WEBHOOK_SIGNATURE');
   });
 });

@@ -1,0 +1,46 @@
+# Transactional outbox alerts (outbox plan Task 19). The series come from @platform/outbox
+# (libs/outbox/src/outbox-metrics.ts); `outbox` = the feature name (the Postgres schema: identity,
+# billing). Only the leader relay of an outbox reports backlog and age (docs/OBSERVABILITY.md).
+# severity: page = wake someone; ticket = look at it in working hours.
+groups:
+  - name: outbox
+    rules:
+      # A row waited longer than 5 minutes: the relay is down, stuck behind a row the broker refuses
+      # (a batch stops at the first failed publish) or cannot reach Postgres. Events are late, not lost.
+      - alert: OutboxBacklogStuck
+        expr: max by (outbox) (outbox_oldest_unpublished_age_seconds) > 300
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Outbox {{ $labels.outbox }}: events wait more than 5 minutes for the broker"
+          description: >-
+            The oldest unpublished {{ $labels.outbox }}.outbox row is {{ $value | humanizeDuration }} old
+            (backlog: outbox_backlog{outbox="{{ $labels.outbox }}"}). See the relay runbook in
+            docs/OBSERVABILITY.md: check Kafka, the leader's logs and the first unpublished row.
+
+      # The broker refused a publish. The relay retries on its next tick; a persistent error for 10
+      # minutes means a poison row or a broker problem.
+      - alert: OutboxPublishErrors
+        expr: sum by (outbox, topic) (rate(outbox_published_total{outcome="error"}[5m])) > 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Outbox {{ $labels.outbox }}: publishing {{ $labels.topic }} keeps failing"
+          description: >-
+            The relay of {{ $labels.outbox }}.outbox has failed to publish {{ $labels.topic }} for 10
+            minutes. Rows stay unpublished and go out once the broker accepts them (at least once).
+
+      # No process holds the relay lock: nothing publishes this outbox. Non-leaders report 0 and the
+      # leader 1, so the maximum below 1 means nobody leads (relays disabled, Redis down, all crashed).
+      - alert: OutboxNoLeader
+        expr: max by (outbox) (outbox_relay_leader) < 1
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Outbox {{ $labels.outbox }}: no relay holds the lock"
+          description: >-
+            No process has been the relay leader of {{ $labels.outbox }}.outbox for 5 minutes, so its
+            events are not published. Check OUTBOX_RELAY_ENABLED, Redis and the owning service.

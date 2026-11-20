@@ -194,6 +194,33 @@ export const auditEvents = identityPgSchema.table(
   ],
 );
 
+// citus: tenant. The transactional outbox (@platform/outbox; outbox plan Task 5): identity's integration
+// events, inserted by the runtime role in the unit of work that changes the state they report, and
+// published by the relay on the system pool. The runtime role may only INSERT its own tenant's rows
+// (0010_outbox: no SELECT grant, one insert policy); app_system polls, marks and purges. Declared by
+// hand with the exact shape of the shared outbox table (`describeOutboxTable` pins it): this file
+// cannot import @platform/outbox (drizzle-kit loads it without workspace packages).
+export const outbox = identityPgSchema.table(
+  'outbox',
+  {
+    tenantId: uuid().notNull(),
+    /** = the envelope id (the domain event's id). */
+    id: uuid().notNull(),
+    topic: text().notNull(),
+    key: text(),
+    envelope: jsonb().notNull(),
+    createdAt: timestamptz().notNull().defaultNow(),
+    publishedAt: timestamptz(),
+  },
+  (t) => [
+    primaryKey({ name: 'outbox_tenant_id_id_pk', columns: [t.tenantId, t.id] }),
+    // The relay's poll: the oldest unpublished rows by (created_at, id).
+    index('outbox_unpublished_idx').on(t.createdAt, t.id).where(sql`${t.publishedAt} IS NULL`),
+    // The retention purge of published rows.
+    index('outbox_published_at_idx').on(t.publishedAt).where(sql`${t.publishedAt} IS NOT NULL`),
+  ],
+);
+
 export const usersRelations = relations(users, ({ many }) => ({
   sessions: many(sessions),
 }));
@@ -214,6 +241,8 @@ export const identitySchema = {
   memberships,
   invitations,
   auditEvents,
+  // Not `outbox`: the monolith spreads every context's schema into one object (billing has one too).
+  identityOutbox: outbox,
   usersRelations,
   sessionsRelations,
 };
@@ -227,3 +256,4 @@ export type TenantRow = typeof tenants.$inferSelect;
 export type MembershipRow = typeof memberships.$inferSelect;
 export type InvitationRow = typeof invitations.$inferSelect;
 export type AuditEventRow = typeof auditEvents.$inferSelect;
+export type OutboxRow = typeof outbox.$inferSelect;

@@ -149,7 +149,9 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
 
   it('re-applying the distribution file changes nothing', async () => {
     const before = await citusTables();
-    expect(before).toHaveLength(3);
+    // payments, stripe_events, outbox (0004_outbox), the three ledger tenant tables
+    // (0005_ledger_tables; its two local tables are not Citus tables), and app.tenant_colocation.
+    expect(before).toHaveLength(7);
     for (const statement of statements('0002_distribute.sql')) {
       await db.execute(sql.raw(statement));
     }
@@ -248,7 +250,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
     };
     const before = await citusTables();
     const files = await applied();
-    expect(files).toBe(4);
+    // 0000_init .. 0008_ledger_trusted_state_read_at.
+    expect(files).toBe(9);
     const first = app;
     app = undefined; // afterAll then closes only what is open, even if the boot below throws
     await first?.close();

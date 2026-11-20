@@ -350,6 +350,191 @@ describe('Payment aggregate', () => {
     });
   });
 
+  describe('refund / dispute / reinstate (ledger S-6, L-11)', () => {
+    const later = new Date('2026-09-10T08:00:00.000Z');
+    const at = (status: PaymentStatus, amountRefunded = 0) =>
+      makePayment({ status, amountTotal: 2_500, currency: 'usd', paidAt, amountRefunded });
+
+    it("refund(total) derives the status from Stripe's refunded total at each boundary", () => {
+      const cases: [number, PaymentStatus][] = [
+        [0, PaymentStatus.Succeeded],
+        [1, PaymentStatus.PartiallyRefunded],
+        [2_499, PaymentStatus.PartiallyRefunded],
+        [2_500, PaymentStatus.Refunded],
+        [2_600, PaymentStatus.Refunded],
+      ];
+      for (const from of [
+        PaymentStatus.Succeeded,
+        PaymentStatus.PartiallyRefunded,
+        PaymentStatus.Refunded,
+      ]) {
+        for (const [total, status] of cases) {
+          const payment = at(from, from === PaymentStatus.Succeeded ? 0 : 700);
+          const changed = payment.refund(total, later);
+          expect(payment.toSnapshot(), `${from} + ${total}`).toMatchObject({
+            status,
+            amountRefunded: total,
+            paidAt,
+            amountTotal: 2_500,
+          });
+          const moved = !(
+            status === from && total === (from === PaymentStatus.Succeeded ? 0 : 700)
+          );
+          expect(changed, `${from} + ${total}`).toBe(moved);
+        }
+      }
+    });
+
+    it('refund(total) is idempotent: re-applying the same total changes nothing', () => {
+      const payment = at(PaymentStatus.Succeeded);
+      expect(payment.refund(1_500, later)).toBe(true);
+      const before = payment.toSnapshot();
+      expect(payment.refund(1_500, new Date('2026-09-11T08:00:00.000Z'))).toBe(false);
+      expect(payment.toSnapshot()).toEqual(before);
+      expect(payment.toSnapshot()).toMatchObject({
+        status: PaymentStatus.PartiallyRefunded,
+        amountRefunded: 1_500,
+        updatedAt: later,
+      });
+    });
+
+    it('a lower total (a refund failed) is stored as is: refunded → partially_refunded → succeeded', () => {
+      const payment = at(PaymentStatus.Refunded, 2_500);
+      expect(payment.refund(1_000, later)).toBe(true);
+      expect(payment.toSnapshot()).toMatchObject({
+        status: PaymentStatus.PartiallyRefunded,
+        amountRefunded: 1_000,
+      });
+      expect(payment.refund(0, later)).toBe(true);
+      expect(payment.toSnapshot()).toMatchObject({
+        status: PaymentStatus.Succeeded,
+        amountRefunded: 0,
+      });
+    });
+
+    it('any order of totals converges on the last one applied (no guard against lower totals)', () => {
+      const payment = at(PaymentStatus.Succeeded);
+      payment.refund(2_500, later);
+      payment.refund(200, later);
+      expect(payment.toSnapshot()).toMatchObject({
+        status: PaymentStatus.PartiallyRefunded,
+        amountRefunded: 200,
+      });
+    });
+
+    it('a disputed payment records the total and stays disputed; its reinstatement reads it', () => {
+      const disputed = at(PaymentStatus.Disputed, 500);
+      expect(disputed.refund(0, later)).toBe(true);
+      expect(disputed.toSnapshot()).toMatchObject({
+        status: PaymentStatus.Disputed,
+        amountRefunded: 0,
+      });
+      expect(disputed.refund(0, later)).toBe(false);
+      expect(disputed.reinstate(later)).toBe(true);
+      expect(disputed.status).toBe(PaymentStatus.Succeeded);
+    });
+
+    it('refund(total) refuses a negative or fractional total', () => {
+      for (const total of [-1, 0.5, Number.NaN]) {
+        const payment = at(PaymentStatus.Succeeded);
+        const before = payment.toSnapshot();
+        expect(payment.refund(total, later), String(total)).toBe(false);
+        expect(payment.toSnapshot()).toEqual(before);
+      }
+    });
+
+    it('has no failRefund (a failure is the lower total Stripe reports)', () => {
+      expect('failRefund' in at(PaymentStatus.Succeeded)).toBe(false);
+    });
+
+    it('dispute() moves succeeded and partially_refunded → disputed', () => {
+      for (const status of [PaymentStatus.Succeeded, PaymentStatus.PartiallyRefunded]) {
+        const payment = at(status);
+        expect(payment.dispute(later)).toBe(true);
+        expect(payment.toSnapshot()).toMatchObject({
+          status: PaymentStatus.Disputed,
+          updatedAt: later,
+        });
+      }
+    });
+
+    it('reinstate() moves disputed → succeeded', () => {
+      const payment = at(PaymentStatus.Disputed);
+      expect(payment.reinstate(later)).toBe(true);
+      expect(payment.toSnapshot()).toMatchObject({
+        status: PaymentStatus.Succeeded,
+        updatedAt: later,
+        paidAt,
+      });
+    });
+
+    it('a partially refunded payment disputed then reinstated is partially_refunded again', () => {
+      const payment = at(PaymentStatus.Succeeded);
+      payment.refund(500, later);
+      expect(payment.dispute(later)).toBe(true);
+
+      expect(payment.reinstate(later)).toBe(true);
+
+      expect(payment.toSnapshot()).toMatchObject({
+        status: PaymentStatus.PartiallyRefunded,
+        amountRefunded: 500,
+        updatedAt: later,
+      });
+    });
+
+    it('a dispute reinstated after its only refund failed is succeeded', () => {
+      const payment = at(PaymentStatus.PartiallyRefunded, 500);
+      payment.dispute(later);
+      payment.refund(0, later);
+
+      expect(payment.reinstate(later)).toBe(true);
+
+      expect(payment.status).toBe(PaymentStatus.Succeeded);
+    });
+
+    it.each([PaymentStatus.Pending, PaymentStatus.Failed, PaymentStatus.Expired])(
+      'refuses every new transition from %s (no state change, no event)',
+      (status) => {
+        const payment = at(status);
+        const before = payment.toSnapshot();
+        expect(payment.refund(2_500, later)).toBe(false);
+        expect(payment.refund(500, later)).toBe(false);
+        expect(payment.dispute(later)).toBe(false);
+        expect(payment.reinstate(later)).toBe(false);
+        expect(payment.toSnapshot()).toEqual(before);
+        expect(payment.getUncommittedEvents()).toEqual([]);
+      },
+    );
+
+    it('a repeat changes nothing', () => {
+      const cases: [PaymentStatus, (payment: Payment) => boolean][] = [
+        [PaymentStatus.Refunded, (p) => p.refund(2_500, later)],
+        [PaymentStatus.PartiallyRefunded, (p) => p.refund(500, later)],
+        [PaymentStatus.Disputed, (p) => p.dispute(later)],
+        [PaymentStatus.Succeeded, (p) => p.reinstate(later)],
+      ];
+      for (const [status, repeat] of cases) {
+        const refunded = { [PaymentStatus.Refunded]: 2_500, [PaymentStatus.Succeeded]: 0 };
+        const payment = at(status, refunded[status as keyof typeof refunded] ?? 500);
+        const before = payment.toSnapshot();
+        expect(repeat(payment), status).toBe(false);
+        expect(payment.toSnapshot()).toEqual(before);
+      }
+    });
+
+    it('refuses a dispute of a refunded payment; a refund total never moves a disputed one', () => {
+      const refunded = at(PaymentStatus.Refunded);
+      expect(refunded.dispute(later)).toBe(false);
+      expect(refunded.status).toBe(PaymentStatus.Refunded);
+      const disputed = at(PaymentStatus.Disputed);
+      expect(disputed.refund(2_500, later)).toBe(true);
+      expect(disputed.toSnapshot()).toMatchObject({
+        status: PaymentStatus.Disputed,
+        amountRefunded: 2_500,
+      });
+    });
+  });
+
   describe('tenant', () => {
     const base = {
       id: generateId(),

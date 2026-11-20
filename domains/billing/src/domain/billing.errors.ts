@@ -4,6 +4,7 @@ import {
   EntityNotFoundException,
   ExternalServiceException,
   PermissionDeniedException,
+  ServiceUnavailableException,
   type ValidationIssue,
 } from '@platform/common';
 import { BillingErrorCode } from '../billing.constants.js';
@@ -82,5 +83,26 @@ export class TenantMismatchException extends PermissionDeniedException {
     super('The request does not belong to your active workspace', {
       code: BillingErrorCode.TENANT_MISMATCH,
     });
+  }
+}
+
+/**
+ * 403 — the ledger tenant rule (`LedgerService`): with a principal, a draft or read must be of the
+ * principal's tenant and never of `PLATFORM_TENANT_ID`; without a principal only `SystemContext`
+ * may post or read. A programming or routing error: the posting message is dead-lettered.
+ */
+export class LedgerTenantMismatchException extends PermissionDeniedException {
+  constructor(reason: 'no-principal-or-system-context' | 'tenant-differs') {
+    super('The ledger entry does not belong to the acting tenant', {
+      code: BillingErrorCode.LEDGER_TENANT_MISMATCH,
+      details: { reason },
+    });
+  }
+}
+
+/** 503 — the ledger is disabled in this process (`LEDGER_ENABLED=false`). */
+export class LedgerDisabledException extends ServiceUnavailableException {
+  constructor() {
+    super('The ledger is not enabled', { code: BillingErrorCode.LEDGER_DISABLED });
   }
 }

@@ -235,6 +235,30 @@ in-memory notifications repositories by default (`notificationStores: 'cassandra
 Cassandra client, which answers every query with no rows). The digest cron's system context is a unit spec
 (`daily-digest.cron.spec.ts`).
 
+### Outbox and ledger suites
+
+The Postgres domains publish through the transactional outbox, so an e2e that expects an event on Kafka ticks the relay
+first. The monolith harness binds `InMemoryOutbox` (`@platform/outbox/testing`) as `IdentityOutbox` and `BillingOutbox`
+and as their system repositories, never starts the app's own relays (`OUTBOX_RELAY_ENABLED=false`) and returns
+`tickRelays()` (one poll → publish → mark cycle per outbox, to the `FakeKafkaProducer`) and `flushOutboxes()`.
+`outbox.e2e-spec.ts` pins the contract: a request leaves rows and publishes nothing, a tick delivers them once, a failing
+producer leaves the rows for a later tick, and the records, replayed through `consumers.deliver()`, reach the real
+notifications handlers.
+
+`ledger.e2e-spec.ts` (outbox plan Task 19) runs the whole ledger path in the monolith, in memory:
+`createMonolithE2eApp({ ledger: true })` with `LEDGER_ENABLED=true` binds `InMemoryLedger` as `LedgerPort`, one
+`InMemoryLedgerStore` (receipts and system repository over billing's in-memory outbox) and `FakeStripe` (the real SDK
+with the ledger's GETs answered from a list, so signature verification is real). The cases: a signed `charge.succeeded` →
+one outbox row and nothing on Kafka → a tick → the app's own `LedgerPostingConsumer` posts one balanced entry and one
+ref; the same webhook again and the same Kafka message again add nothing; `payout.paid` → a platform entry in
+`SystemContext`; a `ReconcileLedgerCommand` run `succeeded` with no findings; after `InMemoryLedger#tamper` the next run
+reports `ledger_row_mutated` once. The microservices topology is covered by `billing-service`'s e2e (the webhook RPC
+leaves its posting record in the unit of work of its receipt with `LEDGER_ENABLED=true`, none with `false`) and the
+gateway's (the edge forwards the raw bytes and answers as billing-service does; it owns neither an outbox nor a ledger).
+
+`scripts/prometheus-rules.spec.ts` parses `docker/prometheus/rules/*.rules.yml`: exactly the planned alerts with their
+severities, thresholds, and only series the code registers in every `expr`. It also fails when a doc still describes the outbox as missing or events as published after commit, except in the notifications note.
+
 ### Real Socket.IO suites
 
 `realtime-socket.e2e-spec.ts` (E-1) is the first spec that reaches the `/notifications` gateway over a real
@@ -409,6 +433,6 @@ tuning, for example why `UV_THREADPOOL_SIZE` must stay at or below the container
 ## Known gaps
 
 - Kafka and gRPC have no broker or cross-process integration specs. The e2e suites run gRPC for real
-  on loopback, and replace Kafka with `FakeKafkaProducer` and `InMemoryKafkaServer`. Events are
-  published after commit today; there is no transactional outbox yet. Tests assert on what was
-  published, not on delivery guarantees.
+  on loopback, and replace Kafka with `FakeKafkaProducer` and `InMemoryKafkaServer`. The outbox relay's
+  poll, publish and mark cycle is driven by hand (`tickRelays()`), so the e2e suites prove what is written
+  and relayed, not Kafka's own delivery guarantees.

@@ -1,5 +1,10 @@
-import type { Payment as PaymentContract, PaymentList } from '@domain/billing-contracts';
+import type {
+  Payment as PaymentContract,
+  PaymentList,
+  PaymentSucceededPayload,
+} from '@domain/billing-contracts';
 import type { CursorPage } from '@platform/common';
+import type { PaymentSucceededEvent } from '../../domain/events/payment-succeeded.event.js';
 import type { Payment } from '../../domain/payment.aggregate.js';
 
 /**
@@ -31,5 +36,24 @@ export function toPaymentListContract(page: CursorPage<Payment>): PaymentList {
   return {
     items: page.items.map(toPaymentContract),
     ...(page.nextCursor === null ? {} : { nextCursor: page.nextCursor }),
+  };
+}
+
+/**
+ * Domain event → the `billing.payment-succeeded.v1` payload (`paidAt` as ISO 8601;
+ * `stripePaymentIntentId` only when Stripe reported one). The webhook enqueues it on billing's
+ * outbox in the unit of work that completes the payment.
+ */
+export function toPaymentSucceededPayload(event: PaymentSucceededEvent): PaymentSucceededPayload {
+  return {
+    paymentId: event.paymentId,
+    userId: event.userId,
+    stripeCheckoutSessionId: event.stripeCheckoutSessionId,
+    amountTotal: event.amountTotal,
+    currency: event.currency,
+    paidAt: event.paidAt.toISOString(),
+    ...(event.stripePaymentIntentId === null
+      ? {}
+      : { stripePaymentIntentId: event.stripePaymentIntentId }),
   };
 }

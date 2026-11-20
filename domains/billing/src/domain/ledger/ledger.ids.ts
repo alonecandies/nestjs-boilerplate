@@ -19,8 +19,11 @@ export function toEpochMicros(at: Date): bigint {
   return BigInt(at.getTime()) * 1_000n;
 }
 
-/** Sorted keys at every level, bigints as decimal strings, no whitespace. */
-function canonicalJson(value: unknown): string {
+/**
+ * Sorted keys at every level, bigints as decimal strings, no whitespace: the hashing input of
+ * `ledgerPayloadHash` and `ledgerDiscrepancyId`.
+ */
+export function canonicalJson(value: unknown): string {
   if (value === null) return 'null';
   if (typeof value === 'bigint') return JSON.stringify(value.toString());
   if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {

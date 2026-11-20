@@ -2,11 +2,59 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { PLATFORM_TENANT_ID } from '@platform/common';
 import { MIGRATIONS_TABLE } from '@platform/database';
+import { describeOutboxTable } from '@platform/outbox/testing';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import drizzleConfig from '../../../drizzle.config.js';
 import { billingMigrations } from './billing.migrations.js';
-import { billingPgSchema, paymentStatusEnum, payments, stripeEvents } from './billing.schema.js';
+import {
+  billingPgSchema,
+  billingSchema,
+  ledgerAccounts,
+  ledgerDiscrepancies,
+  ledgerEntryRefs,
+  ledgerReconciliationRuns,
+  ledgerTrustedState,
+  outbox,
+  paymentStatusEnum,
+  payments,
+  stripeEvents,
+} from './billing.schema.js';
+
+describeOutboxTable(outbox, 'billing');
+
+/** A migration file's statements: comments dropped, whitespace collapsed, one entry per breakpoint. */
+const statementsOf = (file: string): string[] =>
+  readFileSync(join(billingMigrations.folder, file), 'utf8')
+    .split('--> statement-breakpoint')
+    .map((statement) =>
+      statement
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('--'))
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim(),
+    )
+    .filter((statement) => statement !== '');
+
+const journalTags = (): string[] =>
+  (
+    JSON.parse(readFileSync(join(billingMigrations.folder, 'meta', '_journal.json'), 'utf8')) as {
+      entries: { idx: number; tag: string }[];
+    }
+  ).entries.map((entry) => entry.tag);
+
+/** The five ledger tables of 0005 (outbox plan "Ledger tables"): three tenant tables, two local. */
+const LEDGER_TENANT_TABLES = [
+  'ledger_accounts',
+  'ledger_entry_refs',
+  'ledger_discrepancies',
+] as const;
+const LEDGER_TABLES = [
+  ...LEDGER_TENANT_TABLES,
+  'ledger_reconciliation_runs',
+  'ledger_trusted_state',
+] as const;
 
 describe('billingMigrations', () => {
   it("is billing's own history: ./migrations, bookkeeping in billing.__drizzle_migrations", () => {
@@ -20,11 +68,25 @@ describe('billingMigrations', () => {
 
   it('keeps every billing table and enum in the billing Postgres schema', () => {
     expect(billingPgSchema.schemaName).toBe(billingMigrations.migrationsSchema);
-    expect([payments, stripeEvents].map((table) => getTableConfig(table).schema)).toEqual([
-      'billing',
-      'billing',
-    ]);
+    const tables = [
+      payments,
+      stripeEvents,
+      outbox,
+      ledgerAccounts,
+      ledgerEntryRefs,
+      ledgerDiscrepancies,
+      ledgerReconciliationRuns,
+      ledgerTrustedState,
+    ];
+    expect(tables.map((table) => getTableConfig(table).schema)).toEqual(
+      tables.map(() => 'billing'),
+    );
     expect(paymentStatusEnum.schema).toBe('billing');
+  });
+
+  it('registers the outbox as billingOutbox: the monolith spreads every schema into one object', () => {
+    expect(billingSchema.billingOutbox).toBe(outbox);
+    expect(Object.keys(billingSchema)).not.toContain('outbox');
   });
 
   it('matches drizzle.config.ts: output folder, schema filter, bookkeeping table', () => {
@@ -123,8 +185,8 @@ describe('billingMigrations', () => {
       )
       .filter((statement) => statement !== '');
 
-    it('is the fourth and last journal entry', () => {
-      expect(journal.entries.map((entry) => entry.tag)).toEqual([
+    it('is the fourth journal entry', () => {
+      expect(journal.entries.map((entry) => entry.tag).slice(0, 4)).toEqual([
         '0000_init',
         '0001_tenant_columns',
         '0002_distribute',
@@ -170,6 +232,150 @@ describe('billingMigrations', () => {
         'GRANT SELECT, INSERT, UPDATE ON TABLE billing.payments TO app_runtime;',
         'GRANT SELECT, INSERT ON TABLE billing.stripe_events TO app_runtime;',
         'GRANT SELECT, INSERT, DELETE ON TABLE billing.stripe_events TO app_system;',
+      ]);
+    });
+  });
+
+  describe('0004_outbox (outbox plan Task 6: the "Outbox table" SQL, in migration order)', () => {
+    it('is the fifth journal entry: the first billing migration after B3', () => {
+      expect(journalTags().slice(0, 5)).toEqual([
+        '0000_init',
+        '0001_tenant_columns',
+        '0002_distribute',
+        '0003_rls',
+        '0004_outbox',
+      ]);
+    });
+
+    it('is the plan SQL for billing.outbox, one statement each: CREATE, distribution, indexes, RLS, grants, policy', () => {
+      expect(statementsOf('0004_outbox.sql')).toEqual([
+        'CREATE TABLE "billing"."outbox" ( "tenant_id" uuid NOT NULL, "id" uuid NOT NULL, "topic" text NOT NULL, "key" text, "envelope" jsonb NOT NULL, "created_at" timestamp (3) with time zone DEFAULT now() NOT NULL, "published_at" timestamp (3) with time zone, CONSTRAINT "outbox_tenant_id_id_pk" PRIMARY KEY("tenant_id","id") );',
+        "SELECT app.distribute_by_tenant('billing.outbox');",
+        'CREATE INDEX "outbox_unpublished_idx" ON "billing"."outbox" USING btree ("created_at","id") WHERE "billing"."outbox"."published_at" IS NULL;',
+        'CREATE INDEX "outbox_published_at_idx" ON "billing"."outbox" USING btree ("published_at") WHERE "billing"."outbox"."published_at" IS NOT NULL;',
+        'ALTER TABLE "billing"."outbox" ENABLE ROW LEVEL SECURITY;',
+        'ALTER TABLE "billing"."outbox" FORCE ROW LEVEL SECURITY;',
+        'GRANT INSERT ON "billing"."outbox" TO app_runtime;',
+        'GRANT SELECT, INSERT, UPDATE, DELETE ON "billing"."outbox" TO app_system;',
+        'CREATE POLICY "outbox_insert" ON "billing"."outbox" FOR INSERT TO app_runtime WITH CHECK (tenant_id = app.tenant_id());',
+      ]);
+    });
+  });
+  describe('0005_ledger_tables (outbox plan Task 10: the "Ledger tables" contract, in migration order)', () => {
+    const ledgerStatements = (): string[] => statementsOf('0005_ledger_tables.sql');
+
+    it('is the sixth journal entry: L-10 after G-1 (Task 6) on the billing lane', () => {
+      expect(journalTags().slice(0, 6)).toEqual([
+        '0000_init',
+        '0001_tenant_columns',
+        '0002_distribute',
+        '0003_rls',
+        '0004_outbox',
+        '0005_ledger_tables',
+      ]);
+    });
+
+    it('distributes the three tenant tables right after their CREATE, and neither local table', () => {
+      const statements = ledgerStatements();
+      const creates = statements
+        .map(
+          (statement, index) =>
+            [statement.match(/^CREATE TABLE "billing"\."(\w+)"/)?.[1], index] as const,
+        )
+        .filter((entry): entry is readonly [string, number] => entry[0] !== undefined);
+      expect(creates.map(([table]) => table)).toEqual([
+        'ledger_accounts',
+        'ledger_entry_refs',
+        'ledger_discrepancies',
+        'ledger_reconciliation_runs',
+        'ledger_trusted_state',
+      ]);
+      const distributed = statements.filter((statement) => statement.includes('app.distribute_'));
+      expect(distributed).toEqual([
+        "SELECT app.distribute_by_tenant('billing.ledger_accounts');",
+        "SELECT app.distribute_by_tenant('billing.ledger_entry_refs');",
+        "SELECT app.distribute_by_tenant('billing.ledger_discrepancies');",
+      ]);
+      for (const [table, index] of creates.slice(0, 3)) {
+        expect(statements[index + 1]).toBe(`SELECT app.distribute_by_tenant('billing.${table}');`);
+      }
+    });
+
+    it('adds no foreign key, no default privilege, no REVOKE and nothing for PUBLIC', () => {
+      const text = ledgerStatements().join('\n');
+      expect(text).not.toMatch(/FOREIGN KEY|REFERENCES/i);
+      expect(text).not.toMatch(/DEFAULT PRIVILEGES|\bREVOKE\b|\bPUBLIC\b|__drizzle_migrations/i);
+    });
+
+    it('is the contract SQL, one statement each: CREATE and distribution, index, RLS, grants, policies', () => {
+      expect(ledgerStatements()).toEqual([
+        'CREATE TABLE "billing"."ledger_accounts" ( "tenant_id" uuid NOT NULL, "code" text NOT NULL, "currency" text NOT NULL, "immudb_account_id" uuid NOT NULL, "created_at" timestamp (3) with time zone DEFAULT now() NOT NULL, CONSTRAINT "ledger_accounts_tenant_id_code_currency_pk" PRIMARY KEY("tenant_id","code","currency") );',
+        "SELECT app.distribute_by_tenant('billing.ledger_accounts');",
+        'CREATE TABLE "billing"."ledger_entry_refs" ( "tenant_id" uuid NOT NULL, "entry_id" uuid NOT NULL, "source_key" text NOT NULL, "payload_hash" text NOT NULL, "immudb_tx_id" bigint, "payment_id" uuid, "kind" text NOT NULL, "posted_at" timestamp (3) with time zone NOT NULL, "created_at" timestamp (3) with time zone DEFAULT now() NOT NULL, CONSTRAINT "ledger_entry_refs_tenant_id_entry_id_pk" PRIMARY KEY("tenant_id","entry_id") );',
+        "SELECT app.distribute_by_tenant('billing.ledger_entry_refs');",
+        'CREATE TABLE "billing"."ledger_discrepancies" ( "tenant_id" uuid NOT NULL, "id" uuid NOT NULL, "kind" text NOT NULL, "source_key" text NOT NULL, "expected" jsonb NOT NULL, "actual" jsonb NOT NULL, "detected_by" text NOT NULL, "run_id" uuid, "resolves_id" uuid, "created_at" timestamp (3) with time zone DEFAULT now() NOT NULL, CONSTRAINT "ledger_discrepancies_tenant_id_id_pk" PRIMARY KEY("tenant_id","id") );',
+        "SELECT app.distribute_by_tenant('billing.ledger_discrepancies');",
+        'CREATE TABLE "billing"."ledger_reconciliation_runs" ( "id" uuid NOT NULL, "from_ts" timestamp (3) with time zone NOT NULL, "to_ts" timestamp (3) with time zone NOT NULL, "status" text NOT NULL, "counts" jsonb NOT NULL, "finished_at" timestamp (3) with time zone, "created_at" timestamp (3) with time zone DEFAULT now() NOT NULL, CONSTRAINT "ledger_reconciliation_runs_id_pk" PRIMARY KEY("id") );',
+        'CREATE TABLE "billing"."ledger_trusted_state" ( "database" text NOT NULL, "tx_id" bigint NOT NULL, "tx_hash" bytea NOT NULL, "verified_at" timestamp (3) with time zone NOT NULL, "created_at" timestamp (3) with time zone DEFAULT now() NOT NULL, CONSTRAINT "ledger_trusted_state_database_pk" PRIMARY KEY("database") );',
+        'CREATE INDEX "ledger_entry_refs_posted_at_idx" ON "billing"."ledger_entry_refs" USING btree ("posted_at");',
+        ...LEDGER_TABLES.flatMap((table) => [
+          `ALTER TABLE "billing"."${table}" ENABLE ROW LEVEL SECURITY;`,
+          `ALTER TABLE "billing"."${table}" FORCE ROW LEVEL SECURITY;`,
+        ]),
+        ...LEDGER_TENANT_TABLES.flatMap((table) => [
+          `GRANT SELECT, INSERT ON "billing"."${table}" TO app_runtime;`,
+          `GRANT SELECT, INSERT ON "billing"."${table}" TO app_system;`,
+        ]),
+        'GRANT SELECT, INSERT, UPDATE ON "billing"."ledger_reconciliation_runs" TO app_system;',
+        'GRANT SELECT, INSERT, UPDATE ON "billing"."ledger_trusted_state" TO app_system;',
+        ...LEDGER_TENANT_TABLES.flatMap((table) => [
+          `CREATE POLICY "${table}_select" ON "billing"."${table}" FOR SELECT TO app_runtime USING (tenant_id = app.tenant_id() AND app.elevated());`,
+          `CREATE POLICY "${table}_insert" ON "billing"."${table}" FOR INSERT TO app_runtime WITH CHECK (tenant_id = app.tenant_id());`,
+        ]),
+      ]);
+    });
+  });
+
+  describe('0006_ledger_system_reads (custom, outbox plan Task 11: spec §9 item 9)', () => {
+    it('is the seventh journal entry, after the ledger tables', () => {
+      expect(journalTags().slice(0, 7)).toEqual([
+        '0000_init',
+        '0001_tenant_columns',
+        '0002_distribute',
+        '0003_rls',
+        '0004_outbox',
+        '0005_ledger_tables',
+        '0006_ledger_system_reads',
+      ]);
+    });
+
+    it('only grants app_system SELECT on payments (ledgerReconciliation.listSucceededPayments)', () => {
+      expect(statementsOf('0006_ledger_system_reads.sql')).toEqual([
+        'GRANT SELECT ON TABLE billing.payments TO app_system;',
+      ]);
+    });
+  });
+
+  describe('0007_payment_amount_refunded (final review F2/F3: refunds net of failures)', () => {
+    it('is the eighth journal entry', () => {
+      expect(journalTags().slice(7, 8)).toEqual(['0007_payment_amount_refunded']);
+    });
+
+    it('only adds payments.amount_refunded, 0 for existing rows', () => {
+      expect(statementsOf('0007_payment_amount_refunded.sql')).toEqual([
+        'ALTER TABLE "billing"."payments" ADD COLUMN "amount_refunded" bigint DEFAULT 0 NOT NULL;',
+      ]);
+    });
+  });
+
+  describe('0008_ledger_trusted_state_read_at (re-review G3: R5 cutoff from the stored read time)', () => {
+    it('is the ninth and last journal entry', () => {
+      expect(journalTags().slice(8)).toEqual(['0008_ledger_trusted_state_read_at']);
+    });
+
+    it('only adds ledger_trusted_state.read_at, null for existing rows', () => {
+      expect(statementsOf('0008_ledger_trusted_state_read_at.sql')).toEqual([
+        'ALTER TABLE "billing"."ledger_trusted_state" ADD COLUMN "read_at" timestamp (3) with time zone;',
       ]);
     });
   });

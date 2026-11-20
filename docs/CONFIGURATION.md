@@ -102,6 +102,7 @@ it imports. A process ignores (and does not validate) variables of namespaces it
 | `immudb`                  |          |                   |                  |                         |                 | `ImmudbModule` (`@platform/immudb`); wired into monolith and billing-service in ledger wave 2 (L-12) |
 | `redis`                   |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `RedisModule`, `AppQueueModule`, `AppCacheModule`, GraphQL pub/sub                                   |
 | `kafka`                   |    ✓     | ✓ (consumer only) |   ✓ (producer)   | ✓ (producer + consumer) |  ✓ (producer)   | `KafkaProducerModule`, `connectKafkaConsumer`                                                        |
+| `outbox`                  |          |                   |                  |                         |                 | `OutboxModule` (`@platform/outbox`); wired into the apps with their relays (outbox Task 7)           |
 | `grpc`                    |          |    ✓ (clients)    |    ✓ (server)    |       ✓ (server)        |   ✓ (server)    | `GrpcClientsModule.register()`, app module + `connectGrpcServer`                                     |
 | `identityGrpcClient`      |          |         ✓         |                  |                         |                 | `IdentityApiModule.forRemote()`                                                                      |
 | `notificationsGrpcClient` |          |         ✓         |                  |                         |                 | `NotificationsApiModule.forRemote()`                                                                 |
@@ -119,6 +120,7 @@ it imports. A process ignores (and does not validate) variables of namespaces it
 | `storage`                 |    ✓     |         ✓         |                  |                         |                 | `StorageModule`                                                                                      |
 | `files`                   |    ✓     |         ✓         |                  |                         |                 | `FilesModule`                                                                                        |
 | `stripe`                  |    ✓     |                   |                  |                         |        ✓        | `StripeModule`, `BillingCoreModule`                                                                  |
+| `ledger`                  |    ✓     |                   |                  |                         |        ✓        | `BillingCoreModule` (`@domain/billing`)                                                              |
 | `monolith`                |    ✓     |                   |                  |                         |                 | `apps/monolith/src/main.ts`                                                                          |
 | `gateway`                 |          |         ✓         |                  |                         |                 | `apps/gateway/src/main.ts`                                                                           |
 
@@ -256,21 +258,22 @@ notifications-service
 [`immudb.config.ts`](../libs/config/src/namespaces/immudb.config.ts) · not loaded by any app yet
 (ledger wave 2 wires monolith and billing-service)
 
-| Variable                           | Default               | Description                                                                                       |
-| ---------------------------------- | --------------------- | ------------------------------------------------------------------------------------------------- |
-| `IMMUDB_ADDRESS`                   | `localhost:3322`      | gRPC `host:port` (pg-wire is never used).                                                         |
-| `IMMUDB_DATABASE`                  | `app`                 | Database (lowercase identifier); created by provisioning.                                         |
-| `IMMUDB_USERNAME`                  | `app_writer`          | Application user, provisioned with SQL `SELECT` and `INSERT` only.                                |
-| `IMMUDB_PASSWORD`                  | `Compose-local-App1!` | 8-32 chars with an uppercase letter, a digit and a symbol (immudb policy). Refused in production. |
-| `IMMUDB_ADMIN_USERNAME`            | `immudb`              | Superuser for provisioning and migrations.                                                        |
-| `IMMUDB_ADMIN_PASSWORD`            | —                     | Unset = this process never provisions or migrates. `immudb` is refused in production.             |
-| `IMMUDB_SESSION_POOL_SIZE`         | `4`                   | Sessions per process (server cap: 100 in total).                                                  |
-| `IMMUDB_TIMEOUT_MS`                | `5000`                | Deadline of every gRPC call.                                                                      |
-| `IMMUDB_KEEPALIVE_INTERVAL_MS`     | `60000`               | Session keepalive; must stay below the server's 3-minute inactivity limit (max 170000).           |
-| `IMMUDB_TLS`                       | `false`               | gRPC over TLS with the system roots.                                                              |
-| `IMMUDB_ALLOW_INSECURE`            | `false`               | Production opt-out of `IMMUDB_TLS`.                                                               |
-| `IMMUDB_SERVER_SIGNING_PUBLIC_KEY` | —                     | base64 PEM public key; when set, state signatures are verified.                                   |
-| `IMMUDB_RUN_MIGRATIONS`            | `false`               | Provision and migrate at boot.                                                                    |
+| Variable                                | Default               | Description                                                                                                                                                                                                                                           |
+| --------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IMMUDB_ADDRESS`                        | `localhost:3322`      | gRPC `host:port` (pg-wire is never used).                                                                                                                                                                                                             |
+| `IMMUDB_DATABASE`                       | `app`                 | Database (lowercase identifier); created by provisioning.                                                                                                                                                                                             |
+| `IMMUDB_USERNAME`                       | `app_writer`          | Application user, provisioned with SQL `SELECT` and `INSERT` only.                                                                                                                                                                                    |
+| `IMMUDB_PASSWORD`                       | `Compose-local-App1!` | 8-32 chars with an uppercase letter, a digit and a symbol (immudb policy). Refused in production.                                                                                                                                                     |
+| `IMMUDB_ADMIN_USERNAME`                 | `immudb`              | Superuser for provisioning and migrations.                                                                                                                                                                                                            |
+| `IMMUDB_ADMIN_PASSWORD`                 | —                     | Unset = this process never provisions or migrates. `immudb` is refused in production.                                                                                                                                                                 |
+| `IMMUDB_SESSION_POOL_SIZE`              | `4`                   | Sessions per process (server cap: 100 in total).                                                                                                                                                                                                      |
+| `IMMUDB_TIMEOUT_MS`                     | `5000`                | Deadline of every gRPC call.                                                                                                                                                                                                                          |
+| `IMMUDB_KEEPALIVE_INTERVAL_MS`          | `60000`               | Session keepalive; must stay below the server's 3-minute inactivity limit (max 170000).                                                                                                                                                               |
+| `IMMUDB_TLS`                            | `false`               | gRPC over TLS with the system roots.                                                                                                                                                                                                                  |
+| `IMMUDB_ALLOW_INSECURE`                 | `false`               | Production opt-out of `IMMUDB_TLS`.                                                                                                                                                                                                                   |
+| `IMMUDB_SERVER_SIGNING_PUBLIC_KEY`      | —                     | base64 PEM public key; when set, state signatures are verified.                                                                                                                                                                                       |
+| `IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE` | —                     | The same key as a file (a PEM or its base64); not together with the variable above. Compose mounts the generated development key here. Production refuses a key marked `compose-local` (the development key) unless `ALLOW_KNOWN_LOCAL_SECRETS=true`. |
+| `IMMUDB_RUN_MIGRATIONS`                 | `false`               | Provision and migrate at boot.                                                                                                                                                                                                                        |
 
 ### `redis` — cache, locks, throttling, BullMQ, socket.io adapter, GraphQL pub/sub
 
@@ -310,6 +313,21 @@ consumes)
 > (`NOTIFICATIONS_CONSUMER_GROUP` in `apps/notifications-service/src/notifications-service.constants.ts`);
 > identity-service and billing-service only produce today. Every replica of an app must share its
 > group, and the gateway's group must differ from notifications-service's.
+
+### `outbox` — transactional outbox relay
+
+[`outbox.config.ts`](../libs/config/src/namespaces/outbox.config.ts) · monolith, identity-service, billing-service
+(the apps that own an outbox; the gateway and notifications-service read no `OUTBOX_*`). Metrics and alerts:
+[OBSERVABILITY.md](OBSERVABILITY.md#outbox-and-ledger-alerts).
+
+| Variable                  | Default | Description                                                                            |
+| ------------------------- | ------- | -------------------------------------------------------------------------------------- |
+| `OUTBOX_RELAY_ENABLED`    | `true`  | Start the relay of each outbox this process owns; it also needs a system pool.         |
+| `OUTBOX_POLL_INTERVAL_MS` | `500`   | `50`–`60000`. Wait after an empty poll; a full batch polls again at once.              |
+| `OUTBOX_BATCH_SIZE`       | `100`   | `1`–`500` rows per poll.                                                               |
+| `OUTBOX_LOCK_TTL_MS`      | `15000` | `1000`–`300000`. TTL of the leader lock `outbox-relay:<name>`, extended while it runs. |
+| `OUTBOX_MAX_BACKOFF_MS`   | `30000` | Cap of the doubling wait after a failed publish; at least `OUTBOX_POLL_INTERVAL_MS`.   |
+| `OUTBOX_RETENTION_HOURS`  | `168`   | `1`–`8760`. Published rows older than this are purged.                                 |
 
 ### `grpc` — internal RPC (server bind, deadline, message limits, TLS)
 
@@ -535,6 +553,22 @@ enqueue invitation mail on the shared BullMQ `mail` queue: in production it need
 | `STRIPE_MAX_NETWORK_RETRIES`   | `2`                                     | `0`–`10`; Stripe retries idempotently.                                                                                                                                 |
 | `STRIPE_TIMEOUT_MS`            | `20000`                                 | Stripe API timeout.                                                                                                                                                    |
 | `STRIPE_ALLOW_LOCAL_REDIRECTS` | `false`                                 | Local compose stack only. Production requires https, non-loopback `STRIPE_SUCCESS_URL` / `STRIPE_CANCEL_URL` unless this is `true`.                                    |
+
+### `ledger` — Stripe money postings to the immudb ledger
+
+[`ledger.config.ts`](../domains/billing/src/infrastructure/ledger/ledger.config.ts) (owned by billing) · monolith, billing-service
+
+| Variable                          | Default | Description                                                                                                                                                                                                                                                                                                                                                   |
+| --------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LEDGER_ENABLED`                  | `false` | Stripe money webhooks (`charge.succeeded`, `refund.*`, `charge.dispute.funds_*`, `payout.*`) write a `billing.ledger-posting.v1` outbox row in the unit of work of their receipt. Off: receipts and payment transitions still happen, no row.                                                                                                                 |
+| `LEDGER_RECONCILE_LOOKBACK_HOURS` | `72`    | `1`–`720`. Window of the hourly reconciliation, back from now.                                                                                                                                                                                                                                                                                                |
+| `LEDGER_VERIFY`                   | `false` | Reconciliation R5: each run proves (dual proof, plus the state signature when `IMMUDB_SERVER_SIGNING_PUBLIC_KEY` or `_FILE` is set) that immudb extends the trusted state in `billing.ledger_trusted_state`, advances it by compare-and-set and verifies the new entries against their receipts. The first state is taken on trust (signature still checked). |
+| `LEDGER_ALLOW_UNVERIFIED`         | `false` | Production refuses `LEDGER_ENABLED=true` without `LEDGER_VERIFY=true` and `IMMUDB_SERVER_SIGNING_PUBLIC_KEY` (or `_FILE`); `true` is the only opt-out.                                                                                                                                                                                                        |
+
+`LEDGER_ENABLED=false` writes no posting rows, so enabling it later does not post what was paid before: run one
+`ReconcileLedgerCommand` with an explicit window over that period (reconciliation R4 re-enqueues every Stripe balance
+transaction without an entry; [domains/billing/README.md](../domains/billing/README.md#ledger-immudb)). The alert rules
+for the ledger series are in [OBSERVABILITY.md](OBSERVABILITY.md#outbox-and-ledger-alerts).
 
 ## App-local variables
 

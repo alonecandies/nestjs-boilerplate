@@ -1,3 +1,4 @@
+import { MEMBERSHIP_REMOVED_EVENT } from '@domain/identity-contracts';
 import { createPrincipal, generateId, runWithPrincipal, type TenantRole } from '@platform/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { recordingEventBus } from '../../../../test/cqrs-fakes.js';
@@ -48,7 +49,14 @@ describe('RemoveMemberHandler', () => {
       new TenantAuditLog(p.auditEvents),
       log.track('elevation', p.elevation),
       events.eventBus,
+      p.integrationEvents,
     );
+  });
+
+  it('a failing enqueue rejects the removal and publishes nothing in process', async () => {
+    vi.spyOn(p.outbox, 'enqueue').mockRejectedValue(new Error('outbox down'));
+    await expect(remove(bob, eve)).rejects.toThrow('outbox down');
+    expect(events.published).toEqual([]);
   });
 
   it('an admin removes a member; audited member.removed', async () => {
@@ -61,11 +69,18 @@ describe('RemoveMemberHandler', () => {
     expect(events.published).toHaveLength(1);
     expect(events.published[0]).toBeInstanceOf(MembershipRemovedEvent);
     expect(events.published[0]).toMatchObject({ tenantId, userId: eve, actorId: bob });
+    // The integration event rides the unit of work, with the in-process event's id.
+    const [removed] = events.published as [MembershipRemovedEvent];
+    expect(p.outbox.records.map((r) => [r.topic, r.tenantId, r.id, r.key])).toEqual([
+      [MEMBERSHIP_REMOVED_EVENT.topic, tenantId, removed.eventId, eve],
+    ]);
+    expect(p.outbox.records[0]?.envelope).toMatchObject({ tenantId, actorId: bob });
   });
 
   it('403 OWNER_RANK_REQUIRED for an admin removing an owner', async () => {
     await expect(remove(bob, ada)).rejects.toMatchObject({ code: 'OWNER_RANK_REQUIRED' });
     expect(events.published).toEqual([]);
+    expect(p.outbox.records).toEqual([]);
   });
 
   it('422 LAST_OWNER when the sole owner removes themself', async () => {
@@ -96,5 +111,6 @@ describe('RemoveMemberHandler', () => {
     });
     expect(p.store.auditEvents).toHaveLength(before);
     expect(events.published).toEqual([]);
+    expect(p.outbox.records).toEqual([]);
   });
 });

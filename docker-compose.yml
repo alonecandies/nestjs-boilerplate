@@ -124,12 +124,24 @@ x-env-stripe: &env-stripe
   STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-sk_test_compose_local_not_for_production}
   STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET:-whsec_compose_local_not_for_production}
 
-# immudb (ledger store). Wired into monolith and billing-service by ledger wave 2 (L-12). The app user
-# is provisioned by the apps' migrate step with SELECT + INSERT only; the admin password is immudb's
-# built-in default unless IMMUDB_ADMIN_PASSWORD was set before the volume was first created.
-# ChangeSQLPrivileges (re-applied by every migration run) ends the app user's open sessions; the
-# pools recover, but L-12 should migrate from one process (the migrate step) rather than every app.
+# immudb (ledger store) for the app that owns the ledger: monolith or billing-service, one per
+# topology. LEDGER_ENABLED (root .env, default false) switches the ledger on: the app then loads
+# immudb, consumes billing.ledger-posting.v1 and reports immudb in readiness; off, it never connects.
+# With the ledger on, the app provisions the SELECT + INSERT-only user and applies the ledger
+# migrations at boot (IMMUDB_RUN_MIGRATIONS; production: the app's `dist/migrate.js` job). Only that
+# one app migrates: ChangeSQLPrivileges (re-applied by every migration run) ends the app user's open
+# sessions, which the pools recover from. The admin password is immudb's built-in default unless
+# IMMUDB_ADMIN_PASSWORD was set before the volume was first created.
+# State signing (D3): immudb-keygen generates a development key pair into the immudb-signing volume;
+# immudb signs its state with the private key and the apps pin the public key from the read-only
+# mount (R5 then checks every state signature). LEDGER_VERIFY defaults to true here, so the first
+# reconcile run stores the trusted state in billing.ledger_trusted_state. No private key is
+# committed; the public file carries a "compose-local" marker that NODE_ENV=production refuses
+# unless ALLOW_KNOWN_LOCAL_SECRETS (set above for this stack only).
 x-env-immudb: &env-immudb
+  LEDGER_ENABLED: ${LEDGER_ENABLED:-false}
+  LEDGER_VERIFY: ${LEDGER_VERIFY:-true}
+  IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE: /etc/immudb-signing/signing.pub.pem
   IMMUDB_ADDRESS: immudb:3322
   IMMUDB_DATABASE: ${IMMUDB_DATABASE:-app}
   IMMUDB_PASSWORD: "${IMMUDB_PASSWORD:-Compose-local-App1!}"
@@ -448,13 +460,47 @@ services:
       IMMUDB_PGSQL_SERVER: "false"
       # Superuser password on first start of an empty volume (immudb's default is immudb).
       IMMUDB_ADMIN_PASSWORD: ${IMMUDB_ADMIN_PASSWORD:-immudb}
+    # Signs every state it returns (the dual-proof target) with the development key of immudb-keygen.
+    command: ["--signingKey=/etc/immudb-signing/signing.key"]
     ports: ["127.0.0.1:${IMMUDB_HOST_PORT:-3322}:3322"]
-    volumes: [immudb-data:/var/lib/immudb]
+    volumes:
+      - immudb-data:/var/lib/immudb
+      - immudb-signing:/etc/immudb-signing:ro
+    depends_on:
+      immudb-keygen: { condition: service_completed_successfully }
     # Distroless image (no shell, no exec healthcheck): immudb-init polls GET :9497/readyz instead.
     stop_grace_period: 30s
     deploy:
       resources:
         limits: { cpus: "1.0", memory: 512M }
+
+  # One-shot: generates the development signing key pair (ECDSA P-256) into the immudb-signing
+  # volume on its first run and keeps it afterwards. Nothing secret is committed: the private key
+  # exists only in this volume (0644: the immudb user must read it; development only). The public
+  # file starts with a "compose-local" comment line (PEM parsers skip it) that the config guard
+  # recognises, so a production deployment cannot pin this key by accident.
+  immudb-keygen:
+    image: apache/kafka:4.3.1 # reused for its openssl
+    user: "0"
+    restart: "no"
+    logging: *logging
+    networks: [backend]
+    volumes: [immudb-signing:/etc/immudb-signing]
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        cd /etc/immudb-signing &&
+        if [ -s signing.key ] && [ -s signing.pub.pem ]; then echo 'immudb signing key present'; exit 0; fi;
+        openssl ecparam -name prime256v1 -genkey -noout -out signing.key.tmp &&
+        { echo '# compose-local development signing key, generated at start: not for production';
+        openssl ec -in signing.key.tmp -pubout 2>/dev/null; } > signing.pub.pem.tmp &&
+        chmod 0644 signing.key.tmp signing.pub.pem.tmp &&
+        mv signing.key.tmp signing.key && mv signing.pub.pem.tmp signing.pub.pem &&
+        echo 'immudb signing key generated'
+    deploy:
+      resources:
+        limits: { cpus: "0.2", memory: 64M }
 
   immudb-init:
     image: redis:8.10.2-alpine3.23 # any already-pulled image with busybox wget
@@ -649,7 +695,7 @@ services:
   # Sentinel: `docker compose up --wait` only treats a one-shot container that EXITED as success
   # when an enabled service depends on it with service_completed_successfully. Without an app
   # profile nothing would, and `--wait` would fail on "kafka-init exited (0)". This idle process
-  # also means "infra bootstrapped": it starts only after all four init jobs succeeded.
+  # also means "infra bootstrapped": it starts only after all five init jobs succeeded.
   infra-ready:
     image: redis:8.10.2-alpine3.23 # any already-pulled image with busybox `sleep`
     restart: unless-stopped
@@ -661,6 +707,7 @@ services:
       kafka-init: { condition: service_completed_successfully }
       cassandra-init: { condition: service_completed_successfully }
       storage-init: { condition: service_completed_successfully }
+      immudb-keygen: { condition: service_completed_successfully }
       immudb-init: { condition: service_completed_successfully }
       # Only with the `citus` profile on: the apps then start after the worker has joined.
       citus-init: { condition: service_completed_successfully, required: false }
@@ -687,6 +734,7 @@ services:
         - *env-mail
         - *env-storage
         - *env-stripe
+        - *env-immudb
         - *env-edge
       SERVICE_NAME: monolith
       KAFKA_GROUP_ID: monolith
@@ -694,6 +742,7 @@ services:
       # STORAGE_MAX_CONCURRENT_UPLOADS (4) × ~15 MiB. Raise the limit with either knob.
       NODE_OPTIONS: --max-old-space-size=512
     ports: ["127.0.0.1:${API_HOST_PORT:-3000}:3000"]
+    volumes: [immudb-signing:/etc/immudb-signing:ro] # the pinned public key (IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE)
     networks:
       backend:
         aliases: [api] # k6 and docs target http://api:3000 whichever topology runs
@@ -705,6 +754,7 @@ services:
       kafka-init: { condition: service_completed_successfully }
       cassandra-init: { condition: service_completed_successfully }
       storage-init: { condition: service_completed_successfully }
+      immudb-init: { condition: service_completed_successfully }
     deploy:
       resources:
         limits: { cpus: "2.0", memory: 768M }
@@ -840,17 +890,19 @@ services:
       target: ${APP_TARGET:-runtime}
       args: { APP: billing-service }
     environment:
-      <<: [*env-base, *env-postgres, *env-stripe]
+      <<: [*env-base, *env-postgres, *env-stripe, *env-immudb]
       SERVICE_NAME: billing-service
       KAFKA_GROUP_ID: billing-service
       NODE_OPTIONS: --max-old-space-size=320
       GRPC_URL: 0.0.0.0:50051
     ports: ["127.0.0.1:${BILLING_GRPC_HOST_PORT:-50053}:50051"]
+    volumes: [immudb-signing:/etc/immudb-signing:ro] # the pinned public key (IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE)
     depends_on:
       postgres: { condition: service_healthy }
       pgbouncer: { condition: service_healthy }
       redis: { condition: service_healthy }
       kafka-init: { condition: service_completed_successfully }
+      immudb-init: { condition: service_completed_successfully }
     deploy:
       resources:
         limits: { cpus: "1.0", memory: 448M }
@@ -925,6 +977,7 @@ services:
     ports: ["127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"]
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./docker/prometheus/rules:/etc/prometheus/rules:ro # alert rules (outbox, ledger)
       - prometheus-data:/prometheus
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9090/-/healthy"]
@@ -1080,6 +1133,7 @@ volumes:
   redis-data:
   cassandra-data:
   immudb-data:
+  immudb-signing:
   kafka-data:
   mailpit-data:
   rustfs-data:

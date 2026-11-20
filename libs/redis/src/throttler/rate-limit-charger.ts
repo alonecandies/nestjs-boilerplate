@@ -9,6 +9,7 @@ import {
 import type { RateLimitBucket } from './rate-limit-guard.base.js';
 import type { RateLimitDecision } from './rate-limit-headers.js';
 import { rateLimitKey } from './rate-limit-key.util.js';
+import { recordRateLimitDecision } from './rate-limit-metrics.js';
 import type { ThrottlerStorageRecord } from './redis-throttler.storage.js';
 import { throttleTracker } from './throttle-tracker.util.js';
 
@@ -26,7 +27,10 @@ interface WeightedStorage extends ThrottlerStorage {
 const isWeighted = (storage: ThrottlerStorage | WeightedStorage): storage is WeightedStorage =>
   typeof Reflect.get(storage, 'incrementBy') === 'function';
 
-/** Charges a bucket outside the guard pipeline (GraphQL plugin, graphql-ws), by weight. */
+/**
+ * Charges a bucket outside the guard pipeline (GraphQL plugin, graphql-ws), by weight, and counts
+ * the decision in `rate_limit_decisions_total`.
+ */
 @Injectable()
 export class RateLimitCharger {
   // The union lets callers (and tests) hand over a storage that has `incrementBy`; DI uses the token.
@@ -76,6 +80,9 @@ export class RateLimitCharger {
       blocked: record.isBlocked,
       retryAfterSeconds: record.isBlocked ? record.timeToBlockExpire : 0,
     };
+    // One count per charge whatever the weight; callers must not also pass this decision to a
+    // guard's recordDecision (they write headers with collectDecision), so it is counted once.
+    recordRateLimitDecision(decision);
     return { record, decision };
   }
 }

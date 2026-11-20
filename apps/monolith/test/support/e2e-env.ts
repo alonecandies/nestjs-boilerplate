@@ -27,6 +27,8 @@ export const MONOLITH_E2E_ENV: Readonly<Record<string, string>> = {
   CASSANDRA_PORT: '1',
   CASSANDRA_RUN_MIGRATIONS: 'false',
   KAFKA_BROKERS: '127.0.0.1:1',
+  // The outbox relays never run on their own: specs drive them with `tickRelays()`.
+  OUTBOX_RELAY_ENABLED: 'false',
   SMTP_HOST: '127.0.0.1',
   SMTP_PORT: '1',
   S3_ENDPOINT: 'http://127.0.0.1:1',

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { PLATFORM_TENANT_ID } from '@platform/common';
 import { MIGRATIONS_TABLE } from '@platform/database';
+import { describeOutboxTable } from '@platform/outbox/testing';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { describe, expect, it } from 'vitest';
 import drizzleConfig from '../../../drizzle.config.js';
@@ -11,11 +12,14 @@ import {
   identityPgSchema,
   invitations,
   memberships,
+  outbox,
   sessions,
   tenantRole,
   tenants,
   users,
 } from './identity.schema.js';
+
+describeOutboxTable(outbox, 'identity');
 
 describe('identityMigrations', () => {
   it("is identity's own history: ./migrations, bookkeeping in identity.__drizzle_migrations", () => {
@@ -30,10 +34,10 @@ describe('identityMigrations', () => {
   it('keeps every identity table and enum in the identity Postgres schema', () => {
     expect(identityPgSchema.schemaName).toBe(identityMigrations.migrationsSchema);
     expect(
-      [users, sessions, tenants, memberships, invitations, auditEvents].map(
+      [users, sessions, tenants, memberships, invitations, auditEvents, outbox].map(
         (table) => getTableConfig(table).schema,
       ),
-    ).toEqual(Array(6).fill('identity'));
+    ).toEqual(Array(7).fill('identity'));
     expect(tenantRole.schema).toBe('identity');
   });
 
@@ -287,6 +291,35 @@ describe('identityMigrations', () => {
           .filter((name) => name !== undefined && !/^(USING|CHECK|AND|OR|NOT)$/i.test(name)),
       );
       expect([...called].sort()).toEqual(['app.elevated', 'app.tenant_id', 'app.user_id']);
+    });
+  });
+
+  describe('0010_outbox (outbox plan Task 5: the "Outbox table" SQL, in migration order)', () => {
+    const statements = (): string[] =>
+      readFileSync(join(identityMigrations.folder, '0010_outbox.sql'), 'utf8')
+        .split('--> statement-breakpoint')
+        .map((statement) =>
+          statement
+            .split('\n')
+            .filter((line) => !line.trimStart().startsWith('--'))
+            .join(' ')
+            .replace(/\s+/g, ' ')
+            .trim(),
+        )
+        .filter((statement) => statement !== '');
+
+    it('is the plan SQL for identity.outbox, one statement each: CREATE, distribution, indexes, RLS, grants, policy', () => {
+      expect(statements()).toEqual([
+        'CREATE TABLE "identity"."outbox" ( "tenant_id" uuid NOT NULL, "id" uuid NOT NULL, "topic" text NOT NULL, "key" text, "envelope" jsonb NOT NULL, "created_at" timestamp (3) with time zone DEFAULT now() NOT NULL, "published_at" timestamp (3) with time zone, CONSTRAINT "outbox_tenant_id_id_pk" PRIMARY KEY("tenant_id","id") );',
+        "SELECT app.distribute_by_tenant('identity.outbox');",
+        'CREATE INDEX "outbox_unpublished_idx" ON "identity"."outbox" USING btree ("created_at","id") WHERE "identity"."outbox"."published_at" IS NULL;',
+        'CREATE INDEX "outbox_published_at_idx" ON "identity"."outbox" USING btree ("published_at") WHERE "identity"."outbox"."published_at" IS NOT NULL;',
+        'ALTER TABLE "identity"."outbox" ENABLE ROW LEVEL SECURITY;',
+        'ALTER TABLE "identity"."outbox" FORCE ROW LEVEL SECURITY;',
+        'GRANT INSERT ON "identity"."outbox" TO app_runtime;',
+        'GRANT SELECT, INSERT, UPDATE, DELETE ON "identity"."outbox" TO app_system;',
+        'CREATE POLICY "outbox_insert" ON "identity"."outbox" FOR INSERT TO app_runtime WITH CHECK (tenant_id = app.tenant_id());',
+      ]);
     });
   });
 });

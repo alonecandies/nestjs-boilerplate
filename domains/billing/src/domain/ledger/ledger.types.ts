@@ -122,6 +122,8 @@ export interface LedgerBalance {
 /** An entry whose postings do not balance in `currency`, or (`currency: null`) has < 2 postings. */
 export interface LedgerImbalance {
   readonly entryId: string;
+  /** The entry's tenant (reconciliation R1 files the finding under it). */
+  readonly tenantId: string;
   readonly currency: string | null;
   readonly debit: bigint;
   readonly credit: bigint;

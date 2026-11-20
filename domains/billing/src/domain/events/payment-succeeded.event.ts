@@ -2,12 +2,13 @@ import type { IEvent } from '@nestjs/cqrs';
 import { PLATFORM_TENANT_ID } from '@platform/common';
 
 /**
- * A Checkout Session was paid. Applied by `Payment.complete()` and published on the CQRS event bus
- * only after the webhook transaction committed; `PaymentSucceededRelay` forwards it to Kafka as
- * `billing.payment-succeeded.v1`.
+ * A Checkout Session was paid. Applied by `Payment.complete()`; the webhook enqueues it on
+ * `billing.outbox` as `billing.payment-succeeded.v1` in the unit of work that completes the
+ * payment (the outbox relay publishes it), and publishes it on the CQRS event bus only after that
+ * transaction committed.
  *
- * `eventId` (uuidv7) becomes the Kafka envelope id, so a re-published event keeps its identity and
- * consumers (receipt mail, notification) stay idempotent.
+ * `eventId` (uuidv7) becomes the outbox row id and the Kafka envelope id, so a re-published event
+ * keeps its identity and consumers (receipt mail, notification) stay idempotent.
  */
 export class PaymentSucceededEvent implements IEvent {
   constructor(

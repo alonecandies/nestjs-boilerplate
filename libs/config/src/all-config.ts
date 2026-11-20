@@ -14,6 +14,7 @@ import {
   type ObservabilityConfig,
   observabilityConfig,
 } from './namespaces/observability.config.js';
+import { type OutboxConfig, outboxConfig } from './namespaces/outbox.config.js';
 import { type RedisConfig, redisConfig } from './namespaces/redis.config.js';
 import { type StorageConfig, storageConfig } from './namespaces/storage.config.js';
 import { type ThrottleConfig, throttleConfig } from './namespaces/throttle.config.js';
@@ -30,6 +31,7 @@ export const CONFIG_NAMESPACES = {
   immudb: immudbConfig,
   redis: redisConfig,
   kafka: kafkaConfig,
+  outbox: outboxConfig,
   grpc: grpcConfig,
   auth: authConfig,
   throttle: throttleConfig,
@@ -52,6 +54,7 @@ export interface AllConfig {
   immudb: ImmudbConfig;
   redis: RedisConfig;
   kafka: KafkaConfig;
+  outbox: OutboxConfig;
   grpc: GrpcConfig;
   auth: AuthConfig;
   throttle: ThrottleConfig;

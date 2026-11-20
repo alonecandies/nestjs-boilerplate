@@ -348,7 +348,12 @@ are sanitised before they reach the client.
 - Missing, forged or stale (> 300 s, the code constant `STRIPE_WEBHOOK_TOLERANCE_SEC` in `domains/billing/src/infrastructure/stripe/stripe.constants.ts`) signatures are a 422
   `INVALID_WEBHOOK_SIGNATURE` before any I/O.
 - Exactly-once processing: `INSERT INTO billing.stripe_events … ON CONFLICT DO NOTHING` inside the same
-  transaction as the payment update; duplicates answer `duplicate: true`.
+  transaction as the payment update; duplicates answer `duplicate: true`. The event's outbox rows
+  (`billing.payment-succeeded.v1`, and `billing.ledger-posting.v1` for a money event while
+  `LEDGER_ENABLED=true`) are inserted in that same transaction, so a rolled-back delivery announces
+  and posts nothing, and Stripe's retry runs it again. The owner (tenant and user) of a money event
+  comes only from the signed object's metadata (or its PaymentIntent's); an event with no tenant is
+  recorded for the platform and touches no payment.
 - `@Public()` and `@SkipRateLimit()` (it skips every throttler; Stripe retries any non-2xx).
 - Checkout redirect URLs come only from `STRIPE_SUCCESS_URL`/`STRIPE_CANCEL_URL`, never from the
   REST client (no open redirect). Client `Idempotency-Key`s are mapped per user, never forwarded to
@@ -541,29 +546,79 @@ it); it never falls back to `DATABASE_URL`.
   counted in `db_system_calls_total{method,outcome}`.
 - **Grants.** `app_system` holds per-table grants for these methods and nothing else (identity: `SELECT` on `users`,
   `tenants`, `memberships` and `invitations`, `SELECT, DELETE` on `sessions`; billing: `SELECT, INSERT, DELETE` on
-  `stripe_events` only).
+  `stripe_events`, `SELECT` on `payments` for reconciliation R3, the outbox's `SELECT, INSERT, UPDATE, DELETE`,
+  `SELECT, INSERT` on the three tenant ledger tables and `SELECT, INSERT, UPDATE` on the two local ones).
 - **Not a pool method:** `staff:grant` connects as `app_owner` on `DATABASE_MIGRATION_URL`.
 
-The pinned lists (12 methods when B3 shipped; program spec section 9 numbers the first group, the second is the B3
-ruling below):
+The pinned lists (12 methods when B3 shipped, 22 with the ledger's ten, 29 with the outbox's seven; program spec
+section 9 numbers the first group, the second is the B3 ruling below). The table lists the methods each domain defines
+itself; the shared `outbox.*` methods are in
+[System-method lists after this plan](#system-method-lists-after-this-plan):
 
-| Method                                 | Scope    | Used by (reason)                                                                            |
-| -------------------------------------- | -------- | ------------------------------------------------------------------------------------------- |
-| `users.findCredentialsByEmail`         | pre-auth | login (spec 1): the credentials row by email                                                |
-| `users.existsByEmail`                  | pre-auth | register pre-check (spec 2); the unique constraint still guards races                       |
-| `invitations.findByTokenHash`          | pre-auth | accept invitation (spec 3): a multi-shard read, one index probe per shard                   |
-| `sessions.deleteExpired`               | system   | the hourly purge, `identity.purge-expired-sessions` (spec 4): multi-shard `DELETE` slices   |
-| `stripeEvents.deleteProcessedBefore`   | system   | the hourly purge, `billing.purge-stripe-events` (spec 5)                                    |
-| `stripeEvents.markProcessedAsPlatform` | system   | platform webhooks without a user, `billing.platform-webhook` (spec 8, `stripe_events` half) |
-| `users.findByIdInTenant`               | system   | `GET /v1/users/:id` and scoped `UsersPort` reads, `identity.user-directory`                 |
-| `users.listInTenant`                   | system   | `ListUsers`, `identity.user-directory`                                                      |
-| `users.findByIdsInTenant`              | system   | `GetUsersByIds` (the GraphQL users DataLoader, `Payment.user`), `identity.user-directory`   |
-| `memberships.findMember`               | system   | the member and profile after a role change, `identity.member-directory`                     |
-| `memberships.listMembers`              | system   | `ListMembers` and GraphQL `tenantMembers`, `identity.member-directory`                      |
-| `memberships.listForUser`              | system   | `ListMyTenants`, `identity.my-tenants`: every membership of the caller, across tenants      |
+| Method                                        | Scope    | Used by (reason)                                                                                    |
+| --------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------- |
+| `users.findCredentialsByEmail`                | pre-auth | login (spec 1): the credentials row by email                                                        |
+| `users.existsByEmail`                         | pre-auth | register pre-check (spec 2); the unique constraint still guards races                               |
+| `invitations.findByTokenHash`                 | pre-auth | accept invitation (spec 3): a multi-shard read, one index probe per shard                           |
+| `sessions.deleteExpired`                      | system   | the hourly purge, `identity.purge-expired-sessions` (spec 4): multi-shard `DELETE` slices           |
+| `stripeEvents.deleteProcessedBefore`          | system   | the hourly purge, `billing.purge-stripe-events` (spec 5)                                            |
+| `stripeEvents.markProcessedAsPlatform`        | system   | platform webhooks without a user, `billing.platform-webhook` (spec 8, `stripe_events` half)         |
+| `users.findByIdInTenant`                      | system   | `GET /v1/users/:id` and scoped `UsersPort` reads, `identity.user-directory`                         |
+| `users.listInTenant`                          | system   | `ListUsers`, `identity.user-directory`                                                              |
+| `users.findByIdsInTenant`                     | system   | `GetUsersByIds` (the GraphQL users DataLoader, `Payment.user`), `identity.user-directory`           |
+| `memberships.findMember`                      | system   | the member and profile after a role change, `identity.member-directory`                             |
+| `memberships.listMembers`                     | system   | `ListMembers` and GraphQL `tenantMembers`, `identity.member-directory`                              |
+| `memberships.listForUser`                     | system   | `ListMyTenants`, `identity.my-tenants`: every membership of the caller, across tenants              |
+| `ledgerReconciliation.listSucceededPayments`  | system   | reconciliation R3 (spec 9): paid payments of every tenant in a window, keyset by `(tenant_id, id)`  |
+| `ledgerReconciliation.listEntryRefs`          | system   | reconciliation (spec 9): ledger entry refs of every tenant in a window, keyset                      |
+| `ledgerReconciliation.findPaymentsByIds`      | system   | reconciliation R3 and R4 (spec 9): payments by `(tenant_id, id)` key, any tenant, at most 1000 keys |
+| `ledgerReconciliation.appendDiscrepancies`    | system   | reconciliation (spec 10): findings under their tenants, deterministic ids, append-only              |
+| `ledgerReconciliation.enqueueMissingPostings` | system   | reconciliation R4 (spec 10): re-enqueued ledger postings, outbox rows of any tenant                 |
+| `ledgerEntryRefs.recordAsSystem`              | system   | the ledger-posting consumer in `SystemContext` (spec 10): refs of platform or user-less postings    |
+| `ledgerAccounts.recordPlatformAccounts`       | system   | ledger postings (outbox plan delta 4): `PLATFORM_TENANT_ID` account rows only                       |
+| `ledgerTrustedState.read`                     | system   | reconciliation R5 (spec 11): the stored trusted immudb state                                        |
+| `ledgerTrustedState.advance`                  | system   | reconciliation R5 (spec 11): compare-and-set after the dual proof                                   |
+| `ledgerRuns.start`                            | system   | the reconciliation cron (spec 11): a run starts                                                     |
+| `ledgerRuns.finish`                           | system   | the reconciliation cron (spec 11): a run finishes, once                                             |
 
-Later phases add their own methods (the outbox relay, the ledger reconciliation) to the same pinned lists, with
-their per-table `app_system` grants and this table.
+Later phases add their own methods to the same pinned lists, with their per-table `app_system` grants and this
+table.
+
+### System-method lists after this plan
+
+Identity pins 13 methods and billing 16 (29 names in all, 4 of them shared). The four `outbox.*` methods come from
+`@platform/outbox` (`OUTBOX_SYSTEM_METHODS`); each domain with an outbox lists the ones its relay uses. All are `system`
+scope: the relay runs in `SystemContext.run('outbox.relay', …)`, the reconciliation in
+`SystemContext.run('billing.reconcile-ledger', …)`.
+
+| Domain   | Pinned list after this plan                                                                                                                                                          |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| identity | B3's ten (`users.*`, `invitations.findByTokenHash`, `sessions.deleteExpired`, `memberships.*`) plus `outbox.pollUnpublished`, `outbox.markPublished`, `outbox.deletePublishedBefore` |
+| billing  | B3's two (`stripeEvents.deleteProcessedBefore`, `stripeEvents.markProcessedAsPlatform`) plus the four `outbox.*` and the ten `ledger*` names of the table above                      |
+
+| Method                         | Scope  | What it does                                                                                                                |
+| ------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------- |
+| `outbox.pollUnpublished`       | system | the relay's multi-shard read of the oldest unpublished rows, no row lock, plus the backlog statistics                       |
+| `outbox.markPublished`         | system | stamps the rows the broker acknowledged: router statements, each with `tenant_id = $n`                                      |
+| `outbox.insertAsPlatform`      | system | billing only: rows for `PLATFORM_TENANT_ID` (payout postings, user-less webhooks), the only door for them; idempotent by id |
+| `outbox.deletePublishedBefore` | system | the relay's retention purge (`OUTBOX_RETENTION_HOURS`) of published rows, on every shard                                    |
+
+What keeps the outbox and the ledger inside the tenant rule:
+
+- **The runtime role cannot read `outbox`**: it holds `INSERT` only, under the policy `tenant_id = app.tenant_id()`, and an
+  enqueue is a plain `INSERT` without `RETURNING` in the caller's open transaction. Rows of another tenant, and of the
+  platform tenant, are refused (`OUTBOX_TENANT_MISMATCH`, `OUTBOX_PLATFORM_TENANT`, and the policy as the backstop).
+- **The relay publishes what was validated when it was stored**: `publishStored` re-checks the generic envelope schema and
+  `type === topic`, rebuilds the two headers from the envelope and reads nothing from CLS, so a row cannot be rewritten
+  into another tenant's event at publish time.
+- **The ledger consumer's principal comes from the envelope**: `LedgerPostingConsumer` rejects an envelope whose tenant or
+  actor differs from the payload's, then runs as `{ userId, tenantId, roles: [] }`; only the platform tenant and user-less
+  postings run in `SystemContext`. `LedgerService` refuses a tenant that is not the principal's and never lets a principal
+  touch `PLATFORM_TENANT_ID`.
+- **The ledger is append-only**: reconciliation appends findings and never corrects an entry. The runtime role reads the
+  ledger tables only when elevated, which the consumer's `roles: []` principal never is.
+- **No PII** in immudb, in the discrepancy JSON, in the logs of these paths or in any metric label (amounts are minor
+  units, ids are uuids, labels are `outbox`, `topic`, `outcome`, `kind`).
 
 ### Trust model
 
@@ -699,6 +754,33 @@ notifications domain and the real-Citus journeys of B3.
 | internal error messages and stack traces hidden (problem+json, GraphQL, gRPC, `/health/ready`)                                                                                                                                                                                            | `exposeInternalErrors: !isProduction`                                                                               |
 | paired credentials (SMTP, Cassandra, Kafka SASL) must be set together; Stripe key prefixes checked                                                                                                                                                                                        | `mail`, `cassandra`, `kafka`, `stripe` schemas                                                                      |
 
+### immudb state signing key
+
+immudb signs the state it returns (`--signingKey`, an ECDSA P-256 private key). Reconciliation R5 pins the matching
+public key (`IMMUDB_SERVER_SIGNING_PUBLIC_KEY` or `_FILE`) and checks the signature of every state it advances the
+trusted state to, so a server that is not the one holding the key is refused (an unsigned server too). Production
+refuses an enabled ledger without `LEDGER_VERIFY=true` and a pinned key (`LEDGER_ALLOW_UNVERIFIED=true` opts out).
+
+- **Generating.** Anywhere offline, never in the repository:
+  `openssl ecparam -name prime256v1 -genkey -noout -out signing.key` (SEC1 `EC PRIVATE KEY`, which immudb parses),
+  then `openssl ec -in signing.key -pubout -out signing.pub.pem`. The local compose stack generates its own
+  development pair in the `immudb-signing` volume; its public file carries a `compose-local` marker line and the
+  `immudb` config namespace refuses it in production (unless `ALLOW_KNOWN_LOCAL_SECRETS=true`, set by compose only).
+- **Storing.** The private key goes to the secret store and is mounted into the immudb host only (file mode 0400
+  for the immudb user); no application ever sees it. The applications get the public key only, as the base64 PEM
+  (`IMMUDB_SERVER_SIGNING_PUBLIC_KEY`) or a mounted file (`IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE`).
+- **Rotating.** Rotation changes who may sign future states; it cannot re-sign the past. Plan it as: (1) stop the
+  reconcile cron (or let one run finish), (2) restart immudb with the new `--signingKey`, (3) roll the new public
+  key out to every app, (4) re-run R5. Until the apps pin the new key, R5 refuses the new server's states (a
+  signature failure is a `verification_failed` finding and the trusted state does not advance); the old key keeps
+  verifying nothing new. The trusted state in `billing.ledger_trusted_state` (tx id and hash) stays valid across a
+  rotation: it is a consistency anchor of the history, independent of the key, and the next advance is proven by
+  the dual proof from it to the new state. Do not clear that row to "fix" a rotation: that turns the next run
+  into a trust-on-first-use of whatever immudb then serves.
+- **Losing or replacing the server.** A fresh immudb (empty volume, any key) fails the dual proof against the stored
+  trusted state: R5 reports `verification_failed` and does not advance. That is the intended alarm; restore the
+  ledger volume rather than resetting the trusted state.
+
 ### Log redaction
 
 pino redacts these paths to `[REDACTED]` (`LOG_REDACT_PATHS`,
@@ -746,6 +828,8 @@ Prometheus scrape the pods directly. A separate metrics listener is a [known gap
       password or ACL user, `KAFKA_SSL` + SASL, `CASSANDRA_SSL` with `CASSANDRA_TLS_CA_PATH` and
       `CASSANDRA_REPLICATION_DATACENTERS`, SMTP with STARTTLS (`SMTP_REQUIRE_TLS`); S3/GCS credentials
       scoped to the bucket (`GCS_KEY_FILE` must be a `service_account` key, or use workload identity).
+- [ ] immudb runs with `--signingKey` (private key in the secret store, never the compose development key), apps pin the
+      public key, `LEDGER_VERIFY=true` ([immudb state signing key](#immudb-state-signing-key)).
 - [ ] Database roles created from the production SQL in [Database roles](#database-roles), with
       secret-store passwords; on a multi-node cluster, TLS (`verify-full`) and SCRAM between nodes.
 - [ ] Every app that uses the database has `DATABASE_URL` (`app_runtime`), `DATABASE_SYSTEM_URL` (`app_system`) and,
@@ -763,8 +847,11 @@ Prometheus scrape the pods directly. A separate metrics listener is a [known gap
 ## Known gaps
 
 - `/metrics` is served on the API port; a separate metrics listener is a planned follow-up.
-- Integration events are published after commit, with no transactional outbox: a crash between
-  commit and publish loses the event (not a security issue, but an audit-trail one).
+- `notifications.notification-created.v1` is published directly (the notifications context has no Postgres
+  store to hold an outbox row): a crash between the inbox write and the publish loses the push. The events of
+  identity and billing go through the transactional outbox and are delivered at least once.
+- A row the broker always refuses blocks its outbox until an operator acts (a batch stops at the first failed
+  publish; `OutboxBacklogStuck` pages), so a poison row delays that outbox's later events, not loses them.
 - WebSocket revocation is not instant: a live socket whose token is revoked is closed by the next
   sweep, up to `WS_REVOCATION_SWEEP_INTERVAL_MS` (30 s by default) later, on both transports.
   Socket.IO messages and new graphql-ws operations are refused at once (their guards re-check the

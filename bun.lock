@@ -40,6 +40,7 @@
         "unplugin-swc": "2.0.0",
         "vite": "8.3.4",
         "vitest": "5.0.3",
+        "yaml": "2.9.1",
       },
     },
     "apps/billing-service": {
@@ -63,6 +64,7 @@
         "@platform/config": "workspace:*",
         "@platform/contracts": "workspace:*",
         "@platform/database": "workspace:*",
+        "@platform/immudb": "workspace:*",
         "@platform/observability": "workspace:*",
         "@platform/redis": "workspace:*",
         "@platform/transport": "workspace:*",
@@ -76,6 +78,7 @@
       },
       "devDependencies": {
         "@nestjs/testing": "catalog:",
+        "@platform/outbox": "workspace:*",
         "@platform/testing": "workspace:*",
         "drizzle-orm": "catalog:",
       },
@@ -118,6 +121,8 @@
       "devDependencies": {
         "@nestjs/jwt": "catalog:",
         "@nestjs/testing": "catalog:",
+        "@platform/immudb": "workspace:*",
+        "@platform/outbox": "workspace:*",
         "@platform/testing": "workspace:*",
         "cache-manager": "catalog:",
         "graphql": "catalog:",
@@ -159,6 +164,7 @@
       "devDependencies": {
         "@nestjs/bullmq": "catalog:",
         "@nestjs/testing": "catalog:",
+        "@platform/outbox": "workspace:*",
         "@platform/testing": "workspace:*",
         "drizzle-orm": "catalog:",
       },
@@ -191,6 +197,7 @@
         "@platform/config": "workspace:*",
         "@platform/database": "workspace:*",
         "@platform/graphql": "workspace:*",
+        "@platform/immudb": "workspace:*",
         "@platform/mailer": "workspace:*",
         "@platform/observability": "workspace:*",
         "@platform/redis": "workspace:*",
@@ -205,13 +212,17 @@
         "zod": "catalog:",
       },
       "devDependencies": {
+        "@domain/billing-contracts": "workspace:*",
         "@domain/identity-contracts": "workspace:*",
+        "@nestjs/microservices": "catalog:",
         "@nestjs/testing": "catalog:",
+        "@platform/outbox": "workspace:*",
         "@platform/testing": "workspace:*",
         "cache-manager": "catalog:",
         "drizzle-orm": "catalog:",
         "graphql": "catalog:",
         "graphql-subscriptions": "catalog:",
+        "rxjs": "catalog:",
       },
     },
     "apps/notifications-service": {
@@ -277,6 +288,7 @@
         "@platform/graphql": "workspace:*",
         "@platform/immudb": "workspace:*",
         "@platform/observability": "workspace:*",
+        "@platform/outbox": "workspace:*",
         "@platform/redis": "workspace:*",
         "@platform/transport": "workspace:*",
         "class-validator": "catalog:",
@@ -367,6 +379,7 @@
         "@platform/database": "workspace:*",
         "@platform/graphql": "workspace:*",
         "@platform/mailer": "workspace:*",
+        "@platform/outbox": "workspace:*",
         "@platform/redis": "workspace:*",
         "@platform/transport": "workspace:*",
         "class-transformer": "catalog:",
@@ -717,6 +730,33 @@
         "@types/lodash-es": "catalog:",
         "fastify": "catalog:",
         "pino-pretty": "catalog:",
+      },
+    },
+    "libs/outbox": {
+      "name": "@platform/outbox",
+      "version": "0.0.0",
+      "dependencies": {
+        "@nestjs-cls/transactional": "catalog:",
+        "@nestjs/common": "catalog:",
+        "@nestjs/config": "catalog:",
+        "@platform/common": "workspace:*",
+        "@platform/config": "workspace:*",
+        "@platform/contracts": "workspace:*",
+        "@platform/database": "workspace:*",
+        "@platform/observability": "workspace:*",
+        "@platform/redis": "workspace:*",
+        "@platform/transport": "workspace:*",
+        "drizzle-orm": "catalog:",
+        "nestjs-cls": "catalog:",
+        "zod": "catalog:",
+      },
+      "devDependencies": {
+        "@nestjs/core": "catalog:",
+        "@platform/testing": "workspace:*",
+        "@types/lodash-es": "catalog:",
+        "lodash-es": "catalog:",
+        "postgres": "catalog:",
+        "testcontainers": "catalog:",
       },
     },
     "libs/redis": {
@@ -1879,6 +1919,8 @@
     "@platform/mailer": ["@platform/mailer@workspace:libs/mailer"],
 
     "@platform/observability": ["@platform/observability@workspace:libs/observability"],
+
+    "@platform/outbox": ["@platform/outbox@workspace:libs/outbox"],
 
     "@platform/redis": ["@platform/redis@workspace:libs/redis"],
 

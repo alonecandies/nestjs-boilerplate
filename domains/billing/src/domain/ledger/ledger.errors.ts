@@ -16,11 +16,15 @@ export class LedgerUnbalancedException extends BusinessRuleViolationException {
 
 /** A ledger row did not verify against the trusted state (tamper evidence; page someone). */
 export class LedgerVerificationFailedException extends ExternalServiceException {
+  /** Why it failed (no PII: tx ids, hashes, the proof that did not hold); R5 stores it. */
+  readonly reason: string;
+
   constructor(entryId: string, reason: string, cause?: unknown) {
     super(`Ledger entry ${entryId} failed verification: ${reason}`, {
       code: BillingErrorCode.LEDGER_VERIFICATION_FAILED,
       cause,
       details: { entryId },
     });
+    this.reason = reason;
   }
 }

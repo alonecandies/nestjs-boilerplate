@@ -42,7 +42,7 @@ describe('docs/SECURITY.md: the system pool', () => {
   const methods = ['identity', 'billing'].flatMap((domain) =>
     quoted(
       read(`domains/${domain}/src/infrastructure/persistence/${domain}.system-methods.ts`),
-      /defineSystemMethod\('([A-Za-z.]+)', '(?:pre-auth|system)'\)/g,
+      /defineSystemMethod\(\s*'([A-Za-z.]+)',\s*'(?:pre-auth|system)',?\s*\)/g,
     ),
   );
   const scopes = new Map(
@@ -50,7 +50,7 @@ describe('docs/SECURITY.md: the system pool', () => {
       [
         ...read(
           `domains/${domain}/src/infrastructure/persistence/${domain}.system-methods.ts`,
-        ).matchAll(/defineSystemMethod\('([A-Za-z.]+)', '(pre-auth|system)'\)/g),
+        ).matchAll(/defineSystemMethod\(\s*'([A-Za-z.]+)',\s*'(pre-auth|system)',?\s*\)/g),
       ].map((match) => [match[1] ?? '', match[2] ?? ''] as const),
     ),
   );

@@ -9,6 +9,7 @@ import { PasswordHasher } from '../../../infrastructure/security/password-hasher
 import { toUserRecord } from '../../mappers/user.mapper.js';
 import { UsersRepository } from '../../persistence/users.repository.js';
 import { UsersSystemRepository } from '../../persistence/users.system-repository.js';
+import { IdentityIntegrationEvents } from '../../services/identity-integration-events.service.js';
 import { MembershipActivity } from '../../services/membership-activity.elevated.js';
 import { PersonalWorkspaces } from '../../services/personal-workspaces.service.js';
 import { SessionTokensService } from '../../services/session-tokens.service.js';
@@ -23,7 +24,8 @@ import { LoginCommand } from './login.command.js';
  * 2. as `{ user, null }`: the best-effort re-hash (its own unit of work), then pick the membership;
  * 3. as `{ user, tenant, roles }`: `touch` (`membership-activity`) and the session insert, in one
  *    unit of work; an account without a membership instead gets, as
- *    `{ user, newTenant, ['owner'] }`, its workspace (`tenant-bootstrap`) and the session.
+ *    `{ user, newTenant, ['owner'] }`, its workspace (`tenant-bootstrap`), the
+ *    `identity.membership-created.v1` outbox row and the session.
  */
 @CommandHandler(LoginCommand)
 export class LoginHandler implements ICommandHandler<LoginCommand> {
@@ -39,6 +41,7 @@ export class LoginHandler implements ICommandHandler<LoginCommand> {
     private readonly bootstrap: TenantBootstrap,
     private readonly activity: MembershipActivity,
     private readonly events: EventBus,
+    private readonly integrationEvents: IdentityIntegrationEvents,
   ) {}
 
   async execute(command: LoginCommand): Promise<AuthTokens> {
@@ -70,21 +73,24 @@ export class LoginHandler implements ICommandHandler<LoginCommand> {
     if (membership === null) {
       // A pre-tenancy account: its workspace id is generated before the unit of work opens.
       const workspace = this.workspaces.plan(user);
+      const created = new MembershipCreatedEvent({
+        tenantId: workspace.id,
+        userId: user.id,
+        email: user.email,
+        displayName: user.displayName,
+        actorId: user.id,
+        occurredAt: now,
+      });
+      // The workspace, its `identity.membership-created.v1` outbox row and the session: one unit.
       const tokens = await this.sessionTokens.open(
         { user, tenantId: workspace.id, roles: ['owner'], client: command.client },
-        () => this.bootstrap.create(workspace, user.id, now),
+        async () => {
+          await this.bootstrap.create(workspace, user.id, now);
+          await this.integrationEvents.membershipCreated(created);
+        },
       );
-      // The workspace this login created is published once its unit of work committed.
-      this.events.publish(
-        new MembershipCreatedEvent({
-          tenantId: workspace.id,
-          userId: user.id,
-          email: user.email,
-          displayName: user.displayName,
-          actorId: user.id,
-          occurredAt: now,
-        }),
-      );
+      // Committed: in-process handlers see the workspace this login created.
+      this.events.publish(created);
       return tokens;
     }
     return this.sessionTokens.open(

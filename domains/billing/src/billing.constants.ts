@@ -38,6 +38,13 @@ export const BillingErrorCode = {
   LEDGER_ENTRY_INVALID: 'LEDGER_ENTRY_INVALID',
   /** A ledger row failed proof verification against the trusted state. */
   LEDGER_VERIFICATION_FAILED: 'LEDGER_VERIFICATION_FAILED',
+  /**
+   * 403: a ledger post or read names a tenant other than the principal's (or the platform tenant
+   * outside `SystemContext`), or runs with neither a principal nor `SystemContext`.
+   */
+  LEDGER_TENANT_MISMATCH: 'LEDGER_TENANT_MISMATCH',
+  /** 503: the ledger is not enabled in this process (`LEDGER_ENABLED=false`). */
+  LEDGER_DISABLED: 'LEDGER_DISABLED',
 } as const;
 export type BillingErrorCode = (typeof BillingErrorCode)[keyof typeof BillingErrorCode];
 
@@ -67,6 +74,18 @@ export const PURGE_STRIPE_EVENTS_LOCK = 'billing:purge-stripe-events';
 export const PURGE_STRIPE_EVENTS_LOCK_TTL_MS = 60_000;
 
 /**
+ * Hourly ledger reconciliation (R1-R3, outbox plan Task 15), on one replica only (`@WithLock`; the
+ * lock is auto-extended while the run lasts).
+ */
+export const RECONCILE_LEDGER_LOCK = 'billing:reconcile-ledger';
+export const RECONCILE_LEDGER_LOCK_TTL_MS = 120_000;
+/**
+ * The reconciliation window ends this long before now (plan delta 8): postings of the last
+ * minutes may still be on their way through the outbox and the consumer.
+ */
+export const LEDGER_RECONCILE_GRACE_MS = 900_000;
+
+/**
  * Prometheus counter: Checkout Sessions Stripe reported paid without any usable currency (none in
  * the event, none stored). The payment is left `pending` and NOT announced (no receipt): alert on
  * any increase and reconcile it against the Stripe dashboard.
@@ -88,6 +107,12 @@ export const PAID_WITHOUT_AMOUNT_METRIC = 'billing_checkout_paid_without_amount_
 export const AMOUNT_MISMATCH_METRIC = 'billing_checkout_amount_mismatch_total';
 /** Prometheus counter: webhook events whose `api_version` differs from `STRIPE_API_VERSION`. */
 export const API_VERSION_MISMATCH_METRIC = 'billing_stripe_api_version_mismatch_total';
+/**
+ * Prometheus counter: checkout requests that sent no `Idempotency-Key` (S-4b). The header stays
+ * optional; this shows how many clients skip it (each such request makes a new payment).
+ */
+export const CHECKOUT_WITHOUT_IDEMPOTENCY_KEY_METRIC =
+  'billing_checkout_without_idempotency_key_total';
 
 /** gRPC circuit-breaker / operation names (logs, metrics). */
 export const BILLING_GRPC_UPSTREAM = 'billing';

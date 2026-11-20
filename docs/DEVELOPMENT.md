@@ -210,7 +210,7 @@ domains/orders/
     ├── index.ts                    # the public API (barrel)
     ├── api/index.ts                # the ./api entry: presentation, ports, adapters (what the gateway imports)
     ├── orders.constants.ts         # error codes, tokens
-    ├── orders-core.module.ts       # handlers, relays, repositories
+    ├── orders-core.module.ts       # handlers, repositories, OutboxModule.forFeature (when the context emits events)
     ├── orders-api.module.ts        # forLocal() / forRemote()
     ├── domain/                     # aggregates, domain events, errors (DomainException subclasses)
     ├── application/                # commands/, queries/ (+ handlers), ports/ (abstract classes), repositories/ (abstract)
@@ -241,13 +241,14 @@ In both `package.json` files, keep the `exports` block exactly as in billing (th
 - Commands and queries extend `Command<T>` / `Query<T>` from `@nestjs/cqrs`. Handlers live next to them.
 - Presentation depends **only on ports** (`abstract class OrdersPort`). Ports return the contracts package's types, so a local adapter and a later gRPC adapter return identical shapes.
 - Errors are subclasses of the concrete `DomainException`s in `@platform/common` (see `domains/billing/src/domain/billing.errors.ts`).
-- Integration events are published after the transaction commits, from a relay (see `domains/billing/src/application/relays/payment-succeeded.relay.ts`). There is no transactional outbox yet (a known follow-up).
+- Integration events of a Postgres context go through the transactional outbox (`@platform/outbox`; the pattern is in step 5): the handler calls `this.outbox.enqueue(ORDER_PLACED_EVENT, payload, options)` inside the unit of work that changes the state (see `domains/billing/src/application/commands/handle-stripe-webhook/handle-stripe-webhook.handler.ts`), and the context's relay publishes the row afterwards. Never call `KafkaProducer.publish` from a request path of such a context.
 
 **5. Persistence (Postgres).** The context owns a Postgres schema and a migration history:
 
 - declare the tables in `src/infrastructure/persistence/orders.schema.ts` on an exported `ordersPgSchema = pgSchema('orders')`, and export an `ordersSchema` object;
 - `domains/orders/drizzle.config.ts` (step 1) reads that schema file, writes to `src/infrastructure/persistence/migrations` and records applied files in `orders.__drizzle_migrations` (`schemaFilter: ['orders']`, `migrations: { schema: 'orders', table: '__drizzle_migrations' }`). The separate table matters: drizzle applies only the files newer than the **last** row of its table, so a shared table would let one domain skip another's files;
 - export `ordersMigrations`, a `DatabaseMigrationSet`, from `src/infrastructure/persistence/orders.migrations.ts` (copy `billing.migrations.ts` and its spec);
+- **an outbox, when the context emits integration events** (see `domains/billing`): hand-declare `orders.outbox` exactly as [libs/outbox/README.md](../libs/outbox/README.md#declaring-an-outbox-table) shows (and call `describeOutboxTable(outbox, 'orders')` in the schema spec), subclass `OutboxWriter` once (`OrdersOutbox`) and `OutboxSystemRepository` once, export an `OutboxFeature` (`name` = the schema), import `OutboxModule.forFeature({ feature, writer, systemRepository })` in the core module, and add the three `outbox.*` system methods (`pollUnpublished`, `markPublished`, `deletePublishedBefore`) to the context's pinned list. The migration is drizzle-generated, then hand-edited into the order CREATE → `app.distribute_by_tenant` → indexes → ENABLE and FORCE RLS → grants → policy. Tests bind `InMemoryOutbox` from `@platform/outbox/testing` as the writer and the system repository and tick the relay by hand.
 - start the history with `bun run --filter @domain/orders db:generate --name init`, change the first statement of the new `0000_init.sql` to `CREATE SCHEMA IF NOT EXISTS "orders";`, and commit the SQL plus the `meta/` snapshot. Later changes: `bun run db:generate` (it runs every domain's config);
 - in each app that owns the data, merge the schema (`const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema, ...ordersSchema }` in `apps/monolith/src/app.module.ts`) and add `ordersMigrations` to the app's `src/database.migrations.ts`, then extend that app's `src/database.migrations.spec.ts` (`apps/monolith/src/database.migrations.spec.ts` pins the ordered list of schemas). `DatabaseModule.forRootAsync({ schema, migrations: DATABASE_MIGRATIONS })` and `src/migrate.ts` both read that list: the platform set always runs first, then the sets in array order, under one advisory lock. See [migrations](#database-migrations-postgres--drizzle).
 
@@ -370,7 +371,7 @@ Add root scripts by copying `dev:billing` (`"dev:orders": "bun run setup:env && 
 Known limits that apply to extracted services:
 
 - **Image size.** Today the gateway imports whole domain packages, and the Dockerfile builds every domain and lib (`bun run --filter "./libs/*" --filter "./domains/*" …`). Per-domain `@domain/<x>/api` subpath exports, which would let the gateway image drop the core and persistence code, are a known follow-up.
-- **Events.** Integration events are publish-after-commit. A crash between commit and publish loses the event. A transactional outbox is a known follow-up.
+- **Events.** Integration events of a Postgres context are rows of `<schema>.outbox`, published at least once by one leader relay per outbox (see step 5 and [libs/outbox/README.md](../libs/outbox/README.md)). A context without a Postgres store (notifications) does not use an outbox and publishes directly.
 
 ## Conventions and DI pitfalls
 
