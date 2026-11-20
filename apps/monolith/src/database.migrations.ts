@@ -1,3 +1,4 @@
+import { aiMigrations } from '@domain/ai';
 import { billingMigrations } from '@domain/billing';
 import { identityMigrations } from '@domain/identity';
 import type { DatabaseMigrationSet } from '@platform/database';
@@ -9,4 +10,5 @@ import type { DatabaseMigrationSet } from '@platform/database';
 export const DATABASE_MIGRATIONS: readonly DatabaseMigrationSet[] = [
   identityMigrations,
   billingMigrations,
+  aiMigrations,
 ];

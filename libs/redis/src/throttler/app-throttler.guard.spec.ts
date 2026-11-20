@@ -43,6 +43,9 @@ class Controller {
   @RateLimit('files.search') search(): void {
     // route handler stub
   }
+  @RateLimit('chat.send') send(): void {
+    // route handler stub
+  }
   @SkipRateLimit() webhook(): void {
     // route handler stub
   }
@@ -98,6 +101,13 @@ async function createGuard(options: Partial<Exclude<ThrottlerModuleOptions, unkn
   registry.register([
     { name: 'files.upload', key: 'user', limit: 3, ttlMs: 10_000 },
     { name: 'files.search', key: 'ip', limit: 9, ttlMs: 5_000, blockMs: 0 },
+    {
+      name: 'chat.send',
+      key: 'user',
+      limit: 2,
+      ttlMs: 60_000,
+      tenant: { limit: 5, ttlMs: 30_000 },
+    },
     {
       name: 'id.credentials',
       key: 'credentials',
@@ -190,6 +200,73 @@ describe('AppThrottlerGuard', () => {
       [rateLimitKey('route', 'files.upload', 'user:u-1'), 10_000, 3, 10_000, 'route'],
       [rateLimitKey('route', 'files.upload', 'user:u-1'), 10_000, 3, 10_000, 'route'],
     ]);
+  });
+
+  it('charges a policy tenant budget shared by every member of the tenant, after the user bucket', async () => {
+    const { guard, increment } = await createGuard();
+    for (const user of [
+      { id: 'u-1', tenantId: 't-1' },
+      { id: 'u-2', tenantId: 't-1' },
+      { id: 'u-3', tenantId: 't-2' },
+    ]) {
+      await guard.canActivate(http(Controller.prototype.send, { headers: {}, user }));
+    }
+    const globalTenants = new Set(
+      ['t-1', 't-2'].map((id) => rateLimitKey('tenant', 'global', `tenant:${id}`)),
+    );
+    const scoped = increment.mock.calls.filter(
+      ([key, , , , name]) => name !== THROTTLER.USER && !globalTenants.has(key),
+    );
+    expect(scoped).toEqual([
+      [rateLimitKey('route', 'chat.send', 'user:u-1'), 60_000, 2, 60_000, 'route'],
+      [rateLimitKey('tenant', 'chat.send', 'tenant:t-1'), 30_000, 5, 30_000, 'tenant'],
+      [rateLimitKey('route', 'chat.send', 'user:u-2'), 60_000, 2, 60_000, 'route'],
+      [rateLimitKey('tenant', 'chat.send', 'tenant:t-1'), 30_000, 5, 30_000, 'tenant'],
+      [rateLimitKey('route', 'chat.send', 'user:u-3'), 60_000, 2, 60_000, 'route'],
+      [rateLimitKey('tenant', 'chat.send', 'tenant:t-2'), 30_000, 5, 30_000, 'tenant'],
+    ]);
+  });
+
+  it('refuses on the policy tenant budget with 429 and advertises it in the headers', async () => {
+    const { guard, increment } = await createGuard();
+    const tenantKey = rateLimitKey('tenant', 'chat.send', 'tenant:t-1');
+    increment.mockImplementation(async (key) =>
+      key === tenantKey
+        ? record({ isBlocked: true, totalHits: 6, timeToBlockExpire: 12 })
+        : record(),
+    );
+    const res = { header: vi.fn() };
+    await expect(
+      guard.canActivate(
+        context(
+          'http',
+          { headers: {}, user: { id: 'u-1', tenantId: 't-1' } },
+          Controller.prototype.send,
+          res,
+        ),
+      ),
+    ).rejects.toBeInstanceOf(ThrottlerException);
+    expect(res.header).toHaveBeenCalledWith('Retry-After', 12);
+    expect(String(res.header.mock.calls.at(-2)?.[1] ?? '')).toContain('"tenant:chat.send";r=0');
+  });
+
+  it('charges no policy tenant budget for anonymous callers or a user-blocked request', async () => {
+    const { guard, increment } = await createGuard();
+    await guard.canActivate(http(Controller.prototype.send, { headers: {}, ip: '1.2.3.4' }));
+    expect(increment.mock.calls.map(([, , , , n]) => n)).toEqual(['user', 'route']);
+    increment.mockClear();
+    const userKey = rateLimitKey('route', 'chat.send', 'user:u-9');
+    increment.mockImplementation(async (key) =>
+      key === userKey ? record({ isBlocked: true, totalHits: 3, timeToBlockExpire: 5 }) : record(),
+    );
+    await expect(
+      guard.canActivate(
+        http(Controller.prototype.send, { headers: {}, user: { id: 'u-9', tenantId: 't-9' } }),
+      ),
+    ).rejects.toBeInstanceOf(ThrottlerException);
+    expect(increment.mock.calls.map(([key]) => key)).not.toContain(
+      rateLimitKey('tenant', 'chat.send', 'tenant:t-9'),
+    );
   });
 
   it('keys an "ip" policy by IP even for authenticated users and honours blockMs', async () => {

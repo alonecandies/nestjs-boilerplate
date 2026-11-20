@@ -1,3 +1,5 @@
+import { ConversationsRepository, MessagesRepository, UsageRepository } from '@domain/ai';
+import { createInMemoryAiPersistence } from '@domain/ai/testing';
 import {
   BillingOutbox,
   BillingOutboxSystemRepository,
@@ -41,6 +43,8 @@ import { CACHE_MANAGER } from '@nestjs/cache-manager';
 import type { Type } from '@nestjs/common';
 import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
+import { AiModelProvider } from '@platform/ai';
+import { MockAiModelProvider, mockTextModel } from '@platform/ai/testing';
 import { buildFastifyOptions, configureHttpApp, setupApiDocs } from '@platform/bootstrap';
 import { CASSANDRA_CLIENT } from '@platform/cassandra';
 import { appConfig } from '@platform/config';
@@ -94,6 +98,8 @@ export type MonolithE2e = Awaited<ReturnType<typeof createMonolithE2eApp>>;
  * | `GRAPHQL_PUB_SUB`                          | in-process `PubSub`                          |
  * | `StorageService`                           | `InMemoryStorageService`                     |
  * | `ImmudbClient` (`LEDGER_ENABLED=true` only) | `options.immudb`, when given                 |
+ * | ai repositories (conversations, messages, usage) | in-memory twins (`ai.persistence`), emulating the row-local policies |
+ * | `AiModelProvider` (OpenRouter)             | `MockAiModelProvider` (`options.aiModel`, default a fixed text answer) |
  * | `LedgerPort`, `LedgerReceiptsRepository`, `LedgerSystemRepository`, the Stripe client (`options.ledger`) | `InMemoryLedger`, one `InMemoryLedgerStore` over billing's outbox, `FakeStripe` |
  *
  * The Redis Socket.IO adapter is not connected (no Redis). The Kafka consumers are connected only
@@ -132,7 +138,15 @@ export interface MonolithE2eOptions {
    * the Stripe client a `FakeStripe` (the real signature check, fake GETs). Returned as `ledger`.
    */
   ledger?: boolean;
+  /**
+   * The language model behind `AiClient` (default: `mockTextModel(E2E_AI_REPLY)`). Nothing reaches
+   * OpenRouter; the routes still answer 503 unless the spec sets `AI_ENABLED=true`.
+   */
+  aiModel?: ConstructorParameters<typeof MockAiModelProvider>[0];
 }
+
+/** What the default mock model answers. */
+export const E2E_AI_REPLY = 'Hello from the mock model.';
 
 export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
   const config = appConfig.parse();
@@ -159,6 +173,10 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
   const recipients = new InMemoryNotificationRecipientsRepository();
   const mailQueue = createFakeQueue();
   const storage = new InMemoryStorageService();
+  const ai = {
+    persistence: createInMemoryAiPersistence(),
+    models: new MockAiModelProvider(options.aiModel ?? mockTextModel(E2E_AI_REPLY)),
+  };
 
   const builder = Test.createTestingModule({ imports: [options.module ?? AppModule] })
     .overrideProvider(REDIS_CLIENT)
@@ -216,7 +234,15 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     .overrideProvider(StorageService)
     .useValue(storage)
     .overrideProvider(StripeEventsSystemRepository)
-    .useValue(new InMemoryStripeEventsSystemRepository());
+    .useValue(new InMemoryStripeEventsSystemRepository())
+    .overrideProvider(ConversationsRepository)
+    .useValue(ai.persistence.conversations)
+    .overrideProvider(MessagesRepository)
+    .useValue(ai.persistence.messages)
+    .overrideProvider(UsageRepository)
+    .useValue(ai.persistence.usage)
+    .overrideProvider(AiModelProvider)
+    .useValue(ai.models);
 
   if (options.immudb !== undefined) {
     builder.overrideProvider(ImmudbClient).useValue(options.immudb);
@@ -297,5 +323,6 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     recipients,
     mailQueue,
     storage,
+    ai,
   };
 }

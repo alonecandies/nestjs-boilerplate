@@ -3,12 +3,13 @@
  * (Drizzle, distributed by tenant on Citus, under row-local RLS), over `@platform/ai`.
  *
  * Wiring: `aiSchema` and the migration set `aiMigrations` go into
- * `DatabaseModule.forRootAsync({ schema, migrations })`; the repositories bind their ports
- * (`{ provide: ConversationsRepository, useClass: DrizzleConversationsRepository }`, …). In-memory
- * twins: `@domain/ai/testing`.
+ * `DatabaseModule.forRootAsync({ schema, migrations })`; the app imports `AiCoreModule` (handlers,
+ * repositories, `AiModule`) then `AiApiModule.forLocal()`. In-memory twins: `@domain/ai/testing`.
  */
 
-// The edge surface (also `@domain/ai/api`): the record shapes and their value lists.
+// The core (handlers, repositories, model client) for the process that owns the ai tables.
+export { AiCoreModule } from './ai-core.module.js';
+// The edge surface (also `@domain/ai/api`): the API module, port, permission, policy, records.
 export * from './api/index.js';
 // Application: the persistence ports
 export * from './application/repositories/conversations.repository.js';

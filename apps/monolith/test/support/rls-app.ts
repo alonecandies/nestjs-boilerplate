@@ -84,7 +84,7 @@ class FakeStripe {
  * Boots the REAL `AppModule` (identity, billing, notifications and files together, the production
  * HTTP wiring) on a real Citus container with the three roles of `startRlsTestPostgres()`:
  *
- * - `DatabaseModule` migrates as `app_owner` (`DATABASE_MIGRATION_URL`, both migration sets), runs
+ * - `DatabaseModule` migrates as `app_owner` (`DATABASE_MIGRATION_URL`, every migration set), runs
  *   every request as `app_runtime` (`DATABASE_URL`) and opens the system pool as `app_system`
  *   (`DATABASE_SYSTEM_URL`). The boot guard is `enforce`: the app does not start unless roles,
  *   FORCE RLS and grants are as required.

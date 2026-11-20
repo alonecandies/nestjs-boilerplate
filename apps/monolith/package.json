@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Modular monolith: every bounded context (identity, notifications, billing, files) in one process — REST + GraphQL + Socket.IO with ports bound to local CQRS adapters, plus the Kafka consumers of the integration events.",
+  "description": "Modular monolith: every bounded context (identity, notifications, billing, files, ai) in one process — REST + GraphQL + Socket.IO with ports bound to local CQRS adapters, plus the Kafka consumers of the integration events.",
   "scripts": {
     "dev": "node --watch --watch-preserve-output --env-file-if-exists=../../.env --env-file-if-exists=.env --enable-source-maps --conditions=@repo/source --import @swc-node/register/esm-register --import ./src/instrument.ts src/main.ts",
     "start:dev": "bun run dev",
@@ -19,7 +19,9 @@
     "clean": "rimraf dist coverage"
   },
   "dependencies": {
+    "@platform/ai": "workspace:*",
     "@platform/auth": "workspace:*",
+    "@domain/ai": "workspace:*",
     "@domain/billing": "workspace:*",
     "@platform/bootstrap": "workspace:*",
     "@platform/cassandra": "workspace:*",

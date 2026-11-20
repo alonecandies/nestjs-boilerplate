@@ -9,6 +9,17 @@ export interface RateLimitLockout {
   readonly durationMs: number;
 }
 
+/**
+ * A second budget of a `user` policy: one bucket per active tenant (the principal's), shared by every
+ * member, charged after the member's own bucket admitted the request. Anonymous requests skip it.
+ */
+export interface RateLimitTenantBudget {
+  readonly limit: number;
+  readonly ttlMs: number;
+  /** Block after the limit is exceeded (default `ttlMs`; `0` = reject until the window resets). */
+  readonly blockMs?: number;
+}
+
 /** A named route policy, declared by the owning domain (`RateLimitModule.forFeature`). */
 export interface RateLimitPolicy {
   /** `<domain>.<name>`, lower-case kebab parts, e.g. `orders.credentials`, `files.upload`. */
@@ -21,6 +32,8 @@ export interface RateLimitPolicy {
   /** Body / GraphQL input field holding the account identifier (default `email`). */
   readonly credentialField?: string;
   readonly lockout?: RateLimitLockout;
+  /** Also a per-tenant bucket (key `user` only), e.g. so one workspace cannot exhaust a shared upstream. */
+  readonly tenant?: RateLimitTenantBudget;
 }
 
 export const RATE_LIMIT_POLICY_NAME = /^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$/;
@@ -51,6 +64,21 @@ function assertValidPolicy(policy: RateLimitPolicy): void {
   ) {
     fail('lockout threshold and durationMs must be integers >= 1');
   }
+  if (policy.tenant !== undefined) assertValidTenantBudget(policy.key, policy.tenant, fail);
+}
+
+function assertValidTenantBudget(
+  key: RateLimitKeyKind,
+  tenant: RateLimitTenantBudget,
+  fail: (why: string) => never,
+): void {
+  if (key !== 'user') fail('tenant needs key "user"');
+  if (!(isPositiveInt(tenant.limit) && isPositiveInt(tenant.ttlMs))) {
+    fail('tenant limit and ttlMs must be integers >= 1');
+  }
+  if (tenant.blockMs !== undefined && !(Number.isInteger(tenant.blockMs) && tenant.blockMs >= 0)) {
+    fail('tenant blockMs must be an integer >= 0');
+  }
 }
 
 /** Process-wide registry of named policies (provided globally by `AppThrottlerModule`). */
@@ -64,7 +92,9 @@ export class RateLimitPolicyRegistry {
       if (this.policies.has(policy.name)) {
         throw new Error(`Rate-limit policy "${policy.name}" is registered twice`);
       }
-      this.policies.set(policy.name, Object.freeze({ ...policy }));
+      const tenant =
+        policy.tenant === undefined ? {} : { tenant: Object.freeze({ ...policy.tenant }) };
+      this.policies.set(policy.name, Object.freeze({ ...policy, ...tenant }));
     }
   }
 

@@ -1,3 +1,4 @@
+import { AiApiModule, AiCoreModule, aiSchema } from '@domain/ai';
 import {
   BILLING_LOG_REDACT_PATHS,
   BillingApiModule,
@@ -53,8 +54,8 @@ import { KafkaProducerModule } from '@platform/transport';
 import { DATABASE_MIGRATIONS } from './database.migrations.js';
 import { PaymentUserFieldResolver } from './graphql/payment-user.resolver.js';
 
-/** Both Postgres contexts live in the monolith's database (one drizzle instance, one pool). */
-const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema };
+/** The Postgres contexts live in the monolith's database (one drizzle instance, one pool). */
+const DATABASE_SCHEMA = { ...identitySchema, ...billingSchema, ...aiSchema };
 
 /**
  * The modular monolith: every bounded context in one process. Presentation (REST, GraphQL,
@@ -139,6 +140,9 @@ export function createAppModule(
       BillingCoreModule,
       BillingApiModule.forLocal(),
       FilesModule,
+      // AI chat over OpenRouter (AI_ENABLED=false by default: the chat routes answer 503).
+      AiCoreModule,
+      AiApiModule.forLocal(),
       // LEDGER_ENABLED=true only: immudb (global ImmudbClient) + the ledger-posting consumer.
       ...ledgerImports,
     ],

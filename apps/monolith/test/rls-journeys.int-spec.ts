@@ -188,7 +188,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('cross-domain RLS journeys (
       expect(role).toEqual({ current_user: 'app_runtime', bypass: false });
       const forced = await rls.admin<{ relname: string }[]>`
         select c.relname from pg_class c join pg_namespace n on n.oid = c.relnamespace
-        where n.nspname in ('identity', 'billing') and c.relkind = 'r'
+        where n.nspname in ('identity', 'billing', 'ai') and c.relkind = 'r'
           and c.relname <> '__drizzle_migrations' and not c.relforcerowsecurity`;
       expect(forced).toEqual([]);
     });

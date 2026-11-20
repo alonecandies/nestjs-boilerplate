@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "AI bounded context: per-tenant conversations, messages and a usage log (Drizzle, Citus, RLS) over @platform/ai.",
+  "description": "AI bounded context: per-tenant conversations, messages and a usage log (Drizzle, Citus, RLS) and the chat API (REST, RBAC, rate limit, idempotency) over @platform/ai.",
   "exports": {
     ".": {
       "@repo/source": "./src/index.ts",
@@ -32,19 +32,27 @@
     "db:studio": "drizzle-kit studio --port 4985"
   },
   "dependencies": {
+    "@platform/ai": "workspace:*",
+    "@platform/auth": "workspace:*",
     "@platform/common": "workspace:*",
+    "@platform/config": "workspace:*",
     "@platform/database": "workspace:*",
+    "@platform/redis": "workspace:*",
     "@nestjs/common": "catalog:",
+    "@nestjs/config": "catalog:",
+    "@nestjs/cqrs": "catalog:",
+    "@nestjs/swagger": "catalog:",
     "drizzle-orm": "catalog:",
-    "lodash-es": "catalog:"
+    "lodash-es": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
-    "@platform/config": "workspace:*",
     "@platform/testing": "workspace:*",
     "@nestjs/core": "catalog:",
     "@types/lodash-es": "catalog:",
     "drizzle-kit": "catalog:",
     "nestjs-cls": "catalog:",
-    "postgres": "catalog:"
+    "postgres": "catalog:",
+    "ai": "catalog:"
   }
 }

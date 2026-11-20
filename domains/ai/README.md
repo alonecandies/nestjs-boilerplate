@@ -4,22 +4,61 @@ The AI bounded context: per-tenant conversations, their messages and a usage log
 (Drizzle), distributed by tenant on Citus and under row-local RLS. Model calls go through
 [`@platform/ai`](../../libs/ai/README.md) (OpenRouter on the Vercel AI SDK).
 
-This package holds the persistence so far: the schema, the `0000_init` migration, the repository
-ports with their Drizzle implementations, and in-memory twins. The chat API (commands, REST,
-GraphQL, streaming, tools) and its wiring into the apps come with the AI plan's later tasks.
+This package holds the persistence (schema, `0000_init`, repositories, in-memory twins) and the
+non-streaming chat API: CQRS handlers, the REST controller, the `ai:chat` permission and the
+`ai.chat` rate-limit policy, wired into the monolith. Streaming, GraphQL, tools and the
+microservices topology come with the AI plan's later tasks.
 
 ## Entry points
 
-| Entry                | What                                                                                                                                                           |
-| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `@domain/ai`         | Everything below: the record types, the repository ports, `aiSchema`, `aiMigrations` and the Drizzle repositories.                                             |
-| `@domain/ai/api`     | The edge surface: the record types and their value lists (`MESSAGE_ROLES`, `MESSAGE_STATUSES`, `USAGE_OUTCOMES`). No persistence is reachable from it.         |
-| `@domain/ai/testing` | `createInMemoryAiPersistence()` (the three twins over one store) and the fixtures `makeConversation`, `makeMessage`, `makeUsage`. Specs and `test/` code only. |
+| Entry                | What                                                                                                                                                                                                                                                      |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `@domain/ai`         | Everything below: `AiCoreModule`, the repository ports, `aiSchema`, `aiMigrations` and the Drizzle repositories, plus `./api`.                                                                                                                            |
+| `@domain/ai/api`     | The edge surface: `AiApiModule`, `AiPort` and its request/result shapes, `AI_RBAC` / `AiPermission`, `aiRateLimitConfig` / `AI_RATE_LIMITS`, `AiChatErrorCode`, `AI_LIMITS`, the record types and their value lists. No persistence is reachable from it. |
+| `@domain/ai/testing` | `createInMemoryAiPersistence()` (the three twins over one store) and the fixtures `makeConversation`, `makeMessage`, `makeUsage`. Specs and `test/` code only.                                                                                            |
 
-Wiring (when an app owns the ai tables): `aiSchema` and `aiMigrations` go into
-`DatabaseModule.forRootAsync({ schema, migrations })` and the app's `migrate.ts`; bind the ports with
-`{ provide: ConversationsRepository, useClass: DrizzleConversationsRepository }` (and the same for
-`MessagesRepository` and `UsageRepository`).
+Wiring (when an app owns the ai tables, the monolith now): `aiSchema` and `aiMigrations` go into
+`DatabaseModule.forRootAsync({ schema, migrations })` and the app's `migrate.ts`; the app imports
+`AiCoreModule` (the handlers, the Drizzle repositories bound to their ports, and
+`AiModule.forRootAsync()`) and then `AiApiModule.forLocal()` (REST, RBAC feature, rate-limit policy,
+`AiPort` on the CQRS buses).
+
+## Chat API (REST `/v1/ai/conversations`)
+
+Every route needs `ai:chat` (granted to members, so to admins and owners too); tenant and user come
+from the token, and every handler re-checks them against the principal (403 `TENANT_MISMATCH`).
+
+| Route                                    | What                                                                                                                                        |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POST /v1/ai/conversations`              | New conversation (`title?`, `model?` = `AI_DEFAULT_MODEL`, must be allowed: 422 `AI_MODEL_NOT_ALLOWED`). 503 `AI_DISABLED` while AI is off. |
+| `GET /v1/ai/conversations`               | The caller's conversations, newest first (`limit`, `cursor`).                                                                               |
+| `GET /v1/ai/conversations/:id`           | One of them; anyone else's is 404 `CONVERSATION_NOT_FOUND`.                                                                                 |
+| `DELETE /v1/ai/conversations/:id`        | Deletes it and its messages (usage rows stay). 204.                                                                                         |
+| `GET /v1/ai/conversations/:id/messages`  | Its messages, newest first (`limit`, `cursor`).                                                                                             |
+| `POST /v1/ai/conversations/:id/messages` | One chat turn (`content`, `model?`), optional `Idempotency-Key`; 201 `{ message, replayed }`. Rate limited by `ai.chat`.                    |
+
+A chat turn (`SendMessageHandler`):
+
+1. One unit of work as the caller: the conversation (404 when it is not the caller's); with an
+   `Idempotency-Key`, the stored reply for it (same request hash: returned, `replayed: true`, no model
+   call; another content or model: 409 `IDEMPOTENCY_KEY_REUSED`); the `AI_HISTORY_MAX_MESSAGES`
+   newest messages.
+2. The model call (`AiClient.generate`) with the history window (also cut to `AI_HISTORY_MAX_TOKENS`,
+   characters / 4, newest kept) then the new user message. No transaction is open during the call.
+3. One unit of work as the caller: the conversation again (the row-local messages policy cannot check
+   who owns the conversation a message names), the assistant reply carrying the key and request hash
+   (inserted first: the unique key decides a concurrent replay), the user message, the usage row and
+   the conversation's `updated_at`.
+
+A failed call (502 `AI_UPSTREAM_ERROR`, 504 `AI_TIMEOUT`) stores no message and records a usage row
+with outcome `error` or `timeout`; a request refused before any call (`AI_DISABLED`,
+`AI_MODEL_NOT_ALLOWED`, `AI_INPUT_TOO_LARGE`) records nothing, and the user message is not stored
+either way (a retry sends it again). Logs carry ids, model and token counts, never message text.
+
+`ai.chat` (`aiRateLimit` namespace): `AI_CHAT_LIMIT` messages per user per `AI_CHAT_TTL_MS`, then
+`AI_CHAT_TENANT_LIMIT` per tenant per `AI_CHAT_TENANT_TTL_MS`, shared by every member (the
+policy's `tenant` budget of `@platform/redis`). The send route has no handler timeout (`@Timeout(0)`):
+`AI_REQUEST_TIMEOUT_MS` bounds it.
 
 ## Data model (`aiSchema`, `infrastructure/persistence/ai.schema.ts`)
 

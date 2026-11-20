@@ -118,7 +118,8 @@ it imports. A process ignores (and does not validate) variables of namespaces it
 | `graphql`                 |    ✓     |         ✓         |                  |                         |                 | `AppGraphqlModule`                                                                                   |
 | `mail`                    |    ✓     |                   |   ✓ (enqueue)    |            ✓            |                 | `AppMailerModule`                                                                                    |
 | `storage`                 |    ✓     |         ✓         |                  |                         |                 | `StorageModule`                                                                                      |
-| `ai`                      |          |                   |                  |                         |                 | `AiModule` (`@platform/ai`); not loaded by any app yet (the AI domain wires it)                      |
+| `ai`                      |    ✓     |                   |                  |                         |                 | `AiModule` (`@platform/ai`), `AiCoreModule` (`@domain/ai`)                                           |
+| `aiRateLimit`             |    ✓     |                   |                  |                         |                 | `AiApiModule` (`RateLimitModule.forFeature`)                                                         |
 | `files`                   |    ✓     |         ✓         |                  |                         |                 | `FilesModule`                                                                                        |
 | `stripe`                  |    ✓     |                   |                  |                         |        ✓        | `StripeModule`, `BillingCoreModule`                                                                  |
 | `ledger`                  |    ✓     |                   |                  |                         |        ✓        | `BillingCoreModule` (`@domain/billing`)                                                              |
@@ -534,8 +535,8 @@ enqueue invitation mail on the shared BullMQ `mail` queue: in production it need
 
 ### `ai` — LLM calls through OpenRouter
 
-[`ai.config.ts`](../libs/config/src/namespaces/ai.config.ts) · not loaded by any app yet (`AiModule`,
-`@platform/ai`)
+[`ai.config.ts`](../libs/config/src/namespaces/ai.config.ts) · monolith (`AiModule`, `@platform/ai`;
+`AiCoreModule`, `@domain/ai`)
 
 | Variable                  | Default                        | Description                                                                                                                     |
 | ------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -552,6 +553,17 @@ enqueue invitation mail on the shared BullMQ `mail` queue: in production it need
 | `AI_HISTORY_MAX_MESSAGES` | `20`                           | History window of a conversation: the last N messages.                                                                          |
 | `AI_HISTORY_MAX_TOKENS`   | `8000`                         | Approximate token budget of that window (characters / 4).                                                                       |
 | `AI_MAX_TOOL_STEPS`       | `3`                            | Tool-calling steps of one request (1-10).                                                                                       |
+
+### `aiRateLimit` — chat policy (ai)
+
+[`ai-rate-limit.config.ts`](../domains/ai/src/presentation/rate-limit/ai-rate-limit.config.ts) · monolith
+
+| Variable                | Default | Description                                                                                    |
+| ----------------------- | ------- | ---------------------------------------------------------------------------------------------- |
+| `AI_CHAT_LIMIT`         | `20`    | `ai.chat`: messages sent (model calls) per user per window.                                    |
+| `AI_CHAT_TTL_MS`        | `60000` | Its window.                                                                                    |
+| `AI_CHAT_TENANT_LIMIT`  | `200`   | `ai.chat`: messages sent per tenant per window, shared by every member, after the user budget. |
+| `AI_CHAT_TENANT_TTL_MS` | `60000` | Its window.                                                                                    |
 
 ### `files` — upload limits
 

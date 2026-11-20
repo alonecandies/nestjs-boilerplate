@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { parseEnv } from 'node:util';
+import { aiRateLimitConfig } from '@domain/ai';
 import { ledgerConfig, stripeConfig } from '@domain/billing';
 import { filesConfig } from '@domain/files';
 import {
@@ -32,6 +33,7 @@ const NAMESPACES = [
   monolithConfig,
   notificationsRateLimitConfig,
   identityRateLimitConfig,
+  aiRateLimitConfig,
 ] as const;
 
 /**

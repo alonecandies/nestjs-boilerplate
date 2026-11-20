@@ -20,6 +20,12 @@ describe('RateLimitPolicyRegistry', () => {
     expect(() => registry.require('nope.nope')).toThrow('Unknown rate-limit policy "nope.nope"');
   });
 
+  it('accepts a per-tenant budget on a user policy', () => {
+    const registry = new RateLimitPolicyRegistry();
+    registry.register([policy({ tenant: { limit: 50, ttlMs: 60_000 } })]);
+    expect(registry.require('files.upload').tenant).toEqual({ limit: 50, ttlMs: 60_000 });
+  });
+
   it('freezes registered policies', () => {
     const registry = new RateLimitPolicyRegistry();
     registry.register([policy()]);
@@ -42,6 +48,10 @@ describe('RateLimitPolicyRegistry', () => {
     [{ lockout: { threshold: 3, durationMs: 1_000 } }, 'need key "credentials"'],
     [{ credentialField: 'email' }, 'need key "credentials"'],
     [{ key: 'credentials', lockout: { threshold: 0, durationMs: 1_000 } }, 'lockout threshold'],
+    [{ key: 'ip', tenant: { limit: 5, ttlMs: 1_000 } }, 'tenant needs key "user"'],
+    [{ tenant: { limit: 0, ttlMs: 1_000 } }, 'tenant limit and ttlMs must be integers >= 1'],
+    [{ tenant: { limit: 5, ttlMs: 0 } }, 'tenant limit and ttlMs must be integers >= 1'],
+    [{ tenant: { limit: 5, ttlMs: 1_000, blockMs: -1 } }, 'tenant blockMs must be an integer >= 0'],
   ] as const)('rejects %j', (overrides, message) => {
     const registry = new RateLimitPolicyRegistry();
     expect(() => registry.register([policy(overrides as Partial<RateLimitPolicy>)])).toThrow(
