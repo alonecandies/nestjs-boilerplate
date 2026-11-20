@@ -22,11 +22,12 @@ import { DrizzlePaymentsRepository } from './drizzle-payments.repository.js';
 import { DrizzleStripeEventsSystemRepository } from './drizzle-stripe-events.system-repository.js';
 
 /*
- * Billing's distribution migration (sharding design SH-6) on Citus 14.2, single node, local execution
- * off (startRlsTestPostgres): every shard query goes over a remote connection, as on a cluster.
+ * Billing's distribution calls (sharding design SH-6; in 0000_init since the SH-12 squash) on
+ * Citus 14.2, single node, local execution off (startRlsTestPostgres): every shard query goes over
+ * a remote connection, as on a cluster.
  * The real runner applies the platform set and billing's whole history as app_owner (the migration
  * role), all pending files of a set in one transaction, as on a fresh production database. Data
- * goes through the superuser: under 0003's forced RLS the owner reads and writes no row, and the
+ * goes through the superuser: under the forced RLS the owner reads and writes no row, and the
  * policies themselves are billing.rls.int-spec.ts's subject. Repository calls still run as a
  * principal (the unit of work refuses to BEGIN without one), and the purge as the system method on
  * app_system, in SystemContext.
@@ -147,12 +148,16 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
     expect(new Set(groups.map((row) => row.colocationid)).size).toBe(1);
   });
 
-  it('re-applying the distribution file changes nothing', async () => {
+  it("re-applying 0000_init's distribution calls changes nothing", async () => {
     const before = await citusTables();
-    // payments, stripe_events, outbox (0004_outbox), the three ledger tenant tables
-    // (0005_ledger_tables; its two local tables are not Citus tables), and app.tenant_colocation.
+    // payments, stripe_events, outbox, the three ledger tenant tables (its two local tables are
+    // not Citus tables), and app.tenant_colocation.
     expect(before).toHaveLength(7);
-    for (const statement of statements('0002_distribute.sql')) {
+    const calls = statements('0000_init.sql').filter((statement) =>
+      /^SELECT app\./.test(statement),
+    );
+    expect(calls).toHaveLength(6);
+    for (const statement of calls) {
       await db.execute(sql.raw(statement));
     }
     await expect(citusTables()).resolves.toEqual(before);
@@ -250,8 +255,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
     };
     const before = await citusTables();
     const files = await applied();
-    // 0000_init .. 0008_ledger_trusted_state_read_at.
-    expect(files).toBe(9);
+    // 0000_init, the squashed baseline (SH-12).
+    expect(files).toBe(1);
     const first = app;
     app = undefined; // afterAll then closes only what is open, even if the boot below throws
     await first?.close();

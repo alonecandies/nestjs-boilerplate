@@ -11,22 +11,31 @@ import { sql } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { type BillingDatabase, startBillingDatabase } from '../../../test/billing-database.js';
 import { makePayment } from '../../../test/billing-test.utils.js';
-import { billingMigrations } from './billing.migrations.js';
 import { DrizzlePaymentsRepository } from './drizzle-payments.repository.js';
 import { DrizzleStripeEventsRepository } from './drizzle-stripe-events.repository.js';
 import { DrizzleStripeEventsSystemRepository } from './drizzle-stripe-events.system-repository.js';
 
 /*
  * Billing repositories against Citus 14.2 (single node, local execution off: tenant isolation) with
- * billing's real history, so both tables are distributed by tenant_id (0002_distribute, SH-6).
+ * billing's real history, so both tables are distributed by tenant_id (SH-6).
  * Opt-in: INTEGRATION=1 npx vitest run --project billing:int repositories
  * Every query carries tenant_id (sharding §2.1.5): a router query to one shard. The app runs as
- * app_runtime under 0003's forced RLS, so each repository call runs as a principal (the user in
+ * app_runtime under the forced RLS, so each repository call runs as a principal (the user in
  * the tenant it acts in); platform events go through the system repository in SystemContext.
  * billing.repositories.rls.int-spec.ts covers every method and its refusals.
  */
+/** The stacked history from before the SH-12 squash, where 0001's backfill lives. */
+const STACKED_FOLDER = join(
+  import.meta.dirname,
+  '..',
+  '..',
+  '..',
+  'test',
+  'stacked-history',
+  'migrations',
+);
 const statements = (file: string): string[] =>
-  readFileSync(join(billingMigrations.folder, file), 'utf8')
+  readFileSync(join(STACKED_FOLDER, file), 'utf8')
     .split('--> statement-breakpoint')
     .map((statement) => statement.trim())
     .filter((statement) => statement !== '');
@@ -126,6 +135,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing repositories on Cit
     expect([...rows]).toEqual([{ tenant_id: PLATFORM_TENANT_ID, user_id: null }]);
   });
 
+  // The stacked 0001's backfill (test/stacked-history: before the squash, kept as the record).
   describe('0001 on a database that already has payments', () => {
     let legacy: BillingDatabase | undefined;
 

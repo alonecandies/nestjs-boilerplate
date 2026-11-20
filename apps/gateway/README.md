@@ -70,7 +70,7 @@ off.
 
 | Surface  | Where                                                                                                                                                                                                                                                                                                                       |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Ops      | `GET /health/live`, `GET /health/ready` (redis only), `GET /metrics`, `GET /docs` (Scalar), `GET /openapi.json`, `GET /openapi.yaml`                                                                                                                                                                                        |
+| Ops      | `GET /health/live`, `GET /health/ready` (redis only), `GET /metrics` on `METRICS_PORT` (9464), `GET /docs` (Scalar), `GET /openapi.json`, `GET /openapi.yaml`                                                                                                                                                               |
 | Identity | `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/refresh`, `POST /v1/auth/logout`, `GET /v1/auth/me`, `GET /v1/users`, `GET /v1/users/:id`                                                                                                                                                                   |
 | Notifs   | `GET /v1/notifications`, `POST /v1/notifications/:id/read`; Socket.IO namespace `/notifications` (`auth: { token }`, websocket transport)                                                                                                                                                                                   |
 | Billing  | `POST /v1/billing/checkout-sessions`, `POST /v1/billing/webhooks/stripe` (raw bytes + signature forwarded to billing-service), `GET /v1/billing/payments`                                                                                                                                                                   |
@@ -80,8 +80,9 @@ off.
 Errors are RFC 9457 `application/problem+json`; every response carries `x-request-id` and
 `x-correlation-id`, which also travel to the services as gRPC metadata.
 
-`/metrics`, `/docs` and `/openapi.*` share the API port: don't route them through the public ingress
-(set `METRICS_BEARER_TOKEN` for scrapes; see docs/DOCKER.md).
+`/docs` and `/openapi.*` share the API port: don't route them through the public ingress. `/metrics` is served on
+`METRICS_PORT` (9464; the API port answers 404 for it): keep that port cluster-internal and set `METRICS_BEARER_TOKEN`
+for scrapes (see docs/DOCKER.md).
 
 ## How it is wired
 

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { PLATFORM_TENANT_ID } from '@platform/common';
 import { MIGRATIONS_TABLE } from '@platform/database';
@@ -59,51 +59,102 @@ describe('identityMigrations', () => {
     );
   });
 
-  it('0001_tenants refuses the platform tenant id (tenants_id_not_platform = PLATFORM_TENANT_ID)', () => {
-    const sql = readFileSync(join(identityMigrations.folder, '0001_tenants.sql'), 'utf8');
-    expect(sql).toContain(
-      `CONSTRAINT "tenants_id_not_platform" CHECK ("id" <> '${PLATFORM_TENANT_ID}'::uuid)`,
-    );
-    expect(sql).toContain('CONSTRAINT "tenants_slug_unique" UNIQUE("slug")');
-  });
-
-  it('0005_tenant_sessions empties sessions first and re-keys them (user_id, id)', () => {
-    const sql = readFileSync(join(identityMigrations.folder, '0005_tenant_sessions.sql'), 'utf8');
-    const statements = sql.split('--> statement-breakpoint').map((statement) => statement.trim());
-    expect(statements[0]).toMatch(/DELETE FROM "identity"\."sessions";$/);
-    expect(sql).toContain('DROP CONSTRAINT "sessions_pkey"');
-    expect(sql).toContain('ADD CONSTRAINT "sessions_user_id_id_pk" PRIMARY KEY("user_id","id")');
-    expect(sql).not.toMatch(/^-- ALTER TABLE/m);
-  });
-
-  it('0006 adds users.is_platform_staff; 0007 drops users.roles and the user_role type', () => {
-    const add = readFileSync(join(identityMigrations.folder, '0006_platform_staff.sql'), 'utf8');
-    expect(add).toContain('ADD COLUMN "is_platform_staff" boolean DEFAULT false NOT NULL');
-    expect(add).not.toContain('DROP');
-    const drop = readFileSync(join(identityMigrations.folder, '0007_drop_user_roles.sql'), 'utf8');
-    expect(drop).toContain('DROP COLUMN "roles"');
-    expect(drop).toContain('DROP TYPE "identity"."user_role"');
-  });
-
-  it('0008_distribute holds only the app.* distribution calls, references first (sharding design §4.2)', () => {
-    const sql = readFileSync(join(identityMigrations.folder, '0008_distribute.sql'), 'utf8');
-    const statements = sql
-      .split('--> statement-breakpoint')
-      .map((statement) => statement.trim())
-      .filter((statement) => statement !== '');
-    expect(statements).toEqual([
-      "SELECT app.make_reference('identity.users');",
-      "SELECT app.make_reference('identity.tenants');",
-      "SELECT app.make_reference('identity.memberships');",
-      "SELECT app.distribute_by_tenant('identity.invitations');",
-      "SELECT app.distribute_by_tenant('identity.audit_events');",
-      "SELECT app.distribute_by_user('identity.sessions');",
-    ]);
-  });
-
-  describe('0009_rls (spec §8.2 per the row-local ruling of 2026-11-17; B3 Task 10)', () => {
+  describe('0000_init (the final squash, SH-12: one baseline in the sharding design order)', () => {
+    const text = (): string =>
+      readFileSync(join(identityMigrations.folder, '0000_init.sql'), 'utf8');
     const statements = (): string[] =>
-      readFileSync(join(identityMigrations.folder, '0009_rls.sql'), 'utf8')
+      text()
+        .split('--> statement-breakpoint')
+        .map((statement) => statement.trim())
+        .filter((statement) => statement !== '');
+
+    it('keeps the last stacked migration timestamp, so a database migrated before the squash skips it', () => {
+      const read = (folder: string): number[] =>
+        (
+          JSON.parse(readFileSync(join(folder, 'meta', '_journal.json'), 'utf8')) as {
+            entries: { when: number }[];
+          }
+        ).entries.map((entry) => entry.when);
+
+      const stacked = read(
+        join(import.meta.dirname, '..', '..', '..', 'test', 'stacked-history', 'migrations'),
+      );
+
+      expect(read(identityMigrations.folder)).toEqual([stacked.at(-1)]);
+    });
+
+    it('is the only journal entry, with one snapshot', () => {
+      const journal = JSON.parse(
+        readFileSync(join(identityMigrations.folder, 'meta', '_journal.json'), 'utf8'),
+      ) as { entries: { tag: string }[] };
+      expect(journal.entries.map((entry) => entry.tag)).toEqual(['0000_init']);
+      expect(readdirSync(join(identityMigrations.folder, 'meta')).toSorted()).toEqual([
+        '0000_snapshot.json',
+        '_journal.json',
+      ]);
+    });
+
+    it('refuses the platform tenant id (tenants_id_not_platform = PLATFORM_TENANT_ID)', () => {
+      expect(text()).toContain(
+        `CONSTRAINT "tenants_id_not_platform" CHECK ("id" <> '${PLATFORM_TENANT_ID}'::uuid)`,
+      );
+      expect(text()).toContain('CONSTRAINT "tenants_slug_unique" UNIQUE("slug")');
+    });
+
+    it('keys sessions (user_id, id); users carry is_platform_staff, no roles column or user_role type', () => {
+      expect(text()).toContain('CONSTRAINT "sessions_user_id_id_pk" PRIMARY KEY("user_id","id")');
+      expect(text()).toContain('"is_platform_staff" boolean DEFAULT false NOT NULL');
+      expect(text()).not.toMatch(/user_role|DROP |DELETE FROM/);
+    });
+
+    it('calls the app.* distribution helpers right after each CREATE TABLE: references first (§4.2)', () => {
+      const all = statements();
+      const distribution = [
+        "SELECT app.make_reference('identity.users');",
+        "SELECT app.make_reference('identity.tenants');",
+        "SELECT app.make_reference('identity.memberships');",
+        "SELECT app.distribute_by_tenant('identity.invitations');",
+        "SELECT app.distribute_by_tenant('identity.audit_events');",
+        "SELECT app.distribute_by_user('identity.sessions');",
+        "SELECT app.distribute_by_tenant('identity.outbox');",
+      ];
+      expect(all.filter((statement) => /^SELECT app\./.test(statement))).toEqual(distribution);
+      const creates = all
+        .map((statement, index) => [/CREATE TABLE "identity"\."(\w+)"/.exec(statement)?.[1], index])
+        .filter((entry): entry is [string, number] => entry[0] !== undefined);
+      expect(creates.map(([table]) => table)).toEqual([
+        'users',
+        'tenants',
+        'memberships',
+        'invitations',
+        'audit_events',
+        'sessions',
+        'outbox',
+      ]);
+      for (const [table, index] of creates) {
+        expect(all[index + 1]).toMatch(
+          new RegExp(`^SELECT app\\.\\w+\\('identity\\.${table}'\\);$`),
+        );
+      }
+    });
+
+    it('adds the foreign keys after every distribution call, each to a reference table', () => {
+      const all = statements();
+      const lastDistribution = all.findLastIndex((statement) => /^SELECT app\./.test(statement));
+      const fks = all
+        .map((statement, index) => [statement, index] as const)
+        .filter(([statement]) => statement.includes('FOREIGN KEY'));
+      expect(fks).toHaveLength(7);
+      for (const [statement, index] of fks) {
+        expect(index).toBeGreaterThan(lastDistribution);
+        expect(statement).toMatch(/REFERENCES "identity"\."(users|tenants)"\("id"\)/);
+      }
+    });
+  });
+
+  describe('0000_init RLS (spec §8.2 per the row-local ruling of 2026-11-17; B3 Task 10)', () => {
+    const statements = (): string[] =>
+      readFileSync(join(identityMigrations.folder, '0000_init.sql'), 'utf8')
         .split('--> statement-breakpoint')
         .map((statement) =>
           statement
@@ -231,12 +282,13 @@ describe('identityMigrations', () => {
         runtime('sessions', 'UPDATE', 'user_id = app.user_id()', 'user_id = app.user_id()'),
         runtime('audit_events', 'SELECT', tenantElevated, null),
         runtime('audit_events', 'INSERT', null, 'tenant_id = app.tenant_id()'),
+        runtime('outbox', 'INSERT', null, 'tenant_id = app.tenant_id()'),
       ]);
     });
 
     it('has no subquery in any policy (Citus rejects subqueries)', () => {
       const created = statements().filter((statement) => /^CREATE POLICY/i.test(statement));
-      expect(created).toHaveLength(21);
+      expect(created).toHaveLength(22);
       for (const policy of created) {
         expect(policy).not.toMatch(/\(\s*select/i);
         // The only SELECT is the command keyword ("FOR SELECT").
@@ -244,15 +296,21 @@ describe('identityMigrations', () => {
       }
     });
 
-    it('enables and forces RLS on all six identity tables, one table per statement', () => {
-      const alters = statements().filter((statement) => /^ALTER TABLE/i.test(statement));
+    it('enables and forces RLS on all seven identity tables, one table per statement', () => {
+      const alters = statements().filter((statement) => /ROW LEVEL SECURITY;$/i.test(statement));
       expect(alters).toEqual(
-        ['users', 'tenants', 'memberships', 'invitations', 'sessions', 'audit_events'].flatMap(
-          (table) => [
-            `ALTER TABLE identity.${table} ENABLE ROW LEVEL SECURITY;`,
-            `ALTER TABLE identity.${table} FORCE ROW LEVEL SECURITY;`,
-          ],
-        ),
+        [
+          'users',
+          'tenants',
+          'memberships',
+          'invitations',
+          'sessions',
+          'audit_events',
+          'outbox',
+        ].flatMap((table) => [
+          `ALTER TABLE identity.${table} ENABLE ROW LEVEL SECURITY;`,
+          `ALTER TABLE identity.${table} FORCE ROW LEVEL SECURITY;`,
+        ]),
       );
     });
 
@@ -273,6 +331,8 @@ describe('identityMigrations', () => {
         'GRANT SELECT ON TABLE identity.memberships TO app_system;',
         'GRANT SELECT ON TABLE identity.invitations TO app_system;',
         'GRANT SELECT, DELETE ON TABLE identity.sessions TO app_system;',
+        'GRANT INSERT ON TABLE identity.outbox TO app_runtime;',
+        'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE identity.outbox TO app_system;',
       ]);
       for (const grant of grants) {
         expect(grant).toMatch(/^GRANT [^;]+ ON (TABLE|SCHEMA) [\w.]+ TO \w+;$/);
@@ -294,9 +354,9 @@ describe('identityMigrations', () => {
     });
   });
 
-  describe('0010_outbox (outbox plan Task 5: the "Outbox table" SQL, in migration order)', () => {
+  describe('0000_init outbox (outbox plan Task 5: the "Outbox table" SQL, in migration order)', () => {
     const statements = (): string[] =>
-      readFileSync(join(identityMigrations.folder, '0010_outbox.sql'), 'utf8')
+      readFileSync(join(identityMigrations.folder, '0000_init.sql'), 'utf8')
         .split('--> statement-breakpoint')
         .map((statement) =>
           statement
@@ -308,17 +368,30 @@ describe('identityMigrations', () => {
         )
         .filter((statement) => statement !== '');
 
-    it('is the plan SQL for identity.outbox, one statement each: CREATE, distribution, indexes, RLS, grants, policy', () => {
-      expect(statements()).toEqual([
+    it('creates identity.outbox as the plan SQL: CREATE, distribution, then its two indexes', () => {
+      const all = statements();
+      const at = all.findIndex((statement) =>
+        statement.startsWith('CREATE TABLE "identity"."outbox"'),
+      );
+      expect(all.slice(at, at + 4)).toEqual([
         'CREATE TABLE "identity"."outbox" ( "tenant_id" uuid NOT NULL, "id" uuid NOT NULL, "topic" text NOT NULL, "key" text, "envelope" jsonb NOT NULL, "created_at" timestamp (3) with time zone DEFAULT now() NOT NULL, "published_at" timestamp (3) with time zone, CONSTRAINT "outbox_tenant_id_id_pk" PRIMARY KEY("tenant_id","id") );',
         "SELECT app.distribute_by_tenant('identity.outbox');",
         'CREATE INDEX "outbox_unpublished_idx" ON "identity"."outbox" USING btree ("created_at","id") WHERE "identity"."outbox"."published_at" IS NULL;',
         'CREATE INDEX "outbox_published_at_idx" ON "identity"."outbox" USING btree ("published_at") WHERE "identity"."outbox"."published_at" IS NOT NULL;',
-        'ALTER TABLE "identity"."outbox" ENABLE ROW LEVEL SECURITY;',
-        'ALTER TABLE "identity"."outbox" FORCE ROW LEVEL SECURITY;',
-        'GRANT INSERT ON "identity"."outbox" TO app_runtime;',
-        'GRANT SELECT, INSERT, UPDATE, DELETE ON "identity"."outbox" TO app_system;',
-        'CREATE POLICY "outbox_insert" ON "identity"."outbox" FOR INSERT TO app_runtime WITH CHECK (tenant_id = app.tenant_id());',
+      ]);
+    });
+
+    it('then forces RLS on it, grants it (insert-only for app_runtime) and adds its one policy', () => {
+      expect(
+        statements().filter((statement) =>
+          /^(ALTER TABLE|GRANT|CREATE POLICY) .*\bidentity\.outbox\b/.test(statement),
+        ),
+      ).toEqual([
+        'ALTER TABLE identity.outbox ENABLE ROW LEVEL SECURITY;',
+        'ALTER TABLE identity.outbox FORCE ROW LEVEL SECURITY;',
+        'GRANT INSERT ON TABLE identity.outbox TO app_runtime;',
+        'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE identity.outbox TO app_system;',
+        'CREATE POLICY outbox_insert ON identity.outbox FOR INSERT TO app_runtime WITH CHECK (tenant_id = app.tenant_id());',
       ]);
     });
   });

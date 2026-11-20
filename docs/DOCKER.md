@@ -86,7 +86,8 @@ listed at the bottom of [`.env.example`](../.env.example)), e.g. `POSTGRES_HOST_
 moving them keeps presigned URLs and host-side Kafka clients working. `GCS_HOST_PORT` likewise feeds fake-gcs's
 `-public-host`.
 Inside the `backend` network containers use service names (`postgres:5432`, `kafka:9092`, `identity-service:50051`…);
-every app container listens on HTTP **3000** (API or health + metrics) and gRPC **50051**.
+every app container listens on HTTP **3000** (API or health), `/metrics` on **9464** (`METRICS_PORT`; never published,
+Prometheus scrapes `:9464` inside the network) and gRPC **50051**.
 
 ## Topologies & profiles
 
@@ -370,7 +371,7 @@ node:24-trixie-slim ── toolchain ── manifests (package.json × N, bun.lo
                                       │   ├─ dev ───── COPY . . → `bun run dev` (node --watch + swc-node, TS sources)
                                       │   └─ build ─── COPY . . → bun run --filter './libs/*' --filter './domains/*' --filter ./apps/$APP build (swc)
                                       └─ prod-deps ─── bun install --production --filter ./apps/$APP (the app's closure only)
-                                           └─ assemble ── scripts/docker/assemble-image.mjs (prune, copy dist, verify)
+                                           └─ assemble ── scripts/docker/assemble-image.mjs (copy dist, verify, trace, prune)
                                                 ├─ runtime-alpine ── node:24-alpine + tini, user node
                                                 └─ runtime (default) ── gcr.io/distroless/nodejs24-debian13:nonroot
 ```
@@ -383,7 +384,8 @@ docker build --build-arg APP=gateway --target dev -t boilerplate/gateway:dev .  
 ```
 
 Build args: `APP` (required; the build fails fast without it), `NODE_VERSION` (24.21.0), `BUN_VERSION` (1.4.3),
-`ALPINE_VERSION` (3.24), `DISTROLESS_IMAGE`, `UV_THREADPOOL_SIZE` (4), `PRUNE_NODE_MODULES` (true), `VCS_REF`.
+`ALPINE_VERSION` (3.24), `DISTROLESS_IMAGE`, `UV_THREADPOOL_SIZE` (4), `PRUNE_NODE_MODULES` (true), `TRACE_FILES`
+(true), `VCS_REF`.
 Compose builds the same targets (`APP_TARGET`, tag `boilerplate/<app>:${TAG:-local}`).
 
 - **Bun installs, Node runs.** The toolchain is `node:24-trixie-slim` with the Bun binary copied in, so swc runs on
@@ -404,10 +406,20 @@ Compose builds the same targets (`APP_TARGET`, tag `boilerplate/<app>:${TAG:-loc
 
   It also removes install-only files (`bun.lock`, `bunfig.toml`, `patches/`) from the runtime tree.
 
+- **Only the files the entrypoints import ship** (`TRACE_FILES=true`, default). `assemble-image.mjs` follows the
+  static imports of `dist/main.js`, `dist/instrument.js` and `dist/migrate.js` (`scripts/docker/trace-imports.mjs`):
+  workspace packages file by file through their `exports` maps, third-party packages by name. It then deletes every
+  untraced JS file of the closure's `dist/`, every workspace package with no traced file, and every `node_modules`
+  package outside the manifest closure (dependencies, optional and installed peer dependencies) of the imported
+  packages. Non-JS assets of traced packages (`.proto`, `.sql`, `.cql`, templates, migration `meta/`) stay. A load
+  check then imports `dist/app.module.js` once, so an import the tracer cannot see (a computed `import()`) fails the
+  build instead of the container. `--build-arg TRACE_FILES=false` copies the closure packages whole, as before
+  tracing. `scripts/docker/assemble-image.spec.ts` pins this on fixture install trees.
+
 - **Pruned `node_modules`** (`PRUNE_NODE_MODULES=true`, default): `*.d.ts`, `*.map`, TS sources (Node refuses to
   strip types under `node_modules`), Markdown (license/notice files kept) and the `typescript` package (an optional
   peer of `@nestjs/graphql`/`@nestjs/swagger`, used only by their CLI plugins). It is removed only if no installed
-  package hard-depends on it. This takes the monolith from 465 MB to 294 MB. Build with
+  package hard-depends on it. This took the monolith from 465 MB to 294 MB (measured before tracing). Build with
   `--build-arg PRUNE_NODE_MODULES=false` to keep them (e.g. for `--enable-source-maps` debugging).
 - **Runtime**: `NODE_ENV=production`, `HOST=0.0.0.0`, `PORT=3000`, numeric non-root user (65532 distroless /
   1000 = `node` on alpine, which runs under `tini`), `EXPOSE 3000 50051`,
@@ -424,17 +436,22 @@ Compose builds the same targets (`APP_TARGET`, tag `boilerplate/<app>:${TAG:-loc
 - **`dev` target**: the full dev `node_modules` + sources, runs `bun run dev` from TS (no build step). It is large
   (the entire toolchain) and slow to export on Docker Desktop; prefer dev loop 1 unless you need Linux-only behaviour.
 
-Measured (Apple silicon, Docker Desktop 4 CPU / 4 GB, other containers running):
+Measured (Apple silicon, Docker Desktop; distroless, pruned; `docker image inspect` size). Both columns are built
+from the same commit, the first with `--build-arg TRACE_FILES=false`:
 
-| Image                   | Size (distroless, pruned) | Workspace packages | Assets verified | Runtime deps checked |
-| ----------------------- | ------------------------- | ------------------ | --------------- | -------------------- |
-| `monolith`              | 294 MB (294,437,864 B)    | 19                 | 18              | 326                  |
-| `gateway`               | 294 MB                    | 19                 | 14              | —                    |
-| `notifications-service` | 280 MB                    | 13                 | —               | —                    |
-| `billing-service`       | 245 MB                    | 14                 | —               | —                    |
-| `identity-service`      | 242 MB (alpine: 247 MB)   | 12                 | 6               | 231                  |
+| Image                   | `TRACE_FILES=false` | Traced (default) | Saved          |
+| ----------------------- | ------------------- | ---------------- | -------------- |
+| `gateway`               | 299.5 MB            | **250.1 MB**     | 49.3 MB (16 %) |
+| `monolith`              | 299.5 MB            | 299.3 MB         | 0.1 MB         |
+| `notifications-service` | 279.9 MB            | 279.8 MB         | 0.1 MB         |
+| `billing-service`       | 243.5 MB            | 243.4 MB         | 0.1 MB         |
+| `identity-service`      | 242.9 MB            | 242.8 MB         | 0.1 MB         |
 
-The monolith row was re-measured on a cold build (the other rows are from the original measurement). The assemble step reported 19 workspace packages, 18 assets
+The gateway gains most: it imports each domain only through `@domain/<x>/api` (`scripts/check-api-subpaths.mjs`, in
+`bun run check`, enforces it), so the domains' core, persistence and messaging code and the packages only they import
+are never traced. The other apps run nearly everything their closure ships.
+
+Before tracing, a cold monolith build reported 19 workspace packages, 18 assets
 verified and 326 runtime dependencies resolved, then pruned 27,817 files plus `typescript` (162.8 MiB) from
 `node_modules`. Inside the image `/app/node_modules` is about 124 MiB, `apps/` holds only `monolith`, `libs/` its 18
 closure libs, and `bun.lock`, `bunfig.toml`, `patches/` and `typescript` are gone. `swagger-ui-dist` stays (a hard
@@ -443,9 +460,6 @@ dependency of `@nestjs/swagger`) although `/docs` uses Scalar.
 Build time: ~5–5.5 min cold (about 2 min of it is the distroless base pull on a fresh machine; the full and the
 filtered install share a locked cache, so they serialize; swc compiles all domains + libs + the app in ~1.5 s), **~30 s** for
 a source-only change (dependency layers cached), ~40 s for another app once the full install is cached.
-The gateway ships as much as the monolith because the domain-lib barrels import their infrastructure
-(`@domain/notifications` → cassandra/mailer…). Per-domain `@domain/<x>/api` subpath exports would slim it; that is a known
-follow-up, not done yet (see [Known follow-ups](#known-follow-ups)).
 
 ### Running a prebuilt image, and what a healthy container looks like
 
@@ -483,9 +497,10 @@ Full teardown of a stack, volumes and network included: `docker compose --profil
 ## Observability
 
 - **Prometheus** ([`docker/prometheus/prometheus.yml`](../docker/prometheus/prometheus.yml)) discovers apps with DNS
-  SD on the compose service names (port 3000): one target per replica, nothing for profiles that aren't running.
-  It sets the `service` label itself. Job `host-apps` scrapes apps started on the host (`host.docker.internal:3000-3003`,
-  `service="host:<port>"`). When the API runs in compose, `host:3000` is that same container through its published port.
+  SD on the compose service names (port 9464, the in-network `METRICS_PORT`): one target per replica, nothing for
+  profiles that aren't running. It sets the `service` label itself. Job `host-apps` scrapes apps started on the host
+  (`host.docker.internal:9464-9467`, their `METRICS_PORT`s; `service="host:<port>"`). Containers never publish 9464,
+  so a compose app is never scraped twice.
   The remote-write receiver is on for k6. The alert rules of the outbox and the ledger
   (`docker/prometheus/rules/{outbox,ledger}.rules.yml`, listed in `rule_files`) are mounted read-only at
   `/etc/prometheus/rules`; edit one and `POST /-/reload`. No Alertmanager runs in compose: the alerts show on the
@@ -626,7 +641,7 @@ least 8 GiB.
 12. zsh users: `docker build -t img/$app:local` expands `$app:l` (lowercase modifier) → quote as `"img/${app}:local"`.
 13. k6 threshold selectors cannot contain `:` or `,` in tag values (hence the `GET /v1/users/<id>` tag).
 14. Distroless has no shell: debug with `--target runtime-alpine`, `docker compose logs`, or
-    `docker run --rm --network <project>_backend redis:8.10.2-alpine3.23 wget -qO- http://gateway:3000/metrics`.
+    `docker run --rm --network <project>_backend redis:8.10.2-alpine3.23 wget -qO- http://gateway:9464/metrics`.
 15. **Citus is amd64-only.** Every `citusdata/citus:14.2*` tag is built for amd64; on Apple Silicon Docker
     Desktop runs `postgres` (and the int-spec containers) under emulation, with Rosetta when it is enabled.
     Expect slower first boots; nothing else differs. CI runners are amd64.
@@ -659,17 +674,14 @@ Production: mutual TLS (`GRPC_TLS_CA_PATH`/`GRPC_TLS_CERT_PATH`/`GRPC_TLS_KEY_PA
 gRPC ports. Reflection defaults to off in production; compose turns it back on for local grpcurl/Postman.
 
 **Never expose the ops routes through the public ingress.** `/metrics` (route-level traffic, error rates, queue and
-heap internals) and `/docs` + `/openapi.*` are served on the API port: route only `/v1`, `/graphql` and
-`/notifications` (Socket.IO) publicly, keep `DOCS_ENABLED` off, and let Prometheus scrape the pods directly. Set
-`METRICS_BEARER_TOKEN` (Prometheus `authorization: { credentials: … }`) so `/metrics` answers 404 to anyone else.
-A separate metrics listener (its own port) is not implemented yet, so this routing rule is the control today.
+heap internals) is served on its own listener, `METRICS_PORT` (9464; the API port answers 404 for it): compose never
+publishes it, and in production it must stay cluster-internal, scraped by Prometheus from inside the network. Set
+`METRICS_BEARER_TOKEN` (Prometheus `authorization: { credentials: … }`) as defence in depth, so `/metrics` answers 404
+to anyone else. `/docs` + `/openapi.*` are on the API port: route only `/v1`, `/graphql` and `/notifications`
+(Socket.IO) publicly and keep `DOCS_ENABLED` off.
 
 ## Known follow-ups
 
-Stated honestly: none of these are done yet.
-
-| Follow-up                                                              | Docker impact                                                                                            |
-| ---------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| Per-domain `@domain/<x>/api` subpath exports                           | the gateway image would stop shipping the domains' infrastructure (it is as large as the monolith today) |
-| Separate metrics listener                                              | `/metrics` could leave the API port; until then keep it off the public ingress + `METRICS_BEARER_TOKEN`  |
-| Real-database integration specs for billing/notifications repositories | the CI `integration` job covers Postgres + Redis only through the existing `*:int` projects              |
+None open for Docker. The earlier ones have landed: the gateway imports each domain through `@domain/<x>/api` and its
+image is traced ([Images](#images-dockerfile)), `/metrics` has its own listener on `METRICS_PORT`, and the CI
+`integration` job runs every `*:int` project, billing's Citus and notifications' Cassandra specs included.

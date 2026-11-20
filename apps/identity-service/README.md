@@ -8,7 +8,8 @@ GraphQL API and calls this service through `IdentityApiModule.forRemote()`.
 | Surface | Port (default)             | What                                                                        |
 | ------- | -------------------------- | --------------------------------------------------------------------------- |
 | gRPC    | `GRPC_URL` `0.0.0.0:50051` | `identity.v1.AuthService`, `identity.v1.UsersService`, health, reflection   |
-| HTTP    | `PORT` `3001`              | `GET /health/live`, `GET /health/ready`, `GET /metrics` only                |
+| HTTP    | `PORT` `3001`              | `GET /health/live`, `GET /health/ready` only                                |
+| Metrics | `METRICS_PORT` `9465`      | `GET /metrics` on its own listener (`9464` in containers; never published)  |
 | Kafka   | produces                   | `identity.user-registered.v1` (key `userId`; envelope id = domain event id) |
 
 The domain logic lives in [`@domain/identity`](../../domains/identity/README.md); this app is only the

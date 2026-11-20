@@ -367,11 +367,11 @@ raw bytes and answers as billing-service does).
 | `stripe_events` | `tenant_id uuid`, `id text` (Stripe `evt_…`), `user_id uuid` (NULL for platform events), `type`, `processed_at`                                                                                                                                                                                                                                                                                                                                | PK `stripe_events_tenant_id_id_pk (tenant_id, id)` = the idempotency key; `stripe_events_processed_at_idx` for the retention purge                                                                                                                                                                                                                          |
 
 Both tables are distributed by `tenant_id` on Citus, colocated with `app.tenant_colocation` (and so with identity's
-tenant tables): `0002_distribute.sql` (SH-6). The primary key and every unique index start with `tenant_id`, and no
+tenant tables): the calls right after each `CREATE TABLE` in `0000_init.sql` (SH-6). The primary key and every unique index start with `tenant_id`, and no
 FK reaches another domain, so a query by `(tenant_id, …)` goes to one shard. Rows created before B2 belong to the platform tenant (nil
 UUID): no tenant can list them.
 
-### Ledger tables (`0005_ledger_tables.sql`, outbox plan Task 10, ledger design §5)
+### Ledger tables (outbox plan Task 10, ledger design §5)
 
 The receipts and bookkeeping around the immudb ledger (the entries themselves live in immudb). Every table also has
 `created_at`; no FK (`payment_id`, `run_id` and `resolves_id` are plain columns); all five have RLS enabled and forced.
@@ -384,7 +384,7 @@ L = coordinator-local, system only.
 | `ledger_entry_refs` (T)          | `tenant_id`, `entry_id`, `source_key`, `payload_hash`, `immudb_tx_id int8` (NULL when replayed), `payment_id` (nullable), `kind`, `posted_at`; index `ledger_entry_refs_posted_at_idx` | `(tenant_id, entry_id)`       | S, I / S, I                         |
 | `ledger_discrepancies` (T)       | `tenant_id`, `id`, `kind`, `source_key`, `expected jsonb`, `actual jsonb`, `detected_by`, `run_id` (nullable), `resolves_id` (nullable)                                                | `(tenant_id, id)`             | S, I / S, I                         |
 | `ledger_reconciliation_runs` (L) | `id`, `from_ts`, `to_ts`, `status`, `counts jsonb`, `finished_at` (nullable)                                                                                                           | `(id)`                        | none / S, I, U                      |
-| `ledger_trusted_state` (L)       | `database`, `tx_id int8`, `tx_hash bytea`, `verified_at`, `read_at` (0008)                                                                                                             | `(database)`                  | none / S, I, U                      |
+| `ledger_trusted_state` (L)       | `database`, `tx_id int8`, `tx_hash bytea`, `verified_at`, `read_at` (nullable)                                                                                                         | `(database)`                  | none / S, I, U                      |
 
 - Each tenant table has two policies `TO app_runtime`: `<table>_select USING (tenant_id = app.tenant_id() AND
 app.elevated())` and `<table>_insert WITH CHECK (tenant_id = app.tenant_id())`. A principal inserts only its own
@@ -395,7 +395,7 @@ NOTHING` without a conflict target: the int spec pins that it reports 1 row, the
 - Neither app role may `UPDATE` or `DELETE` a tenant table: entry refs and discrepancies are append-only.
   `PLATFORM_TENANT_ID` rows and the two local tables belong to `app_system`.
 
-### Row-level security (`0003_rls.sql`, B3-5/B3-6, program spec §8.2)
+### Row-level security (B3-5/B3-6, program spec §8.2)
 
 Both tables have RLS enabled and **forced** (the owner `app_owner` has no policy, so it reads and writes no row).
 Grants are explicit per table and role, deny by default; `billing.__drizzle_migrations` has no RLS and no grant to
@@ -409,8 +409,8 @@ directly (no subquery, no helper or FK into identity); "–" means no policy, so
 
 - Elevation (`billing:read-all`) widens the payments read to the tenant; it never writes another member's payment,
   and a `SELECT … FOR UPDATE` of another member's payment returns nothing even when elevated.
-- `app_system` (BYPASSRLS) gets `SELECT, INSERT, DELETE` on `stripe_events` (the Stripe-event system methods) and,
-  since `0006_ledger_system_reads`, `SELECT` on `payments` (reconciliation R3's
+- `app_system` (BYPASSRLS) gets `SELECT, INSERT, DELETE` on `stripe_events` (the Stripe-event system methods) and
+  `SELECT` on `payments` (reconciliation R3's
   `ledgerReconciliation.listSucceededPayments`); it never writes a payment. Rows with `tenant_id = PLATFORM_TENANT_ID` match no runtime policy: only `app_system`
   reads or writes them.
 - **Which principal each flow runs as** (no transaction spans the Stripe call, and each flow settles its principal before
@@ -439,11 +439,14 @@ directly (no subquery, no helper or FK into identity); "–" means no policy, so
 `payment_status` enum: `pending`, `succeeded`, `failed`, `expired`, `refunded`, `partially_refunded`, `disputed`.
 Constraint and index names are explicit snake_case (`payments_tenant_id_id_pk`). The tables and the enum live in the `billing` Postgres schema
 (`billingPgSchema`); raw SQL qualifies them (`billing.payments`). Billing owns its migration history:
-`drizzle.config.ts` generates `src/infrastructure/persistence/migrations` (`0000_init.sql` holds the original tables and
-indexes; `0001_tenant_columns.sql` adds the tenant columns, the tenant-leading keys and the three ledger statuses;
-`0002_distribute.sql` is hand-written and only calls `app.distribute_by_tenant` on both tables; a table added later
-calls it right after its `CREATE TABLE`), bookkeeping in `billing.__drizzle_migrations`, and
-`billingMigrations` applies it after the platform set (the schema file imports only `drizzle-orm` and a
+`drizzle.config.ts` generates `src/infrastructure/persistence/migrations`, bookkeeping in `billing.__drizzle_migrations`.
+Since the final squash (SH-12) the history is one `0000_init.sql`: drizzle-kit's tables, enum and indexes, hand-edited
+into the sharding design's order (each tenant table's `app.distribute_by_tenant` call right after its `CREATE TABLE`,
+then its indexes; then forced RLS, the grants and the policies); a table added later gets its own `NNNN` file in that
+order. The stacked files it replaced (`0000_init` .. `0008_ledger_trusted_state_read_at`) stay in
+`test/stacked-history/` as the fixture of `billing.squash.int-spec.ts`; a database migrated before the squash must be
+recreated ([docs/DEVELOPMENT.md](../../docs/DEVELOPMENT.md#database-migrations-postgres--drizzle)).
+`billingMigrations` applies the set after the platform set (the schema file imports only `drizzle-orm` and a
 dependency-free enum file, so drizzle-kit can load it). Every query carries `tenant_id` (`findById(tenantId, id)`, `findForCheckoutSession({ tenantId, … })`, `list({ tenantId, … })`).
 Every repository method runs in `inUnitOfWork` (`@platform/database`): it joins the active transaction or opens one that starts
 with the principal's `SET LOCAL` context. There is no pool handle and no prepared statement, because a statement outside a
@@ -477,13 +480,12 @@ transaction would carry no RLS context.
 - Drizzle repositories: real Drizzle SQL generation on a recording postgres.js fake (ON CONFLICT targets,
   `FOR UPDATE`, optimistic lock, prepared list statements).
 - `billing.migrations.spec.ts` — the migration set: its folder and `billing.__drizzle_migrations` bookkeeping,
-  every table and enum in the `billing` schema, the match with `drizzle.config.ts`, the baseline's
-  `CREATE SCHEMA IF NOT EXISTS "billing";` first statement, `0002_distribute` holding only the two
-  `app.distribute_by_tenant` calls, and `0003_rls` holding exactly the forced RLS, the five policies (no subquery)
-  and one grant per table and role, `0004_outbox` holding the plan's outbox SQL in order
-  (`describeOutboxTable` pins the table's shape), and `0005_ledger_tables` holding the five ledger tables in order
-  (each tenant table's distribution call right after its `CREATE`, no FK, no `REVOKE`, the contract's grants and
-  policies), and `0006_ledger_system_reads` holding only `app_system`'s `SELECT` on `payments`.
+  every table and enum in the `billing` schema, the match with `drizzle.config.ts`, and the squashed `0000_init`
+  (the only journal entry and snapshot): `CREATE SCHEMA IF NOT EXISTS "billing";` first, the full enum, tenant-leading
+  keys, each of the six tenant tables' `app.distribute_by_tenant` call right after its `CREATE` (none for the two
+  local ledger tables), every structural statement before forced RLS on all eight tables, then exactly one grant per
+  table and role, then exactly the §8.2, outbox and ledger policies (row-local, no subquery), no FK, no `REVOKE`,
+  and the outbox plan's SQL for `billing.outbox` (`describeOutboxTable` pins the table's shape).
 - `infrastructure/stripe/*.spec.ts` — the Stripe adapter: SDK error mapping, signature verification (valid, forged, stale, re-serialised, missing, not JSON), Checkout params and idempotency key, module wiring and the invalid-key boot failure.
 - `billing.controller.spec.ts` — Fastify app with the real `AuthModule` guards (tokens from `signTestAccessToken`, `@platform/auth/testing`):
   401/403, 400 validation (body, query, `Idempotency-Key`), serialisation, raw-body webhook, OpenAPI document.
@@ -509,7 +511,7 @@ one bookkeeping row per journal entry in each set's own table, every index of th
 (uuidv7 id, `pending` status) and a second boot that applies nothing.
 `infrastructure/persistence/billing.repositories.int-spec.ts` runs the repositories as `app_runtime` (`startBillingDatabase`):
 tenant isolation of list, find and lock, Idempotency-Keys per (tenant, user), platform events with a NULL user, and
-migration `0001` applied to a database that already has rows.
+the stacked migration `0001` (from `test/stacked-history/`) applied to a database that already has rows.
 `test/billing-flows.rls.int-spec.ts` (13 cases) runs the real billing core on the three URLs and proves each flow of the
 table above: `current_user` is `app_runtime`; a signed webhook updates only its tenant's payment and a replay changes
 nothing; metadata naming another tenant's payment touches neither tenant; a malformed tenant id is recorded as a platform
@@ -518,9 +520,14 @@ applies it; checkout calls Stripe with no applied RLS context; a member lists on
 tenant's (elevated, ending with the transaction); the purge deletes the old events of every tenant and the platform
 tenant. Across the file the system methods used are exactly the two pinned ones (the outbox relay is off there:
 `OUTBOX_RELAY_ENABLED=false`).
+`infrastructure/persistence/billing.squash.int-spec.ts` (SH-12): the stacked history (`test/stacked-history/`) on one
+fresh Citus and the squashed `0000_init` on another, both through the real runner as `app_owner` after the platform
+set; the catalogs of `app` and `billing` (`readSchemaCatalog` from `@platform/testing/postgres`: tables, columns,
+constraints, indexes, policies, table and column grants, enums, functions, triggers and the Citus distribution with
+its colocation group and shard ranges) are equal.
 `infrastructure/persistence/billing.distribution.int-spec.ts` (`startRlsTestPostgres()`: local execution off, the
 history applied as `app_owner`): both tables distributed by `tenant_id` and colocated with `app.tenant_colocation`,
-`0002` re-applied without change, the purge removing exactly the old events of tenants on every shard and of the
+`0000_init`'s six distribution calls re-applied without change, one bookkeeping row, the purge removing exactly the old events of tenants on every shard and of the
 platform tenant, both `payments` uniques per tenant, and a `(tenant_id, id)` router query (data through the
 superuser, since forced RLS hides every row from the owner).
 `infrastructure/persistence/billing.rls.int-spec.ts` (`startRlsTestPostgres()`, migrated as `app_owner`, seeded as the
@@ -531,13 +538,13 @@ own Stripe events only, UPDATE and DELETE `42501`), platform rows invisible to e
 by `app_system`, no context returning or changing nothing, forced RLS (the owner reads nothing), the exact grants and
 policies, and nothing on `billing.__drizzle_migrations`. A superuser snapshot after every case proves that no
 forbidden write changed a row.
-`infrastructure/persistence/billing.outbox.rls.int-spec.ts` (`0004_outbox`, local execution off): `billing.outbox`
+`infrastructure/persistence/billing.outbox.rls.int-spec.ts` (local execution off): `billing.outbox`
 distributed by `tenant_id` and colocated, RLS enabled and forced, exactly `INSERT` for `app_runtime` and `SELECT,
 INSERT, UPDATE, DELETE` for `app_system`, the one `outbox_insert` policy; a principal inserts only its own tenant's
 rows (another tenant's, the nil tenant's and a tenant-less principal's are refused); runtime reads and writes are
 `42501`; the system repository polls and marks; a row written by `insertAsPlatform` is invisible to and unchangeable
 by every runtime principal, elevated or not, and is returned by the poll.
-`infrastructure/persistence/billing.ledger.rls.int-spec.ts` (`0005_ledger_tables`, local execution off): the three
+`infrastructure/persistence/billing.ledger.rls.int-spec.ts` (local execution off): the three
 tenant tables distributed by `tenant_id` and colocated, the two local ones not in `pg_dist_partition`; forced RLS and
 no FK on all five; exactly the contract's grants and policies. Per tenant table: a non-elevated member inserts its
 own tenant's row, another tenant's or the nil tenant's is refused; it reads nothing without elevation and only its

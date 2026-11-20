@@ -501,8 +501,15 @@ except the `OTEL_*` variables that only `otel.ts` reads. Full catalogue: [CONFIG
 
 - **Cache metrics** (hit/miss of `AppCacheService`) are not exported yet.
 - **Tracing gaps** for NestJS 12, graphql 17 and postgres.js: rely on `@Span()` / `@Traceable()`
-  until upstream instrumentations support them.
-- **Jaeger** stays on 2.20 until Grafana's Jaeger datasource supports the 2.21+ API.
+  until upstream instrumentations support them. Re-checked 2026-11-20:
+  `@opentelemetry/instrumentation-nestjs-core` 0.72.1 supports `@nestjs/core <12`,
+  `@opentelemetry/instrumentation-graphql` 0.73.0 supports `graphql <17`, and there is no
+  postgres.js instrumentation.
+- **Jaeger** stays on 2.20 until Grafana's Jaeger datasource stops calling the endpoints 2.21
+  removed. Re-checked 2026-11-20 (Grafana 13.3.1, Jaeger 2.23.0): trace search
+  ([grafana/grafana#112336](https://github.com/grafana/grafana/issues/112336)) and dependencies
+  ([grafana/grafana#112348](https://github.com/grafana/grafana/issues/112348), waiting on
+  [jaegertracing/jaeger#7595](https://github.com/jaegertracing/jaeger/issues/7595)) still use them.
 
 Related: [PERFORMANCE.md](PERFORMANCE.md), [DOCKER.md](DOCKER.md), [SECURITY.md](SECURITY.md),
 [ARCHITECTURE.md](ARCHITECTURE.md), [README](../README.md).

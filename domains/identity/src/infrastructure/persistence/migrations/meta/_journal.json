@@ -5,78 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1791812058964,
-      "tag": "0000_init",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1794807188417,
-      "tag": "0001_tenants",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1794808619318,
-      "tag": "0002_memberships",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1794809293473,
-      "tag": "0003_invitations",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1794809507488,
-      "tag": "0004_audit_events",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1794810157769,
-      "tag": "0005_tenant_sessions",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1794823997191,
-      "tag": "0006_platform_staff",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1794824125653,
-      "tag": "0007_drop_user_roles",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1794880970326,
-      "tag": "0008_distribute",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1794899651063,
-      "tag": "0009_rls",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "7",
       "when": 1794940062535,
-      "tag": "0010_outbox",
+      "tag": "0000_init",
       "breakpoints": true
     }
   ]

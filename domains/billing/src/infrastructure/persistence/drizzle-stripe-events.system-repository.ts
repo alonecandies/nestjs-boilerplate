@@ -12,7 +12,7 @@ const { stripeEvents: methods } = BILLING_SYSTEM_METHODS;
  * `stripe_events` on the `app_system` (BYPASSRLS) pool, through `SystemDatabase.run` and the pinned
  * methods only: each call is logged and counted, refused outside `SystemContext`, and commits on
  * its own (never inside a runtime transaction). `app_system` holds SELECT, INSERT and DELETE on
- * `stripe_events` (0003_rls) and only SELECT on `payments` (0006, for reconciliation).
+ * `stripe_events` (0000_init) and only SELECT on `payments` (for reconciliation).
  */
 @Injectable()
 export class DrizzleStripeEventsSystemRepository implements StripeEventsSystemRepository {

@@ -190,7 +190,7 @@ Bootstrap (`main.ts`) adds the transports:
 | --------------------- | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------- |
 | monolith              | `createHttpApp(AppModule, { rawBody: true, multipart: true })` + Redis Socket.IO adapter | `connectKafkaConsumer`                                                          | `monolith` (override: `KAFKA_GROUP_ID`)     |
 | gateway               | same                                                                                     | `connectKafkaConsumer` (push consumer)                                          | `gateway-push` (override: `KAFKA_GROUP_ID`) |
-| identity-service      | `createServiceApp` (`/health/*`, `/metrics` only)                                        | `connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE])`                               | none                                        |
+| identity-service      | `createServiceApp` (`/health/*` only; `/metrics` on `METRICS_PORT`)                      | `connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE])`                               | none                                        |
 | notifications-service | `createServiceApp`                                                                       | `connectGrpcServer(app, [NOTIFICATIONS_GRPC_PACKAGE])` + `connectKafkaConsumer` | `notifications-service` (pinned in code)    |
 | billing-service       | `createServiceApp`                                                                       | `connectGrpcServer(app, [BILLING_GRPC_PACKAGE])`                                | none                                        |
 
@@ -638,11 +638,9 @@ Other structural decisions:
 
 Stated honestly, none of these are done:
 
-| Follow-up                                        | Today                                                                                                                                                                                                                         |
-| ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Outbox for notifications**                     | `notifications.notification-created.v1` is published directly: the notifications context has no Postgres store to hold an outbox row, so a crash between the inbox write and the publish loses the push (the inbox row stays) |
-| **Per-domain `@domain/<x>/api` subpath exports** | The gateway imports `@domain/identity`, `@domain/notifications`, `@domain/billing` whole, so its image carries core code it never runs. Subpath exports for the API surface would slim it                                     |
-| **Separate metrics listener**                    | `/metrics` is served on the application HTTP port                                                                                                                                                                             |
+| Follow-up                    | Today                                                                                                                                                                                                                         |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Outbox for notifications** | `notifications.notification-created.v1` is published directly: the notifications context has no Postgres store to hold an outbox row, so a crash between the inbox write and the publish loses the push (the inbox row stays) |
 
 ## See also
 

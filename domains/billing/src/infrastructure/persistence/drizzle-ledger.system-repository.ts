@@ -63,8 +63,8 @@ function keysetAfter(tenant: PgColumn, id: PgColumn, after: LedgerCursor | null)
  * The ledger on the `app_system` (BYPASSRLS) pool, through `SystemDatabase.run` and the pinned
  * methods only (`BILLING_SYSTEM_METHODS`): each call is logged and counted, refused outside
  * `SystemContext`, and its statements commit on their own. `app_system` holds `SELECT, INSERT` on
- * the three tenant ledger tables, `SELECT, INSERT, UPDATE` on the two local ones (0005), the
- * outbox grants (0004) and `SELECT` on `payments` (0006). The lists are multi-shard keyset reads
+ * the three tenant ledger tables, `SELECT, INSERT, UPDATE` on the two local ones, the
+ * outbox grants and `SELECT` on `payments`. The lists are multi-shard keyset reads
  * over a half-open window, without row locks; the only UPDATEs touch the two local tables.
  */
 @Injectable()

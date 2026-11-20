@@ -20,7 +20,7 @@ import { BILLING_OUTBOX, BillingOutbox } from './billing-outbox.js';
 import { BillingOutboxSystemRepository } from './drizzle-outbox.system-repository.js';
 
 /*
- * billing.outbox (0004_outbox, outbox plan Task 6) on Citus 14.2, single node, local execution off
+ * billing.outbox (0000_init, outbox plan Task 6) on Citus 14.2, single node, local execution off
  * (startRlsTestPostgres): distributed by tenant_id and colocated with app.tenant_colocation, RLS
  * enabled and forced, insert-only for app_runtime (its own tenant's rows, never the nil tenant),
  * poll, mark, purge and the platform-tenant insert for app_system. The real billing migration set
@@ -80,7 +80,7 @@ interface RuntimeContext {
 }
 
 describe.skipIf(process.env['INTEGRATION'] !== '1')(
-  'billing.outbox (0004_outbox) on Citus, local execution off',
+  'billing.outbox on Citus, local execution off',
   () => {
     let pg: RlsTestPostgres | undefined;
     let admin: Sql;

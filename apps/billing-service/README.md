@@ -9,7 +9,8 @@ verified.
 | Surface | Port (default)             | What                                                                           |
 | ------- | -------------------------- | ------------------------------------------------------------------------------ |
 | gRPC    | `GRPC_URL` `0.0.0.0:50053` | `billing.v1.BillingService`, health, reflection                                |
-| HTTP    | `PORT` `3003`              | `GET /health/live`, `GET /health/ready`, `GET /metrics` only                   |
+| HTTP    | `PORT` `3003`              | `GET /health/live`, `GET /health/ready` only                                   |
+| Metrics | `METRICS_PORT` `9467`      | `GET /metrics` on its own listener (`9464` in containers; never published)     |
 | Kafka   | produces                   | `billing.payment-succeeded.v1` (key `userId`; envelope id = domain event id)   |
 | Kafka   | consumes (ledger on)       | `billing.ledger-posting.v1` in group `billing-service` (`LEDGER_ENABLED=true`) |
 

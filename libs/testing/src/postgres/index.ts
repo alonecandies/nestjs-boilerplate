@@ -3,5 +3,6 @@
  * subpath so that specs which only need `createMock` never load testcontainers. Test code only.
  */
 
+export * from './catalog.js';
 export * from './roles.js';
 export * from './start-test-postgres.js';

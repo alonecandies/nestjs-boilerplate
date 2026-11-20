@@ -165,7 +165,7 @@ details in [OBSERVABILITY.md](OBSERVABILITY.md)
 | ------------------------------------ | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `LOG_LEVEL`                          | `info`                         | `fatal` \| `error` \| `warn` \| `info` \| `debug` \| `trace` \| `silent` (pino).                                                                                                   |
 | `LOG_PRETTY`                         | on when `NODE_ENV=development` | pino-pretty output (~5x slower).                                                                                                                                                   |
-| `METRICS_ENABLED`                    | `true`                         | `GET /metrics` (prom-client).                                                                                                                                                      |
+| `METRICS_ENABLED`                    | `true`                         | `GET /metrics` (prom-client) on `METRICS_PORT`.                                                                                                                                    |
 | `METRICS_BEARER_TOKEN`               | —                              | Min 16 chars. When set, `/metrics` answers `404` unless the scrape sends `Authorization: Bearer <token>`.                                                                          |
 | `METRICS_PORT`                       | `9464`                         | Port of the separate `/metrics` listener (host dev: 9464 monolith and gateway, 9465 identity, 9466 notifications, 9467 billing). Must differ from `PORT`; `0` = OS-picked (tests). |
 | `OTEL_SDK_DISABLED`                  | —                              | Explicit value wins; when unset, tracing is on only if an OTLP endpoint is set.                                                                                                    |
@@ -655,9 +655,8 @@ Cross-field rules live in each schema's `superRefine`; a violation stops the pro
   disables a guard above: they exist for the local compose stack (which runs `NODE_ENV=production` on
   purpose) and for networks that secure a hop themselves (a mesh, a TLS sidecar). Keep each one off
   unless you can say what encrypts that hop instead.
-- `/metrics` is served on the same `PORT` as the API (a separate metrics listener is a known
-  follow-up) and is open unless `METRICS_BEARER_TOKEN` is set: set the token, or block the path at
-  the load balancer.
+- `/metrics` is served on `METRICS_PORT`, not the API's `PORT`, and is open to anyone who reaches that port unless
+  `METRICS_BEARER_TOKEN` is set: keep the port cluster-internal (never behind the load balancer) and set the token.
 
 Production checklist (secrets from a secret store as real environment variables, which win over any
 `.env`):

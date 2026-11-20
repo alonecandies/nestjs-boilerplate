@@ -5,64 +5,8 @@
     {
       "idx": 0,
       "version": "7",
-      "when": 1791824047581,
-      "tag": "0000_init",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1794851841593,
-      "tag": "0001_tenant_columns",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1794880966489,
-      "tag": "0002_distribute",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1794900055539,
-      "tag": "0003_rls",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1794942410609,
-      "tag": "0004_outbox",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1794975386145,
-      "tag": "0005_ledger_tables",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1795072854589,
-      "tag": "0006_ledger_system_reads",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1795113464882,
-      "tag": "0007_payment_amount_refunded",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
       "when": 1795158942361,
-      "tag": "0008_ledger_trusted_state_read_at",
+      "tag": "0000_init",
       "breakpoints": true
     }
   ]

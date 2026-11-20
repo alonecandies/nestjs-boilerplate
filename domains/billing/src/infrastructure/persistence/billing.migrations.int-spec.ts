@@ -142,7 +142,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing migrations on Postg
     });
   });
 
-  it('carries the tenant-leading keys of 0001 and the purge index', async () => {
+  it('carries the tenant-leading keys and the purge index', async () => {
     // billing.__drizzle_migrations (the migrator's SERIAL PRIMARY KEY) is not part of the history.
     const indexes = await db.execute<{ indexname: string }>(sql`
       select indexname from pg_indexes
