@@ -103,6 +103,8 @@ describe('HandleStripeWebhookHandler', () => {
   let stripe: StripeService;
   /** The PaymentIntents Stripe knows, by id → metadata (absent = 404). */
   let intents: Map<string, Record<string, string>>;
+  /** Stripe's CURRENT `amount_refunded` of each charge it knows, by id (absent = 404). */
+  let charges: Map<string, number>;
   let ledger: { -readonly [K in keyof LedgerConfig]: LedgerConfig[K] };
   let systemEventsRepository: StripeEventsSystemRepository;
   let outboxSystem: BillingOutboxSystemRepository;
@@ -216,6 +218,20 @@ describe('HandleStripeWebhookHandler', () => {
         });
       }
       return { id, object: 'payment_intent', metadata };
+    }) as never);
+    charges = new Map();
+    vi.spyOn(stripe.client.charges, 'retrieve').mockImplementation((async (id: string) => {
+      order.push(`stripe:${id}:${tx.active ? 'in-tx' : 'no-tx'}`);
+      const amountRefunded = charges.get(id);
+      if (amountRefunded === undefined) {
+        throw Stripe.errors.StripeError.generate({
+          statusCode: 404,
+          message: `No such charge: '${id}'`,
+          type: 'invalid_request_error',
+          code: 'resource_missing',
+        });
+      }
+      return { id, object: 'charge', amount: 2_500, amount_refunded: amountRefunded };
     }) as never);
     // LEDGER_ENABLED defaults to false; the ledger blocks below switch it on.
     ledger = { enabled: false, reconcileLookbackHours: 72, verify: false, allowUnverified: false };
@@ -812,6 +828,7 @@ describe('HandleStripeWebhookHandler', () => {
       status: 'succeeded',
       metadata: {},
       payment_intent: 'pi_paid',
+      charge: 'ch_1',
       ...overrides,
     });
     const dispute = (overrides: Record<string, unknown> = {}) => ({
@@ -884,6 +901,7 @@ describe('HandleStripeWebhookHandler', () => {
       });
       store.seed(paid);
       intents.set('pi_paid', paidMetadata());
+      charges.set('ch_1', 0);
     });
 
     it('charge.succeeded (charge metadata): no Stripe call, no transition, one charge posting in the unit of work', async () => {
@@ -924,45 +942,67 @@ describe('HandleStripeWebhookHandler', () => {
       });
     });
 
-    it('charge.refunded with amount_refunded = amount → refunded, no posting row', async () => {
+    it("charge.refunded: Stripe's current total = amount → refunded, read before the unit of work, no posting row", async () => {
+      charges.set('ch_1', 2_500);
       await deliver(money('charge.refunded', charge({ amount_refunded: 2_500 }), 'evt_ch_rf'));
 
       expect(store.payment(paid.id)).toMatchObject({
         status: PaymentStatus.Refunded,
+        amountRefunded: 2_500,
         version: 1,
       });
-      expect(order).toEqual(['markProcessed', 'save']);
+      expect(order).toEqual(['stripe:ch_1:no-tx', 'markProcessed', 'save']);
       expect(postings()).toEqual([]);
     });
 
-    it('charge.refunded with less refunded → partially_refunded, no posting row', async () => {
-      await deliver(money('charge.refunded', charge({ amount_refunded: 500 }), 'evt_ch_prf'));
+    it("charge.refunded with less refunded → partially_refunded, from Stripe's total, not the event's", async () => {
+      charges.set('ch_1', 500);
+      await deliver(money('charge.refunded', charge({ amount_refunded: 2_500 }), 'evt_ch_prf'));
 
-      expect(store.payment(paid.id)?.status).toBe(PaymentStatus.PartiallyRefunded);
+      expect(store.payment(paid.id)).toMatchObject({
+        status: PaymentStatus.PartiallyRefunded,
+        amountRefunded: 500,
+      });
       expect(postings()).toEqual([]);
     });
 
-    it.each(['refund.created', 'refund.updated'])(
-      '%s with status succeeded: one refund posting, no transition',
-      async (type) => {
-        await deliver(money(type, refund(), `evt_${type}`));
+    it('refund.created with status succeeded: one refund posting, no transition, no charge read', async () => {
+      await deliver(money('refund.created', refund(), 'evt_refund.created'));
 
-        expect(order).toEqual([
-          'stripe:pi_paid:no-tx',
-          'markProcessed',
-          `enqueue:${POSTING}:in-tx`,
-        ]);
-        expectPosting(`evt_${type}`, {
-          stripeEventType: type,
-          objectType: 'refund',
-          objectId: 're_1',
-        });
-        expect(store.payment(paid.id)).toMatchObject({
-          status: PaymentStatus.Succeeded,
-          version: 0,
-        });
-      },
-    );
+      expect(order).toEqual(['stripe:pi_paid:no-tx', 'markProcessed', `enqueue:${POSTING}:in-tx`]);
+      expectPosting('evt_refund.created', {
+        stripeEventType: 'refund.created',
+        objectType: 'refund',
+        objectId: 're_1',
+      });
+      expect(store.payment(paid.id)).toMatchObject({
+        status: PaymentStatus.Succeeded,
+        version: 0,
+      });
+    });
+
+    it("refund.updated with status succeeded: one refund posting and Stripe's total recorded", async () => {
+      charges.set('ch_1', 2_500);
+      await deliver(money('refund.updated', refund(), 'evt_refund.updated'));
+
+      expect(order).toEqual([
+        'stripe:pi_paid:no-tx',
+        'stripe:ch_1:no-tx',
+        'markProcessed',
+        'save',
+        `enqueue:${POSTING}:in-tx`,
+      ]);
+      expectPosting('evt_refund.updated', {
+        stripeEventType: 'refund.updated',
+        objectType: 'refund',
+        objectId: 're_1',
+      });
+      expect(store.payment(paid.id)).toMatchObject({
+        status: PaymentStatus.Refunded,
+        amountRefunded: 2_500,
+        version: 1,
+      });
+    });
 
     it('refund.failed: one refund posting', async () => {
       await deliver(money('refund.failed', refund({ status: 'failed' }), 'evt_re_failed'));
@@ -975,9 +1015,11 @@ describe('HandleStripeWebhookHandler', () => {
     });
 
     it('a full refund then refund.failed: the payment is succeeded again', async () => {
+      charges.set('ch_1', 2_500);
       await deliver(money('charge.refunded', charge({ amount_refunded: 2_500 }), 'evt_ch_rf'));
       expect(store.payment(paid.id)?.status).toBe(PaymentStatus.Refunded);
 
+      charges.set('ch_1', 0);
       await deliver(money('refund.failed', refund({ status: 'failed' }), 'evt_re_failed'));
 
       expect(store.payment(paid.id)).toMatchObject({
@@ -992,41 +1034,102 @@ describe('HandleStripeWebhookHandler', () => {
       });
     });
 
-    it('two partial refunds then one refund.failed: still partially_refunded by the other', async () => {
-      await deliver(money('charge.refunded', charge({ amount_refunded: 500 }), 'evt_ch_rf1'));
-      await deliver(money('charge.refunded', charge({ amount_refunded: 1_500 }), 'evt_ch_rf2'));
+    it('a replayed refund event converges on the same total (a new event id, no new change)', async () => {
+      charges.set('ch_1', 1_500);
+      await deliver(money('charge.refunded', charge(), 'evt_ch_rf1'));
+      await deliver(money('refund.updated', refund({ amount: 1_500 }), 'evt_re_upd'));
+
       expect(store.payment(paid.id)).toMatchObject({
         status: PaymentStatus.PartiallyRefunded,
         amountRefunded: 1_500,
-      });
-
-      await deliver(
-        money('refund.failed', refund({ amount: 500, status: 'failed' }), 'evt_re_failed'),
-      );
-
-      expect(store.payment(paid.id)).toMatchObject({
-        status: PaymentStatus.PartiallyRefunded,
-        amountRefunded: 1_000,
+        version: 1,
       });
     });
 
-    it('a partial refund then refund.failed: succeeded again', async () => {
-      await deliver(money('charge.refunded', charge({ amount_refunded: 500 }), 'evt_ch_prf'));
+    describe("out-of-order deliveries end at Stripe's total (re-review G1)", () => {
+      it('refund A (500) fails after refund B (1000) is recorded: 1000, partially_refunded', async () => {
+        charges.set('ch_1', 500);
+        await deliver(money('charge.refunded', charge({ amount_refunded: 500 }), 'evt_a_rf'));
+        // A failed, B went through: Stripe now reports B alone.
+        charges.set('ch_1', 1_000);
+        await deliver(money('charge.refunded', charge({ amount_refunded: 1_000 }), 'evt_b_rf'));
 
-      await deliver(
-        money('refund.failed', refund({ amount: 500, status: 'failed' }), 'evt_re_failed'),
+        await deliver(
+          money('refund.failed', refund({ id: 're_a', amount: 500, status: 'failed' }), 'evt_a_f'),
+        );
+
+        expect(store.payment(paid.id)).toMatchObject({
+          status: PaymentStatus.PartiallyRefunded,
+          amountRefunded: 1_000,
+        });
+      });
+
+      it('charge.refunded (200) delivered before refund.failed (A = 500): 200, partially_refunded', async () => {
+        charges.set('ch_1', 500);
+        await deliver(money('charge.refunded', charge({ amount_refunded: 500 }), 'evt_a_rf'));
+        // A failed and B (200) went through; B's charge.refunded overtakes A's refund.failed.
+        charges.set('ch_1', 200);
+        await deliver(money('charge.refunded', charge({ amount_refunded: 200 }), 'evt_b_rf'));
+        expect(store.payment(paid.id)).toMatchObject({ amountRefunded: 200 });
+
+        await deliver(
+          money('refund.failed', refund({ id: 're_a', amount: 500, status: 'failed' }), 'evt_a_f'),
+        );
+
+        expect(store.payment(paid.id)).toMatchObject({
+          status: PaymentStatus.PartiallyRefunded,
+          amountRefunded: 200,
+        });
+      });
+
+      it('a late charge.refunded after refund.failed does not resurrect the failed refund', async () => {
+        // The full refund failed before either event arrived: Stripe reports nothing refunded.
+        charges.set('ch_1', 0);
+        await deliver(money('refund.failed', refund({ status: 'failed' }), 'evt_re_failed'));
+        await deliver(money('charge.refunded', charge({ amount_refunded: 2_500 }), 'evt_ch_late'));
+
+        expect(store.payment(paid.id)).toMatchObject({
+          status: PaymentStatus.Succeeded,
+          amountRefunded: 0,
+          version: 0,
+        });
+        expectPosting('evt_re_failed', {
+          stripeEventType: 'refund.failed',
+          objectType: 'refund',
+          objectId: 're_1',
+        });
+      });
+    });
+
+    it('a Stripe failure reading the charge fails the delivery (retried): nothing is written', async () => {
+      vi.mocked(stripe.client.charges.retrieve).mockRejectedValueOnce(
+        Stripe.errors.StripeError.generate({ statusCode: 500, message: 'down', type: 'api_error' }),
       );
 
-      expect(store.payment(paid.id)).toMatchObject({
-        status: PaymentStatus.Succeeded,
-        amountRefunded: 0,
-      });
+      await expect(
+        deliver(money('refund.failed', refund({ status: 'failed' }), 'evt_re_down')),
+      ).rejects.toMatchObject({ code: 'PAYMENT_PROVIDER_ERROR' });
+
+      expect(tx.begun).toBe(0);
+      expect(store.state.events.size).toBe(0);
+      expect(systemEvents.events).toEqual([]);
+      expect(store.payment(paid.id)).toMatchObject({ status: PaymentStatus.Succeeded, version: 0 });
+      expect(outbox.records).toEqual([]);
+
+      // Stripe's redelivery is then applied.
+      charges.set('ch_1', 0);
+      await expect(
+        deliver(money('refund.failed', refund({ status: 'failed' }), 'evt_re_down')),
+      ).resolves.toMatchObject({ duplicate: false });
+      expect(postings()).toHaveLength(1);
     });
 
     it('refund.failed with the ledger off still restores the payment, and writes no row', async () => {
+      charges.set('ch_1', 2_500);
       await deliver(money('charge.refunded', charge({ amount_refunded: 2_500 }), 'evt_ch_rf'));
       ledger.enabled = false;
 
+      charges.set('ch_1', 0);
       await deliver(money('refund.failed', refund({ status: 'failed' }), 'evt_re_failed'));
 
       expect(store.payment(paid.id)?.status).toBe(PaymentStatus.Succeeded);
@@ -1034,7 +1137,7 @@ describe('HandleStripeWebhookHandler', () => {
     });
 
     it.each(['pending', 'requires_action', 'canceled'])(
-      'refund.updated with status %s writes no row (and asks Stripe nothing)',
+      "refund.updated with status %s writes no row, only reads Stripe's total",
       async (status) => {
         const response = await deliver(
           money('refund.updated', refund({ status }), `evt_re_${status}`),
@@ -1042,7 +1145,7 @@ describe('HandleStripeWebhookHandler', () => {
 
         expect(response).toMatchObject({ received: true, duplicate: false });
         expect(postings()).toEqual([]);
-        expect(order.filter((step) => step.startsWith('stripe:'))).toEqual([]);
+        expect(order).toEqual(['stripe:pi_paid:no-tx', 'stripe:ch_1:no-tx', 'markProcessed']);
         expect(store.payment(paid.id)?.version).toBe(0);
       },
     );
@@ -1079,6 +1182,7 @@ describe('HandleStripeWebhookHandler', () => {
     });
 
     it('a partial refund, a dispute and its reinstatement: partially_refunded again', async () => {
+      charges.set('ch_1', 500);
       await deliver(money('charge.refunded', charge({ amount_refunded: 500 }), 'evt_ch_prf'));
       await deliver(money('charge.dispute.funds_withdrawn', dispute(), 'evt_du_out'));
       expect(store.payment(paid.id)?.status).toBe(PaymentStatus.Disputed);
@@ -1310,7 +1414,8 @@ describe('HandleStripeWebhookHandler', () => {
       await deliver(money('payout.paid', payout(), 'evt_s7'));
 
       const calls = order.filter((step) => step.startsWith('stripe:'));
-      expect(calls).toHaveLength(6);
+      // PaymentIntent GETs for s1-s6, plus the charge GET of s2, s3 and s4.
+      expect(calls).toHaveLength(9);
       expect(calls.every((step) => step.endsWith(':no-tx'))).toBe(true);
       expect(postings()).toHaveLength(6);
     });
@@ -1325,6 +1430,7 @@ describe('HandleStripeWebhookHandler', () => {
         expect(store.payment(paid.id)?.status).toBe(PaymentStatus.Disputed);
         await deliver(money('charge.dispute.funds_reinstated', dispute(), 'evt_off_2'));
         expect(store.payment(paid.id)?.status).toBe(PaymentStatus.Succeeded);
+        charges.set('ch_1', 2_500);
         await deliver(money('charge.refunded', charge({ amount_refunded: 2_500 }), 'evt_off_3'));
         expect(store.payment(paid.id)?.status).toBe(PaymentStatus.Refunded);
 

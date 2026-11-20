@@ -258,20 +258,30 @@ failure marks the payment `failed`; a retry with the same key reopens it and get
 receipt (envelope id `uuidv5(LEDGER_NAMESPACE, <evt id>)`, key = tenant id, actor = the user; the billing consumer
 posts it to immudb). With the ledger off (the default) receipts and transitions still happen and no row is written.
 
-| Stripe event                                                   | Owner from                              | Payment transition                                                                                                                        | Posting row       |
-| -------------------------------------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
-| `checkout.session.completed`, `async_payment_succeeded` (paid) | session metadata                        | → `succeeded`                                                                                                                             | none              |
-| `charge.succeeded`                                             | charge metadata, else its PaymentIntent | none                                                                                                                                      | `charge`, `ch_…`  |
-| `charge.refunded`                                              | same                                    | → `refunded` when `amount_refunded = amount`, else `partially_refunded`; records `amount_refunded`                                        | none              |
-| `refund.created` and `refund.updated` with status `succeeded`  | the refund's PaymentIntent              | none                                                                                                                                      | `refund`, `re_…`  |
-| `refund.failed`                                                | same                                    | takes the refund off `amount_refunded`: → `partially_refunded` while some remains, else `succeeded` (a `disputed` payment stays disputed) | `refund`, `re_…`  |
-| `charge.dispute.funds_withdrawn`                               | the dispute's PaymentIntent             | → `disputed`                                                                                                                              | `dispute`, `du_…` |
-| `charge.dispute.funds_reinstated`                              | same                                    | `disputed` → `partially_refunded` while `amount_refunded` > 0, else `succeeded`                                                           | `dispute`, `du_…` |
-| `payout.paid`, `payout.failed`                                 | none: the platform                      | none                                                                                                                                      | `payout`, `po_…`  |
+| Stripe event                                                   | Owner from                              | Payment transition                                                               | Posting row                            |
+| -------------------------------------------------------------- | --------------------------------------- | -------------------------------------------------------------------------------- | -------------------------------------- |
+| `checkout.session.completed`, `async_payment_succeeded` (paid) | session metadata                        | → `succeeded`                                                                    | none                                   |
+| `charge.succeeded`                                             | charge metadata, else its PaymentIntent | none                                                                             | `charge`, `ch_…`                       |
+| `charge.refunded`                                              | same                                    | records the charge's **current** `amount_refunded`, read from Stripe (see below) | none                                   |
+| `refund.created` with status `succeeded`                       | the refund's PaymentIntent              | none                                                                             | `refund`, `re_…`                       |
+| `refund.updated`                                               | same                                    | records the charge's current `amount_refunded` (see below)                       | `refund`, `re_…` at status `succeeded` |
+| `refund.failed`                                                | same                                    | records the charge's current `amount_refunded` (see below)                       | `refund`, `re_…`                       |
+| `charge.dispute.funds_withdrawn`                               | the dispute's PaymentIntent             | → `disputed`                                                                     | `dispute`, `du_…`                      |
+| `charge.dispute.funds_reinstated`                              | same                                    | `disputed` → the status the stored `amount_refunded` gives                       | `dispute`, `du_…`                      |
+| `payout.paid`, `payout.failed`                                 | none: the platform                      | none                                                                             | `payout`, `po_…`                       |
 
 - The owner comes from `StripeOwnerResolver`: the object's own signed metadata, else its PaymentIntent's (checkout
   signs `{ paymentId, userId, tenantId }` onto it), read with at most one GET (`StripeService.retrievePaymentIntent`)
   **before** the unit of work opens. No Stripe call is made while a transaction is open.
+- Refund state is order-independent: every refund event (`charge.refunded`, `refund.updated`, `refund.failed`) reads
+  the charge (`StripeService.retrieveCharge`, one GET before the unit of work) and stores Stripe's **current**
+  `amount_refunded` as `payments.amount_refunded`, an absolute value, never a delta. The status follows from it
+  (`Payment.refund`): `0` → `succeeded`, below `amount_total` → `partially_refunded`, at least `amount_total` →
+  `refunded`; a `disputed` payment records the total and stays disputed. A replayed, late or reordered event (a
+  failure arriving after a later refund, a `charge.refunded` arriving after its refund failed) converges on Stripe's
+  state. A failing charge read fails the delivery before anything is written, and Stripe retries it. Postings are
+  unchanged: each money movement still posts per event. Rows paid before migration 0007 show `amount_refunded = 0`
+  until their next refund event sets the true total.
 - An owner that cannot be resolved (no metadata, a missing PaymentIntent, a tenant that is not a UUID, the nil
   tenant) is recorded as a platform receipt with a warning: no payment is touched and no row is written
   (reconciliation R4 posts the balance transaction later).
@@ -281,8 +291,9 @@ posts it to immudb). With the ledger off (the default) receipts and transitions 
 - Payouts are platform money: `SystemContext.run('billing.platform-webhook')`, `outbox.insertAsPlatform` first (nil
   tenant and key, null user and actor), then `stripeEvents.markProcessedAsPlatform`. Both are idempotent, so a crash
   between them is healed by Stripe's redelivery.
-- Events without a posting or a transition (a `refund.updated` still pending, and with the ledger off
-  `charge.succeeded`, `refund.*` and `payout.*`) resolve their owner from their own metadata only, like any other event.
+- Events without a posting or a transition (a `refund.created` still pending, a `refund.updated` of no charge, and
+  with the ledger off `charge.succeeded`, `refund.created` and `payout.*`) resolve their owner from their own metadata
+  only, like any other event.
 
 **Stripe event types to enable** on the webhook endpoint: `checkout.session.completed`,
 `checkout.session.async_payment_succeeded`, `checkout.session.async_payment_failed`, `checkout.session.expired`,

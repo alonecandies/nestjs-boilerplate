@@ -20,8 +20,9 @@ export interface PaymentSnapshot {
   /** ISO 4217, lowercase; `null` until Stripe priced the Checkout Session. */
   readonly currency: string | null;
   /**
-   * Minor units Stripe reports refunded on the charge (`charge.refunded`), net of refunds that
-   * failed since (`refund.failed`); 0 until a refund.
+   * Minor units Stripe reported refunded on the charge (its `amount_refunded`, net of failed
+   * refunds) when the last refund event was applied; 0 until a refund event (rows from before
+   * migration 0007 too, until their next refund event).
    */
   readonly amountRefunded: number;
   readonly status: PaymentStatus;
@@ -67,10 +68,12 @@ export interface CheckoutCompletion {
 }
 
 const OPEN_STATUSES: readonly PaymentStatus[] = [PaymentStatus.Pending, PaymentStatus.Failed];
-/** Paid and not disputed: what a Stripe refund applies to. */
-const REFUNDABLE_STATUSES: readonly PaymentStatus[] = [
+/** Paid: what Stripe's refunded total applies to (a disputed payment keeps its status). */
+const REFUND_TRACKED_STATUSES: readonly PaymentStatus[] = [
   PaymentStatus.Succeeded,
   PaymentStatus.PartiallyRefunded,
+  PaymentStatus.Refunded,
+  PaymentStatus.Disputed,
 ];
 /** Paid and not refunded in full: what a dispute's withdrawal applies to. */
 const DISPUTABLE_STATUSES: readonly PaymentStatus[] = [
@@ -193,7 +196,7 @@ export class Payment extends AggregateRoot {
     return this.state.status;
   }
 
-  /** Minor units refunded, net of failed refunds. */
+  /** Minor units refunded, net of failed refunds (Stripe's total at the last refund event). */
   get amountRefunded(): number {
     return this.state.amountRefunded;
   }
@@ -315,37 +318,23 @@ export class Payment extends AggregateRoot {
   }
 
   /**
-   * A Stripe refund of the charge (`charge.refunded`, ledger S-6), with the charge's
-   * `amount_refunded`: `succeeded` or `partially_refunded` → `refunded` when `full` (Stripe's
-   * `amount_refunded = amount`), else `partially_refunded`, recording the refunded total. Returns
-   * `false` when nothing changes: a payment never paid (`pending`, `failed`, `expired`), a disputed
-   * one (Stripe refuses refunds of disputed charges), a repeat, or an older delivery whose total is
-   * below the recorded one (Stripe's total only drops through `refund.failed`, see `failRefund`).
+   * Stripe's CURRENT refunded total of the charge (`amount_refunded`, read from Stripe on every
+   * refund event: `charge.refunded`, `refund.updated`, `refund.failed`; ledger S-6), stored as is.
+   * The status follows from it: `0` → `succeeded`, below `amountTotal` → `partially_refunded`, at
+   * least `amountTotal` → `refunded`; a `disputed` payment records the total and stays disputed
+   * (its reinstatement reads it). Absolute, not a delta: replayed or out-of-order events converge
+   * on Stripe's state (a refund that failed is simply no longer in the total). Returns `false` when
+   * nothing changes: a payment never paid (`pending`, `failed`, `expired`), the same total again,
+   * or a total that is not a non-negative integer.
    */
-  refund(amountRefunded: number, full: boolean, now: Date): boolean {
-    if (!REFUNDABLE_STATUSES.includes(this.state.status)) return false;
-    if (amountRefunded < this.state.amountRefunded) return false;
-    const status = full ? PaymentStatus.Refunded : PaymentStatus.PartiallyRefunded;
+  refund(amountRefunded: number, now: Date): boolean {
+    if (!REFUND_TRACKED_STATUSES.includes(this.state.status)) return false;
+    if (!isInteger(amountRefunded) || amountRefunded < 0) return false;
+    const status =
+      this.state.status === PaymentStatus.Disputed
+        ? PaymentStatus.Disputed
+        : this.paidStatusOf(amountRefunded);
     if (status === this.state.status && amountRefunded === this.state.amountRefunded) return false;
-    this.state = { ...this.state, status, amountRefunded, updatedAt: now };
-    return true;
-  }
-
-  /**
-   * A refund that failed after it was recorded (`refund.failed`, Stripe returns `amount` to the
-   * balance): the refunded total drops by `amount` (never below 0) and a `refunded` or
-   * `partially_refunded` payment gets the status that total gives: `partially_refunded` while other
-   * refunds remain, else `succeeded`. A `disputed` payment stays disputed with the lower total (its
-   * reinstatement reads it). Returns `false` when no refund is recorded (nothing to undo).
-   */
-  failRefund(amount: number, now: Date): boolean {
-    const refundedStatus =
-      this.state.status === PaymentStatus.Refunded ||
-      this.state.status === PaymentStatus.PartiallyRefunded;
-    if (!refundedStatus && this.state.status !== PaymentStatus.Disputed) return false;
-    if (this.state.amountRefunded === 0) return false;
-    const amountRefunded = Math.max(0, this.state.amountRefunded - amount);
-    const status = refundedStatus ? this.paidStatusOf(amountRefunded) : this.state.status;
     this.state = { ...this.state, status, amountRefunded, updatedAt: now };
     return true;
   }
@@ -362,8 +351,8 @@ export class Payment extends AggregateRoot {
 
   /**
    * Funds reinstated after a won dispute (`charge.dispute.funds_reinstated`): `disputed` → the
-   * status before the dispute, from the refunded total: `partially_refunded` while refunds remain,
-   * else `succeeded`. Returns `false` from any other status.
+   * status the stored refunded total gives (as `refund`): `partially_refunded` while refunds
+   * remain, else `succeeded`. Returns `false` from any other status.
    */
   reinstate(now: Date): boolean {
     if (this.state.status !== PaymentStatus.Disputed) return false;
@@ -372,9 +361,16 @@ export class Payment extends AggregateRoot {
     return true;
   }
 
-  /** The status of a paid, undisputed payment with `amountRefunded` refunded (not in full). */
+  /**
+   * The status of a paid, undisputed payment with `amountRefunded` refunded: `succeeded` at 0,
+   * `refunded` from `amountTotal` on, else `partially_refunded`.
+   */
   private paidStatusOf(amountRefunded: number): PaymentStatus {
-    return amountRefunded > 0 ? PaymentStatus.PartiallyRefunded : PaymentStatus.Succeeded;
+    if (amountRefunded <= 0) return PaymentStatus.Succeeded;
+    const total = this.state.amountTotal;
+    return total !== null && amountRefunded >= total
+      ? PaymentStatus.Refunded
+      : PaymentStatus.PartiallyRefunded;
   }
 
   /** Called by the repository after a successful optimistic-locked save. */

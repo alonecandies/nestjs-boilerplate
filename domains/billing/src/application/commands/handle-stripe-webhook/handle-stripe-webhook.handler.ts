@@ -55,6 +55,11 @@ interface MoneyEvent {
   readonly posts: boolean;
   /** The payment's status change, if the event moves one. */
   readonly transition: Transition | null;
+  /**
+   * A refund event: the charge whose CURRENT `amount_refunded` the payment records (read from
+   * Stripe before the unit of work; the transition is `payment.refund(total)`), else null.
+   */
+  readonly refundedCharge: string | null;
   /** Platform-level money (payouts): no tenant, the system path. */
   readonly platform: boolean;
 }
@@ -64,7 +69,7 @@ interface MoneyEvent {
  * has a balance transaction (plan delta 5): `charge.refunded` only moves the payment status.
  */
 function moneyEventOf(event: Stripe.Event): MoneyEvent | null {
-  const tenantMoney = { platform: false } as const;
+  const tenantMoney = { platform: false, refundedCharge: null } as const;
   switch (event.type) {
     case 'charge.succeeded':
       return {
@@ -74,19 +79,17 @@ function moneyEventOf(event: Stripe.Event): MoneyEvent | null {
         posts: true,
         transition: null,
       };
-    case 'charge.refunded': {
-      const charge = event.data.object;
-      const full = charge.amount_refunded === charge.amount;
+    case 'charge.refunded':
+      // The event's own `amount_refunded` may be stale (out of order): Stripe's current one counts.
       return {
         ...tenantMoney,
         objectType: 'charge',
-        objectId: charge.id,
+        objectId: event.data.object.id,
         posts: false,
-        transition: (payment, now) => payment.refund(charge.amount_refunded, full, now),
+        transition: null,
+        refundedCharge: event.data.object.id,
       };
-    }
     case 'refund.created':
-    case 'refund.updated':
       // Only a refund that went through moves money; pending, requires_action and canceled do not.
       return {
         ...tenantMoney,
@@ -95,15 +98,17 @@ function moneyEventOf(event: Stripe.Event): MoneyEvent | null {
         posts: event.data.object.status === 'succeeded',
         transition: null,
       };
+    case 'refund.updated':
     case 'refund.failed': {
-      // Stripe returned the refund to the balance: the payment's status goes back with it.
+      // A failed refund is returned to the balance: Stripe's total no longer counts it.
       const refund = event.data.object;
       return {
         ...tenantMoney,
         objectType: 'refund',
         objectId: refund.id,
-        posts: true,
-        transition: (payment, now) => payment.failRefund(refund.amount, now),
+        posts: event.type === 'refund.failed' || refund.status === 'succeeded',
+        transition: null,
+        refundedCharge: idOf(refund.charge),
       };
     }
     case 'charge.dispute.funds_withdrawn':
@@ -129,12 +134,17 @@ function moneyEventOf(event: Stripe.Event): MoneyEvent | null {
         objectId: event.data.object.id,
         posts: true,
         transition: null,
+        refundedCharge: null,
         platform: true,
       };
     default:
       return null;
   }
 }
+
+/** The id of an expandable Stripe reference (a string id or the expanded object), else null. */
+const idOf = (ref: string | { readonly id: string } | null | undefined): string | null =>
+  typeof ref === 'string' ? ref : (ref?.id ?? null);
 
 const paymentIntentIdOf = (session: Stripe.Checkout.Session): string | null =>
   typeof session.payment_intent === 'string'
@@ -172,18 +182,21 @@ const PLATFORM_WEBHOOK_REASON = 'billing.platform-webhook';
  * Handled: `checkout.session.completed` / `async_payment_succeeded` → `succeeded` (only once the
  * session is actually paid), `async_payment_failed` → `failed`, `expired` → `expired`.
  *
- * Money events (L-11, `moneyEventOf`): `charge.succeeded`, `charge.refunded` (→ `refunded` or
- * `partially_refunded`, recording `amount_refunded`), `refund.created` / `refund.updated` (status
- * `succeeded`), `refund.failed` (the refund taken off: → `partially_refunded` while other refunds
- * remain, else `succeeded`), `charge.dispute.funds_withdrawn` (→ `disputed`),
- * `charge.dispute.funds_reinstated` (`disputed` → `partially_refunded` while refunds remain, else
- * `succeeded`) and `payout.paid` / `payout.failed`. While LEDGER_ENABLED, each event of the table
+ * Money events (L-11, `moneyEventOf`): `charge.succeeded`, `charge.refunded`, `refund.created` /
+ * `refund.updated` (posting at status `succeeded`), `refund.failed`, `charge.dispute.funds_withdrawn`
+ * (→ `disputed`), `charge.dispute.funds_reinstated` (`disputed` → the status the stored refunded
+ * total gives) and `payout.paid` / `payout.failed`. Every refund event (`charge.refunded`,
+ * `refund.updated`, `refund.failed`) reads the charge from Stripe and stores its CURRENT
+ * `amount_refunded` (`payment.refund`, absolute: 0 → `succeeded`, below the amount →
+ * `partially_refunded`, else `refunded`; a disputed payment stays disputed), so replayed and
+ * out-of-order events converge on Stripe's state. While LEDGER_ENABLED, each event of the table
  * with a posting writes one `billing.ledger-posting.v1` row (envelope id `uuidv5(LEDGER_NAMESPACE,
  * evt id)`, key = tenant id) in the unit of work of its receipt; with the ledger off, transitions
  * and receipts happen and no row is written. The owner comes from `StripeOwnerResolver` (the
- * object's metadata, else its PaymentIntent: at most one Stripe GET, always BEFORE the unit of work
- * opens). An unresolved owner is recorded for the platform with a warning, touches no payment and
- * writes no row (reconciliation R4 posts it). A payment id that names no payment of the owner
+ * object's metadata, else its PaymentIntent: at most one Stripe GET); a refund event's charge is
+ * one more GET. Every Stripe call happens BEFORE the unit of work opens. An unresolved owner is
+ * recorded for the platform with a warning, touches no payment and writes no row (reconciliation
+ * R4 posts it). A payment id that names no payment of the owner
  * (tenant and user) moves nothing, and its row says `paymentId: null`. Payouts are platform money:
  * `SystemContext.run('billing.platform-webhook')`, `outbox.insertAsPlatform` first (nil tenant and
  * key, null user and actor), then `stripeEvents.markProcessedAsPlatform`; both are idempotent, so a
@@ -239,7 +252,8 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
     if (money !== null) {
       const effect = { ...money, posts: money.posts && this.ledger.enabled };
       // Nothing to post and nothing to move: no owner lookup (no Stripe call), as any other event.
-      if (effect.posts || effect.transition !== null) return this.applyMoney(event, effect);
+      const moves = effect.transition !== null || effect.refundedCharge !== null;
+      if (effect.posts || moves) return this.applyMoney(event, effect);
     }
     const owner = stripeOwnerOf(event.data.object);
     if (owner.userId === null) {
@@ -256,7 +270,11 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
     return runWithPrincipal(createPrincipal({ userId, tenantId: owner.tenantId, roles: [] }), work);
   }
 
-  /** A tenant money event: resolve the owner (Stripe, no unit of work open), then apply it once. */
+  /**
+   * A tenant money event: resolve the owner and, for a refund event, read the charge's current
+   * refunded total (Stripe, no unit of work open; a failure fails the delivery before anything is
+   * written, and Stripe retries it), then apply it once.
+   */
   private async applyMoney(
     event: Stripe.Event,
     money: MoneyEvent,
@@ -275,7 +293,17 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
       );
       return SystemContext.run(PLATFORM_WEBHOOK_REASON, () => this.recordWithoutUser(event, owner));
     }
-    return this.actAs(owner, userId, () => this.process(event, owner, money));
+    const effect =
+      money.refundedCharge === null
+        ? money
+        : { ...money, transition: await this.refundTransition(money.refundedCharge) };
+    return this.actAs(owner, userId, () => this.process(event, owner, effect));
+  }
+
+  /** `payment.refund(total)` with Stripe's CURRENT `amount_refunded` of `chargeId` (one GET). */
+  private async refundTransition(chargeId: string): Promise<Transition> {
+    const { amount_refunded: total } = await this.stripe.retrieveCharge(chargeId);
+    return (payment, now) => payment.refund(total, now);
   }
 
   /**

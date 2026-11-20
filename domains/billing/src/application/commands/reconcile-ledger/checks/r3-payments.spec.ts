@@ -356,11 +356,11 @@ describe('R3PaymentsCheck (reconciliation R3: billing payments against the ledge
   it('a refund that failed after a full or partial refund leaves a status R3 agrees with (no status_mismatch)', async () => {
     const later = new Date(PAID.getTime() + MINUTE);
     const afterFull = makePayment({ status: PaymentStatus.Succeeded, amountTotal: 2_500 });
-    afterFull.refund(2_500, true, later);
-    afterFull.failRefund(2_500, later);
+    afterFull.refund(2_500, later);
+    afterFull.refund(0, later);
     const afterPartial = makePayment({ status: PaymentStatus.Succeeded, amountTotal: 2_500 });
-    afterPartial.refund(500, false, later);
-    afterPartial.failRefund(500, later);
+    afterPartial.refund(500, later);
+    afterPartial.refund(0, later);
     for (const aggregate of [afterFull, afterPartial]) {
       const row = payment(TENANT_A, { id: aggregate.id, status: aggregate.status });
       await posted('charge', row);

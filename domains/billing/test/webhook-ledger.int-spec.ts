@@ -9,7 +9,7 @@ import { FakeKafkaProducer } from '@platform/transport/testing';
 import { sql } from 'drizzle-orm';
 import postgres, { type Sql } from 'postgres';
 import { v5 as uuidv5 } from 'uuid';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { HandleStripeWebhookCommand } from '../src/application/commands/handle-stripe-webhook/handle-stripe-webhook.command.js';
 import { BILLING_RBAC } from '../src/billing.permissions.js';
 import { BillingCoreModule } from '../src/billing-core.module.js';
@@ -31,7 +31,7 @@ import {
  * The ledger-posting row of a tenant money event (outbox plan Task 12, L-11) on Citus 14.2 (local
  * execution off): the real BillingCoreModule with LEDGER_ENABLED=true on the real DatabaseModule,
  * the webhook as app_runtime under the signed owner. The charges carry the signed metadata, so no
- * Stripe call is made (one would fail the spec). Only Kafka and the lock are fakes; the module's
+ * PaymentIntent GET is made (one would fail the spec); a refund's charge read is stubbed. Only Kafka and the lock are fakes; the module's
  * relay is off (OUTBOX_RELAY_ENABLED=false).
  * Opt-in (needs Docker): INTEGRATION=1 bunx vitest run --project billing:int webhook-ledger
  */
@@ -142,11 +142,6 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         ],
       });
       commands = database.app.get(CommandBus);
-      // Every charge here carries its owner: a PaymentIntent GET would be a bug.
-      vi.spyOn(
-        database.app.get(StripeService, { strict: false }),
-        'retrievePaymentIntent',
-      ).mockRejectedValue(new Error('no Stripe call expected'));
       systemSql = postgres(database.pg.systemUrl, { max: 1, onnotice: () => undefined });
       const succeeded = {
         status: PaymentStatus.Succeeded,
@@ -158,6 +153,18 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       payB1 = makePayment({ tenantId: TENANT_B, userId: B1, ...succeeded });
       await db().superuser.insert(paymentsTable).values([payA1, payB1].map(toPaymentRow));
     }, 360_000);
+
+    // In beforeEach: the config's restoreMocks undoes spies before every test.
+    beforeEach(() => {
+      // Every charge here carries its owner: a PaymentIntent GET would be a bug.
+      vi.spyOn(StripeService.prototype, 'retrievePaymentIntent').mockRejectedValue(
+        new Error('no Stripe call expected'),
+      );
+      // A refund event reads the charge's current refunded total: Stripe says refunded in full.
+      vi.spyOn(StripeService.prototype, 'retrieveCharge').mockImplementation(
+        async (id) => ({ id, object: 'charge', amount: 2_500, amount_refunded: 2_500 }) as never,
+      );
+    });
 
     afterAll(async () => {
       await systemSql?.end({ timeout: 5 });

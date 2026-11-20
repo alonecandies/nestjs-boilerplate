@@ -257,6 +257,33 @@ describe('StripeService.retrieveCheckoutSession and the pinned API version', () 
     });
   });
 
+  it('retrieveCharge: one GET by id; failures (404 included) are translated and thrown', async () => {
+    const service = createService();
+    const retrieve = vi
+      .spyOn(service.client.charges, 'retrieve')
+      .mockResolvedValueOnce({ id: 'ch_1', object: 'charge', amount_refunded: 700 } as never)
+      .mockRejectedValueOnce(
+        Stripe.errors.StripeError.generate({ statusCode: 500, message: 'down', type: 'api_error' }),
+      )
+      .mockRejectedValueOnce(
+        Stripe.errors.StripeError.generate({
+          statusCode: 404,
+          message: "No such charge: 'ch_gone'",
+          type: 'invalid_request_error',
+          code: 'resource_missing',
+        }),
+      );
+
+    await expect(service.retrieveCharge('ch_1')).resolves.toMatchObject({ amount_refunded: 700 });
+    expect(retrieve).toHaveBeenNthCalledWith(1, 'ch_1');
+    await expect(service.retrieveCharge('ch_1')).rejects.toMatchObject({
+      code: 'PAYMENT_PROVIDER_ERROR',
+    });
+    await expect(service.retrieveCharge('ch_gone')).rejects.toMatchObject({
+      code: 'PAYMENT_REQUEST_INVALID',
+    });
+  });
+
   it('pins the API version the SDK was built for', () => {
     expect(STRIPE_API_VERSION).toBe(Stripe.API_VERSION);
   });

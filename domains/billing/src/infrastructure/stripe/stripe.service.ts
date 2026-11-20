@@ -123,6 +123,20 @@ export class StripeService {
   }
 
   /**
+   * A charge by id (a GET: naturally idempotent), for its CURRENT `amount_refunded`: the refunded
+   * total a payment records on every refund event. Never call it inside a unit of work.
+   * @throws DomainException any Stripe failure, a missing charge (404) included (translated; the
+   *   caller's delivery is retried)
+   */
+  async retrieveCharge(id: string): Promise<Stripe.Charge> {
+    try {
+      return await this.client.charges.retrieve(id);
+    } catch (error) {
+      throw toPaymentDomainException(error) ?? error;
+    }
+  }
+
+  /**
    * The balance transactions a posting request's Stripe object moved money with (L-12), by GETs
    * only (naturally idempotent; never call it inside a unit of work):
    * - `charge`: its `balance_transaction`; presentment = the charge's amount and currency;
