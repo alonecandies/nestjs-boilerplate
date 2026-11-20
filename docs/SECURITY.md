@@ -796,16 +796,18 @@ production; Redis URLs are logged with credentials removed.
 
 ## Ops endpoints (`/metrics`, `/docs`, health)
 
-All of these share the API port (3000):
+`/docs`, `/openapi.*` and the health probes share the API port (`PORT`, 3000). `/metrics` does not: it is served
+by its own listener on `METRICS_PORT` (9464 in every container; host dev 9464-9467), and the API port answers 404 for
+it:
 
-| Route                                         | Exposure                                                                                                                                                                                             |
-| --------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET /metrics`                                | route-level traffic, error rates, heap and queue internals. Set `METRICS_BEARER_TOKEN` (≥ 16 chars): without `Authorization: Bearer <token>` it answers **404**. `METRICS_ENABLED=false` disables it |
-| `GET /docs`, `/openapi.json`, `/openapi.yaml` | off in production unless `DOCS_ENABLED=true`                                                                                                                                                         |
-| `GET /health/live`, `/health/ready`           | public, no secrets; failure details hidden in production                                                                                                                                             |
+| Route                                         | Exposure                                                                                                                                                                                                                                                 |
+| --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `GET /metrics` (on `METRICS_PORT`)            | route-level traffic, error rates, heap and queue internals. Keep the port cluster-internal; set `METRICS_BEARER_TOKEN` (≥ 16 chars) as defence in depth: without `Authorization: Bearer <token>` it answers **404**. `METRICS_ENABLED=false` disables it |
+| `GET /docs`, `/openapi.json`, `/openapi.yaml` | off in production unless `DOCS_ENABLED=true`                                                                                                                                                                                                             |
+| `GET /health/live`, `/health/ready`           | public, no secrets; failure details hidden in production                                                                                                                                                                                                 |
 
-At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) publicly and let
-Prometheus scrape the pods directly. A separate metrics listener is a [known gap](#known-gaps).
+At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) publicly. Never publish `METRICS_PORT`
+(compose does not; Prometheus scrapes `:9464` inside the network) and let Prometheus scrape the pods directly.
 
 ## Production checklist
 
@@ -822,7 +824,7 @@ Prometheus scrape the pods directly. A separate metrics listener is a [known gap
       can name what secures that hop instead (a mesh, a TLS sidecar); the compose stack sets all of them.
 - [ ] gRPC: `GRPC_TLS_CERT_PATH`/`_KEY_PATH`/`_CA_PATH` (mTLS), or a mesh + `GRPC_ALLOW_INSECURE=true`;
       NetworkPolicy so only the gateway reaches 50051; `GRPC_REFLECTION` off.
-- [ ] `METRICS_BEARER_TOKEN` set; `/metrics`, `/docs`, `/openapi.*` not routed publicly;
+- [ ] `METRICS_PORT` kept cluster-internal and `METRICS_BEARER_TOKEN` set; `/docs`, `/openapi.*` not routed publicly;
       `DOCS_ENABLED`, `GRAPHQL_SANDBOX`, `GRAPHQL_INTROSPECTION` left off.
 - [ ] TLS everywhere, enforced at boot: Postgres `?sslmode=verify-full`, Redis `rediss://` with a
       password or ACL user, `KAFKA_SSL` + SASL, `CASSANDRA_SSL` with `CASSANDRA_TLS_CA_PATH` and
@@ -846,7 +848,6 @@ Prometheus scrape the pods directly. A separate metrics listener is a [known gap
 
 ## Known gaps
 
-- `/metrics` is served on the API port; a separate metrics listener is a planned follow-up.
 - `notifications.notification-created.v1` is published directly (the notifications context has no Postgres
   store to hold an outbox row): a crash between the inbox write and the publish loses the push. The events of
   identity and billing go through the transactional outbox and are delivered at least once.

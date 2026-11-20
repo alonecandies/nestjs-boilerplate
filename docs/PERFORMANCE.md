@@ -79,8 +79,8 @@ WebSockets: socket.io runs websocket-only with `perMessageDeflate: false`.
 
 The monolith and the gateway start through `runClustered()`. With `CLUSTER_WORKERS=1` (the
 default, and what compose uses) it just runs the app. With N > 1 the primary forks N workers (it
-never boots Nest), restarts crashed ones with capped backoff, forwards SIGTERM and aggregates
-`/metrics` across workers. `0` means one worker per core (`os.availableParallelism()`).
+never boots Nest), restarts crashed ones with capped backoff, forwards SIGTERM and serves the
+workers' aggregate `/metrics` on `METRICS_PORT`. `0` means one worker per core (`os.availableParallelism()`).
 
 - **Kubernetes / compose: keep 1** and scale with replicas (`docker compose up --scale`, pods).
   The orchestrator then sees each process, and CPU limits stay predictable.
@@ -342,8 +342,10 @@ Locally each topic has 6 partitions and its `.dlq` has 1 (`docker/kafka/topics.t
 | `DefaultPartitioner`, key = aggregate id       | The same key always lands on the same partition, so events of one user stay ordered.                             |
 | `send.timeout` 30 s, no client-level `retries` | kafkajs would otherwise merge client retries into the idempotent producer's retry and warn.                      |
 
-Events are published **after the database commit** (`publish()` resolves once the broker acks).
-There is no transactional outbox yet: a crash between commit and publish loses that event (see
+Identity and billing never publish from a request: `OutboxWriter` writes the event to `<schema>.outbox` in the
+transaction that changes the state, and the leader `OutboxRelay` publishes the rows in order on its next tick
+(`OUTBOX_POLL_INTERVAL_MS`, `OUTBOX_BATCH_SIZE`), at least once ([libs/outbox](../libs/outbox/README.md)).
+`notifications.notification-created.v1` is still published directly (see
 [Known follow-ups](#known-follow-ups)).
 
 ### Consumer
@@ -480,6 +482,13 @@ CREATE TABLE IF NOT EXISTS notifications_by_tenant_user (
 Driver knobs: `CASSANDRA_CONSISTENCY` (`localOne`), `CASSANDRA_CORE_CONNECTIONS` (2 per host),
 `CASSANDRA_REQUEST_TIMEOUT_MS` (12000), `CASSANDRA_LOCAL_DC` (must match the cluster's DC name, or
 the driver ignores the node).
+
+## Image size
+
+The images ship only the files each app's entrypoints import (`scripts/docker/assemble-image.mjs`, file tracing;
+[DOCKER.md](DOCKER.md#images-dockerfile)). Measured distroless sizes: gateway **250 MB** (299 MB untraced, since it imports
+each domain only through `@domain/<x>/api`), monolith 299 MB, notifications-service 280 MB, billing-service 243 MB,
+identity-service 243 MB.
 
 ## Load testing with k6
 
@@ -662,7 +671,7 @@ per series and the explanation of any series over the bound).
 
 Open `http://localhost:3300` (NestJS overview, see
 [OBSERVABILITY.md](OBSERVABILITY.md#grafana-dashboard)). Select the services under test in the
-`service` variable (deselect `host:3000` when the API runs in compose). Panel rates use
+`service` variable. Panel rates use
 `$__rate_interval`, and Prometheus scrapes every 15 s, so give a run at least a minute before
 reading it.
 
@@ -687,17 +696,9 @@ where the time went.
 
 Stated honestly, as of this writing:
 
-- **Transactional outbox.** Events are published after the database commit. A crash between the
-  two loses the event; an outbox table plus a relay would make it exactly-once-produced.
-- **Slimmer gateway image.** The gateway imports whole domain packages; per-domain
-  `@domain/<x>/api` subpath exports would let it ship only the presentation layer and gRPC adapters
-  (today the gateway image is as large as the monolith's, 294 MB).
-- **Separate metrics listener**, so `/metrics` (and its serialization cost) is off the API port.
-- **Real-database integration specs** for the billing and notifications repositories (identity
-  and Redis have them under `INTEGRATION=1`); query-plan regressions there would currently only
-  show up under load.
-- **No app-level gRPC / Kafka / pool metrics** yet, so pool waits, breaker trips and consumer lag
-  have to be inferred from latency and logs (see [OBSERVABILITY.md](OBSERVABILITY.md#known-follow-ups)).
+- **Outbox for notifications.** `notifications.notification-created.v1` has no Postgres store behind
+  it, so it is published directly: a crash between the inbox write and the publish loses the push.
+  The events of identity and billing go through the transactional outbox.
 
 Related: [OBSERVABILITY.md](OBSERVABILITY.md), [DOCKER.md](DOCKER.md), [ARCHITECTURE.md](ARCHITECTURE.md),
 [CONFIGURATION.md](CONFIGURATION.md), [TESTING.md](TESTING.md), [SECURITY.md](SECURITY.md),

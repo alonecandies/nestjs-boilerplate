@@ -13,11 +13,12 @@ reacts to other services' integration events:
   over Socket.IO and GraphQL subscriptions;
 - the BullMQ `mail` worker (SMTP) and the daily digest cron (09:00 UTC, `@WithLock`).
 
-| Surface | Port (default)             | What                                                                  |
-| ------- | -------------------------- | --------------------------------------------------------------------- |
-| gRPC    | `GRPC_URL` `0.0.0.0:50052` | `notifications.v1.NotificationsService`, health, reflection           |
-| HTTP    | `PORT` `3002`              | `GET /health/live`, `GET /health/ready`, `GET /metrics` only          |
-| Kafka   | consumes / produces        | see above; every topic and its `.dlq` must exist (auto-create is off) |
+| Surface | Port (default)             | What                                                                       |
+| ------- | -------------------------- | -------------------------------------------------------------------------- |
+| gRPC    | `GRPC_URL` `0.0.0.0:50052` | `notifications.v1.NotificationsService`, health, reflection                |
+| HTTP    | `PORT` `3002`              | `GET /health/live`, `GET /health/ready` only                               |
+| Metrics | `METRICS_PORT` `9466`      | `GET /metrics` on its own listener (`9464` in containers; never published) |
+| Kafka   | consumes / produces        | see above; every topic and its `.dlq` must exist (auto-create is off)      |
 
 The domain logic lives in [`@domain/notifications`](../../domains/notifications/README.md); this app is
 only the composition root.

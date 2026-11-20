@@ -10,13 +10,13 @@ The public surface is the same in both topologies. The monolith and the gateway 
 In the monolith they reach the domain through the CQRS buses (`XApiModule.forLocal()`). In the gateway they reach it
 through gRPC clients (`XApiModule.forRemote()`). See [ARCHITECTURE.md](ARCHITECTURE.md).
 
-| Process                 | Listens on                                       | Serves                                                                                                      |
-| ----------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
-| `monolith`              | HTTP `PORT` (default `3000`)                     | REST `/v1/*`, GraphQL + graphql-ws `/graphql`, Socket.IO `/notifications`, `/docs`, `/health/*`, `/metrics` |
-| `gateway`               | HTTP `PORT` (default `3000`)                     | Same public surface as the monolith. Domain calls go to the services over gRPC                              |
-| `identity-service`      | gRPC `GRPC_URL` (default `0.0.0.0:50051`) + HTTP | `identity.v1.AuthService`, `identity.v1.UsersService`. HTTP serves only `/health/*` and `/metrics`          |
-| `notifications-service` | gRPC `GRPC_URL` + HTTP                           | `notifications.v1.NotificationsService`, Kafka consumers. HTTP serves only `/health/*` and `/metrics`       |
-| `billing-service`       | gRPC `GRPC_URL` + HTTP                           | `billing.v1.BillingService`. HTTP serves only `/health/*` and `/metrics`                                    |
+| Process                 | Listens on                                       | Serves                                                                                          |
+| ----------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------------------- |
+| `monolith`              | HTTP `PORT` (default `3000`)                     | REST `/v1/*`, GraphQL + graphql-ws `/graphql`, Socket.IO `/notifications`, `/docs`, `/health/*` |
+| `gateway`               | HTTP `PORT` (default `3000`)                     | Same public surface as the monolith. Domain calls go to the services over gRPC                  |
+| `identity-service`      | gRPC `GRPC_URL` (default `0.0.0.0:50051`) + HTTP | `identity.v1.AuthService`, `identity.v1.UsersService`. HTTP serves only `/health/*`             |
+| `notifications-service` | gRPC `GRPC_URL` + HTTP                           | `notifications.v1.NotificationsService`, Kafka consumers. HTTP serves only `/health/*`          |
+| `billing-service`       | gRPC `GRPC_URL` + HTTP                           | `billing.v1.BillingService`. HTTP serves only `/health/*`                                       |
 
 Docker Compose host ports (all bound to `127.0.0.1`): API `3000` (`API_HOST_PORT`, used by the monolith or the gateway
 depending on the profile), identity gRPC `50051`, notifications gRPC `50052`, billing gRPC `50053`. Each service listens
@@ -54,8 +54,8 @@ Conventions that apply to every HTTP response:
 
 - **Timeouts**: an HTTP or GraphQL handler that runs longer than 30 s fails with 504 `TIMEOUT`. The streaming upload
   opts out with `@Timeout(0)`.
-- **Metrics port**: `/metrics` is served on the same port as the public API. Putting it on a separate listener is a
-  known follow-up. Until then, protect it with `METRICS_BEARER_TOKEN` or block it at the ingress.
+- **Metrics port**: `/metrics` is served on its own listener, `METRICS_PORT` (9464; host dev 9464-9467), never on the
+  API port (which answers 404 for it). Keep that port cluster-internal; `METRICS_BEARER_TOKEN` adds defence in depth.
 - **Maintenance**: with `MAINTENANCE_MODE=true` every request except `/health*` and `/metrics` gets 503 problem+json
   with `Retry-After`.
 

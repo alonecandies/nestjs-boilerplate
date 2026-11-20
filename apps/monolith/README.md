@@ -9,7 +9,8 @@ the microservices, which is what makes "monolith first, split later" a wiring ch
 rewrite.
 
 ```
-HTTP :3000 (Fastify) ──► REST /v1 · GraphQL /graphql · Socket.IO /notifications · /docs · /health · /metrics
+HTTP :3000 (Fastify) ──► REST /v1 · GraphQL /graphql · Socket.IO /notifications · /docs · /health
+HTTP :9464 (METRICS_PORT) ──► /metrics
         │ ports → local adapters (CQRS buses)
         ▼
 identity core ── Postgres (drizzle)        billing core ── Postgres (drizzle) + Stripe
@@ -73,7 +74,7 @@ all five, and every topic is tenant-scoped: an envelope without a tenant dead-le
 
 | Surface  | Where                                                                                                                                                                                                                                                                                                               |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Ops      | `GET /health/live`, `GET /health/ready` (postgres, cassandra, redis — not Kafka: events wait in the outbox, a broker outage must not take the API out of rotation), `GET /metrics`, `GET /docs` (Scalar), `GET /openapi.json`, `GET /openapi.yaml`                                                                  |
+| Ops      | `GET /health/live`, `GET /health/ready` (postgres, cassandra, redis — not Kafka: events wait in the outbox, a broker outage must not take the API out of rotation), `GET /metrics` on `METRICS_PORT` (9464), `GET /docs` (Scalar), `GET /openapi.json`, `GET /openapi.yaml`                                         |
 | Identity | `POST /v1/auth/register`, `POST /v1/auth/login`, `POST /v1/auth/refresh`, `POST /v1/auth/logout`, `GET /v1/auth/me`, `GET /v1/users`, `GET /v1/users/:id`                                                                                                                                                           |
 | Notifs   | `GET /v1/notifications`, `POST /v1/notifications/:id/read`; Socket.IO namespace `/notifications` (`auth: { token }`, websocket transport)                                                                                                                                                                           |
 | Billing  | `POST /v1/billing/checkout-sessions`, `POST /v1/billing/webhooks/stripe` (raw body, signature-verified), `GET /v1/billing/payments`                                                                                                                                                                                 |
@@ -83,8 +84,9 @@ all five, and every topic is tenant-scoped: an envelope without a tenant dead-le
 Errors are RFC 9457 `application/problem+json` (`type`, `title`, `status`, `detail`, `code`,
 `requestId`, `errors[]`); every response carries `x-request-id` and `x-correlation-id`.
 
-`/metrics`, `/docs` and `/openapi.*` share the API port: don't route them through the public ingress
-(set `METRICS_BEARER_TOKEN` for scrapes; see docs/DOCKER.md).
+`/docs` and `/openapi.*` share the API port: don't route them through the public ingress. `/metrics` is served on
+`METRICS_PORT` (9464; the API port answers 404 for it): keep that port cluster-internal and set `METRICS_BEARER_TOKEN`
+for scrapes (see docs/DOCKER.md).
 
 ## How it is wired
 
