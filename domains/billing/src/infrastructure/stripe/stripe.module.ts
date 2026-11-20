@@ -22,13 +22,16 @@ export function createStripeClient(cfg: StripeConfig): Stripe {
 
 /**
  * Billing's Stripe adapter: `STRIPE_CLIENT` (raw SDK, `@InjectStripe()`) + `StripeService`.
- * Imported by `BillingCoreModule` only (its handlers are the one consumer), so no app imports it
- * and it is not global.
+ * Imported by `BillingCoreModule` and `BillingLedgerModule` (their handlers and R4 are the
+ * consumers), so no app imports it and it is not global. `forRootAsync()` returns one module
+ * object: Nest keys dynamic modules by reference, so both importers share one client.
  */
 @Module({})
 export class StripeModule {
+  private static root: DynamicModule | undefined;
+
   static forRootAsync(): DynamicModule {
-    return {
+    StripeModule.root ??= {
       module: StripeModule,
       imports: [ConfigModule.forFeature(stripeConfig)],
       providers: [
@@ -41,5 +44,6 @@ export class StripeModule {
       ],
       exports: [STRIPE_CLIENT, StripeService],
     };
+    return StripeModule.root;
   }
 }

@@ -52,7 +52,8 @@ export function createLedgerPort(cfg: LedgerConfig, immudb: ImmudbClient | undef
  * `ScheduleModule.forRoot()` and `RedisModule` for its lock in the app; it does nothing while
  * `LEDGER_ENABLED=false`). Self-contained over the apps' global modules (`DatabaseModule` for the
  * runtime and system pools, `CqrsModule.forRoot()`, nestjs-cls, `KafkaProducerModule` for R4's
- * envelopes) and its own Stripe adapter;
+ * envelopes) and the Stripe adapter (`StripeModule.forRootAsync()`: the same module, so the same
+ * client, as `BillingCoreModule`'s);
  * imported by `BillingMessagingModule`, which the apps load only while the ledger is enabled.
  * Exports `LedgerPort` and `LedgerService`.
  */

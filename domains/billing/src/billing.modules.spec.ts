@@ -20,11 +20,15 @@ import { KafkaProducer } from '@platform/transport';
 import { FakeKafkaProducer } from '@platform/transport/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createRecordingDrizzle, installRlsTransactionHost } from '../test/billing-test.utils.js';
+import { HandleStripeWebhookHandler } from './application/commands/handle-stripe-webhook/handle-stripe-webhook.handler.js';
+import { R4StripeCheck } from './application/commands/reconcile-ledger/checks/r4-stripe.js';
 import { ReconcileLedgerHandler } from './application/commands/reconcile-ledger/reconcile-ledger.handler.js';
 import { LedgerService } from './application/ledger/ledger.service.js';
 import { BillingPort } from './application/ports/billing.port.js';
 import { LedgerPort } from './application/ports/ledger.port.js';
 import { ListPaymentsQuery } from './application/queries/list-payments/list-payments.query.js';
+import { LedgerSystemRepository } from './application/repositories/ledger.system-repository.js';
+import { LedgerReceiptsRepository } from './application/repositories/ledger-receipts.repository.js';
 import { PaymentsRepository } from './application/repositories/payments.repository.js';
 import { BillingApiModule } from './billing-api.module.js';
 import { BillingCoreModule } from './billing-core.module.js';
@@ -115,6 +119,9 @@ describe('billing modules (DI wiring per topology, no infrastructure)', () => {
     );
     // The reconciliation comes with the ledger (BillingMessagingModule), not with the core.
     expect(() => context?.get(ReconcileLedgerCron, { strict: false })).toThrow();
+    // So do the ledger's repositories: no core provider uses them (final review F8).
+    expect(() => context?.get(LedgerReceiptsRepository, { strict: false })).toThrow();
+    expect(() => context?.get(LedgerSystemRepository, { strict: false })).toThrow();
     await expect(
       asMember(() =>
         context
@@ -215,6 +222,17 @@ describe('BillingMessagingModule (L-12: the ledger-posting consumer and its ledg
     expect(
       context.get(ReconcileLedgerHandler, { strict: false }).checks.map((check) => check.name),
     ).toEqual(['R1', 'R2', 'R3', 'R4']);
+  });
+
+  it('the ledger and the core share one Stripe client and one StripeService', async () => {
+    vi.stubEnv('LEDGER_ENABLED', 'true');
+
+    context = await boot([FakeImmudbModule]);
+
+    const r4 = context.get(R4StripeCheck, { strict: false });
+    const webhook = context.get(HandleStripeWebhookHandler, { strict: false });
+    expect(r4['stripe']).toBeInstanceOf(StripeService);
+    expect(r4['stripe']).toBe(webhook['stripe']);
   });
 
   it('LEDGER_VERIFY=true: the handler runs R5 last', async () => {
