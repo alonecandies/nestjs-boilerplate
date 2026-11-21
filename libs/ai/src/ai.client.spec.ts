@@ -252,6 +252,55 @@ describe('AiClient.stream', () => {
     expect(await value(metrics.requests, { outcome: 'aborted' })).toBe(1);
   });
 
+  it('settles usage at once when the caller signal is already aborted', async () => {
+    const model = mockHangingModel(['never ']);
+    const { client } = setup(model);
+    const controller = new AbortController();
+    const reason = new Error('client gone');
+    controller.abort(reason);
+
+    const call = client.stream({ messages: ask(), signal: controller.signal });
+    const deltas = read(call.result.textStream).catch(() => []);
+
+    const settled = await Promise.race([
+      call.usage.then(
+        () => 'resolved',
+        (error: unknown) => error,
+      ),
+      new Promise((resolve) => setTimeout(() => resolve('pending'), 1_000)),
+    ]);
+    expect(settled).toBe(reason);
+    expect(await deltas).toEqual([]);
+    expect(await value(metrics.requests, { outcome: 'aborted' })).toBe(1);
+  });
+
+  it('settles usage when the SDK ends the stream on its abort path', async () => {
+    const model = mockHangingModel(['partial ']);
+    // A signal aborted without an 'abort' event reaching the client's listener: only the
+    // SDK's onAbort path can settle usage.
+    const controller = new AbortController();
+    const { client } = setup(model);
+    const addEventListener = vi
+      .spyOn(AbortSignal.prototype, 'addEventListener')
+      .mockImplementationOnce(() => undefined);
+
+    const call = client.stream({ messages: ask(), signal: controller.signal });
+    addEventListener.mockRestore();
+    const iterator = call.result.textStream[Symbol.asyncIterator]();
+    expect((await iterator.next()).value).toBe('partial ');
+    controller.abort();
+    await iterator.next().catch(() => undefined);
+
+    const settled = await Promise.race([
+      call.usage.then(
+        () => 'resolved',
+        () => 'rejected',
+      ),
+      new Promise((resolve) => setTimeout(() => resolve('pending'), 1_000)),
+    ]);
+    expect(settled).toBe('rejected');
+  });
+
   it('times out a stream that stalls', async () => {
     const model = mockHangingModel(['partial ']);
     const { client } = setup(model, { requestTimeoutMs: 20 });

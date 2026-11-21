@@ -245,6 +245,39 @@ describe('StreamMessageHandler', () => {
     expect(db.store.usage.map((u) => [u.outcome, u.messageId])).toEqual([['aborted', null]]);
   });
 
+  it('a client that disconnects during prepare ends the stream at once and stores no message', async () => {
+    const model = mockHangingModel(['never']);
+    const { handler } = setup(model);
+    const client = new AbortController();
+    const findById = db.conversations.findById.bind(db.conversations);
+    db.conversations.findById = async (...args) => {
+      client.abort();
+      return findById(...args);
+    };
+
+    const outcome = await as(ADA, async () => {
+      const events = await handler.execute(
+        new StreamMessageCommand({
+          ...ADA,
+          conversationId: conversation.id,
+          content: 'Go',
+          idempotencyKey: 'stream-0009',
+          signal: client.signal,
+        }),
+      );
+      return Promise.race([
+        drain(events),
+        new Promise<'hung'>((resolve) => setTimeout(() => resolve('hung'), 1_000)),
+      ]);
+    });
+
+    expect(outcome).not.toBe('hung');
+    expect(outcome).toMatchObject({ events: [], error: expect.anything() });
+    expect(db.store.messages).toEqual([]);
+    // Like any abort before the first token: no message, one usage row recorded as aborted.
+    expect(db.store.usage.map((u) => [u.outcome, u.messageId])).toEqual([['aborted', null]]);
+  });
+
   it('an upstream failure before any token ends the stream with AI_UPSTREAM_ERROR and stores no message', async () => {
     const upstream = new APICallError({
       message: 'boom',

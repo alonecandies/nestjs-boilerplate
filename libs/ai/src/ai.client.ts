@@ -73,10 +73,11 @@ export class AiClient {
     const call = this.start(input, 'stream');
     const { promise: usage, resolve, reject } = Promise.withResolvers<AiUsage>();
     usage.catch(() => undefined); // a caller that ignores `usage` gets no unhandled rejection
-    // Abort and timeout settle here, at once, whatever the SDK reports afterwards.
-    call.signal.addEventListener('abort', () => reject(call.fail(call.signal.reason)), {
-      once: true,
-    });
+    // Abort and timeout settle here, at once, whatever the SDK reports afterwards. A signal that
+    // is already aborted fires no event: settle now (the SDK ends the stream on its abort path).
+    const onAbort = (): void => reject(call.fail(call.signal.reason));
+    if (call.signal.aborted) onAbort();
+    else call.signal.addEventListener('abort', onAbort, { once: true });
     try {
       const result = streamText<TOOLS>({
         ...call.options(input),
@@ -87,6 +88,8 @@ export class AiClient {
           resolve(total);
         },
         onError: ({ error }) => reject(call.fail(error)),
+        // The SDK's abort path ends the stream without onEnd or onError.
+        onAbort,
       });
       return { model: call.model, result, usage };
     } catch (error) {
