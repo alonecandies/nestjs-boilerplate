@@ -233,6 +233,28 @@ describe('SendMessageHandler', () => {
     });
   });
 
+  it('a send that repeats the question of a cut stream sends it once: the cut exchange is left out', async () => {
+    await as(ADA, async () => {
+      await db.messages.append(makeMessage(conversation, { content: 'Hi' }));
+      await db.messages.append(makeMessage(conversation, { role: 'assistant', content: 'Hello!' }));
+      await db.messages.append(makeMessage(conversation, { content: 'What is RLS?' }));
+      await db.messages.append(
+        makeMessage(conversation, { role: 'assistant', content: 'Row-', status: 'incomplete' }),
+      );
+    });
+    const model = mockTextModel('Row-level security.');
+    const { send } = setup(model);
+
+    await send({ content: 'What is RLS?' });
+
+    const prompt = model.doGenerateCalls[0]?.prompt ?? [];
+    expect(prompt.map((m) => [m.role, textOf(m)])).toEqual([
+      ['user', 'Hi'],
+      ['assistant', 'Hello!'],
+      ['user', 'What is RLS?'],
+    ]);
+  });
+
   it('answers 409 when the same key comes with another body', async () => {
     const model = mockTextModel('first answer');
     const { send } = setup(model);

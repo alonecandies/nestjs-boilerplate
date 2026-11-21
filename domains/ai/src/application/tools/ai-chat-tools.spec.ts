@@ -127,11 +127,20 @@ describe('AI chat tools (read-only, as the caller)', () => {
           new SendMessageCommand({ ...ADA, conversationId: conversation.id, content }),
         ),
       );
-    const stream = (content = 'Stream it') =>
+    /** Reads the streamed turn into `events` (kept when the stream fails). */
+    const stream = (
+      content = 'Stream it',
+      idempotencyKey?: string,
+      events: ChatStreamEvent[] = [],
+    ) =>
       as(ADA, async () => {
-        const events: ChatStreamEvent[] = [];
         const iterable = await streamer.execute(
-          new StreamMessageCommand({ ...ADA, conversationId: conversation.id, content }),
+          new StreamMessageCommand({
+            ...ADA,
+            conversationId: conversation.id,
+            content,
+            idempotencyKey,
+          }),
         );
         for await (const event of iterable) events.push(event);
         return events;
@@ -285,6 +294,33 @@ describe('AI chat tools (read-only, as the caller)', () => {
       expect(sources.calls).toHaveLength(1);
     },
   );
+
+  it('a streamed turn that sent text before that 502 is a cut stream: its text is stored incomplete, without the key', async () => {
+    // Text on both steps, and a tool call on the last one too, whose tool choice is none.
+    const model = mockScriptedModel([
+      { text: 'Let me look. ', toolCalls: [{ toolName: AiToolName.GetMyProfile, input: {} }] },
+      { text: 'You are', toolCalls: [{ toolName: AiToolName.GetMyProfile, input: {} }] },
+    ]);
+    const { stream } = setup(model, { maxToolSteps: 2 });
+    const events: ChatStreamEvent[] = [];
+
+    const error = await stream('Who am I?', 'tools-0001', events).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AiUpstreamError);
+    expect(events).toEqual([
+      { type: 'delta', text: 'Let me look. ' },
+      { type: 'delta', text: 'You are' },
+    ]);
+    // Like any stream cut short: the text so far, no tool rows, and the key left free, so a
+    // retry with it runs the turn again (as a send does after the same 502).
+    const stored = storedMessages();
+    expect(stored.map((m) => [m.role, m.content, m.status, m.idempotencyKey])).toEqual([
+      ['user', 'Who am I?', 'complete', null],
+      ['assistant', 'Let me look. You are', 'incomplete', null],
+    ]);
+    expect(stored[1]?.requestHash).toBeNull();
+    expect(db.store.usage.map((u) => [u.outcome, u.messageId])).toEqual([['error', stored[1]?.id]]);
+  });
 
   it('caps the output: long text clipped, items dropped, still JSON', async () => {
     for (let i = 0; i < AI_TOOL_LIMITS.MAX_ITEMS; i += 1) {

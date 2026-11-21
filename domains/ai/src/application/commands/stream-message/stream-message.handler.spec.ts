@@ -99,6 +99,39 @@ describe('StreamMessageHandler', () => {
   }
 
   const assistantReplies = () => db.store.messages.filter((m) => m.role === 'assistant');
+  /** The conversation's rows in order: role, text, status and the key each holds. */
+  const rows = () =>
+    db.store.messages
+      .filter((m) => m.conversationId === conversation.id)
+      .toSorted((a, b) => (a.id < b.id ? -1 : 1))
+      .map((m) => [m.role, m.content, m.status, m.idempotencyKey]);
+  /** What a model call received: each message's role and text. */
+  const promptSent = (call: MockModelCall | undefined) =>
+    (call?.prompt ?? []).map((m) => [m.role, textOf(m)]);
+
+  /**
+   * A turn on 'Tell me everything' cut after its first delta 'partial ' (the consumer stops
+   * reading, as when the client leaves): the partial reply is stored as `incomplete`.
+   */
+  async function cut(request: Partial<StreamMessageRequest> = {}): Promise<void> {
+    const model = mockHangingModel(['partial ']);
+    const { handler } = setup(model);
+    await as(ADA, async () => {
+      const events = await handler.execute(
+        new StreamMessageCommand({
+          ...ADA,
+          conversationId: conversation.id,
+          content: 'Tell me everything',
+          ...request,
+        }),
+      );
+      for await (const event of events) {
+        expect(event).toEqual({ type: 'delta', text: 'partial ' });
+        break;
+      }
+    });
+    await model.aborted;
+  }
 
   beforeEach(async () => {
     db = createInMemoryAiPersistence();
@@ -266,7 +299,9 @@ describe('StreamMessageHandler', () => {
       model: 'mock/default',
       inputTokens: null,
       outputTokens: null,
-      idempotencyKey: 'stream-0002',
+      // Only a complete reply binds the key: the cut one leaves it free for a retry.
+      idempotencyKey: null,
+      requestHash: null,
     });
     expect(db.store.messages.filter((m) => m.role === 'user').map((m) => m.content)).toEqual([
       'Tell me everything',
@@ -441,6 +476,95 @@ describe('StreamMessageHandler', () => {
       code: AiChatErrorCode.IDEMPOTENCY_KEY_REUSED,
       httpStatus: HttpStatus.CONFLICT,
     });
+  });
+
+  it('a cut stream leaves its Idempotency-Key free: the retry runs a new turn, whose full reply then holds the key', async () => {
+    await cut({ idempotencyKey: 'stream-0010' });
+    const model = mockStreamModel(['The whole ', 'answer.']);
+    const { stream, handler } = setup(model);
+
+    const retry = await stream({ content: 'Tell me everything', idempotencyKey: 'stream-0010' });
+
+    // A new turn, not a replay of the partial reply.
+    expect(retry.error).toBeUndefined();
+    expect(retry.events.slice(0, -1)).toEqual([
+      { type: 'delta', text: 'The whole ' },
+      { type: 'delta', text: 'answer.' },
+    ]);
+    const done = retry.events.at(-1);
+    if (done?.type !== 'done') throw new Error('the retry did not end with done');
+    expect(done.replayed).toBe(false);
+    expect(done.message).toMatchObject({
+      content: 'The whole answer.',
+      status: 'complete',
+      idempotencyKey: 'stream-0010',
+    });
+    // The question reached the model once: the cut exchange it repeats was left out.
+    expect(model.doStreamCalls.map(promptSent)).toEqual([[['user', 'Tell me everything']]]);
+
+    // The full reply holds the key now: the same body replays it, another body is a 409.
+    const again = await stream({ content: 'Tell me everything', idempotencyKey: 'stream-0010' });
+    expect(again.events).toEqual([
+      { type: 'done', message: done.message, replayed: true, usage: null },
+    ]);
+    expect(model.doStreamCalls).toHaveLength(1);
+    const reused = await as(ADA, () =>
+      handler.execute(
+        new StreamMessageCommand({
+          ...ADA,
+          conversationId: conversation.id,
+          content: 'Another question',
+          idempotencyKey: 'stream-0010',
+        }),
+      ),
+    ).catch((e: unknown) => e);
+    expect(reused).toMatchObject({
+      code: AiChatErrorCode.IDEMPOTENCY_KEY_REUSED,
+      httpStatus: HttpStatus.CONFLICT,
+    });
+
+    // Every row stays (both questions, the partial reply): only the full reply holds the key.
+    expect(rows()).toEqual([
+      ['user', 'Tell me everything', 'complete', null],
+      ['assistant', 'partial ', 'incomplete', null],
+      ['user', 'Tell me everything', 'complete', null],
+      ['assistant', 'The whole answer.', 'complete', 'stream-0010'],
+    ]);
+    expect(db.store.usage.map((u) => u.outcome)).toEqual(['aborted', 'success']);
+  });
+
+  it('a retry of a cut question sends it once, and later turns never see the cut exchange it repeats', async () => {
+    await cut(); // no key: the history rule holds for any retry
+    const model = mockStreamModel(['Everything.']);
+    const { stream } = setup(model);
+
+    expect((await stream({ content: 'Tell me everything' })).error).toBeUndefined();
+    expect((await stream({ content: 'And then?' })).error).toBeUndefined();
+
+    expect(model.doStreamCalls.map(promptSent)).toEqual([
+      [['user', 'Tell me everything']],
+      [
+        ['user', 'Tell me everything'],
+        ['assistant', 'Everything.'],
+        ['user', 'And then?'],
+      ],
+    ]);
+  });
+
+  it('a cut exchange the next message does not repeat stays in the history, so the model can go on', async () => {
+    await cut();
+    const model = mockStreamModel(['…and the rest.']);
+    const { stream } = setup(model);
+
+    expect((await stream({ content: 'Go on from there' })).error).toBeUndefined();
+
+    expect(model.doStreamCalls.map(promptSent)).toEqual([
+      [
+        ['user', 'Tell me everything'],
+        ['assistant', 'partial '],
+        ['user', 'Go on from there'],
+      ],
+    ]);
   });
 
   it('refuses before returning a stream: 404 for another user, 422 for a disallowed model, 503 disabled', async () => {

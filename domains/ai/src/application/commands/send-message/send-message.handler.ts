@@ -17,7 +17,8 @@ import { SendMessageCommand } from './send-message.command.js';
  *    another → 409), and the history (`AI_HISTORY_MAX_MESSAGES` newest).
  * 2. Call the model with the history window (count, approximate token budget, and what
  *    `AI_MAX_INPUT_CHARS` leaves after the new message and the tool instructions: the oldest
- *    messages go first) then the new user message. No transaction is open during the call.
+ *    messages go first; a streamed exchange cut short and asked again is left out) then the new
+ *    user message. No transaction is open during the call.
  * 3. Write, in one unit of work as the caller: the conversation again, the assistant reply with the
  *    key and request hash first, the user message, the usage row and the conversation's `updatedAt`.
  *

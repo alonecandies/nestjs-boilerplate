@@ -43,9 +43,11 @@ interface StreamTurn {
  * between the user message and the reply, whose content is the last step's text, and `done`
  * carries that reply. A cut turn stores only the text received.
  *
- * With text received, the user message and an `incomplete` assistant reply (with the
- * `Idempotency-Key`, so a replay returns it) are stored with the usage row; without any, only the
- * usage row. Token counts of a cut call are unknown and recorded as 0.
+ * With text received, the user message and an `incomplete` assistant reply are stored with the
+ * usage row; without any, only the usage row. Token counts of a cut call are unknown and recorded
+ * as 0. The incomplete reply carries no `Idempotency-Key` nor request hash: only a complete reply
+ * binds the key, so a retry with it runs a new turn instead of replaying the cut text, and the
+ * history of that turn and of later ones leaves out the cut exchange it repeats (`promptOf`).
  */
 @CommandHandler(StreamMessageCommand)
 export class StreamMessageHandler
@@ -188,6 +190,8 @@ export class StreamMessageHandler
     usage: ChatStreamUsage | null,
   ): Message {
     const { request } = turn;
+    // Only a complete reply binds the key: a cut one leaves it free, so a retry runs a new turn.
+    const idempotencyKey = status === 'complete' ? (request.idempotencyKey ?? null) : null;
     return this.newMessage(request, {
       role: 'assistant',
       content: text,
@@ -195,8 +199,8 @@ export class StreamMessageHandler
       model: turn.call.model,
       inputTokens: usage?.inputTokens ?? null,
       outputTokens: usage?.outputTokens ?? null,
-      idempotencyKey: request.idempotencyKey ?? null,
-      requestHash: request.idempotencyKey === undefined ? null : turn.requestHash,
+      idempotencyKey,
+      requestHash: idempotencyKey === null ? null : turn.requestHash,
     });
   }
 

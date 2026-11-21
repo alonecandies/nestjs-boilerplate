@@ -3,7 +3,12 @@ import type { ModelMessage } from 'ai';
 import { describe, expect, it } from 'vitest';
 import type { Message } from '../domain/ai.types.js';
 import { makeConversation, makeMessage } from '../testing/ai-fixtures.js';
-import { approximateTokens, type HistoryLimits, historyWindow } from './history-window.js';
+import {
+  approximateTokens,
+  type HistoryLimits,
+  historyWindow,
+  withoutRetriedCuts,
+} from './history-window.js';
 
 const conversation = makeConversation({ tenantId: 't-1', userId: 'u-1' });
 const text = (content: string, role: 'user' | 'assistant' | 'tool' = 'user') =>
@@ -92,5 +97,50 @@ describe('historyWindow', () => {
     expect(approximateTokens([{ type: 'text', text: 'hi' }])).toBe(
       Math.ceil(JSON.stringify([{ type: 'text', text: 'hi' }]).length / 4),
     );
+  });
+});
+
+describe('withoutRetriedCuts', () => {
+  /** An assistant reply cut short (a stream that ended early). */
+  const cutReply = (content: string) =>
+    makeMessage(conversation, { role: 'assistant', content, status: 'incomplete' });
+  const contents = (messages: readonly Message[]) => messages.map((m) => m.content);
+
+  it('leaves out a cut reply and its question when the new message asks it again', () => {
+    const history = [text('Hi'), text('Hello!', 'assistant'), text('Q'), cutReply('Par')];
+    expect(contents(withoutRetriedCuts(history, text('Q')))).toEqual(['Hi', 'Hello!']);
+  });
+
+  it('leaves them out when a later stored message asked it again (the retry, answered)', () => {
+    const history = [text('Q'), cutReply('Par'), text('Q'), text('Full.', 'assistant')];
+    const kept = withoutRetriedCuts(history, text('Next'));
+    expect(kept).toEqual([history[2], history[3]]);
+  });
+
+  it('leaves out every cut attempt of a question asked again more than once', () => {
+    const history = [text('Q'), cutReply('P1'), text('Q'), cutReply('P2')];
+    expect(withoutRetriedCuts(history, text('Q'))).toEqual([]);
+    const answered = [...history, text('Q'), text('Full.', 'assistant')];
+    expect(contents(withoutRetriedCuts(answered, text('Next')))).toEqual(['Q', 'Full.']);
+  });
+
+  it('keeps a cut exchange whose question the next user message does not repeat', () => {
+    const history = [text('Q'), cutReply('Par')];
+    expect(withoutRetriedCuts(history, text('Go on'))).toEqual(history);
+    // Only the next user message counts: a question asked again later is a new turn.
+    const later = [...history, text('Go on'), text('Rest.', 'assistant')];
+    expect(withoutRetriedCuts(later, text('Q'))).toEqual(later);
+  });
+
+  it('keeps a complete reply, even when its question is asked again', () => {
+    const history = [text('Q'), text('Full.', 'assistant')];
+    expect(withoutRetriedCuts(history, text('Q'))).toEqual(history);
+  });
+
+  it('keeps a cut reply with no user message right before it', () => {
+    // Its question fell outside the fetched history, or another message came between.
+    expect(withoutRetriedCuts([cutReply('Par')], text('Q'))).toHaveLength(1);
+    const between = [text('Q'), text('Other.', 'assistant'), cutReply('Par')];
+    expect(withoutRetriedCuts(between, text('Q'))).toEqual(between);
   });
 });

@@ -252,7 +252,9 @@ export class AiController {
   @ApiHeader({
     name: 'Idempotency-Key',
     required: false,
-    description: 'Replays with the same key and body stream the stored reply as a single `done`.',
+    description:
+      'Replays with the same key and body stream the stored reply as a single `done`. A reply ' +
+      'cut short does not hold the key: a retry with it runs a new turn.',
   })
   @ApiProduces(SSE_CONTENT_TYPE)
   @ApiOkResponse({

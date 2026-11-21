@@ -23,7 +23,7 @@ import type {
   UsageOutcome,
   UsageRecord,
 } from '../../domain/ai.types.js';
-import { historyWindow, toModelMessage } from '../history-window.js';
+import { historyWindow, toModelMessage, withoutRetriedCuts } from '../history-window.js';
 import type { SendMessageRequest } from '../ports/ai.port.js';
 import { ConversationsRepository } from '../repositories/conversations.repository.js';
 import { MessagesRepository } from '../repositories/messages.repository.js';
@@ -155,7 +155,8 @@ export abstract class ChatTurnHandler {
    * `AI_MAX_INPUT_CHARS` leaves once the new message and the instructions are counted, measured as
    * the client's guard measures (`aiInputChars`): a long conversation drops its oldest messages
    * instead of being refused, and a new message too large on its own leaves no history and gets
-   * the guard's 422 `AI_INPUT_TOO_LARGE`.
+   * the guard's 422 `AI_INPUT_TOO_LARGE`. A cut exchange that was asked again (a retry after a
+   * stream cut short) is left out before the window is measured (`withoutRetriedCuts`).
    */
   protected promptOf(
     caller: Principal,
@@ -164,7 +165,7 @@ export abstract class ChatTurnHandler {
   ): ChatPrompt {
     const tools = this.toolOptions(caller);
     const message = toModelMessage(userMessage);
-    const window = historyWindow(history, {
+    const window = historyWindow(withoutRetriedCuts(history, userMessage), {
       maxMessages: this.config.historyMaxMessages,
       maxTokens: this.config.historyMaxTokens,
       maxChars: this.config.maxInputChars - aiInputChars([message], tools.system),

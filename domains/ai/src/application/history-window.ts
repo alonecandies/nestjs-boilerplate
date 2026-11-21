@@ -28,6 +28,35 @@ export function approximateTokens(content: MessageContent): number {
 }
 
 /**
+ * `history` (oldest first) without the cut exchanges that were asked again: an `incomplete`
+ * assistant reply (a stream cut short) and the user message right before it are left out when the
+ * next user message after the reply, stored or `next` (the turn's new message), has the same text.
+ * A retry after a cut stream stores its question a second time; the model sees it once, never as
+ * the same question twice with half an answer between. A cut the user did not retry stays, so the
+ * model can go on from it. Only the history sent to the model changes: every row stays stored.
+ */
+export function withoutRetriedCuts(history: readonly Message[], next: Message): Message[] {
+  const kept: Message[] = [];
+  // Read newest first: the next user message after each one is known when it is reached.
+  let nextQuestion = next.content;
+  let index = history.length - 1;
+  while (index >= 0) {
+    const message = history[index] as Message;
+    const question = history[index - 1];
+    const cut = message.role === 'assistant' && message.status === 'incomplete';
+    if (cut && question?.role === 'user' && question.content === nextQuestion) {
+      // Both go. The question has the next question's text, so that stays the one before them.
+      index -= 2;
+      continue;
+    }
+    if (message.role === 'user') nextQuestion = message.content;
+    kept.push(message);
+    index -= 1;
+  }
+  return kept.reverse();
+}
+
+/**
  * The newest messages of `history` (oldest first) that fit every limit, kept contiguous: the
  * window stops at the first message that would overflow a budget, so the oldest go first. A tool
  * call and its results are kept or dropped together: a window never opens on a tool result whose

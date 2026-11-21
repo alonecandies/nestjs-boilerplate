@@ -94,7 +94,8 @@ export abstract class AiPort {
    * `sendMessage`, streamed. Resolves once the turn started: refusals (404, 409, 422, 503) reject
    * here, before any event. The reply is stored when the stream ends; a stream cut short (the
    * caller's `signal`, a consumer that stops reading, a failure after the first token) stores the
-   * text so far once, as an `incomplete` reply. An `Idempotency-Key` replay is a single `done`.
+   * text so far once, as an `incomplete` reply that does not hold the `Idempotency-Key` (a retry
+   * with it runs a new turn). An `Idempotency-Key` replay is a single `done`.
    */
   abstract streamMessage(input: StreamMessageRequest): Promise<AsyncIterable<ChatStreamEvent>>;
 }
