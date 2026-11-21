@@ -1022,7 +1022,7 @@ services:
     ports: ["127.0.0.1:${PROMETHEUS_HOST_PORT:-9090}:9090"]
     volumes:
       - ./docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-      - ./docker/prometheus/rules:/etc/prometheus/rules:ro # alert rules (outbox, ledger)
+      - ./docker/prometheus/rules:/etc/prometheus/rules:ro # alert rules (outbox, ledger, ai)
       - prometheus-data:/prometheus
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9090/-/healthy"]

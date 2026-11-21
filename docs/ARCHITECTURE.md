@@ -230,7 +230,7 @@ user.commit(); // in-process domain events only, after COMMIT
 
 `HandleStripeWebhookHandler` does the same inside its `@Transactional()` method: the payment transition, the `stripe_events` receipt and the `billing.payment-succeeded.v1` or `billing.ledger-posting.v1` row commit together, so a rolled-back delivery never announces a payment and a failing enqueue fails the delivery (Stripe retries it).
 
-**The relay.** One `OutboxRelay` per outbox runs in every process that owns it, and only the holder of the Redis lock `outbox-relay:<schema>` publishes: poll the unpublished rows on the system pool, `KafkaProducer#publishStored` them in order (no Postgres transaction is open across a publish), mark the acknowledged rows. A failed publish ends the batch; the row and the later ones go out on a later tick. Delivery is therefore **at least once**, and every consumer deduplicates on the envelope id (below). A row the broker always refuses blocks its outbox until an operator acts (the `OutboxBacklogStuck` alert pages; [OBSERVABILITY.md](OBSERVABILITY.md#outbox-and-ledger-alerts)). Published rows are purged after `OUTBOX_RETENTION_HOURS`. Details: [libs/outbox/README.md](../libs/outbox/README.md). Notifications (Cassandra) and files (no store) do not use an outbox.
+**The relay.** One `OutboxRelay` per outbox runs in every process that owns it, and only the holder of the Redis lock `outbox-relay:<schema>` publishes: poll the unpublished rows on the system pool, `KafkaProducer#publishStored` them in order (no Postgres transaction is open across a publish), mark the acknowledged rows. A failed publish ends the batch; the row and the later ones go out on a later tick. Delivery is therefore **at least once**, and every consumer deduplicates on the envelope id (below). A row the broker always refuses blocks its outbox until an operator acts (the `OutboxBacklogStuck` alert pages; [OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts)). Published rows are purged after `OUTBOX_RETENTION_HOURS`. Details: [libs/outbox/README.md](../libs/outbox/README.md). Notifications (Cassandra) and files (no store) do not use an outbox.
 
 **Exception: `notifications.notification-created.v1`.** The notifications context has no Postgres store behind it. `PublishNotificationCreatedHandler` publishes it directly after the inbox row was written, so a crash between the two loses the push (the inbox row stays). That is the one event path that is not transactional.
 
@@ -609,7 +609,7 @@ sequenceDiagram
   RC->>PG: append ledger_discrepancies (never corrects)
 ```
 
-The tables, the checks and the alerts: [domains/billing/README.md](../domains/billing/README.md#ledger-immudb), [OBSERVABILITY.md](OBSERVABILITY.md#outbox-and-ledger-alerts), [SECURITY.md](SECURITY.md#immudb-state-signing-key).
+The tables, the checks and the alerts: [domains/billing/README.md](../domains/billing/README.md#ledger-immudb), [OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts), [SECURITY.md](SECURITY.md#immudb-state-signing-key).
 
 ## 11. Deliberate decisions and pins
 

@@ -83,6 +83,7 @@ Per-app values that the example files set:
 | `identity-service`      | `identity-service`      | 3001   | `0.0.0.0:50051`          | `identity-service`      | `DATABASE_RUN_MIGRATIONS=true`                                  |
 | `notifications-service` | `notifications-service` | 3002   | `0.0.0.0:50052`          | `notifications-service` | `CASSANDRA_RUN_MIGRATIONS=true`                                 |
 | `billing-service`       | `billing-service`       | 3003   | `0.0.0.0:50053`          | `billing-service`       | `DATABASE_RUN_MIGRATIONS=true`                                  |
+| `ai-service`            | `ai-service`            | 3004   | `0.0.0.0:50054`          | — (no Kafka)            | `DATABASE_RUN_MIGRATIONS=true`                                  |
 
 The monolith and the gateway both listen on 3000: run one topology at a time. In containers every
 app listens on 3000 and every gRPC server on `0.0.0.0:50051` (see
@@ -93,40 +94,43 @@ app listens on 3000 and every gRPC server on `0.0.0.0:50051` (see
 Derived from each `apps/*/src/app.module.ts` and the `ConfigModule.forFeature()` calls of the libs
 it imports. A process ignores (and does not validate) variables of namespaces it does not load.
 
-| Namespace                 | monolith |      gateway      | identity-service |  notifications-service  | billing-service | Loaded by                                                                                            |
-| ------------------------- | :------: | :---------------: | :--------------: | :---------------------: | :-------------: | ---------------------------------------------------------------------------------------------------- |
-| `app`                     |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `AppConfigModule.forRoot()` (global)                                                                 |
-| `observability`           |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `AppConfigModule.forRoot()` (global)                                                                 |
-| `database`                |    ✓     |                   |        ✓         |                         |        ✓        | `DatabaseModule`                                                                                     |
-| `cassandra`               |    ✓     |                   |                  |            ✓            |                 | `CassandraModule`                                                                                    |
-| `immudb`                  |          |                   |                  |                         |                 | `ImmudbModule` (`@platform/immudb`); wired into monolith and billing-service in ledger wave 2 (L-12) |
-| `redis`                   |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        | `RedisModule`, `AppQueueModule`, `AppCacheModule`, GraphQL pub/sub                                   |
-| `kafka`                   |    ✓     | ✓ (consumer only) |   ✓ (producer)   | ✓ (producer + consumer) |  ✓ (producer)   | `KafkaProducerModule`, `connectKafkaConsumer`                                                        |
-| `outbox`                  |          |                   |                  |                         |                 | `OutboxModule` (`@platform/outbox`); wired into the apps with their relays (outbox Task 7)           |
-| `grpc`                    |          |    ✓ (clients)    |    ✓ (server)    |       ✓ (server)        |   ✓ (server)    | `GrpcClientsModule.register()`, app module + `connectGrpcServer`                                     |
-| `identityGrpcClient`      |          |         ✓         |                  |                         |                 | `IdentityApiModule.forRemote()`                                                                      |
-| `notificationsGrpcClient` |          |         ✓         |                  |                         |                 | `NotificationsApiModule.forRemote()`                                                                 |
-| `billingGrpcClient`       |          |         ✓         |                  |                         |                 | `BillingApiModule.forRemote()`                                                                       |
-| `auth`                    |    ✓     |         ✓         |        ✓         |                         |                 | `AuthModule`, `IdentityCoreModule` (`TokenIssuer`)                                                   |
-| `password`                |    ✓     |                   |        ✓         |                         |                 | `IdentityCoreModule` (`@domain/identity`)                                                            |
-| `refreshToken`            |    ✓     |                   |        ✓         |                         |                 | `IdentityCoreModule` (`@domain/identity`)                                                            |
-| `staffSwitchIn`           |    ✓     |                   |        ✓         |                         |                 | `IdentityCoreModule` (`@domain/identity`)                                                            |
-| `throttle`                |    ✓     |         ✓         |                  |                         |                 | `AppThrottlerModule`                                                                                 |
-| `identityRateLimit`       |    ✓     |         ✓         |                  |                         |                 | `IdentityApiModule` (`RateLimitModule.forFeature`)                                                   |
-| `notificationsRateLimit`  |    ✓     |         ✓         |                  |                         |                 | `NotificationsApiModule` (`RateLimitModule.forFeature`)                                              |
-| `cache`                   |    ✓     |         ✓         |                  |                         |                 | `AppCacheModule`                                                                                     |
-| `graphql`                 |    ✓     |         ✓         |                  |                         |                 | `AppGraphqlModule`                                                                                   |
-| `mail`                    |    ✓     |                   |   ✓ (enqueue)    |            ✓            |                 | `AppMailerModule`                                                                                    |
-| `storage`                 |    ✓     |         ✓         |                  |                         |                 | `StorageModule`                                                                                      |
-| `ai`                      |    ✓     |                   |                  |                         |                 | `AiModule` (`@platform/ai`), `AiCoreModule` (`@domain/ai`)                                           |
-| `aiRateLimit`             |    ✓     |                   |                  |                         |                 | `AiApiModule` (`RateLimitModule.forFeature`)                                                         |
-| `files`                   |    ✓     |         ✓         |                  |                         |                 | `FilesModule`                                                                                        |
-| `stripe`                  |    ✓     |                   |                  |                         |        ✓        | `StripeModule`, `BillingCoreModule`                                                                  |
-| `ledger`                  |    ✓     |                   |                  |                         |        ✓        | `BillingCoreModule` (`@domain/billing`)                                                              |
-| `monolith`                |    ✓     |                   |                  |                         |                 | `apps/monolith/src/main.ts`                                                                          |
-| `gateway`                 |          |         ✓         |                  |                         |                 | `apps/gateway/src/main.ts`                                                                           |
+| Namespace                 | monolith |      gateway      | identity-service |  notifications-service  | billing-service |      ai-service      | Loaded by                                                                                            |
+| ------------------------- | :------: | :---------------: | :--------------: | :---------------------: | :-------------: | :------------------: | ---------------------------------------------------------------------------------------------------- |
+| `app`                     |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        |          ✓           | `AppConfigModule.forRoot()` (global)                                                                 |
+| `observability`           |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        |          ✓           | `AppConfigModule.forRoot()` (global)                                                                 |
+| `database`                |    ✓     |                   |        ✓         |                         |        ✓        |          ✓           | `DatabaseModule`                                                                                     |
+| `cassandra`               |    ✓     |                   |                  |            ✓            |                 |                      | `CassandraModule`                                                                                    |
+| `immudb`                  |          |                   |                  |                         |                 |                      | `ImmudbModule` (`@platform/immudb`); wired into monolith and billing-service in ledger wave 2 (L-12) |
+| `redis`                   |    ✓     |         ✓         |        ✓         |            ✓            |        ✓        |                      | `RedisModule`, `AppQueueModule`, `AppCacheModule`, GraphQL pub/sub                                   |
+| `kafka`                   |    ✓     | ✓ (consumer only) |   ✓ (producer)   | ✓ (producer + consumer) |  ✓ (producer)   |                      | `KafkaProducerModule`, `connectKafkaConsumer`                                                        |
+| `outbox`                  |          |                   |                  |                         |                 |                      | `OutboxModule` (`@platform/outbox`); wired into the apps with their relays (outbox Task 7)           |
+| `grpc`                    |          |    ✓ (clients)    |    ✓ (server)    |       ✓ (server)        |   ✓ (server)    | ✓ (server + clients) | `GrpcClientsModule.register()`, app module + `connectGrpcServer`                                     |
+| `identityGrpcClient`      |          |         ✓         |                  |                         |                 |      ✓ (tools)       | `IdentityApiModule.forRemote()`                                                                      |
+| `notificationsGrpcClient` |          |         ✓         |                  |                         |                 |      ✓ (tools)       | `NotificationsApiModule.forRemote()`                                                                 |
+| `billingGrpcClient`       |          |         ✓         |                  |                         |                 |      ✓ (tools)       | `BillingApiModule.forRemote()`                                                                       |
+| `aiGrpcClient`            |          |         ✓         |                  |                         |                 |                      | `AiApiModule.forRemote()`                                                                            |
+| `auth`                    |    ✓     |         ✓         |        ✓         |                         |                 |                      | `AuthModule`, `IdentityCoreModule` (`TokenIssuer`)                                                   |
+| `password`                |    ✓     |                   |        ✓         |                         |                 |                      | `IdentityCoreModule` (`@domain/identity`)                                                            |
+| `refreshToken`            |    ✓     |                   |        ✓         |                         |                 |                      | `IdentityCoreModule` (`@domain/identity`)                                                            |
+| `staffSwitchIn`           |    ✓     |                   |        ✓         |                         |                 |                      | `IdentityCoreModule` (`@domain/identity`)                                                            |
+| `throttle`                |    ✓     |         ✓         |                  |                         |                 |                      | `AppThrottlerModule`                                                                                 |
+| `identityRateLimit`       |    ✓     |         ✓         |                  |                         |                 |                      | `IdentityApiModule` (`RateLimitModule.forFeature`)                                                   |
+| `notificationsRateLimit`  |    ✓     |         ✓         |                  |                         |                 |                      | `NotificationsApiModule` (`RateLimitModule.forFeature`)                                              |
+| `cache`                   |    ✓     |         ✓         |                  |                         |                 |                      | `AppCacheModule`                                                                                     |
+| `graphql`                 |    ✓     |         ✓         |                  |                         |                 |                      | `AppGraphqlModule`                                                                                   |
+| `mail`                    |    ✓     |                   |   ✓ (enqueue)    |            ✓            |                 |                      | `AppMailerModule`                                                                                    |
+| `storage`                 |    ✓     |         ✓         |                  |                         |                 |                      | `StorageModule`                                                                                      |
+| `ai`                      |    ✓     |                   |                  |                         |                 |          ✓           | `AiModule` (`@platform/ai`), `AiCoreModule` (`@domain/ai`)                                           |
+| `aiRateLimit`             |    ✓     |         ✓         |                  |                         |                 |                      | `AiApiModule` (`RateLimitModule.forFeature`)                                                         |
+| `files`                   |    ✓     |         ✓         |                  |                         |                 |                      | `FilesModule`                                                                                        |
+| `stripe`                  |    ✓     |                   |                  |                         |        ✓        |                      | `StripeModule`, `BillingCoreModule`                                                                  |
+| `ledger`                  |    ✓     |                   |                  |                         |        ✓        |                      | `BillingCoreModule` (`@domain/billing`)                                                              |
+| `monolith`                |    ✓     |                   |                  |                         |                 |                      | `apps/monolith/src/main.ts`                                                                          |
+| `gateway`                 |          |         ✓         |                  |                         |                 |                      | `apps/gateway/src/main.ts`                                                                           |
 
-The gateway holds no Postgres, Cassandra, SMTP or Stripe settings: it reaches those contexts over
+ai-service loads the `ai` namespace (the model client) and, for the chat tools, the identity, notifications and
+billing client targets; the gateway loads `aiGrpcClient` and `aiRateLimit` (RBAC and the `ai.chat` charge stay at the
+edge). The gateway holds no Postgres, Cassandra, SMTP or Stripe settings: it reaches those contexts over
 gRPC (`IdentityApiModule.forRemote()` etc.). The Stripe webhook is received by the gateway and
 forwarded as raw bytes + signature to billing-service, which verifies it with
 `STRIPE_WEBHOOK_SECRET`.
@@ -180,7 +184,7 @@ details in [OBSERVABILITY.md](OBSERVABILITY.md)
 ### `database` — PostgreSQL 18 (postgres.js + Drizzle)
 
 [`database.config.ts`](../libs/config/src/namespaces/database.config.ts) · monolith,
-identity-service, billing-service, `bun run db:migrate`
+identity-service, billing-service, ai-service, `bun run db:migrate`
 
 Three URLs, one per role (sharding design §5): `DATABASE_URL` (`app_runtime`, every request; through
 PgBouncer when pooled), `DATABASE_SYSTEM_URL` (`app_system`, the named system methods; through
@@ -208,13 +212,14 @@ value fails where it is needed (migrations throw before connecting; no system UR
 
 #### Which process needs which URL
 
-| Process                                                       | `DATABASE_URL`     | `DATABASE_SYSTEM_URL` | `DATABASE_MIGRATION_URL`               |
-| ------------------------------------------------------------- | ------------------ | --------------------- | -------------------------------------- |
-| `monolith`                                                    | yes                | yes                   | yes (migrations at boot, `db:migrate`) |
-| `identity-service`                                            | yes                | yes                   | yes                                    |
-| `billing-service`                                             | yes                | yes                   | yes                                    |
-| `gateway`, `notifications-service`                            | none (no Postgres) | none                  | none                                   |
-| a release job (`dist/migrate.js`), `staff:grant`, drizzle-kit | none               | none                  | yes: the only URL they connect with    |
+| Process                                                       | `DATABASE_URL`     | `DATABASE_SYSTEM_URL`                                        | `DATABASE_MIGRATION_URL`                         |
+| ------------------------------------------------------------- | ------------------ | ------------------------------------------------------------ | ------------------------------------------------ |
+| `monolith`                                                    | yes                | yes                                                          | yes (migrations at boot, `db:migrate`)           |
+| `identity-service`                                            | yes                | yes                                                          | yes                                              |
+| `billing-service`                                             | yes                | yes                                                          | yes                                              |
+| `ai-service`                                                  | yes                | yes (required in production; ai itself has no system method) | yes (ai's migrations at boot, `dist/migrate.js`) |
+| `gateway`, `notifications-service`                            | none (no Postgres) | none                                                         | none                                             |
+| a release job (`dist/migrate.js`), `staff:grant`, drizzle-kit | none               | none                                                         | yes: the only URL they connect with              |
 
 - Every app that runs the identity or billing core needs all three. The system URL serves login and register lookups, the
   member directory, the purge crons and the platform webhooks. Production refuses to start without it (config
@@ -320,7 +325,7 @@ consumes)
 
 [`outbox.config.ts`](../libs/config/src/namespaces/outbox.config.ts) · monolith, identity-service, billing-service
 (the apps that own an outbox; the gateway and notifications-service read no `OUTBOX_*`). Metrics and alerts:
-[OBSERVABILITY.md](OBSERVABILITY.md#outbox-and-ledger-alerts).
+[OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts).
 
 | Variable                  | Default | Description                                                                            |
 | ------------------------- | ------- | -------------------------------------------------------------------------------------- |
@@ -362,6 +367,17 @@ gateway's module tree is defined:
 | `IDENTITY_GRPC_URL`      | `localhost:50051` | identity-service target (any grpc-js target syntax: `host:port`, `dns:///svc:port`, …). |
 | `NOTIFICATIONS_GRPC_URL` | `localhost:50052` | notifications-service target.                                                           |
 | `BILLING_GRPC_URL`       | `localhost:50053` | billing-service target.                                                                 |
+
+### `aiGrpcClient` — ai-service target and chat deadline
+
+[`ai-grpc-client.config.ts`](../domains/ai/src/infrastructure/adapters/grpc/ai-grpc-client.config.ts) · gateway
+(`AiApiModule.forRemote()`). ai-service itself also reads `IDENTITY_GRPC_URL`, `NOTIFICATIONS_GRPC_URL` and
+`BILLING_GRPC_URL` (above): its chat tools call those services as the caller.
+
+| Variable                   | Default           | Description                                                                                                                                                                                                                                  |
+| -------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AI_GRPC_URL`              | `localhost:50054` | ai-service target (any grpc-js target syntax; compose: `ai-service:50051`).                                                                                                                                                                  |
+| `AI_GRPC_CHAT_DEADLINE_MS` | `70000`           | Deadline of a chat turn over gRPC (`SendMessage`, the whole `StreamMessage` stream), 1000-900000. Keep it above ai-service's `AI_REQUEST_TIMEOUT_MS` so the model's own 504 `AI_TIMEOUT` answers first. Other calls keep `GRPC_DEADLINE_MS`. |
 
 ### `auth` — access tokens (JWT)
 
@@ -535,8 +551,8 @@ enqueue invitation mail on the shared BullMQ `mail` queue: in production it need
 
 ### `ai` — LLM calls through OpenRouter
 
-[`ai.config.ts`](../libs/config/src/namespaces/ai.config.ts) · monolith (`AiModule`, `@platform/ai`;
-`AiCoreModule`, `@domain/ai`)
+[`ai.config.ts`](../libs/config/src/namespaces/ai.config.ts) · monolith, ai-service (`AiModule`, `@platform/ai`;
+`AiCoreModule`, `@domain/ai`). Setup, models, limits and privacy: [AI.md](AI.md).
 
 | Variable                  | Default                        | Description                                                                                                                     |
 | ------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -556,7 +572,7 @@ enqueue invitation mail on the shared BullMQ `mail` queue: in production it need
 
 ### `aiRateLimit` — chat policy (ai)
 
-[`ai-rate-limit.config.ts`](../domains/ai/src/presentation/rate-limit/ai-rate-limit.config.ts) · monolith
+[`ai-rate-limit.config.ts`](../domains/ai/src/presentation/rate-limit/ai-rate-limit.config.ts) · monolith, gateway
 
 | Variable                | Default | Description                                                                                    |
 | ----------------------- | ------- | ---------------------------------------------------------------------------------------------- |
@@ -602,7 +618,7 @@ enqueue invitation mail on the shared BullMQ `mail` queue: in production it need
 `LEDGER_ENABLED=false` writes no posting rows, so enabling it later does not post what was paid before: run one
 `ReconcileLedgerCommand` with an explicit window over that period (reconciliation R4 re-enqueues every Stripe balance
 transaction without an entry; [domains/billing/README.md](../domains/billing/README.md#ledger-immudb)). The alert rules
-for the ledger series are in [OBSERVABILITY.md](OBSERVABILITY.md#outbox-and-ledger-alerts).
+for the ledger series are in [OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts).
 
 ## App-local variables
 
@@ -805,6 +821,7 @@ What the containers get regardless of your `.env` (local-only conveniences):
 | `IDENTITY_GRPC_HOST_PORT`      | 50051    | identity-service gRPC                                  |
 | `NOTIFICATIONS_GRPC_HOST_PORT` | 50052    | notifications-service gRPC                             |
 | `BILLING_GRPC_HOST_PORT`       | 50053    | billing-service gRPC                                   |
+| `AI_GRPC_HOST_PORT`            | 50054    | ai-service gRPC                                        |
 | `KAFKA_UI_HOST_PORT`           | 8080     | Kafka UI (`tools`)                                     |
 | `JAEGER_UI_HOST_PORT`          | 16686    | Jaeger UI (`observability`)                            |
 | `OTLP_GRPC_HOST_PORT`          | 4317     | OTLP gRPC (`observability`)                            |

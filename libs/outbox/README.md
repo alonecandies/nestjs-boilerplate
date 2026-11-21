@@ -123,7 +123,7 @@ a relay by hand.
 `docker/prometheus/rules/outbox.rules.yml` alerts on these series (`scripts/prometheus-rules.spec.ts` pins them):
 `OutboxBacklogStuck` (oldest unpublished age above 300 s for 5 m, page), `OutboxPublishErrors` (any `error` rate for 10 m,
 ticket) and `OutboxNoLeader` (no `outbox_relay_leader == 1` for 5 m, page). The runbook is in
-[OBSERVABILITY.md](../../docs/OBSERVABILITY.md#outbox-and-ledger-alerts).
+[OBSERVABILITY.md](../../docs/OBSERVABILITY.md#outbox-ledger-and-ai-alerts).
 
 ## Configuration
 

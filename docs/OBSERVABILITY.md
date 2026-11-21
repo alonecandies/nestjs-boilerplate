@@ -183,6 +183,9 @@ not logged (`includePayload: false`).
 | `billing_checkout_amount_mismatch_total`                              | counter   | —                                          | billing: paid Checkout Sessions whose charged amount or currency differs from the quote                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `billing_stripe_api_version_mismatch_total`                           | counter   | —                                          | billing: Stripe webhook events whose `api_version` differs from `STRIPE_API_VERSION`                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `billing_checkout_without_idempotency_key_total`                      | counter   | —                                          | billing: checkout requests (REST, GraphQL, gRPC) that sent no `Idempotency-Key`; each is also logged at debug with only `userId` and `tenantId`. The header stays optional: this shows how many clients skip it                                                                                                                                                                                                                                                                                                                                         |
+| `ai_requests_total`                                                   | counter   | `model`, `outcome`                         | `@platform/ai` (`AiMetrics`), the process that runs the AI chat (monolith or ai-service): one per model call, `success`, `error` (502 `AI_UPSTREAM_ERROR`), `timeout` (504 `AI_TIMEOUT`) or `aborted` (the caller left); `model` is the requested model, bounded by `AI_ALLOWED_MODELS`. Refusals before a call (`AI_DISABLED`, …) are not counted                                                                                                                                                                                                      |
+| `ai_tokens_total`                                                     | counter   | `model`, `kind`                            | same: tokens used, `input` or `output`, summed over a call's steps                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `ai_request_duration_seconds`                                         | histogram | `model`                                    | same (`_bucket`, `_sum`, `_count`): one model call, a whole stream for streamed calls; buckets 0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300 s                                                                                                                                                                                                                                                                                                                                                                                                           |
 
 The `db_pool_*` gauges describe the app's client pool: behind PgBouncer (program spec §16, sharding
 design) they are the demand towards PgBouncer, whose `SHOW POOLS` columns `cl_waiting` and `sv_active` are the
@@ -223,7 +226,7 @@ Keep label values bounded (enums, route templates), never ids or emails.
 ### `GET /metrics` and its protection
 
 `/metrics` is served by a separate `node:http` listener on `METRICS_PORT` (default `9464`; host dev
-`9464`-`9467`, see each `apps/*/.env.example`), **never on the API port**, which answers 404 for
+`9464`-`9468`, see each `apps/*/.env.example`), **never on the API port**, which answers 404 for
 it. The listener bypasses the API's auth guards, throttler, maintenance mode and logs by
 construction. `METRICS_PORT` must differ from `PORT` and a port already in use fails the boot.
 
@@ -255,32 +258,33 @@ refuses to start when `METRICS_PORT` equals `PORT`.
 [`docker/prometheus/prometheus.yml`](../docker/prometheus/prometheus.yml) (scrape interval 15 s,
 retention 7 days):
 
-| Job                                         | Targets                                                                                                                                                                        | `service` label               |
-| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
-| `nestjs-apps`                               | DNS service discovery of `monolith`, `gateway`, `identity-service`, `notifications-service`, `billing-service` on port 9464; one target per replica, so `--scale` is picked up | the compose service name      |
-| `host-apps`                                 | `host.docker.internal:9464`…`9467` (apps started with `bun run dev:*`)                                                                                                         | `host:9464` … `host:9467`     |
-| `postgres`, `redis`, `jaeger`, `prometheus` | exporters and the tools themselves                                                                                                                                             | `postgres`, `redis`, `jaeger` |
+| Job                                         | Targets                                                                                                                                                                                      | `service` label               |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------- |
+| `nestjs-apps`                               | DNS service discovery of `monolith`, `gateway`, `identity-service`, `notifications-service`, `billing-service`, `ai-service` on port 9464; one target per replica, so `--scale` is picked up | the compose service name      |
+| `host-apps`                                 | `host.docker.internal:9464`…`9468` (apps started with `bun run dev:*`)                                                                                                                       | `host:9464` … `host:9468`     |
+| `postgres`, `redis`, `jaeger`, `prometheus` | exporters and the tools themselves                                                                                                                                                           | `postgres`, `redis`, `jaeger` |
 
 Containers never publish `9464`, so the `host-apps` targets cannot duplicate the in-network
 `nestjs-apps` job.
 
-### Outbox and ledger alerts
+### Outbox, ledger and AI alerts
 
-[`docker/prometheus/rules/`](../docker/prometheus/rules) holds two rule files, loaded through `rule_files` in
+[`docker/prometheus/rules/`](../docker/prometheus/rules) holds three rule files (`outbox`, `ledger`, `ai`), loaded through `rule_files` in
 `prometheus.yml` and mounted by the compose `prometheus` service. Prometheus only evaluates them: compose runs no
 Alertmanager, so route `severity` in your own (`page` wakes someone, `ticket` waits for working hours).
 `scripts/prometheus-rules.spec.ts` pins the alert names, severities, thresholds and that every `expr` reads a series
 of the table above.
 
-| Alert                       | Severity | Fires when                                                                     | First look                                                                                                                  |
-| --------------------------- | -------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| `OutboxBacklogStuck`        | page     | `outbox_oldest_unpublished_age_seconds` above 300 for 5 minutes                | the leader's logs (`OutboxRelay:<outbox>`), Kafka reachability, the first unpublished row; a poison row blocks the outbox   |
-| `OutboxPublishErrors`       | ticket   | `outbox_published_total{outcome="error"}` has a rate above 0 for 10 minutes    | the `topic` label, then the broker and the envelope of the failing row                                                      |
-| `OutboxNoLeader`            | page     | no process reports `outbox_relay_leader == 1` for 5 minutes                    | `OUTBOX_RELAY_ENABLED`, `DATABASE_SYSTEM_URL` (no system pool, no relay), Redis (the lock), the owning service              |
-| `LedgerDiscrepancy`         | ticket   | any increase of `ledger_discrepancies_total` within one hour                   | `billing.ledger_discrepancies` by `kind`: `expected` and `actual` JSON and `source_key`; the ledger is never corrected      |
-| `LedgerTamperEvidence`      | page     | `kind` `verification_failed` or `ledger_row_mutated` increases within one hour | an incident: immudb proofs or a rewritten row ([SECURITY.md](SECURITY.md#immudb-state-signing-key))                         |
-| `LedgerPostConflict`        | ticket   | `ledger_postings_total{outcome="conflict"}` increases within one hour          | the `post_conflict` row names the source key; the same Stripe transaction produced a different payload                      |
-| `LedgerReconciliationStale` | page     | the last success of the hourly reconciliation is older than 3 hours            | `ledger_reconciliation_runs_total{status="failed"}`, the billing logs (`Ledger reconciliation run finished`), immudb health |
+| Alert                       | Severity | Fires when                                                                                                                      | First look                                                                                                                                                                                         |
+| --------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `OutboxBacklogStuck`        | page     | `outbox_oldest_unpublished_age_seconds` above 300 for 5 minutes                                                                 | the leader's logs (`OutboxRelay:<outbox>`), Kafka reachability, the first unpublished row; a poison row blocks the outbox                                                                          |
+| `OutboxPublishErrors`       | ticket   | `outbox_published_total{outcome="error"}` has a rate above 0 for 10 minutes                                                     | the `topic` label, then the broker and the envelope of the failing row                                                                                                                             |
+| `OutboxNoLeader`            | page     | no process reports `outbox_relay_leader == 1` for 5 minutes                                                                     | `OUTBOX_RELAY_ENABLED`, `DATABASE_SYSTEM_URL` (no system pool, no relay), Redis (the lock), the owning service                                                                                     |
+| `LedgerDiscrepancy`         | ticket   | any increase of `ledger_discrepancies_total` within one hour                                                                    | `billing.ledger_discrepancies` by `kind`: `expected` and `actual` JSON and `source_key`; the ledger is never corrected                                                                             |
+| `LedgerTamperEvidence`      | page     | `kind` `verification_failed` or `ledger_row_mutated` increases within one hour                                                  | an incident: immudb proofs or a rewritten row ([SECURITY.md](SECURITY.md#immudb-state-signing-key))                                                                                                |
+| `LedgerPostConflict`        | ticket   | `ledger_postings_total{outcome="conflict"}` increases within one hour                                                           | the `post_conflict` row names the source key; the same Stripe transaction produced a different payload                                                                                             |
+| `LedgerReconciliationStale` | page     | the last success of the hourly reconciliation is older than 3 hours                                                             | `ledger_reconciliation_runs_total{status="failed"}`, the billing logs (`Ledger reconciliation run finished`), immudb health                                                                        |
+| `AiErrorRate`               | ticket   | `error` and `timeout` calls of `ai_requests_total` above 10 % of a model's calls (5 m rates) for 10 minutes; `aborted` excluded | OpenRouter's status and the model's provider, the app logs (error name and upstream status only), the key's credit, `AI_REQUEST_TIMEOUT_MS`; consider `AI_FALLBACK_MODELS` ([AI.md](AI.md#models)) |
 
 Reading the series:
 
@@ -290,6 +294,9 @@ Reading the series:
 - **Ledger series exist only where `LEDGER_ENABLED=true`.** With the ledger off nothing reports and no ledger alert
   fires. `LedgerReconciliationStale` needs one success since the process started to have a series: a ledger that never
   reconciles shows in `ledger_reconciliation_runs_total{status="failed"}` and in the billing logs.
+- **AI series exist only where the chat runs** (the monolith or ai-service) and only after a first call; with
+  `AI_ENABLED=false` nothing calls a model and `AiErrorRate` never fires. Client aborts are a user closing a stream,
+  not an outage, so the alert leaves them out; a high `aborted` share is worth a look at latency instead.
 - **Outbox runbook.** A relay that stopped: fix the cause, the rows go out in `created_at` order and are delivered at
   least once. A row the broker always refuses (an oversized or invalid envelope): inspect it as `app_system` and decide;
   deleting an unpublished row loses that event, so prefer fixing the topic. Consumers deduplicate on the envelope id.
@@ -377,13 +384,14 @@ would probe AWS/GCP/Azure metadata endpoints at startup.
 
 ### What is and isn't instrumented
 
-| Instrumented automatically                                                                              | Not instrumented (or deliberately off)                                                                                                                                                                 |
-| ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Incoming and outgoing HTTP (server spans named `GET /v1/users/:id` + `http.route` by `HttpMetricsHook`) | NestJS 12 internals, graphql 17 and postgres.js: no OTel instrumentation supports them yet. Add `@Span()` / `@Traceable()` (re-exported from nestjs-otel) on repositories, resolvers and CQRS handlers |
-| grpc-js client and server calls (trace context travels in gRPC metadata)                                | `fs`, `dns`, `net` (noise), `runtime-node` (metrics; prom-client owns metrics)                                                                                                                         |
-| kafkajs produce/consume                                                                                 | ioredis commands **without a parent span** (`requireParentSpan`), so health pings and BullMQ polling create no root spans                                                                              |
-| ioredis commands inside a traced request                                                                | `/health*`, `/metrics`, `/favicon.ico` (never traced)                                                                                                                                                  |
-| pino: `trace_id`/`span_id` injected into log lines                                                      | Log export over OTLP (logs ship from stdout) and OTLP metrics (`metricReaders: []`)                                                                                                                    |
+| Instrumented automatically                                                                                                                                   | Not instrumented (or deliberately off)                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Incoming and outgoing HTTP (server spans named `GET /v1/users/:id` + `http.route` by `HttpMetricsHook`)                                                      | NestJS 12 internals, graphql 17 and postgres.js: no OTel instrumentation supports them yet. Add `@Span()` / `@Traceable()` (re-exported from nestjs-otel) on repositories, resolvers and CQRS handlers |
+| grpc-js client and server calls (trace context travels in gRPC metadata)                                                                                     | `fs`, `dns`, `net` (noise), `runtime-node` (metrics; prom-client owns metrics)                                                                                                                         |
+| kafkajs produce/consume                                                                                                                                      | ioredis commands **without a parent span** (`requireParentSpan`), so health pings and BullMQ polling create no root spans                                                                              |
+| ioredis commands inside a traced request                                                                                                                     | `/health*`, `/metrics`, `/favicon.ico` (never traced)                                                                                                                                                  |
+| `@platform/ai`: a span per model call (`ai.generate` / `ai.stream`; model, max tokens, token usage, finish reason, outcome; never prompt or completion text) |                                                                                                                                                                                                        |
+| pino: `trace_id`/`span_id` injected into log lines                                                                                                           | Log export over OTLP (logs ship from stdout) and OTLP metrics (`metricReaders: []`)                                                                                                                    |
 
 ```ts
 import { Span } from '@platform/observability';
@@ -444,13 +452,14 @@ failure messages are stripped from the body, because they leak hosts and IPs; th
 
 Readiness contributors per app:
 
-| App                     | Contributors (`key`)             |
-| ----------------------- | -------------------------------- |
-| `monolith`              | `postgres`, `cassandra`, `redis` |
-| `gateway`               | `redis`                          |
-| `identity-service`      | `postgres`, `redis`              |
-| `notifications-service` | `cassandra`, `redis`, `kafka`    |
-| `billing-service`       | `postgres`, `redis`              |
+| App                     | Contributors (`key`)                                                                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `monolith`              | `postgres`, `cassandra`, `redis`                                                                                                      |
+| `gateway`               | `redis`                                                                                                                               |
+| `identity-service`      | `postgres`, `redis`                                                                                                                   |
+| `notifications-service` | `cassandra`, `redis`, `kafka`                                                                                                         |
+| `billing-service`       | `postgres`, `redis`                                                                                                                   |
+| `ai-service`            | `postgres` (OpenRouter is not a contributor: a model outage fails chat turns with 502/504, it must not take replicas out of rotation) |
 
 Contributor details: `postgres` runs `select 1` with a 2 s timeout and cancels the query;
 `kafka` runs `describeCluster` through a reused admin client with no retries and a short result

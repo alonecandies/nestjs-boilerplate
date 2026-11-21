@@ -509,7 +509,7 @@ Full teardown of a stack, volumes and network included: `docker compose --profil
   The remote-write receiver is on for k6. The alert rules of the outbox and the ledger
   (`docker/prometheus/rules/{outbox,ledger}.rules.yml`, listed in `rule_files`) are mounted read-only at
   `/etc/prometheus/rules`; edit one and `POST /-/reload`. No Alertmanager runs in compose: the alerts show on the
-  Prometheus Alerts page, and [OBSERVABILITY.md](OBSERVABILITY.md#outbox-and-ledger-alerts) says how to route them.
+  Prometheus Alerts page, and [OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts) says how to route them.
 - **Grafana** (http://localhost:3300, **3300** because 3000–3003 are the API/services host-dev ports): provisioned
   datasources (Prometheus, Jaeger, Loki, fixed UIDs) and the home dashboard **NestJS services overview**
   ([`docker/grafana/dashboards/nestjs-overview.json`](../docker/grafana/dashboards/nestjs-overview.json)):

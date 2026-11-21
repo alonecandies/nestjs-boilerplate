@@ -42,6 +42,10 @@ const METRIC_NAMES: readonly string[] = [
   'ledger_reconciliation_runs_total',
   'ledger_reconciliation_last_success_timestamp_seconds',
   'ledger_unverified_tx_lag',
+  // AI plan Task 7 (`libs/ai/src/ai.metrics.ts`).
+  'ai_requests_total',
+  'ai_tokens_total',
+  'ai_request_duration_seconds',
 ];
 
 /** PromQL words that are not series: functions, aggregations, operators, modifiers. */
@@ -87,6 +91,9 @@ const EXPECTED: Readonly<Record<string, Readonly<Record<string, 'page' | 'ticket
     LedgerTamperEvidence: 'page',
     LedgerPostConflict: 'ticket',
     LedgerReconciliationStale: 'page',
+  },
+  'docker/prometheus/rules/ai.rules.yml': {
+    AiErrorRate: 'ticket',
   },
 };
 
@@ -162,6 +169,15 @@ describe('the alert thresholds of the plan', () => {
     expect(expr('LedgerReconciliationStale')).toMatch(
       /time\(\) - .*ledger_reconciliation_last_success_timestamp_seconds.* > 10800$/,
     );
+  });
+
+  it("AiErrorRate: error and timeout calls above 10 % of a model's calls for 10 m, aborts excluded", () => {
+    const rule = expr('AiErrorRate');
+    expect(rule).toContain('ai_requests_total{outcome=~"error|timeout"}');
+    expect(rule).not.toContain('aborted');
+    expect(rule).toMatch(/by \(model\)/);
+    expect(rule).toMatch(/> 0\.1/);
+    expect(waits('AiErrorRate')).toBe('10m');
   });
 });
 

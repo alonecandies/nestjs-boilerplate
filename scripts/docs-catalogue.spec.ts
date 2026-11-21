@@ -15,6 +15,8 @@ describe('docs/API.md error catalogue (F23)', () => {
   it.each([
     ['domains/identity/src/identity.constants.ts', 'IdentityErrorCode'],
     ['domains/billing/src/billing.constants.ts', 'BillingErrorCode'],
+    ['libs/ai/src/ai.errors.ts', 'AiErrorCode'],
+    ['domains/ai/src/ai.constants.ts', 'AiChatErrorCode'],
   ])('lists every code of %s', (file, object) => {
     const codes = codesIn(file, object);
     expect(codes.length).toBeGreaterThan(0);

@@ -1,0 +1,25 @@
+# AI chat alerts (AI plan Task 7). The series come from @platform/ai (libs/ai/src/ai.metrics.ts):
+# `model` = the requested model (bounded by AI_ALLOWED_MODELS), `outcome` = success, error, timeout or
+# aborted (the caller left: not a failure). Reported by the process that runs the chat (monolith or
+# ai-service); nothing reports while AI_ENABLED=false (docs/AI.md).
+# severity: page = wake someone; ticket = look at it in working hours.
+groups:
+  - name: ai
+    rules:
+      # More than 10 % of a model's calls failed upstream (502 AI_UPSTREAM_ERROR) or ran past
+      # AI_REQUEST_TIMEOUT_MS (504 AI_TIMEOUT) for 10 minutes. Client aborts are excluded: a user who
+      # closes the tab is not an outage.
+      - alert: AiErrorRate
+        expr: >-
+          sum by (model) (rate(ai_requests_total{outcome=~"error|timeout"}[5m]))
+          / sum by (model) (rate(ai_requests_total[5m])) > 0.1
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "AI model {{ $labels.model }}: {{ $value | humanizePercentage }} of calls fail"
+          description: >-
+            More than 10 % of the calls to {{ $labels.model }} have ended in error or timeout for 10
+            minutes. Check OpenRouter's status page and the model's provider, the app logs (error name
+            and upstream status only), the OpenRouter key's credit, and AI_REQUEST_TIMEOUT_MS. Consider
+            AI_FALLBACK_MODELS or another AI_DEFAULT_MODEL.

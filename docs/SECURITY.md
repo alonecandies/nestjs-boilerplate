@@ -8,7 +8,7 @@ Related: [Architecture](ARCHITECTURE.md) · [Development](DEVELOPMENT.md) · [Do
 [Releasing](RELEASING.md) · [README](../README.md)
 
 - [Authentication](#authentication)
-- [Authorisation (RBAC)](#authorisation-rbac)
+- [Authorisation (RBAC)](#authorisation-rbac), [AI tools](#ai-tools)
 - [Rate limiting](#rate-limiting)
 - [HTTP hardening: proxies, CORS, helmet, limits](#http-hardening-proxies-cors-helmet-limits)
 - [Internal gRPC](#internal-grpc-mtls-reflection)
@@ -162,12 +162,13 @@ them at verification. Grants are cumulative: owner ⊇ admin ⊇ member (✓ = e
 | files         | `files:read`          |    ✓     |    ✓    |    ✓    | `GET /v1/files/download-url` (own files)                                                                                        |
 | files         | `files:write`         |    ✓     |    ✓    |    ✓    | upload, presign, delete (own files)                                                                                             |
 | files         | `files:manage`        |          |    ✓    |    ✓    | download/delete any file of the active tenant only (keys `tenants/<tid>/…`; never another tenant's)                             |
+| ai            | `ai:chat`             |    ✓     |    ✓    |    ✓    | `/v1/ai/conversations` (REST and SSE), the AI GraphQL fields and `aiMessageStream`: own conversations only                      |
 
 Ownership rules that are **not** permissions, enforced by the handlers:
 
 - A user can always read their own profile (`GET /v1/users/:id`, `user(id)`).
 - Files are scoped to the key prefix `tenants/{tenantId}/users/{userId}/`, the tenant taken from the token; the tenant prefix is checked first (another tenant's key and a legacy `users/…` key are 403 for everyone, `files:manage` included), and access is checked before existence (403 before 404) so keys of other users and tenants cannot be probed.
-- Notifications and payments always use the user id and tenant from the token, never from the request.
+- Notifications, payments and AI conversations always use the user id and tenant from the token, never from the request; another user's conversation is 404 `CONVERSATION_NOT_FOUND`.
 - Owner rank: only an owner can grant, revoke, invite or remove the `owner` role, and a tenant always keeps one owner (`LAST_OWNER`); both are checked in the handlers, in every transport.
 
 ### Platform staff switch-in
@@ -237,6 +238,30 @@ bun run --filter @domain/identity staff:grant you@example.com --revoke  # revoke
 It connects with `DATABASE_MIGRATION_URL` only (never `DATABASE_URL`), and exits 1 when no user has that email.
 No API can grant staff. A revocation takes effect at the next switch-in (the flag is re-read every time).
 
+### AI tools
+
+The AI chat ([AI.md](AI.md#tools)) lets the model call three read-only tools: `get_my_profile`, `list_my_notifications`
+and `list_my_payments`. The model chooses when to call them, so they are built so that the model can never widen what
+they read:
+
+- **As the caller's principal.** `AiChatTools.forCaller(principal)` binds the tools to the request's principal before the
+  call. A tool runs only when the context's principal is that caller (none: `PRINCIPAL_MISSING`; another one:
+  `TOOL_CALLER_MISMATCH`), takes tenant and user from it, and its strict input schema has no id field, so the model
+  cannot name another user or tenant. Each tool reads through the owning domain's port with that domain's own checks
+  (row-level security, the inbox owner, own payments), never through the system pool; in ai-service the principal
+  travels on in the gRPC metadata to identity-, notifications- and billing-service.
+- **Read-only, permission-checked.** No tool writes. A tool whose REST twin needs a permission checks the same one from
+  the caller's roles (`list_my_notifications`: `notifications:read`, else `PERMISSION_DENIED`).
+- **Results are untrusted.** A tool result can carry text other people wrote (a notification title). The system
+  instructions (`AI_TOOLS_SYSTEM_PROMPT`) tell the model that tool results are data, not instructions; since the tools
+  can only read what the caller could read anyway, an injected instruction can at most make the model misreport the
+  caller's own data. The reply is returned to the caller only.
+- **Bounded and quiet.** At most `AI_MAX_TOOL_STEPS` steps, output capped (`AI_TOOL_LIMITS`), failures returned to the
+  model as `{ error: { code, message } }` (`TOOL_FAILED` with no detail for anything unexpected) and logged by error
+  name only. Prompts, completions and tool results are never logged.
+- **Data leaves the cluster.** Tool results become part of the prompt sent to OpenRouter. Remove a tool from `AI_TOOLS`
+  where that is not acceptable.
+
 ## Rate limiting
 
 [`libs/redis`](../libs/redis/README.md) `AppThrottlerModule` (global `AppThrottlerGuard`, Redis
@@ -251,6 +276,7 @@ storage, one `EVALSHA` per request):
 | `THROTTLE_WS_*`                                 | 30 handshakes per 60 s per IP; 10 sockets per user | Socket.IO and graphql-ws connections: per-IP handshake budget, per-user concurrent sockets (429 `TOO_MANY_CONNECTIONS` / 4403)                                            |
 | `IDENTITY_CREDENTIALS_*` / `IDENTITY_LOCKOUT_*` | 10 per 60 s; 10 failed attempts → 15 min           | `identity.credentials` routes: register, login (REST and GraphQL)                                                                                                         |
 | `NOTIFICATIONS_MARK_READ_*`                     | 30 per 10 s per user                               | `notifications.mark-read`: Socket.IO `notifications.markRead` (`WsThrottlerGuard`), REST `POST /v1/notifications/:id/read` and GraphQL `markNotificationRead`, one budget |
+| `AI_CHAT_*`                                     | 20 per 60 s per user, then 200 per 60 s per tenant | `ai.chat`: AI chat turns (REST send and stream, `sendAiMessage`, `streamAiMessage`), charged before the model call; the tenant budget is shared by every member           |
 | exempt                                          | —                                                  | path prefixes `/health`, `/metrics`, `/docs`, `/openapi.json`, `/openapi.yaml`, `/swagger`; the Stripe webhook (`@SkipRateLimit`)                                         |
 
 - Tracker: `user:<id>` for authenticated requests (fair per account, NAT-proof), otherwise
@@ -316,7 +342,7 @@ when they match `[A-Za-z0-9._:-]{1,128}`.
 
 ## Internal gRPC (mTLS, reflection)
 
-The services (identity, notifications, billing) **trust their caller**: `rpc` handlers run no JWT
+The services (identity, notifications, billing, ai) **trust their caller**: `rpc` handlers run no JWT
 guard, and the principal (`x-user-id`, `x-tenant-id`, `x-user-roles`, `x-staff`) and the `actorId`/`userId`/`tenantId`
 fields come from the caller. Whoever reaches port 50051 can act as any user of any tenant. Protect the
 transport (see also [Principal propagation](#principal-propagation)):
@@ -331,11 +357,14 @@ transport (see also [Principal propagation](#principal-propagation)):
 
 Production: either mutual TLS (server certificates must name the `*_GRPC_URL` hosts) or a service
 mesh doing mTLS with `GRPC_ALLOW_INSECURE=true`, **plus** a NetworkPolicy that lets only the gateway
-reach the services' gRPC ports. Keep reflection off.
+reach the services' gRPC ports, and ai-service reach identity-, notifications- and billing-service (its chat tools call
+them as the caller). Keep reflection off. ai-service re-checks tenant and user of every request against the principal
+(403 `TENANT_MISMATCH`).
 
 Client-side resilience (not a security control, but it limits blast radius): every call has a
 deadline (`GRPC_DEADLINE_MS`, 5 s), a circuit breaker per upstream, and `UNAVAILABLE` retries only
-for `GetUser`, `GetUsersByIds`, `ListUsers`, `ListMyTenants`, `ListMembers`, `ListNotifications`, `ListPayments`. Upstream 5xx details
+for `GetUser`, `GetUsersByIds`, `ListUsers`, `ListMyTenants`, `ListMembers`, `ListNotifications`, `ListPayments`,
+`ListConversations`, `GetConversation`, `ListMessages`. Upstream 5xx details
 are sanitised before they reach the client.
 
 ## Webhooks and uploads
@@ -473,8 +502,15 @@ only the query, decides which rows a request sees (program spec section 8, B3). 
   table: Citus rejects subqueries in policies, and a helper that reads another distributed table fails on a shard
   (`XX000 cannot execute a distributed query from a query on a shard`). The per-table policies are in
   [`domains/identity/README.md`](../domains/identity/README.md#data-model-identityschemats--identityschema) and
-  [`domains/billing/README.md`](../domains/billing/README.md#row-level-security-b3-5b3-6-program-spec-82).
+  [`domains/billing/README.md`](../domains/billing/README.md#row-level-security-b3-5b3-6-program-spec-82) and
+  [`domains/ai/README.md`](../domains/ai/README.md#distribution-and-row-level-security-0000_init).
   Rows with `tenant_id = PLATFORM_TENANT_ID` match no runtime policy; only the system pool reads or writes them.
+- **ai: one owner per row.** `ai.conversations`, `ai.messages` and `ai.usage` each carry the conversation owner's
+  `user_id`, and every policy is `tenant_id = app.tenant_id() AND user_id = app.user_id()`: a user sees only their own
+  conversations, messages and usage, even inside their tenant, and elevation grants nothing. `app_runtime` has no UPDATE
+  on `ai.messages` and only SELECT and INSERT on `ai.usage` (append-only); `app_system` has no grant at all. Because a
+  row-local policy cannot check who owns the conversation a message names, the chat handlers load the conversation as
+  the caller (`ConversationsRepository.findById`) in the same unit of work before they append to it.
 - **One principal per transaction.** The principal is final before a unit of work opens. A runtime repository reaches
   the database only through `inUnitOfWork`, which compares the CLS principal with what `BEGIN` applied and throws
   `RLS_CONTEXT_STALE` when they differ. With no principal the adapter refuses to `BEGIN` (`RLS_NO_PRINCIPAL`).
@@ -747,6 +783,7 @@ notifications domain and the real-Citus journeys of B3.
 | no local endpoints or senders: S3/GCS emulators (`STORAGE_ALLOW_INSECURE`), the Mailpit default and an example.com sender (`SMTP_ALLOW_INSECURE`), localhost Checkout redirects (`STRIPE_ALLOW_LOCAL_REDIRECTS`), Cassandra SimpleStrategy (`CASSANDRA_ALLOW_SIMPLE_STRATEGY`)            | `storage`, `mail`, `stripe`, `cassandra` namespaces                                                                 |
 | `CORS_ORIGINS` must not contain `*`                                                                                                                                                                                                                                                       | `app.config.ts`                                                                                                     |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` must not be the dev placeholders (forged webhooks)                                                                                                                                                                                          | `stripe.config.ts`                                                                                                  |
+| with `AI_ENABLED=true`: `OPENROUTER_API_KEY` required (all environments), not a known placeholder, and `OPENROUTER_BASE_URL` https on a non-loopback host                                                                                                                                 | `ai.config.ts`                                                                                                      |
 | JWT secrets ≥ 32 characters (all environments)                                                                                                                                                                                                                                            | `auth.config.ts`, `refresh-token.config.ts`                                                                         |
 | `TRUST_PROXY=true` rejected                                                                                                                                                                                                                                                               | `app.config.ts`                                                                                                     |
 | plaintext gRPC refused unless `GRPC_ALLOW_INSECURE=true`; TLS cert/key/CA must be consistent                                                                                                                                                                                              | `grpc.config.ts`                                                                                                    |
@@ -791,7 +828,8 @@ pino redacts these paths to `[REDACTED]` (`LOG_REDACT_PATHS`,
 composition: the monolith and the gateway pass billing's `BILLING_LOG_REDACT_PATHS`
 (`req.headers["stripe-signature"]`) to `ObservabilityModule.forRoot({ redactPaths })`. Don't log
 request bodies or whole DTOs, and add paths here (or to the owning domain's list) if you introduce
-new secret fields. Postgres query logging (`DATABASE_LOG_QUERIES`) prints parameters only outside
+new secret fields. The AI client never logs prompts, completions or the upstream error message, and
+`OPENROUTER_API_KEY` stays in config ([AI.md](AI.md#privacy)). Postgres query logging (`DATABASE_LOG_QUERIES`) prints parameters only outside
 production; Redis URLs are logged with credentials removed.
 
 ## Ops endpoints (`/metrics`, `/docs`, health)
