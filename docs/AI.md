@@ -55,8 +55,8 @@ ai-service's `AI_REQUEST_TIMEOUT_MS`, so the model's own timeout (504 `AI_TIMEOU
 - A conversation stores its model (`POST /v1/ai/conversations` with `model?`); a message may name another allowed model
   for one turn. Creating a conversation with a model outside the list is refused too, so no conversation is bound to a
   model that cannot be called.
-- The tools are offered on every turn, so list only **tool-capable** models (OpenRouter shows "tools" among a model's
-  supported parameters). OpenRouter refuses a tool call to a model without tool support, and the turn fails with 502
+- The tools are offered on every turn, so list only **tool-capable** models: OpenRouter must show both "tools" and
+  "tool_choice" among a model's supported parameters (OpenRouter drops a parameter a provider does not support). OpenRouter refuses a tool call to a model without tool support, and the turn fails with 502
   `AI_UPSTREAM_ERROR`. The last tool step sends `tool_choice: none` (below); a model that calls a tool there anyway
   fails the turn with 502 too.
 - The `model` label of the metrics is the requested model, so the allowlist also bounds their cardinality.
