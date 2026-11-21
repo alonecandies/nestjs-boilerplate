@@ -255,6 +255,35 @@ describe('SendMessageHandler', () => {
     ]);
   });
 
+  it('leaves the retried cut out before the window is measured: the freed room keeps older history', async () => {
+    // The cap leaves 20 characters beside the retried question: enough for 'Hi' and 'Hello!',
+    // but only once the stored copy of the question and its cut reply are left out first.
+    const question = `What is RLS? ${'Explain it in detail. '.repeat(14)}`;
+    await as(ADA, async () => {
+      await db.messages.append(makeMessage(conversation, { content: 'Hi' }));
+      await db.messages.append(makeMessage(conversation, { role: 'assistant', content: 'Hello!' }));
+      await db.messages.append(makeMessage(conversation, { content: question }));
+      await db.messages.append(
+        makeMessage(conversation, { role: 'assistant', content: 'Row-', status: 'incomplete' }),
+      );
+    });
+    const model = mockTextModel('Row-level security.');
+    const { send } = setup(model, {
+      maxInputChars: question.length + 20,
+      historyMaxMessages: 50,
+      historyMaxTokens: 100_000,
+    });
+
+    await send({ content: question });
+
+    const prompt = model.doGenerateCalls[0]?.prompt ?? [];
+    expect(prompt.map((m) => [m.role, textOf(m)])).toEqual([
+      ['user', 'Hi'],
+      ['assistant', 'Hello!'],
+      ['user', question],
+    ]);
+  });
+
   it('answers 409 when the same key comes with another body', async () => {
     const model = mockTextModel('first answer');
     const { send } = setup(model);

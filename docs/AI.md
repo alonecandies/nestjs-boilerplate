@@ -98,16 +98,16 @@ ai-service's `AI_REQUEST_TIMEOUT_MS`, so the model's own timeout (504 `AI_TIMEOU
 Every response carries one of these codes when a call is refused or fails (REST problem+json, GraphQL
 `extensions.code`, gRPC `x-error-code`, the SSE `error` event):
 
-| Code                     | Status | When                                                                                     |
-| ------------------------ | ------ | ---------------------------------------------------------------------------------------- |
-| `AI_DISABLED`            | 503    | `AI_ENABLED=false`; checked before anything else, nothing is stored                      |
-| `AI_MODEL_NOT_ALLOWED`   | 422    | the model is not `AI_DEFAULT_MODEL` nor in `AI_ALLOWED_MODELS` (`details.model`)         |
-| `AI_INPUT_TOO_LARGE`     | 422    | the new message is over `AI_MAX_INPUT_CHARS` on its own (`details.maxInputChars`)        |
-| `AI_TIMEOUT`             | 504    | the call ran longer than `AI_REQUEST_TIMEOUT_MS` (`details.timeoutMs`)                   |
-| `AI_UPSTREAM_ERROR`      | 502    | OpenRouter or the model failed after the retries; the upstream message is never returned |
-| `CONVERSATION_NOT_FOUND` | 404    | no conversation with this id among the caller's (another user's is never visible)        |
-| `IDEMPOTENCY_KEY_REUSED` | 409    | an `Idempotency-Key` replayed with a different message (content or model)                |
-| `TENANT_MISMATCH`        | 403    | the request names a tenant or user other than the caller's principal (gRPC callers)      |
+| Code                     | Status | When                                                                                                                  |
+| ------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------- |
+| `AI_DISABLED`            | 503    | `AI_ENABLED=false`; checked before anything else, nothing is stored                                                   |
+| `AI_MODEL_NOT_ALLOWED`   | 422    | the model is not `AI_DEFAULT_MODEL` nor in `AI_ALLOWED_MODELS` (`details.model`)                                      |
+| `AI_INPUT_TOO_LARGE`     | 422    | the new message plus the tool instructions (when tools are on) is over `AI_MAX_INPUT_CHARS` (`details.maxInputChars`) |
+| `AI_TIMEOUT`             | 504    | the call ran longer than `AI_REQUEST_TIMEOUT_MS` (`details.timeoutMs`)                                                |
+| `AI_UPSTREAM_ERROR`      | 502    | OpenRouter or the model failed after the retries; the upstream message is never returned                              |
+| `CONVERSATION_NOT_FOUND` | 404    | no conversation with this id among the caller's (another user's is never visible)                                     |
+| `IDEMPOTENCY_KEY_REUSED` | 409    | an `Idempotency-Key` replayed with a different message (content or model)                                             |
+| `TENANT_MISMATCH`        | 403    | the request names a tenant or user other than the caller's principal (gRPC callers)                                   |
 
 A refusal before the call (`AI_DISABLED`, `AI_MODEL_NOT_ALLOWED`, `AI_INPUT_TOO_LARGE`) stores nothing. A failed call
 (`AI_TIMEOUT`, `AI_UPSTREAM_ERROR`) stores no message but a usage row with outcome `timeout` or `error`, because tokens

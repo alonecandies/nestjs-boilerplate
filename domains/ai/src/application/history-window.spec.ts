@@ -137,6 +137,13 @@ describe('withoutRetriedCuts', () => {
     expect(withoutRetriedCuts(history, text('Q'))).toEqual(history);
   });
 
+  it('pairs a cut reply only with a user message: an assistant text equal to the next question is kept', () => {
+    // Two turns interleaved: X asked first, Y asked and answered, then X was cut. The next user
+    // message happens to equal Y's answer; that answer is not the cut's question, so all stay.
+    const history = [text('Qx'), text('Qy'), text('Yes.', 'assistant'), cutReply('Part')];
+    expect(withoutRetriedCuts(history, text('Yes.'))).toEqual(history);
+  });
+
   it('keeps a cut reply with no user message right before it', () => {
     // Its question fell outside the fetched history, or another message came between.
     expect(withoutRetriedCuts([cutReply('Par')], text('Q'))).toHaveLength(1);

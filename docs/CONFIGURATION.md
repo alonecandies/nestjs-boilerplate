@@ -554,21 +554,21 @@ enqueue invitation mail on the shared BullMQ `mail` queue: in production it need
 [`ai.config.ts`](../libs/config/src/namespaces/ai.config.ts) · monolith, ai-service (`AiModule`, `@platform/ai`;
 `AiCoreModule`, `@domain/ai`). Setup, models, limits and privacy: [AI.md](AI.md).
 
-| Variable                  | Default                        | Description                                                                                                                     |
-| ------------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
-| `AI_ENABLED`              | `false`                        | Off: nothing calls OpenRouter and every `AiClient` call throws 503 `AI_DISABLED`.                                               |
-| `OPENROUTER_API_KEY`      | —                              | Required when `AI_ENABLED=true`. A placeholder is refused in production. Never logged.                                          |
-| `OPENROUTER_BASE_URL`     | `https://openrouter.ai/api/v1` | OpenRouter API (or a proxy); https on a non-loopback host in production.                                                        |
-| `AI_DEFAULT_MODEL`        | `openai/gpt-4o-mini`           | Model of a request that names none (`<vendor>/<model>[:variant]`).                                                              |
-| `AI_ALLOWED_MODELS`       | —                              | CSV of other models a request may name; the default is always allowed, anything else is 422 `AI_MODEL_NOT_ALLOWED`.             |
-| `AI_FALLBACK_MODELS`      | —                              | CSV for OpenRouter's `models` routing, tried in order when the requested model fails; each must be allowed.                     |
-| `AI_MAX_OUTPUT_TOKENS`    | `1024`                         | Output cap of one call (1-32768); a request may ask for less, never more.                                                       |
-| `AI_REQUEST_TIMEOUT_MS`   | `60000`                        | Deadline of one call, a whole stream included (1000-600000); the upstream call is aborted and the caller gets 504 `AI_TIMEOUT`. |
-| `AI_MAX_RETRIES`          | `2`                            | AI SDK retries of retryable failures only (429, 5xx, network), 0-5.                                                             |
-| `AI_MAX_INPUT_CHARS`      | `32000`                        | Characters one call may send; older history is dropped to fit, a new message over it is 422 `AI_INPUT_TOO_LARGE`.               |
-| `AI_HISTORY_MAX_MESSAGES` | `20`                           | History window of a conversation: the last N messages.                                                                          |
-| `AI_HISTORY_MAX_TOKENS`   | `8000`                         | Approximate token budget of that window (characters / 4).                                                                       |
-| `AI_MAX_TOOL_STEPS`       | `3`                            | Model steps of one request with tools (1-10); the last may not call a tool, so it answers in text (1: no tool runs).            |
+| Variable                  | Default                        | Description                                                                                                                                    |
+| ------------------------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AI_ENABLED`              | `false`                        | Off: nothing calls OpenRouter and every `AiClient` call throws 503 `AI_DISABLED`.                                                              |
+| `OPENROUTER_API_KEY`      | —                              | Required when `AI_ENABLED=true`. A placeholder is refused in production. Never logged.                                                         |
+| `OPENROUTER_BASE_URL`     | `https://openrouter.ai/api/v1` | OpenRouter API (or a proxy); https on a non-loopback host in production.                                                                       |
+| `AI_DEFAULT_MODEL`        | `openai/gpt-4o-mini`           | Model of a request that names none (`<vendor>/<model>[:variant]`).                                                                             |
+| `AI_ALLOWED_MODELS`       | —                              | CSV of other models a request may name; the default is always allowed, anything else is 422 `AI_MODEL_NOT_ALLOWED`.                            |
+| `AI_FALLBACK_MODELS`      | —                              | CSV for OpenRouter's `models` routing, tried in order when the requested model fails; each must be allowed.                                    |
+| `AI_MAX_OUTPUT_TOKENS`    | `1024`                         | Output cap of one call (1-32768); a request may ask for less, never more.                                                                      |
+| `AI_REQUEST_TIMEOUT_MS`   | `60000`                        | Deadline of one call, a whole stream included (1000-600000); the upstream call is aborted and the caller gets 504 `AI_TIMEOUT`.                |
+| `AI_MAX_RETRIES`          | `2`                            | AI SDK retries of retryable failures only (429, 5xx, network), 0-5.                                                                            |
+| `AI_MAX_INPUT_CHARS`      | `32000`                        | Characters one call may send; older history is dropped to fit, a new message over it (with the tool instructions) is 422 `AI_INPUT_TOO_LARGE`. |
+| `AI_HISTORY_MAX_MESSAGES` | `20`                           | History window of a conversation: the last N messages.                                                                                         |
+| `AI_HISTORY_MAX_TOKENS`   | `8000`                         | Approximate token budget of that window (characters / 4).                                                                                      |
+| `AI_MAX_TOOL_STEPS`       | `3`                            | Model steps of one request with tools (1-10); the last may not call a tool, so it answers in text (1: no tool runs).                           |
 
 ### `aiRateLimit` — chat policy (ai)
 

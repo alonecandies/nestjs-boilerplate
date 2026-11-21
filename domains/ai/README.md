@@ -71,7 +71,8 @@ A chat turn (`SendMessageHandler`):
    is also cut to `AI_HISTORY_MAX_TOKENS` (characters / 4) and to what `AI_MAX_INPUT_CHARS` leaves
    once the new message and the tool instructions are counted, measured as `AiClient` measures it
    (`aiInputChars`): the oldest messages go first, a tool call and its results together, so a long
-   conversation never fails on its history; a new message too large on its own is still 422
+   conversation never fails on its history; a new message too large on its own (counted with the
+   tool instructions when tools are on) is still 422
    `AI_INPUT_TOO_LARGE`. Before that, a cut exchange that was asked again is left out
    (`withoutRetriedCuts`): an `incomplete` reply and the user message right before it, when the next
    user message after the reply (stored, or the new one) has the same text. A cut that was not
