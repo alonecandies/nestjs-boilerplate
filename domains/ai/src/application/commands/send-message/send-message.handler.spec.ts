@@ -24,6 +24,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   installTestTransactionHost,
   type TestTransactions,
+  traceRepositories,
 } from '../../../../test/ai-test.utils.js';
 import { AiChatErrorCode } from '../../../ai.constants.js';
 import type { Conversation } from '../../../domain/ai.types.js';
@@ -61,10 +62,11 @@ describe('SendMessageHandler', () => {
   function setup(model: LanguageModel, config: Partial<AiConfig> = {}) {
     const fullConfig = aiTestConfig(config);
     const provider = new MockAiModelProvider(model);
+    const repositories = traceRepositories(db, tx);
     const handler = new SendMessageHandler(
-      db.conversations,
-      db.messages,
-      db.usage,
+      repositories.conversations,
+      repositories.messages,
+      repositories.usage,
       new AiClient(fullConfig, provider, metrics),
       fullConfig,
     );
@@ -79,7 +81,7 @@ describe('SendMessageHandler', () => {
           }),
         ),
       );
-    return { handler, provider, send };
+    return { handler, provider, send, calls: repositories.calls };
   }
 
   beforeEach(async () => {
@@ -324,7 +326,23 @@ describe('SendMessageHandler', () => {
     expect(db.store.usage).toEqual([]);
   });
 
-  it('a conversation deleted during the call stores no message, keeps the usage and answers 404', async () => {
+  it('writes under a lock: the conversation is read FOR UPDATE first, then the rows and updatedAt', async () => {
+    const { send, calls } = setup(mockTextModel('answer'));
+    await send();
+    // The read before the call (unit 1), then the write (unit 2), whose first statement locks the
+    // conversation: a delete cannot commit between that check and `touch`.
+    expect(calls).toEqual([
+      '1 conversations.findById',
+      '1 messages.listRecent',
+      '2 conversations.findByIdForUpdate',
+      '2 messages.append',
+      '2 messages.append',
+      '2 usage.record',
+      '2 conversations.touch',
+    ]);
+  });
+
+  it('a conversation deleted during the call stores no message, commits the usage row and answers 404', async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -335,15 +353,23 @@ describe('SendMessageHandler', () => {
       await gate;
       return original(options);
     };
-    const pending = setup(slow)
-      .send()
-      .catch((e: unknown) => e);
+    const { send, calls } = setup(slow);
+    const pending = send().catch((e: unknown) => e);
     await new Promise((resolve) => setTimeout(resolve, 20));
     await as(ADA, () => db.conversations.delete(TENANT, conversation.id));
     release();
-    expect(await pending).toMatchObject({ code: AiChatErrorCode.CONVERSATION_NOT_FOUND });
+    expect(await pending).toMatchObject({
+      code: AiChatErrorCode.CONVERSATION_NOT_FOUND,
+      httpStatus: HttpStatus.NOT_FOUND,
+    });
     expect(db.store.messages).toEqual([]);
     expect(db.store.usage.map((u) => [u.outcome, u.messageId])).toEqual([['success', null]]);
+    // The locked read found nothing: the write recorded the usage only, and its unit committed.
+    expect(calls.filter((call) => call.startsWith('2 '))).toEqual([
+      '2 conversations.findByIdForUpdate',
+      '2 usage.record',
+    ]);
+    expect(tx.rolledBack).toBe(0);
   });
 
   it('writes the exchange in one unit of work: a failing write leaves none of it', async () => {

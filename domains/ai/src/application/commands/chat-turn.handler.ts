@@ -45,7 +45,10 @@ export type Stored =
   | { readonly kind: 'stored'; readonly message: Message }
   /** A concurrent request with the same key stored its reply first. */
   | { readonly kind: 'replay'; readonly message: Message }
-  /** The conversation was deleted (or is no longer the caller's) during the call. */
+  /**
+   * The conversation was deleted (or is no longer the caller's) during the call: only the usage
+   * row was stored (`messageId` null), and the unit of work committed it.
+   */
   | { readonly kind: 'gone' };
 
 /** Errors `AiClient` throws before any model call: nothing was spent, so no usage row. */
@@ -69,10 +72,12 @@ const toMessageContent = (content: ResponseMessage['content']): MessageContent =
  *    for the `Idempotency-Key` (same request hash → a replay, another → 409), and the history.
  * 2. The model call with `promptOf` (the history window sized to `AI_MAX_INPUT_CHARS`), with no
  *    transaction open (the subclass).
- * 3. `store`, as the caller: the conversation again (the messages policy is row-local, so ownership
- *    is checked here, not by the database), the assistant reply with the key and request hash first
- *    (the unique key decides a concurrent replay), the user message, the usage row and the
- *    conversation's `updatedAt`.
+ * 3. `store`, as the caller: the conversation again, locked first (`findByIdForUpdate`; the
+ *    messages policy is row-local, so ownership is checked here, not by the database), the
+ *    assistant reply with the key and request hash first (the unique key decides a concurrent
+ *    replay), the user message, the usage row and the conversation's `updatedAt`. The lock makes a
+ *    concurrent delete wait for this unit of work, which then deletes the new messages too; a
+ *    conversation deleted before it (`gone`) gets the usage row only, committed, and a 404.
  *
  * A call that failed before any reply stores no message and records a usage row with the failure
  * outcome (`recordFailure`); a call refused by a guard (disabled, model, input size) records nothing.
@@ -176,9 +181,13 @@ export abstract class ChatTurnHandler {
   ): Promise<Stored> {
     const { tenantId, conversationId } = reply;
     // As the caller, in this unit of work: the row-local messages policy cannot check who owns
-    // the conversation a message names, so the conversation must be the caller's here.
-    const conversation = await this.conversations.findById(tenantId, conversationId);
+    // the conversation a message names, so the conversation must be the caller's here. Locked
+    // (FOR UPDATE) until the unit ends, first: a delete that comes now waits for the commit, so
+    // `touch` cannot miss the row and roll the usage row back with the reply.
+    const conversation = await this.conversations.findByIdForUpdate(tenantId, conversationId);
     if (conversation === null) {
+      // Deleted first (or while the lock was awaited): the tokens were spent all the same. This
+      // returns, so the unit of work commits the usage row; the turn then answers 404.
       await this.usage.record({ ...usage, messageId: null });
       return { kind: 'gone' };
     }

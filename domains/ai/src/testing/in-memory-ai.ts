@@ -109,8 +109,12 @@ export class InMemoryConversationsRepository implements ConversationsRepository 
   }
 
   async findById(tenantId: string, id: string): Promise<Conversation | null> {
-    const row = this.visible(tenantId).find((c) => c.id === id);
-    return row === undefined ? null : structuredClone(row);
+    return this.find(tenantId, id);
+  }
+
+  /** As `findById`: the twin runs no concurrent transactions, so there is nothing to lock. */
+  async findByIdForUpdate(tenantId: string, id: string): Promise<Conversation | null> {
+    return this.find(tenantId, id);
   }
 
   async list(criteria: ListConversationsCriteria): Promise<CursorPage<Conversation>> {
@@ -138,6 +142,11 @@ export class InMemoryConversationsRepository implements ConversationsRepository 
     );
     this.store.messages.splice(0, this.store.messages.length, ...remaining);
     return true;
+  }
+
+  private find(tenantId: string, id: string): Conversation | null {
+    const row = this.visible(tenantId).find((c) => c.id === id);
+    return row === undefined ? null : structuredClone(row);
   }
 
   private visible(tenantId: string): Conversation[] {

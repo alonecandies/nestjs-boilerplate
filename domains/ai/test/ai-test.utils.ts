@@ -1,5 +1,5 @@
 import { type DrizzleTransactionalAdapter, TransactionHost } from '@platform/database';
-import type { InMemoryAiStore } from '../src/testing/in-memory-ai.js';
+import type { InMemoryAiPersistence, InMemoryAiStore } from '../src/testing/in-memory-ai.js';
 
 export interface TestTransactions {
   begun: number;
@@ -51,4 +51,42 @@ export function installTestTransactionHost(store: InMemoryAiStore): TestTransact
     },
   });
   return tx;
+}
+
+/** The twins of `createInMemoryAiPersistence`, each call recorded in `calls`. */
+export type TracedAiRepositories = Pick<
+  InMemoryAiPersistence,
+  'conversations' | 'messages' | 'usage'
+> & {
+  /**
+   * Every call a handler made, in order, as `<unit of work> <repository>.<method>`: the number of
+   * the `@Transactional()` unit it ran in (`tx.begun`), or `-` outside any. Calls a twin makes to
+   * itself and the spec's own calls on the untraced twins are not recorded.
+   */
+  readonly calls: string[];
+};
+
+/** Wraps the twins for a handler, so a spec can pin which call runs in which unit of work. */
+export function traceRepositories(
+  persistence: InMemoryAiPersistence,
+  tx: TestTransactions,
+): TracedAiRepositories {
+  const calls: string[] = [];
+  const trace = <T extends object>(name: string, repository: T): T =>
+    new Proxy(repository, {
+      get(target, property, receiver) {
+        const value: unknown = Reflect.get(target, property, receiver);
+        if (typeof value !== 'function' || typeof property !== 'string') return value;
+        return (...args: unknown[]): unknown => {
+          calls.push(`${tx.active ? tx.begun : '-'} ${name}.${property}`);
+          return (value as (...params: unknown[]) => unknown).apply(target, args);
+        };
+      },
+    });
+  return {
+    conversations: trace('conversations', persistence.conversations),
+    messages: trace('messages', persistence.messages),
+    usage: trace('usage', persistence.usage),
+    calls,
+  };
 }

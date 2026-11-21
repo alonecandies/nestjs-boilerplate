@@ -110,6 +110,11 @@ may have been spent. A streamed turn the client abandons (it disconnects, or clo
 upstream call: no tokens are spent after the client left. The reply so far, if any text arrived, is stored once as an `incomplete`
 message, and a usage row records the outcome `aborted`.
 
+A conversation deleted while one of its turns runs ends the turn with 404 `CONVERSATION_NOT_FOUND` (streamed: the
+`error` event after the deltas). No message is stored, but the usage row is (`message_id` null), because the tokens were
+spent. The turn's write locks the conversation first (`SELECT … FOR UPDATE` by `(tenant_id, id)`), so a delete that
+arrives during the write waits for it and then deletes the turn's messages with the rest; the usage row stays either way.
+
 `Idempotency-Key` (8-255 characters of `[A-Za-z0-9._:-]`) on send makes retries safe: the key is stored on the assistant
 reply, unique per conversation, and a replay with the same content and model returns the stored reply
 (`replayed: true`) without calling the model again.

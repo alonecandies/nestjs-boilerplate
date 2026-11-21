@@ -45,6 +45,20 @@ export class DrizzleConversationsRepository implements ConversationsRepository {
     });
   }
 
+  findByIdForUpdate(tenantId: string, id: string): Promise<Conversation | null> {
+    return inUnitOfWork(this.txHost, async (tx) => {
+      // tenant_id equality: FOR UPDATE needs the distribution column on Citus (sharding §2.1.6).
+      // The lock also needs app_runtime's UPDATE grant and conversations_update's USING (owner).
+      const [row] = await tx
+        .select()
+        .from(conversations)
+        .where(ofTenant(tenantId, id))
+        .limit(1)
+        .for('update');
+      return row ?? null;
+    });
+  }
+
   async list(criteria: ListConversationsCriteria): Promise<CursorPage<Conversation>> {
     // Decoded (and validated: a forged cursor is a 422, never SQL) before the unit of work opens.
     const { tenantId, userId, cursor } = criteria;

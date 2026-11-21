@@ -22,6 +22,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   installTestTransactionHost,
   type TestTransactions,
+  traceRepositories,
 } from '../../../../test/ai-test.utils.js';
 import { AiChatErrorCode } from '../../../ai.constants.js';
 import type { Conversation } from '../../../domain/ai.types.js';
@@ -72,10 +73,11 @@ describe('StreamMessageHandler', () => {
   function setup(model: LanguageModel, config: Partial<AiConfig> = {}) {
     const fullConfig = aiTestConfig(config);
     const provider = new MockAiModelProvider(model);
+    const repositories = traceRepositories(db, tx);
     const handler = new StreamMessageHandler(
-      db.conversations,
-      db.messages,
-      db.usage,
+      repositories.conversations,
+      repositories.messages,
+      repositories.usage,
       new AiClient(fullConfig, provider, metrics),
       fullConfig,
     );
@@ -93,7 +95,7 @@ describe('StreamMessageHandler', () => {
           ),
         ),
       );
-    return { handler, provider, stream };
+    return { handler, provider, stream, calls: repositories.calls };
   }
 
   const assistantReplies = () => db.store.messages.filter((m) => m.role === 'assistant');
@@ -159,6 +161,23 @@ describe('StreamMessageHandler', () => {
     ]);
     // Read before the call, write after it: two units of work, none open while streaming.
     expect(tx.begun).toBe(2);
+  });
+
+  it('stores the end under a lock: the conversation is read FOR UPDATE first, then the rows', async () => {
+    const { stream, calls } = setup(mockStreamModel(['Row', '-level']));
+    const { error } = await stream();
+    expect(error).toBeUndefined();
+    // The read before the call (unit 1), then the write (unit 2), whose first statement locks the
+    // conversation: a delete cannot commit between that check and `touch`.
+    expect(calls).toEqual([
+      '1 conversations.findById',
+      '1 messages.listRecent',
+      '2 conversations.findByIdForUpdate',
+      '2 messages.append',
+      '2 messages.append',
+      '2 usage.record',
+      '2 conversations.touch',
+    ]);
   });
 
   it('drops the oldest history to fit AI_MAX_INPUT_CHARS: a full conversation streams a short message', async () => {
@@ -348,6 +367,47 @@ describe('StreamMessageHandler', () => {
     expect(error).toBeInstanceOf(AiUpstreamError);
     expect(db.store.messages).toEqual([]);
     expect(db.store.usage.map((u) => [u.outcome, u.messageId])).toEqual([['error', null]]);
+  });
+
+  it('a conversation deleted during the stream ends it with a 404 after the deltas and keeps only the usage row', async () => {
+    const model = mockStreamModel(['Row', '-level'], {
+      usage: { inputTokens: 12, outputTokens: 3 },
+    });
+    const { handler, calls } = setup(model);
+
+    const { first, rest } = await as(ADA, async () => {
+      const events = await handler.execute(
+        new StreamMessageCommand({ ...ADA, conversationId: conversation.id, content: 'Go' }),
+      );
+      const iterator = events[Symbol.asyncIterator]();
+      const head = await iterator.next(); // the call runs; nothing is stored yet
+      await db.conversations.delete(TENANT, conversation.id);
+      return { first: head, rest: await drain({ [Symbol.asyncIterator]: () => iterator }) };
+    });
+
+    expect(first).toEqual({ done: false, value: { type: 'delta', text: 'Row' } });
+    expect(rest.events).toEqual([{ type: 'delta', text: '-level' }]);
+    expect(rest.error).toMatchObject({
+      code: AiChatErrorCode.CONVERSATION_NOT_FOUND,
+      httpStatus: HttpStatus.NOT_FOUND,
+    });
+    expect(db.store.messages).toEqual([]);
+    expect(db.store.usage).toEqual([
+      expect.objectContaining({
+        ...ADA,
+        conversationId: conversation.id,
+        messageId: null,
+        inputTokens: 12,
+        outputTokens: 3,
+        outcome: 'success',
+      }),
+    ]);
+    // The locked read found nothing: the write recorded the usage only, and its unit committed.
+    expect(calls.filter((call) => call.startsWith('2 '))).toEqual([
+      '2 conversations.findByIdForUpdate',
+      '2 usage.record',
+    ]);
+    expect(tx.rolledBack).toBe(0);
   });
 
   it('replays an Idempotency-Key as a single done event without a model call; another body is 409', async () => {

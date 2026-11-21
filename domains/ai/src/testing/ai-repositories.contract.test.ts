@@ -96,6 +96,19 @@ export function describeAiRepositoriesContract(
         ).resolves.toBeNull();
       });
 
+      it('findByIdForUpdate reads as findById does: the owner its conversation, anyone else null', async () => {
+        const w = world();
+        const { conversation } = await seed(w.u1InT);
+        const lock = (principal: Principal, id = conversation.id) =>
+          as(principal, () => repos().conversations.findByIdForUpdate(w.t, id));
+
+        // On Postgres the row lock also needs the UPDATE grant and the update policy's USING.
+        await expect(lock(w.u1InT)).resolves.toEqual(conversation);
+        await expect(lock(w.u2InT)).resolves.toBeNull();
+        await expect(lock(w.u1InT2)).resolves.toBeNull();
+        await expect(lock(w.u1InT, generateId())).resolves.toBeNull();
+      });
+
       it('creating one for another user or tenant fails with the policy error and stores nothing', async () => {
         const w = world();
         const forU2 = makeConversation({ tenantId: w.t, userId: w.u2 });
@@ -347,6 +360,8 @@ export function describeAiRepositoriesContract(
         const calls: Record<string, () => Promise<unknown>> = {
           'conversations.create': () => repos().conversations.create(conversation),
           'conversations.findById': () => repos().conversations.findById(w.t, conversation.id),
+          'conversations.findByIdForUpdate': () =>
+            repos().conversations.findByIdForUpdate(w.t, conversation.id),
           'conversations.list': () =>
             repos().conversations.list({ tenantId: w.t, userId: w.u1, limit: 10 }),
           'conversations.touch': () =>

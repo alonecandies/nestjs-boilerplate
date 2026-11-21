@@ -26,6 +26,15 @@ export abstract class ConversationsRepository {
   abstract findById(tenantId: string, id: string): Promise<Conversation | null>;
 
   /**
+   * `findById` with a row lock (`SELECT … FOR UPDATE` by `(tenant_id, id)`, a router query on
+   * Citus) held until the unit of work ends: a concurrent `delete` or `touch` of the conversation
+   * waits for it, so the conversation cannot vanish between this read and the writes after it.
+   * A delete that committed first, or while this read waited for its lock, leaves `null`. Call it
+   * inside a unit of work, before the writes it guards (alone, the lock ends with the read).
+   */
+  abstract findByIdForUpdate(tenantId: string, id: string): Promise<Conversation | null>;
+
+  /**
    * One page of the user's conversations, newest first (uuidv7 order), resuming after `cursor`.
    * @throws DomainValidationException (`INVALID_CURSOR`) a cursor this API did not issue
    */
