@@ -15,8 +15,9 @@ import { SendMessageCommand } from './send-message.command.js';
  * 1. Read, in one unit of work as the caller: the conversation (404 when it is not the caller's),
  *    a stored reply for the `Idempotency-Key` (same request hash → returned without a call,
  *    another → 409), and the history (`AI_HISTORY_MAX_MESSAGES` newest).
- * 2. Call the model with the history window (count and approximate token budget) then the new user
- *    message. No transaction is open during the call.
+ * 2. Call the model with the history window (count, approximate token budget, and what
+ *    `AI_MAX_INPUT_CHARS` leaves after the new message and the tool instructions: the oldest
+ *    messages go first) then the new user message. No transaction is open during the call.
  * 3. Write, in one unit of work as the caller: the conversation again, the assistant reply with the
  *    key and request hash first, the user message, the usage row and the conversation's `updatedAt`.
  *
@@ -48,8 +49,7 @@ export class SendMessageHandler
     try {
       result = await this.ai.generate({
         model,
-        messages: this.promptOf(prepared.history, userMessage),
-        ...this.toolOptions(caller),
+        ...this.promptOf(caller, prepared.history, userMessage),
       });
     } catch (error) {
       await this.recordFailure(request, model, error, Math.round(performance.now() - startedAt));

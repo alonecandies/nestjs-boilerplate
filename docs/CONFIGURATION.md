@@ -565,7 +565,7 @@ enqueue invitation mail on the shared BullMQ `mail` queue: in production it need
 | `AI_MAX_OUTPUT_TOKENS`    | `1024`                         | Output cap of one call (1-32768); a request may ask for less, never more.                                                       |
 | `AI_REQUEST_TIMEOUT_MS`   | `60000`                        | Deadline of one call, a whole stream included (1000-600000); the upstream call is aborted and the caller gets 504 `AI_TIMEOUT`. |
 | `AI_MAX_RETRIES`          | `2`                            | AI SDK retries of retryable failures only (429, 5xx, network), 0-5.                                                             |
-| `AI_MAX_INPUT_CHARS`      | `32000`                        | Message text one call may send, history included; more is 422 `AI_INPUT_TOO_LARGE`.                                             |
+| `AI_MAX_INPUT_CHARS`      | `32000`                        | Characters one call may send; older history is dropped to fit, a new message over it is 422 `AI_INPUT_TOO_LARGE`.               |
 | `AI_HISTORY_MAX_MESSAGES` | `20`                           | History window of a conversation: the last N messages.                                                                          |
 | `AI_HISTORY_MAX_TOKENS`   | `8000`                         | Approximate token budget of that window (characters / 4).                                                                       |
 | `AI_MAX_TOOL_STEPS`       | `3`                            | Tool-calling steps of one request (1-10).                                                                                       |

@@ -7,6 +7,7 @@ import {
   AiModelNotAllowedError,
   type AiSdkGenerateResult,
   AiTimeoutError,
+  aiInputChars,
 } from '@platform/ai';
 import { generateId, type Principal } from '@platform/common';
 import { type AiConfig, aiConfig } from '@platform/config';
@@ -22,14 +23,15 @@ import type {
   UsageOutcome,
   UsageRecord,
 } from '../../domain/ai.types.js';
-import { historyWindow } from '../history-window.js';
+import { historyWindow, toModelMessage } from '../history-window.js';
 import type { SendMessageRequest } from '../ports/ai.port.js';
 import { ConversationsRepository } from '../repositories/conversations.repository.js';
 import { MessagesRepository } from '../repositories/messages.repository.js';
 import { UsageRepository } from '../repositories/usage.repository.js';
 import { AiChatTools, type AiToolCallOptions } from '../tools/ai-chat-tools.js';
 
-export type ModelMessage = AiCallInput['messages'][number];
+/** The prompt part of a chat turn's `AiClient` call: the messages, the tools, their instructions. */
+export type ChatPrompt = Pick<AiCallInput, 'messages' | 'system' | 'tools'>;
 /** What a call added to the conversation: assistant messages and tool results, step by step. */
 export type ResponseMessage = AiSdkGenerateResult['responseMessages'][number];
 
@@ -49,9 +51,6 @@ export type Stored =
 /** Errors `AiClient` throws before any model call: nothing was spent, so no usage row. */
 const REFUSED_BEFORE_CALL = [AiDisabledError, AiModelNotAllowedError, AiInputTooLargeError];
 
-export const toModelMessage = (message: Message): ModelMessage =>
-  ({ role: message.role, content: message.content }) as unknown as ModelMessage;
-
 /** An assistant message that calls no tool: the turn's answer (stored as the reply). */
 const isAnswer = (message: ResponseMessage): boolean =>
   message.role === 'assistant' &&
@@ -68,7 +67,8 @@ const toMessageContent = (content: ResponseMessage['content']): MessageContent =
  *
  * 1. `prepare`, as the caller: the conversation (404 when it is not the caller's), a stored reply
  *    for the `Idempotency-Key` (same request hash → a replay, another → 409), and the history.
- * 2. The model call, with no transaction open (the subclass).
+ * 2. The model call with `promptOf` (the history window sized to `AI_MAX_INPUT_CHARS`), with no
+ *    transaction open (the subclass).
  * 3. `store`, as the caller: the conversation again (the messages policy is row-local, so ownership
  *    is checked here, not by the database), the assistant reply with the key and request hash first
  *    (the unique key decides a concurrent replay), the user message, the usage row and the
@@ -78,8 +78,8 @@ const toMessageContent = (content: ResponseMessage['content']): MessageContent =
  * outcome (`recordFailure`); a call refused by a guard (disabled, model, input size) records nothing.
  *
  * Tools (`AiChatTools`, when the app binds `AiToolSources`): the call is offered the read-only
- * tools bound to the caller (`toolOptions`), and the tool calls and results of its steps are stored
- * as messages between the user message and the reply (`stepMessages`).
+ * tools bound to the caller (`toolOptions`, in `promptOf`), and the tool calls and results of its
+ * steps are stored as messages between the user message and the reply (`stepMessages`).
  */
 @Injectable()
 export abstract class ChatTurnHandler {
@@ -142,13 +142,27 @@ export abstract class ChatTurnHandler {
     return { kind: 'call', conversation, history };
   }
 
-  /** The history window (count, then approximate token budget) followed by the new message. */
-  protected promptOf(history: readonly Message[], userMessage: Message): ModelMessage[] {
+  /**
+   * The prompt of the caller's call: the tools and their instructions (`toolOptions`), the history
+   * window, then the new message. Besides its count and token limits, the window holds only what
+   * `AI_MAX_INPUT_CHARS` leaves once the new message and the instructions are counted, measured as
+   * the client's guard measures (`aiInputChars`): a long conversation drops its oldest messages
+   * instead of being refused, and a new message too large on its own leaves no history and gets
+   * the guard's 422 `AI_INPUT_TOO_LARGE`.
+   */
+  protected promptOf(
+    caller: Principal,
+    history: readonly Message[],
+    userMessage: Message,
+  ): ChatPrompt {
+    const tools = this.toolOptions(caller);
+    const message = toModelMessage(userMessage);
     const window = historyWindow(history, {
       maxMessages: this.config.historyMaxMessages,
       maxTokens: this.config.historyMaxTokens,
+      maxChars: this.config.maxInputChars - aiInputChars([message], tools.system),
     });
-    return [...window.map(toModelMessage), toModelMessage(userMessage)];
+    return { ...tools, messages: [...window.map(toModelMessage), message] };
   }
 
   @Transactional()

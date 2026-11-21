@@ -2,6 +2,7 @@ import { HttpStatus } from '@nestjs/common';
 import {
   AiClient,
   AiDisabledError,
+  AiInputTooLargeError,
   AiMetrics,
   AiModelNotAllowedError,
   AiUpstreamError,
@@ -9,6 +10,7 @@ import {
 import {
   aiTestConfig,
   MockAiModelProvider,
+  type MockModelCall,
   mockFailingModel,
   mockHangingModel,
   mockStreamModel,
@@ -39,6 +41,15 @@ const metrics = new AiMetrics();
 
 const as = <T>(owner: { tenantId: string; userId: string }, fn: () => Promise<T>): Promise<T> =>
   runWithPrincipal(createPrincipal({ ...owner, roles: ['member'] }), fn);
+
+type PromptMessage = MockModelCall['prompt'][number];
+/** The text of a message as the model received it (a text-only prompt has nothing else). */
+const textOf = (message: PromptMessage): string =>
+  typeof message.content === 'string'
+    ? message.content
+    : message.content.map((part) => (part.type === 'text' ? part.text : '')).join('');
+const charsSent = (prompt: readonly PromptMessage[]): number =>
+  prompt.reduce((total, message) => total + textOf(message).length, 0);
 
 /** Reads every event; a failure mid-stream is returned with the events before it. */
 async function drain(
@@ -148,6 +159,51 @@ describe('StreamMessageHandler', () => {
     ]);
     // Read before the call, write after it: two units of work, none open while streaming.
     expect(tx.begun).toBe(2);
+  });
+
+  it('drops the oldest history to fit AI_MAX_INPUT_CHARS: a full conversation streams a short message', async () => {
+    // Ten 100-character messages fill the 1000-character cap on their own.
+    const history = Array.from({ length: 10 }, (_, i) => `old ${i} `.padEnd(100, '.'));
+    for (const content of history) {
+      await as(ADA, () => db.messages.append(makeMessage(conversation, { content })));
+    }
+    const model = mockStreamModel(['ok']);
+    const { stream } = setup(model, {
+      maxInputChars: 1_000,
+      historyMaxMessages: 50,
+      historyMaxTokens: 100_000,
+    });
+
+    const { events, error } = await stream();
+
+    expect(error).toBeUndefined();
+    expect(events.at(-1)).toMatchObject({ type: 'done', message: { content: 'ok' } });
+    const prompt = model.doStreamCalls[0]?.prompt ?? [];
+    // The oldest message made room: the nine newest, oldest first, then the new message.
+    expect(prompt.map(textOf)).toEqual([...history.slice(1), 'What is RLS?']);
+    expect(charsSent(prompt)).toBeLessThanOrEqual(1_000);
+  });
+
+  it('still refuses a new message over AI_MAX_INPUT_CHARS on its own: 422 before any event', async () => {
+    await as(ADA, () => db.messages.append(makeMessage(conversation, { content: 'Hi' })));
+    const model = mockStreamModel(['fits']);
+    const { stream } = setup(model, { maxInputChars: 1_000 });
+
+    const error = await stream({ content: 'x'.repeat(1_001) }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AiInputTooLargeError);
+    expect(error).toMatchObject({
+      httpStatus: HttpStatus.UNPROCESSABLE_ENTITY,
+      details: { maxInputChars: 1_000 },
+    });
+    expect(model.doStreamCalls).toEqual([]);
+    expect(db.store.messages.map((m) => m.content)).toEqual(['Hi']);
+    expect(db.store.usage).toEqual([]);
+
+    // A message that fits on its own goes, with no room left for any history.
+    const { error: none } = await stream({ content: 'x'.repeat(1_000) });
+    expect(none).toBeUndefined();
+    expect(model.doStreamCalls[0]?.prompt.map(textOf)).toEqual(['x'.repeat(1_000)]);
   });
 
   it('a client that disconnects mid-stream aborts the upstream call; the partial reply is stored once as incomplete', async () => {

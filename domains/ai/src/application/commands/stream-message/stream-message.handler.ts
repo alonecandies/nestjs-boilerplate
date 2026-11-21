@@ -69,9 +69,8 @@ export class StreamMessageHandler
     // Guard refusals (disabled, model, input size) throw here, before any event or usage row.
     const call = this.ai.stream({
       model,
-      messages: this.promptOf(prepared.history, userMessage),
+      ...this.promptOf(caller, prepared.history, userMessage),
       signal,
-      ...this.toolOptions(caller),
     });
     return this.run({
       request,

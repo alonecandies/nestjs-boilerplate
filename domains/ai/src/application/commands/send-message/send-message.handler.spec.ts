@@ -2,6 +2,7 @@ import { HttpStatus } from '@nestjs/common';
 import {
   AiClient,
   AiDisabledError,
+  AiInputTooLargeError,
   AiMetrics,
   AiModelNotAllowedError,
   AiTimeoutError,
@@ -10,6 +11,7 @@ import {
 import {
   aiTestConfig,
   MockAiModelProvider,
+  type MockModelCall,
   mockFailingModel,
   mockHangingModel,
   mockTextModel,
@@ -41,6 +43,15 @@ const metrics = new AiMetrics();
 
 const as = <T>(owner: { tenantId: string; userId: string }, fn: () => Promise<T>): Promise<T> =>
   runWithPrincipal(createPrincipal({ ...owner, roles: ['member'] }), fn);
+
+type PromptMessage = MockModelCall['prompt'][number];
+/** The text of a message as the model received it (a text-only prompt has nothing else). */
+const textOf = (message: PromptMessage): string =>
+  typeof message.content === 'string'
+    ? message.content
+    : message.content.map((part) => (part.type === 'text' ? part.text : '')).join('');
+const charsSent = (prompt: readonly PromptMessage[]): number =>
+  prompt.reduce((total, message) => total + textOf(message).length, 0);
 
 describe('SendMessageHandler', () => {
   let db: InMemoryAiPersistence;
@@ -146,6 +157,49 @@ describe('SendMessageHandler', () => {
     const prompt = JSON.stringify(byTokens.doGenerateCalls[0]?.prompt);
     expect(prompt).not.toContain('one one');
     expect(prompt).toContain('four');
+  });
+
+  it('drops the oldest history to fit AI_MAX_INPUT_CHARS: a full conversation takes a short message', async () => {
+    // Ten 100-character messages fill the 1000-character cap on their own.
+    const history = Array.from({ length: 10 }, (_, i) => `old ${i} `.padEnd(100, '.'));
+    for (const content of history) {
+      await as(ADA, () => db.messages.append(makeMessage(conversation, { content })));
+    }
+    const model = mockTextModel('ok');
+    const { send } = setup(model, {
+      maxInputChars: 1_000,
+      historyMaxMessages: 50,
+      historyMaxTokens: 100_000,
+    });
+
+    const result = await send();
+
+    expect(result).toMatchObject({ replayed: false, message: { content: 'ok' } });
+    const prompt = model.doGenerateCalls[0]?.prompt ?? [];
+    // The oldest message made room: the nine newest, oldest first, then the new message.
+    expect(prompt.map(textOf)).toEqual([...history.slice(1), 'What is RLS?']);
+    expect(charsSent(prompt)).toBeLessThanOrEqual(1_000);
+  });
+
+  it('still refuses a new message over AI_MAX_INPUT_CHARS on its own: 422 before any call', async () => {
+    await as(ADA, () => db.messages.append(makeMessage(conversation, { content: 'Hi' })));
+    const model = mockTextModel('fits');
+    const { send } = setup(model, { maxInputChars: 1_000 });
+
+    const error = await send({ content: 'x'.repeat(1_001) }).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(AiInputTooLargeError);
+    expect(error).toMatchObject({
+      httpStatus: HttpStatus.UNPROCESSABLE_ENTITY,
+      details: { maxInputChars: 1_000 },
+    });
+    expect(model.doGenerateCalls).toEqual([]);
+    expect(db.store.messages.map((m) => m.content)).toEqual(['Hi']);
+    expect(db.store.usage).toEqual([]);
+
+    // A message that fits on its own goes, with no room left for any history.
+    await send({ content: 'x'.repeat(1_000) });
+    expect(model.doGenerateCalls[0]?.prompt.map(textOf)).toEqual(['x'.repeat(1_000)]);
   });
 
   it('uses the requested model when allowed, and refuses another with 422 before any call', async () => {

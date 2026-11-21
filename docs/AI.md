@@ -67,9 +67,9 @@ ai-service's `AI_REQUEST_TIMEOUT_MS`, so the model's own timeout (504 `AI_TIMEOU
 | `AI_MAX_OUTPUT_TOKENS`    | `1024`  | Output cap of one call (1-32768)                                                                                                 |
 | `AI_REQUEST_TIMEOUT_MS`   | `60000` | Deadline of one call, a whole stream and its tool steps included. The upstream call is aborted; the caller gets 504 `AI_TIMEOUT` |
 | `AI_MAX_RETRIES`          | `2`     | AI SDK retries of retryable failures only (429, 5xx, network), 0-5. After them: 502 `AI_UPSTREAM_ERROR`                          |
-| `AI_MAX_INPUT_CHARS`      | `32000` | Characters of message text one call sends, history and tool instructions included; more is 422 `AI_INPUT_TOO_LARGE`              |
+| `AI_MAX_INPUT_CHARS`      | `32000` | Characters one call sends, history and tool instructions included; the history is trimmed to fit (below)                         |
 | `AI_HISTORY_MAX_MESSAGES` | `20`    | The history window: the newest N messages of the conversation                                                                    |
-| `AI_HISTORY_MAX_TOKENS`   | `8000`  | Approximate token budget of that window (characters / 4), newest kept; a window never opens on a tool result                     |
+| `AI_HISTORY_MAX_TOKENS`   | `8000`  | Approximate token budget of that window (characters / 4), newest kept                                                            |
 | `AI_MAX_TOOL_STEPS`       | `3`     | Model steps of one turn when it calls tools (1-10)                                                                               |
 | `AI_CHAT_LIMIT`           | `20`    | `ai.chat` rate limit: chat turns per user per `AI_CHAT_TTL_MS` (default 60000)                                                   |
 | `AI_CHAT_TENANT_LIMIT`    | `200`   | `ai.chat`: chat turns per tenant per `AI_CHAT_TENANT_TTL_MS` (default 60000), shared by every member, after the user budget      |
@@ -78,6 +78,11 @@ ai-service's `AI_REQUEST_TIMEOUT_MS`, so the model's own timeout (504 `AI_TIMEOU
   model call (429 `RATE_LIMITED` with `Retry-After`). Reads and conversation management only count towards the global
   budgets. In the microservices topology the gateway charges it.
 - A single message is at most 100000 characters (400 `VALIDATION_FAILED`); a title 200.
+- The history window holds what all three history limits allow: at most `AI_HISTORY_MAX_MESSAGES`, within
+  `AI_HISTORY_MAX_TOKENS`, and within what `AI_MAX_INPUT_CHARS` leaves once the new message and the tool instructions
+  are counted (as `AiClient` counts them: text, tool calls and results as JSON). The oldest messages go first, and a
+  tool call and its results are kept or dropped together, so a long conversation is never refused for its history;
+  only a new message that is over the cap on its own (with the instructions) is 422 `AI_INPUT_TOO_LARGE`.
 - The chat routes have no handler timeout (`@Timeout(0)`): `AI_REQUEST_TIMEOUT_MS` bounds them.
 - **Known limit:** a `streamAiMessage` turn sent over graphql-ws (a WebSocket) is bounded only by
   `AI_REQUEST_TIMEOUT_MS`. Closing the socket does not abort the upstream call, because the mutation has no HTTP request
@@ -91,7 +96,7 @@ Every response carries one of these codes when a call is refused or fails (REST 
 | ------------------------ | ------ | ---------------------------------------------------------------------------------------- |
 | `AI_DISABLED`            | 503    | `AI_ENABLED=false`; checked before anything else, nothing is stored                      |
 | `AI_MODEL_NOT_ALLOWED`   | 422    | the model is not `AI_DEFAULT_MODEL` nor in `AI_ALLOWED_MODELS` (`details.model`)         |
-| `AI_INPUT_TOO_LARGE`     | 422    | the call would send more than `AI_MAX_INPUT_CHARS` (`details.maxInputChars`)             |
+| `AI_INPUT_TOO_LARGE`     | 422    | the new message is over `AI_MAX_INPUT_CHARS` on its own (`details.maxInputChars`)        |
 | `AI_TIMEOUT`             | 504    | the call ran longer than `AI_REQUEST_TIMEOUT_MS` (`details.timeoutMs`)                   |
 | `AI_UPSTREAM_ERROR`      | 502    | OpenRouter or the model failed after the retries; the upstream message is never returned |
 | `CONVERSATION_NOT_FOUND` | 404    | no conversation with this id among the caller's (another user's is never visible)        |

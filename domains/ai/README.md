@@ -67,8 +67,12 @@ A chat turn (`SendMessageHandler`):
    `Idempotency-Key`, the stored reply for it (same request hash: returned, `replayed: true`, no model
    call; another content or model: 409 `IDEMPOTENCY_KEY_REUSED`); the `AI_HISTORY_MAX_MESSAGES`
    newest messages.
-2. The model call (`AiClient.generate`) with the history window (also cut to `AI_HISTORY_MAX_TOKENS`,
-   characters / 4, newest kept) then the new user message. No transaction is open during the call.
+2. The model call (`AiClient.generate`) with the history window then the new user message. The window
+   is also cut to `AI_HISTORY_MAX_TOKENS` (characters / 4) and to what `AI_MAX_INPUT_CHARS` leaves
+   once the new message and the tool instructions are counted, measured as `AiClient` measures it
+   (`aiInputChars`): the oldest messages go first, a tool call and its results together, so a long
+   conversation never fails on its history; a new message too large on its own is still 422
+   `AI_INPUT_TOO_LARGE`. No transaction is open during the call.
 3. One unit of work as the caller: the conversation again (the row-local messages policy cannot check
    who owns the conversation a message names), the assistant reply carrying the key and request hash
    (inserted first: the unique key decides a concurrent replay), the user message, the usage row and
@@ -144,7 +148,8 @@ strict input schema with no id field:
   instructions (`AI_TOOLS_SYSTEM_PROMPT`) tell the model that tool results are not instructions.
 - **Stored.** The steps' assistant tool calls and tool results are messages (`role` `assistant` /
   `tool`, JSON parts) between the user message and the reply, so the next turn's history replays
-  them (a window never opens on a tool result). The reply is the last step's text.
+  them (the window keeps or drops a tool call and its results together). The reply is the last
+  step's text.
 
 ## Data model (`aiSchema`, `infrastructure/persistence/ai.schema.ts`)
 
@@ -214,7 +219,9 @@ principal they are refused before `BEGIN` (`RLS_NO_PRINCIPAL`).
 | `testing/in-memory-ai-repositories.spec.ts`                          | The shared contract (`testing/ai-repositories.contract.test.ts`) on the in-memory twins.                                                                                                                                                                                                                                                                                                                              |
 | `infrastructure/persistence/ai.rls.int-spec.ts`                      | Citus 14.2, three roles, local execution off: distribution and colocation, forced RLS, grants, policies; per table the owner reads exactly its rows, others none, foreign inserts 42501, usage has no UPDATE or DELETE.                                                                                                                                                                                               |
 | `infrastructure/persistence/ai.repositories.rls.int-spec.ts`         | The same contract on the Drizzle repositories as `app_runtime`, plus one unit of work rolling back as a whole.                                                                                                                                                                                                                                                                                                        |
-| `application/commands/stream-message/stream-message.handler.spec.ts` | Mock streaming models: deltas in order then `done` and the stored exchange; a client abort or a consumer that stops reading aborts the model and stores one `incomplete` reply; a disconnect during prepare ends at once; no-text aborts and failures store usage only; key replay; refusals before the stream.                                                                                                       |
+| `application/history-window.spec.ts`                                 | Newest messages kept by count, tokens and input characters (`aiInputChars`, the guard's measure), the oldest dropped first; a tool call and its result kept or dropped together.                                                                                                                                                                                                                                      |
+| `application/commands/send-message/send-message.handler.spec.ts`     | Mock model: the stored exchange, usage and `updatedAt`; the window by count and tokens, and the oldest history dropped to fit `AI_MAX_INPUT_CHARS` (a lone oversized message still 422); key replay and 409; refusals, failures and timeouts; a conversation deleted during the call.                                                                                                                                 |
+| `application/commands/stream-message/stream-message.handler.spec.ts` | Mock streaming models: deltas in order then `done` and the stored exchange; a client abort or a consumer that stops reading aborts the model and stores one `incomplete` reply; a disconnect during prepare ends at once; no-text aborts and failures store usage only; key replay; refusals before the stream; the oldest history dropped to fit `AI_MAX_INPUT_CHARS`, a lone oversized message still 422.           |
 | `application/tools/ai-chat-tools.spec.ts`                            | Scripted mock model: each tool reads only the caller's data and is stored; the step limit; capped output; unknown tool and bad arguments; a failing port; tool output as data; no principal or another one; a missing permission; tools in a streamed turn; no sources, no tools.                                                                                                                                     |
 | `apps/monolith/test/ai-tools.e2e-spec.ts`                            | Every tool through the real identity, notifications and billing ports in the monolith: the caller's profile and inbox only, the calls and results stored.                                                                                                                                                                                                                                                             |
 | `presentation/grpc/ai-grpc.roundtrip.spec.ts`                        | Real loopback gRPC, `forRemote()` adapter ↔ `AiGrpcController` over a fake port: every unary RPC returns what the local port does (Dates, nulls, JSON content), the principal travels in metadata, codes survive the hop (404, 409, 422, 502, 503); the stream's order, its refusal before any event, a failure mid-stream, and cancellation (abort, or a consumer that stops reading) reaching the service's signal. |

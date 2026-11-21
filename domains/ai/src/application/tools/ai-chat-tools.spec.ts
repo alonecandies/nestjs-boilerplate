@@ -1,4 +1,4 @@
-import { AiClient, AiMetrics } from '@platform/ai';
+import { AiClient, AiMetrics, aiInputChars } from '@platform/ai';
 import {
   aiTestConfig,
   MockAiModelProvider,
@@ -13,12 +13,12 @@ import {
   runWithPrincipal,
 } from '@platform/common';
 import type { AiConfig } from '@platform/config';
-import type { LanguageModel, ToolExecutionOptions } from 'ai';
-import { beforeEach, describe, expect, it } from 'vitest';
+import type { LanguageModel, ModelMessage, ToolExecutionOptions } from 'ai';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { installTestTransactionHost } from '../../../test/ai-test.utils.js';
 import { AI_TOOL_LIMITS } from '../../ai.constants.js';
 import type { Conversation, Message } from '../../domain/ai.types.js';
-import { makeConversation } from '../../testing/ai-fixtures.js';
+import { makeConversation, makeMessage } from '../../testing/ai-fixtures.js';
 import { FakeAiToolSources } from '../../testing/fake-ai-tool-sources.js';
 import {
   createInMemoryAiPersistence,
@@ -29,7 +29,7 @@ import { SendMessageHandler } from '../commands/send-message/send-message.handle
 import { StreamMessageCommand } from '../commands/stream-message/stream-message.command.js';
 import { StreamMessageHandler } from '../commands/stream-message/stream-message.handler.js';
 import type { ChatStreamEvent } from '../ports/ai.port.js';
-import { AiChatTools } from './ai-chat-tools.js';
+import { AI_TOOLS_SYSTEM_PROMPT, AiChatTools } from './ai-chat-tools.js';
 import { AI_TOOL_NAMES, AiToolName } from './ai-tools.js';
 import { capToolOutput } from './tool-output.js';
 
@@ -66,6 +66,42 @@ function toolResultsOf(call: MockModelCall | undefined): { toolName: string; out
   );
 }
 
+/** The tool calls a prompt holds without their result, and the results without their call. */
+function orphansOf(call: MockModelCall | undefined): string[] {
+  const calls: string[] = [];
+  const results: string[] = [];
+  const orphans: string[] = [];
+  for (const message of call?.prompt ?? []) {
+    if (message.role === 'assistant') {
+      for (const part of message.content) {
+        if (part.type === 'tool-call') calls.push(part.toolCallId);
+      }
+    } else if (message.role === 'tool') {
+      for (const part of message.content) {
+        if (part.type !== 'tool-result') continue;
+        results.push(part.toolCallId);
+        if (!calls.includes(part.toolCallId)) {
+          orphans.push(`result without call ${part.toolCallId}`);
+        }
+      }
+    }
+  }
+  for (const id of calls) {
+    if (!results.includes(id)) orphans.push(`call without result ${id}`);
+  }
+  return orphans;
+}
+
+/** The text of a message as the model received it (its text parts). */
+const textOf = (message: MockModelCall['prompt'][number]): string =>
+  typeof message.content === 'string'
+    ? message.content
+    : message.content.map((part) => (part.type === 'text' ? part.text : '')).join('');
+
+/** A stored message's characters as `AiClient`'s input guard counts them. */
+const charsOf = (message: Pick<Message, 'role' | 'content'>): number =>
+  aiInputChars([{ role: message.role, content: message.content } as ModelMessage]);
+
 const options = {
   toolCallId: 'call-test',
   messages: [],
@@ -100,7 +136,7 @@ describe('AI chat tools (read-only, as the caller)', () => {
         for await (const event of iterable) events.push(event);
         return events;
       });
-    return { send, stream };
+    return { send, stream, client };
   }
 
   const storedMessages = (): Message[] =>
@@ -386,6 +422,84 @@ describe('AI chat tools (read-only, as the caller)', () => {
       ['assistant', 'object'],
       ['tool', 'object'],
       ['assistant', 'string'],
+    ]);
+  });
+
+  it.each(['send', 'stream'] as const)(
+    'the history window leaves room for the tool instructions (%s)',
+    async (via) => {
+      // Ten 100-character messages and the new one fill the cap; the instructions do not fit.
+      const history = Array.from({ length: 10 }, (_, i) => `old ${i} `.padEnd(100, '.'));
+      for (const content of history) {
+        await as(ADA, () => db.messages.append(makeMessage(conversation, { content })));
+      }
+      const cap = 1_000 + 'Hi?'.length;
+      const model = mockScriptedModel([{ text: 'plain' }]);
+      const { send, stream, client } = setup(model, { maxInputChars: cap });
+      const generate = vi.spyOn(client, 'generate');
+      const streamed = vi.spyOn(client, 'stream');
+
+      if (via === 'send') await send('Hi?');
+      else await stream('Hi?');
+
+      const [input] = [...generate.mock.calls, ...streamed.mock.calls].map(([call]) => call);
+      expect(input?.system).toBe(AI_TOOLS_SYSTEM_PROMPT);
+      // What the guard counted: under the cap, and only as many 100-character messages dropped as
+      // that takes.
+      const sent = aiInputChars(input?.messages ?? [], input?.system);
+      expect(sent).toBeLessThanOrEqual(cap);
+      expect(sent).toBeGreaterThan(cap - 100);
+      const kept = Math.floor((cap - 'Hi?'.length - AI_TOOLS_SYSTEM_PROMPT.length) / 100);
+      const prompt = (via === 'send' ? model.doGenerateCalls : model.doStreamCalls)[0]?.prompt;
+      expect(prompt?.map(textOf)).toEqual([
+        AI_TOOLS_SYSTEM_PROMPT,
+        ...history.slice(history.length - kept),
+        'Hi?',
+      ]);
+    },
+  );
+
+  it('trims a tool call and its result together: the model never gets one without the other', async () => {
+    // A real tool turn stores the question, the tool call, its result and the answer.
+    const first = mockScriptedModel([
+      { toolCalls: [{ toolName: AiToolName.GetMyProfile, input: {} }] },
+      { text: 'You are Ada.' },
+    ]);
+    await setup(first).send('Who am I?');
+    const [, call, result, answer] = storedMessages();
+    if (call === undefined || result === undefined || answer === undefined) {
+      throw new Error('the tool turn was not stored');
+    }
+    expect([call.role, result.role, answer.content]).toEqual(['assistant', 'tool', 'You are Ada.']);
+    /** The cap that leaves room for exactly `kept` once the new message and instructions count. */
+    const capFor = (content: string, kept: readonly Message[]): number =>
+      aiInputChars([{ role: 'user', content }], AI_TOOLS_SYSTEM_PROMPT) +
+      kept.reduce((total, message) => total + charsOf(message), 0);
+
+    // Room for the result and the answer, not the call: the result is dropped with its call.
+    const split = mockScriptedModel([{ text: 'ok' }]);
+    await setup(split, { maxInputChars: capFor('Next?', [result, answer]) }).send('Next?');
+    // Room for the call too: the pair is sent together (streamed this time).
+    const together = mockScriptedModel([{ text: 'ok' }]);
+    const fromCall = storedMessages().slice(1); // call, result, answer, 'Next?', 'ok'
+    await setup(together, { maxInputChars: capFor('Again?', fromCall) }).stream('Again?');
+
+    const sent = [...first.doGenerateCalls, ...split.doGenerateCalls, ...together.doStreamCalls];
+    expect(sent).toHaveLength(4);
+    for (const prompt of sent) expect(orphansOf(prompt)).toEqual([]);
+    expect(split.doGenerateCalls[0]?.prompt.map((m) => m.role)).toEqual([
+      'system',
+      'assistant',
+      'user',
+    ]);
+    expect(together.doStreamCalls[0]?.prompt.map((m) => m.role)).toEqual([
+      'system',
+      'assistant',
+      'tool',
+      'assistant',
+      'user',
+      'assistant',
+      'user',
     ]);
   });
 

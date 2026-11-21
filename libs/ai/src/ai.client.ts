@@ -29,10 +29,11 @@ const TRACER = '@platform/ai';
 
 /**
  * The one way to call a language model. Guards first (disabled → 503, model outside the allowlist
- * → 422, input over `AI_MAX_INPUT_CHARS` → 422), then the AI SDK call through `AiModelProvider`
- * with the output-token cap, the SDK retries (retryable failures only), the caller's abort signal
- * and the `AI_REQUEST_TIMEOUT_MS` deadline. Every call records metrics and a span and logs ids,
- * model, token counts and latency only: never prompt or completion text, nor upstream messages.
+ * → 422, input over `AI_MAX_INPUT_CHARS` as `aiInputChars` counts it → 422), then the AI SDK call
+ * through `AiModelProvider` with the output-token cap, the SDK retries (retryable failures only),
+ * the caller's abort signal and the `AI_REQUEST_TIMEOUT_MS` deadline. Every call records metrics
+ * and a span and logs ids, model, token counts and latency only: never prompt or completion text,
+ * nor upstream messages.
  */
 @Injectable()
 export class AiClient {
@@ -105,7 +106,7 @@ export class AiClient {
     if (!config.enabled) throw new AiDisabledError();
     const model = input.model ?? config.defaultModel;
     if (!config.allowedModels.includes(model)) throw new AiModelNotAllowedError(model);
-    if (inputChars(input.messages, input.system) > config.maxInputChars) {
+    if (aiInputChars(input.messages, input.system) > config.maxInputChars) {
       throw new AiInputTooLargeError(config.maxInputChars);
     }
     const fallbacks = config.fallbackModels.filter((fallback) => fallback !== model);
@@ -235,8 +236,13 @@ class AiCall<TOOLS extends ToolSet> {
   }
 }
 
-/** Characters of message text and serialized non-text parts (tool calls, results, files). */
-function inputChars(messages: readonly ModelMessage[], system: string | undefined): number {
+/**
+ * The input characters `AI_MAX_INPUT_CHARS` counts: the system instructions, message text, and
+ * every other part (tool calls, tool results, files) as its JSON. `AiClient` refuses a call above
+ * the cap with this measure (422 `AI_INPUT_TOO_LARGE`); a caller that trims its history to fit
+ * measures with it too. A sum over the messages, so it can price them one at a time.
+ */
+export function aiInputChars(messages: readonly ModelMessage[], system?: string): number {
   let total = system?.length ?? 0;
   for (const message of messages) {
     if (typeof message.content === 'string') {

@@ -4,7 +4,7 @@ import type { AiConfig } from '@platform/config';
 import { APICallError, jsonSchema, type ModelMessage, tool } from 'ai';
 import { MockLanguageModelV4 } from 'ai/test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AiClient } from './ai.client.js';
+import { AiClient, aiInputChars } from './ai.client.js';
 import {
   AiDisabledError,
   AiInputTooLargeError,
@@ -108,6 +108,44 @@ describe('AiClient guards', () => {
       AiInputTooLargeError,
     );
     expect(model.doGenerateCalls).toEqual([]);
+  });
+
+  it('measures the input with aiInputChars, the export a caller trims its history with', async () => {
+    const call = { type: 'tool-call', toolCallId: 'c-1', toolName: 'lookup', input: { q: 'x' } };
+    const result = {
+      type: 'tool-result',
+      toolCallId: 'c-1',
+      toolName: 'lookup',
+      output: { type: 'json', value: { found: true } },
+    };
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: [{ type: 'text', text: 'Looking.' }, call] },
+      { role: 'tool', content: [result] },
+    ] as ModelMessage[];
+    const system = 'Be brief.';
+    // The instructions and text by length, every other part as its JSON.
+    const chars = aiInputChars(messages, system);
+    expect(chars).toBe(
+      system.length +
+        'hello'.length +
+        'Looking.'.length +
+        JSON.stringify(call).length +
+        JSON.stringify(result).length,
+    );
+    expect(aiInputChars(messages)).toBe(chars - system.length);
+
+    // The guard counts the same: at the cap the call goes through, one character less refuses it.
+    const atCap = setup(mockTextModel('ok'), { maxInputChars: chars });
+    await expect(atCap.client.generate({ messages, system })).resolves.toMatchObject({
+      text: 'ok',
+    });
+    const under = setup(mockTextModel('ok'), { maxInputChars: chars - 1 });
+    await expect(under.client.generate({ messages, system })).rejects.toBeInstanceOf(
+      AiInputTooLargeError,
+    );
+    expect(() => under.client.stream({ messages, system })).toThrow(AiInputTooLargeError);
+    expect(under.model.doGenerateCalls).toEqual([]);
   });
 
   it('uses the default model, an allowed one on request, and the fallbacks', async () => {
