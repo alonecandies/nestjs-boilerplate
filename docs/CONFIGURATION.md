@@ -568,7 +568,7 @@ enqueue invitation mail on the shared BullMQ `mail` queue: in production it need
 | `AI_MAX_INPUT_CHARS`      | `32000`                        | Characters one call may send; older history is dropped to fit, a new message over it is 422 `AI_INPUT_TOO_LARGE`.               |
 | `AI_HISTORY_MAX_MESSAGES` | `20`                           | History window of a conversation: the last N messages.                                                                          |
 | `AI_HISTORY_MAX_TOKENS`   | `8000`                         | Approximate token budget of that window (characters / 4).                                                                       |
-| `AI_MAX_TOOL_STEPS`       | `3`                            | Tool-calling steps of one request (1-10).                                                                                       |
+| `AI_MAX_TOOL_STEPS`       | `3`                            | Model steps of one request with tools (1-10); the last may not call a tool, so it answers in text (1: no tool runs).            |
 
 ### `aiRateLimit` — chat policy (ai)
 

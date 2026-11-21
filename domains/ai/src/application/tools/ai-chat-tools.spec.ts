@@ -1,4 +1,4 @@
-import { AiClient, AiMetrics, aiInputChars } from '@platform/ai';
+import { AiClient, AiMetrics, AiUpstreamError, aiInputChars } from '@platform/ai';
 import {
   aiTestConfig,
   MockAiModelProvider,
@@ -223,26 +223,68 @@ describe('AI chat tools (read-only, as the caller)', () => {
     ]);
   });
 
-  it('stops the tool loop after AI_MAX_TOOL_STEPS steps', async () => {
-    const model = mockScriptedModel([
-      { toolCalls: [{ toolName: AiToolName.GetMyProfile, input: {} }] },
-    ]);
-    const { send } = setup(model, { maxToolSteps: 2 });
+  it.each(['send', 'stream'] as const)(
+    'a model that calls a tool on every step it may still answers, on the last of AI_MAX_TOOL_STEPS (%s)',
+    async (via) => {
+      // Like a real model: it calls a tool unless the step's tool choice is none.
+      const model = mockScriptedModel([
+        (call: MockModelCall): MockModelTurn =>
+          call.toolChoice?.type === 'none'
+            ? { text: 'You are Ada.' }
+            : { toolCalls: [{ toolName: AiToolName.GetMyProfile, input: {} }] },
+      ]);
+      const { send, stream } = setup(model, { maxToolSteps: 2 });
 
-    const result = await send();
+      let message: Message;
+      if (via === 'send') {
+        ({ message } = await send());
+      } else {
+        const events = await stream();
+        expect(events.slice(0, -1)).toEqual([{ type: 'delta', text: 'You are Ada.' }]);
+        const done = events.at(-1);
+        if (done?.type !== 'done') throw new Error('the stream did not end with done');
+        expect(done.replayed).toBe(false);
+        message = done.message;
+      }
 
-    expect(model.doGenerateCalls).toHaveLength(2);
-    expect(sources.calls).toHaveLength(2);
-    expect(result.message).toMatchObject({ role: 'assistant', content: '' });
-    expect(storedMessages().map((m) => m.role)).toEqual([
-      'user',
-      'assistant',
-      'tool',
-      'assistant',
-      'tool',
-      'assistant',
-    ]);
-  });
+      expect(message).toMatchObject({
+        role: 'assistant',
+        content: 'You are Ada.',
+        status: 'complete',
+      });
+      const stored = storedMessages();
+      expect(stored.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'assistant']);
+      expect(stored.at(-1)).toEqual(message);
+      expect(stored.filter((m) => m.content === '')).toEqual([]);
+      // Two model steps: the first ran the tool; the last still saw the tools but could not call one.
+      const calls = via === 'send' ? model.doGenerateCalls : model.doStreamCalls;
+      expect(calls.map((call) => call.toolChoice)).toEqual([{ type: 'auto' }, { type: 'none' }]);
+      const lastStepTools = calls.at(-1)?.tools?.map((t) => t.name) ?? [];
+      expect(lastStepTools.sort()).toEqual([...AI_TOOL_NAMES].sort());
+      expect(sources.calls).toHaveLength(1);
+    },
+  );
+
+  it.each(['send', 'stream'] as const)(
+    'a model that calls a tool on the last step anyway fails the turn with 502; no reply is stored (%s)',
+    async (via) => {
+      const model = mockScriptedModel([
+        { toolCalls: [{ toolName: AiToolName.GetMyProfile, input: {} }] },
+      ]);
+      const { send, stream } = setup(model, { maxToolSteps: 2 });
+
+      const error = await (via === 'send' ? send() : stream()).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(AiUpstreamError);
+      expect(error).toMatchObject({ code: 'AI_UPSTREAM_ERROR' });
+      expect(storedMessages()).toEqual([]);
+      expect(db.store.usage).toEqual([
+        expect.objectContaining({ outcome: 'error', messageId: null }),
+      ]);
+      // The first step's tool call ran; the last step's did not.
+      expect(sources.calls).toHaveLength(1);
+    },
+  );
 
   it('caps the output: long text clipped, items dropped, still JSON', async () => {
     for (let i = 0; i < AI_TOOL_LIMITS.MAX_ITEMS; i += 1) {

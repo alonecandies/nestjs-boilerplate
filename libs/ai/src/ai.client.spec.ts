@@ -2,7 +2,7 @@ import { HttpStatus, Logger } from '@nestjs/common';
 import { trace } from '@opentelemetry/api';
 import type { AiConfig } from '@platform/config';
 import { APICallError, jsonSchema, type ModelMessage, tool } from 'ai';
-import { MockLanguageModelV4 } from 'ai/test';
+import type { MockLanguageModelV4 } from 'ai/test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AiClient, aiInputChars } from './ai.client.js';
 import {
@@ -13,18 +13,27 @@ import {
   AiUpstreamError,
 } from './ai.errors.js';
 import { AiMetrics } from './ai.metrics.js';
+import type { AiUsage } from './ai.types.js';
 import {
   aiTestConfig,
   MockAiModelProvider,
+  type MockModelCall,
+  type MockModelTurn,
   mockFailingModel,
   mockHangingModel,
-  mockModelUsage,
+  mockScriptedModel,
   mockStreamModel,
   mockTextModel,
 } from './testing/index.js';
 
 const SECRET_PROMPT = 'my private diagnosis is 42-xyzzy';
 const ask = (text = 'hello'): ModelMessage[] => [{ role: 'user', content: text }];
+
+const read = async (stream: AsyncIterable<string>): Promise<string[]> => {
+  const deltas: string[] = [];
+  for await (const delta of stream) deltas.push(delta);
+  return deltas;
+};
 
 const metrics = new AiMetrics();
 
@@ -226,37 +235,9 @@ describe('AiClient.generate', () => {
     expect(error).toMatchObject({ code: 'AI_UPSTREAM_ERROR', httpStatus: HttpStatus.BAD_GATEWAY });
     expect(await value(metrics.requests, { outcome: 'error' })).toBe(1);
   });
-
-  it('runs tools up to AI_MAX_TOOL_STEPS steps', async () => {
-    const model = new MockLanguageModelV4({
-      doGenerate: async () => ({
-        content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'lookup', input: '{}' }],
-        finishReason: { unified: 'tool-calls', raw: 'tool_calls' },
-        usage: mockModelUsage({ inputTokens: 3, outputTokens: 2 }),
-        warnings: [],
-      }),
-    });
-    const execute = vi.fn(async () => ({ found: true }));
-    const { client } = setup(model, { maxToolSteps: 2 });
-
-    const result = await client.generate({
-      messages: ask(),
-      tools: { lookup: tool({ inputSchema: jsonSchema({ type: 'object' }), execute }) },
-    });
-
-    expect(model.doGenerateCalls).toHaveLength(2);
-    expect(execute).toHaveBeenCalledTimes(2);
-    expect(result.usage).toMatchObject({ inputTokens: 6, outputTokens: 4 });
-  });
 });
 
 describe('AiClient.stream', () => {
-  const read = async (stream: AsyncIterable<string>): Promise<string[]> => {
-    const deltas: string[] = [];
-    for await (const delta of stream) deltas.push(delta);
-    return deltas;
-  };
-
   it('streams the deltas in order and settles usage and metrics at the end', async () => {
     const { client } = setup(
       mockStreamModel(['Hel', 'lo', '!'], { usage: { inputTokens: 4, outputTokens: 3 } }),
@@ -360,6 +341,98 @@ describe('AiClient.stream', () => {
     await expect(call.usage).rejects.toBeInstanceOf(AiUpstreamError);
     expect(await value(metrics.requests, { outcome: 'error' })).toBe(1);
   });
+});
+
+describe('AiClient tool steps', () => {
+  const STEP_USAGE = { inputTokens: 3, outputTokens: 2 };
+
+  function lookupTool() {
+    const execute = vi.fn(async () => ({ found: true }));
+    return {
+      execute,
+      tools: { lookup: tool({ inputSchema: jsonSchema({ type: 'object' }), execute }) },
+    };
+  }
+
+  /** Calls `lookup` on every step it may; answers `answer` on a step whose tool choice is none. */
+  const toolEveryStep = (answer: string) =>
+    mockScriptedModel([
+      (call: MockModelCall): MockModelTurn =>
+        call.toolChoice?.type === 'none'
+          ? { text: answer, usage: STEP_USAGE }
+          : { toolCalls: [{ toolName: 'lookup', input: {} }], usage: STEP_USAGE },
+    ]);
+
+  it.each(['generate', 'stream'] as const)(
+    'the last of AI_MAX_TOOL_STEPS steps answers in text: tools listed, tool choice none (%s)',
+    async (kind) => {
+      const model = toolEveryStep('Found it.');
+      const { client } = setup(model, { maxToolSteps: 3 });
+      const { execute, tools } = lookupTool();
+
+      let text: string;
+      let usage: AiUsage;
+      if (kind === 'generate') {
+        ({ text, usage } = await client.generate({ messages: ask(), tools }));
+      } else {
+        const call = client.stream({ messages: ask(), tools });
+        expect(await read(call.result.textStream)).toEqual(['Found it.']);
+        usage = await call.usage;
+        text = await call.result.text;
+      }
+
+      expect(text).toBe('Found it.');
+      const calls = kind === 'generate' ? model.doGenerateCalls : model.doStreamCalls;
+      expect(calls.map((call) => call.toolChoice)).toEqual([
+        { type: 'auto' },
+        { type: 'auto' },
+        { type: 'none' },
+      ]);
+      for (const call of calls) expect(call.tools?.map((t) => t.name)).toEqual(['lookup']);
+      expect(execute).toHaveBeenCalledTimes(2);
+      expect(usage).toMatchObject({ inputTokens: 9, outputTokens: 6 });
+    },
+  );
+
+  it('with AI_MAX_TOOL_STEPS=1 the only step answers and no tool runs', async () => {
+    const model = toolEveryStep('Straight answer.');
+    const { client } = setup(model, { maxToolSteps: 1 });
+    const { execute, tools } = lookupTool();
+
+    const result = await client.generate({ messages: ask(), tools });
+
+    expect(result.text).toBe('Straight answer.');
+    expect(model.doGenerateCalls.map((call) => call.toolChoice)).toEqual([{ type: 'none' }]);
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it.each(['generate', 'stream'] as const)(
+    'a model that calls a tool on the last step anyway fails with AI_UPSTREAM_ERROR (%s)',
+    async (kind) => {
+      const model = mockScriptedModel([{ toolCalls: [{ toolName: 'lookup', input: {} }] }]);
+      const { client } = setup(model, { maxToolSteps: 2 });
+      const { execute, tools } = lookupTool();
+
+      let outcome: unknown;
+      if (kind === 'generate') {
+        outcome = await client.generate({ messages: ask(), tools }).catch((e: unknown) => e);
+      } else {
+        const call = client.stream({ messages: ask(), tools });
+        void read(call.result.textStream).catch(() => undefined);
+        outcome = await call.usage.catch((e: unknown) => e);
+      }
+
+      // Never an answer without text: the call fails as a bad upstream response.
+      expect(outcome).toBeInstanceOf(AiUpstreamError);
+      expect(outcome).toMatchObject({
+        code: 'AI_UPSTREAM_ERROR',
+        httpStatus: HttpStatus.BAD_GATEWAY,
+      });
+      // The first step's tool call ran; the last step's never does.
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(await value(metrics.requests, { outcome: 'error' })).toBe(1);
+    },
+  );
 });
 
 describe('AiClient privacy', () => {

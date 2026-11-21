@@ -31,7 +31,9 @@ const TRACER = '@platform/ai';
  * The one way to call a language model. Guards first (disabled → 503, model outside the allowlist
  * → 422, input over `AI_MAX_INPUT_CHARS` as `aiInputChars` counts it → 422), then the AI SDK call
  * through `AiModelProvider` with the output-token cap, the SDK retries (retryable failures only),
- * the caller's abort signal and the `AI_REQUEST_TIMEOUT_MS` deadline. Every call records metrics
+ * the caller's abort signal and the `AI_REQUEST_TIMEOUT_MS` deadline. With tools, at most
+ * `AI_MAX_TOOL_STEPS` model steps, the last with tool choice `none`: the call ends on an answer in
+ * text, never on tool calls (a model that calls one there anyway → 502). Every call records metrics
  * and a span and logs ids, model, token counts and latency only: never prompt or completion text,
  * nor upstream messages.
  */
@@ -169,6 +171,7 @@ class AiCall<TOOLS extends ToolSet> {
   options(input: AiCallInput<TOOLS>) {
     const maxOutputTokens = Math.min(input.maxOutputTokens ?? Infinity, this.maxOutputTokens);
     this.span.setAttribute('gen_ai.request.max_tokens', maxOutputTokens);
+    const { maxToolSteps } = this.ctx.config;
     return {
       model: this.ctx.languageModel,
       maxOutputTokens,
@@ -177,7 +180,16 @@ class AiCall<TOOLS extends ToolSet> {
       ...(input.system === undefined ? {} : { system: input.system }),
       ...(input.tools === undefined
         ? {}
-        : { tools: input.tools, stopWhen: isStepCount(this.ctx.config.maxToolSteps) }),
+        : {
+            tools: input.tools,
+            stopWhen: isStepCount(maxToolSteps),
+            // The last step must answer in text, so a call never ends on tool calls that no step
+            // reads (an empty answer). The tools stay listed, keeping the prompt's tool calls
+            // valid; the SDK runs none on that step and fails a model that calls one anyway
+            // (ToolChoiceViolationError, so 502 AI_UPSTREAM_ERROR).
+            prepareStep: ({ stepNumber }: { readonly stepNumber: number }) =>
+              stepNumber >= maxToolSteps - 1 ? { toolChoice: 'none' as const } : undefined,
+          }),
     };
   }
 

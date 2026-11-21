@@ -15,7 +15,10 @@ export interface AiCallInput<TOOLS extends ToolSet = ToolSet> {
   readonly model?: string;
   /** System instructions (counted in `AI_MAX_INPUT_CHARS`). */
   readonly system?: string;
-  /** Tools the model may call; the loop stops after `AI_MAX_TOOL_STEPS` steps. */
+  /**
+   * Tools the model may call: at most `AI_MAX_TOOL_STEPS` steps, the last of which may not call
+   * one, so the call ends on an answer in text.
+   */
   readonly tools?: TOOLS;
   /** Capped by `AI_MAX_OUTPUT_TOKENS` (also the default). */
   readonly maxOutputTokens?: number;

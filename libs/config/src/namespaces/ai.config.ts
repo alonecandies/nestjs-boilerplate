@@ -40,6 +40,7 @@ export const aiEnvSchema = z
     AI_HISTORY_MAX_MESSAGES: zInt(20, { min: 1, max: 200 }),
     // Approximate (characters / 4) token budget of the history window.
     AI_HISTORY_MAX_TOKENS: zInt(8_000, { min: 1, max: 1_000_000 }),
+    // Model steps of one call with tools; the last may not call a tool (it answers in text).
     AI_MAX_TOOL_STEPS: zInt(3, { min: 1, max: 10 }),
     ALLOW_KNOWN_LOCAL_SECRETS: zBool(false),
   })

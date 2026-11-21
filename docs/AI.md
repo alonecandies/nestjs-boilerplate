@@ -57,7 +57,8 @@ ai-service's `AI_REQUEST_TIMEOUT_MS`, so the model's own timeout (504 `AI_TIMEOU
   model that cannot be called.
 - The tools are offered on every turn, so list only **tool-capable** models (OpenRouter shows "tools" among a model's
   supported parameters). OpenRouter refuses a tool call to a model without tool support, and the turn fails with 502
-  `AI_UPSTREAM_ERROR`.
+  `AI_UPSTREAM_ERROR`. The last tool step sends `tool_choice: none` (below); a model that calls a tool there anyway
+  fails the turn with 502 too.
 - The `model` label of the metrics is the requested model, so the allowlist also bounds their cardinality.
 
 ## Limits
@@ -70,7 +71,7 @@ ai-service's `AI_REQUEST_TIMEOUT_MS`, so the model's own timeout (504 `AI_TIMEOU
 | `AI_MAX_INPUT_CHARS`      | `32000` | Characters one call sends, history and tool instructions included; the history is trimmed to fit (below)                         |
 | `AI_HISTORY_MAX_MESSAGES` | `20`    | The history window: the newest N messages of the conversation                                                                    |
 | `AI_HISTORY_MAX_TOKENS`   | `8000`  | Approximate token budget of that window (characters / 4), newest kept                                                            |
-| `AI_MAX_TOOL_STEPS`       | `3`     | Model steps of one turn when it calls tools (1-10)                                                                               |
+| `AI_MAX_TOOL_STEPS`       | `3`     | Model steps of one turn when it calls tools (1-10); the last may not call one, so it answers in text (1: no tool runs)           |
 | `AI_CHAT_LIMIT`           | `20`    | `ai.chat` rate limit: chat turns per user per `AI_CHAT_TTL_MS` (default 60000)                                                   |
 | `AI_CHAT_TENANT_LIMIT`    | `200`   | `ai.chat`: chat turns per tenant per `AI_CHAT_TENANT_TTL_MS` (default 60000), shared by every member, after the user budget      |
 
@@ -161,6 +162,11 @@ domain's own checks (RLS, the inbox owner, own payments). Their input schemas ar
   else, with no detail). Unknown tools and invalid arguments are answered by the AI SDK as tool errors.
 - **Bounded.** At most `AI_MAX_TOOL_STEPS` model steps; each result is JSON, free text clipped to 500 characters, at
   most 20 items, the whole at most 8000 characters (`AI_TOOL_LIMITS`).
+- **Always an answer.** The last of those steps is sent with `tool_choice: none` (the tools still listed): the model
+  must answer in text there, so a turn whose model called tools on every step before still gets a reply, and the
+  stored reply, the response and the stream's `done` event are never empty for want of a final step. With
+  `AI_MAX_TOOL_STEPS=1` no tool runs. A model that calls a tool on that step anyway fails the turn with 502
+  `AI_UPSTREAM_ERROR`: no message is stored, only a usage row with outcome `error`.
 - **Stored.** The tool calls and results become messages (`assistant` / `tool`) between the user message and the reply,
   so the next turn's history replays them.
 - **Wiring.** ai imports no other domain: the composition root binds `AiToolSources` to the owners' ports (the

@@ -22,8 +22,9 @@ import { SendMessageCommand } from './send-message.command.js';
  *    key and request hash first, the user message, the usage row and the conversation's `updatedAt`.
  *
  * With tools bound, the call may run read-only tools as the caller (`AiChatTools`, at most
- * `AI_MAX_TOOL_STEPS` model steps); its tool calls and results are stored between the user message
- * and the reply.
+ * `AI_MAX_TOOL_STEPS` model steps, the last of which answers without calling one); its tool calls
+ * and results are stored between the user message and the reply. A model that calls a tool on the
+ * last step anyway fails the call (502 `AI_UPSTREAM_ERROR`): no message is stored.
  *
  * A failed call stores no message and records a usage row with the failure outcome (`error`,
  * `timeout`); a call refused by a guard (disabled, model, input size) records nothing. Logs carry

@@ -38,9 +38,10 @@ interface StreamTurn {
  *   upstream call is then aborted here): outcome `aborted`;
  * - the call fails or times out after it started: outcome `error` / `timeout`, rethrown to the
  *   consumer.
- * With tools bound, the deltas span every model step (`AI_MAX_TOOL_STEPS` at most); a complete turn
- * stores the steps' tool calls and results between the user message and the reply, whose content
- * is the last step's text. A cut turn stores only the text received.
+ * With tools bound, the deltas span every model step (`AI_MAX_TOOL_STEPS` at most, the last of
+ * which answers without calling a tool); a complete turn stores the steps' tool calls and results
+ * between the user message and the reply, whose content is the last step's text, and `done`
+ * carries that reply. A cut turn stores only the text received.
  *
  * With text received, the user message and an `incomplete` assistant reply (with the
  * `Idempotency-Key`, so a replay returns it) are stored with the usage row; without any, only the

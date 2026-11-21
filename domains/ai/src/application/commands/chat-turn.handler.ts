@@ -79,7 +79,9 @@ const toMessageContent = (content: ResponseMessage['content']): MessageContent =
  *
  * Tools (`AiChatTools`, when the app binds `AiToolSources`): the call is offered the read-only
  * tools bound to the caller (`toolOptions`, in `promptOf`), and the tool calls and results of its
- * steps are stored as messages between the user message and the reply (`stepMessages`).
+ * steps are stored as messages between the user message and the reply (`stepMessages`). The last
+ * of its `AI_MAX_TOOL_STEPS` steps may not call a tool (`AiClient`), so the reply is an answer in
+ * text even when the model called tools on every step before it.
  */
 @Injectable()
 export abstract class ChatTurnHandler {
