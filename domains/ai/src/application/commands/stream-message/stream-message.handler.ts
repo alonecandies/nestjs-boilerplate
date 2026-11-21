@@ -1,5 +1,11 @@
 import { CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
-import { AiDisabledError, type AiStreamResult, AiTimeoutError } from '@platform/ai';
+import {
+  AiDisabledError,
+  type AiStreamResult,
+  AiTimeoutError,
+  type AiUsage,
+  aiUsageOf,
+} from '@platform/ai';
 import { generateId } from '@platform/common';
 import { ConversationNotFoundException } from '../../../domain/ai.errors.js';
 import type { Message, UsageOutcome, UsageRecord } from '../../../domain/ai.types.js';
@@ -44,8 +50,10 @@ interface StreamTurn {
  * carries that reply. A cut turn stores only the text received.
  *
  * With text received, the user message and an `incomplete` assistant reply are stored with the
- * usage row; without any, only the usage row. Token counts of a cut call are unknown and recorded
- * as 0. The incomplete reply carries no `Idempotency-Key` nor request hash: only a complete reply
+ * usage row; without any, only the usage row. The row of a cut call holds what its model calls
+ * that ended were billed (`aiUsageOf`); one cut mid-answer reports nothing, so a call cut in its
+ * first model call records 0 tokens and no cost. The incomplete reply's own token counts stay
+ * unknown (null). It carries no `Idempotency-Key` nor request hash: only a complete reply
  * binds the key, so a retry with it runs a new turn instead of replaying the cut text, and the
  * history of that turn and of later ones leaves out the cut exchange it repeats (`promptOf`).
  */
@@ -112,12 +120,7 @@ export class StreamMessageHandler
       const stored = await this.store(
         turn.userMessage,
         reply,
-        {
-          ...this.usageOf(turn, reply.id, 'success'),
-          inputTokens: usage.inputTokens,
-          outputTokens: usage.outputTokens,
-          costUsd: usage.costUsd,
-        },
+        this.usageOf(turn, reply.id, 'success', total),
         steps,
       );
       this.logger.debug(
@@ -174,7 +177,11 @@ export class StreamMessageHandler
     }
     const reply = this.reply(turn, text, 'incomplete', null);
     try {
-      await this.store(turn.userMessage, reply, this.usageOf(turn, reply.id, outcome));
+      await this.store(
+        turn.userMessage,
+        reply,
+        this.usageOf(turn, reply.id, outcome, aiUsageOf(error)),
+      );
     } catch (storeError) {
       this.logger.warn(
         `Could not store the incomplete reply of conversation ${request.conversationId}: ` +
@@ -204,7 +211,13 @@ export class StreamMessageHandler
     });
   }
 
-  private usageOf(turn: StreamTurn, messageId: string, outcome: UsageOutcome): UsageRecord {
+  /** The turn's usage row: `usage` is the call's, or what a cut call was billed (none: 0, null). */
+  private usageOf(
+    turn: StreamTurn,
+    messageId: string,
+    outcome: UsageOutcome,
+    usage: AiUsage | undefined,
+  ): UsageRecord {
     const { request } = turn;
     return {
       tenantId: request.tenantId,
@@ -213,9 +226,9 @@ export class StreamMessageHandler
       conversationId: request.conversationId,
       messageId,
       model: turn.call.model,
-      inputTokens: 0,
-      outputTokens: 0,
-      costUsd: null,
+      inputTokens: usage?.inputTokens ?? 0,
+      outputTokens: usage?.outputTokens ?? 0,
+      costUsd: usage?.costUsd ?? null,
       latencyMs: Math.round(performance.now() - turn.startedAt),
       outcome,
       createdAt: new Date(),

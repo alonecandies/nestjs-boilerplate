@@ -1,4 +1,4 @@
-import { AiClient, AiMetrics, AiUpstreamError, aiInputChars } from '@platform/ai';
+import { AiClient, AiMetrics, AiTimeoutError, AiUpstreamError, aiInputChars } from '@platform/ai';
 import {
   aiTestConfig,
   MockAiModelProvider,
@@ -145,7 +145,7 @@ describe('AI chat tools (read-only, as the caller)', () => {
         for await (const event of iterable) events.push(event);
         return events;
       });
-    return { send, stream, client };
+    return { send, stream, client, streamer };
   }
 
   const storedMessages = (): Message[] =>
@@ -320,6 +320,115 @@ describe('AI chat tools (read-only, as the caller)', () => {
     ]);
     expect(stored[1]?.requestHash).toBeNull();
     expect(db.store.usage.map((u) => [u.outcome, u.messageId])).toEqual([['error', stored[1]?.id]]);
+  });
+
+  describe('a failed tool loop records the model calls billed before it failed', () => {
+    /** One billed model call: 1000 tokens in, 50 out, 0.01 USD (OpenRouter usage accounting). */
+    const BILLED = { usage: { inputTokens: 1_000, outputTokens: 50 }, costUsd: 0.01 } as const;
+    const PROFILE = { toolName: AiToolName.GetMyProfile, input: {} };
+    /** The usage row columns of `calls` billed model calls. */
+    const billed = (calls: number) => ({
+      inputTokens: 1_000 * calls,
+      outputTokens: 50 * calls,
+      costUsd: expect.closeTo(0.01 * calls, 10),
+    });
+    /** A tool step, billed, then a step that answers "Still looking. " and never ends. */
+    const toolThenHang = () =>
+      mockScriptedModel([
+        { toolCalls: [PROFILE], ...BILLED },
+        { text: 'Still looking. ', hang: true },
+      ]);
+
+    it.each(['send', 'stream'] as const)(
+      'a tool call on the last step anyway: the error row has its three billed calls (%s)',
+      async (via) => {
+        const model = mockScriptedModel([{ toolCalls: [PROFILE], ...BILLED }]);
+        const { send, stream } = setup(model, { maxToolSteps: 3 });
+
+        const error = await (via === 'send' ? send() : stream()).catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(AiUpstreamError);
+        expect(storedMessages()).toEqual([]);
+        expect(db.store.usage).toEqual([
+          expect.objectContaining({
+            ...ADA,
+            conversationId: conversation.id,
+            messageId: null,
+            outcome: 'error',
+            ...billed(3),
+          }),
+        ]);
+      },
+    );
+
+    it.each(['send', 'stream'] as const)(
+      'the deadline during a later step: the timeout row has the call billed before it (%s)',
+      async (via) => {
+        const model = toolThenHang();
+        const { send, stream } = setup(model, { requestTimeoutMs: 300 });
+
+        const error = await (via === 'send' ? send() : stream()).catch((e: unknown) => e);
+
+        expect(error).toBeInstanceOf(AiTimeoutError);
+        // Streamed, the text received is stored incomplete and the row names it.
+        const reply = storedMessages().find((m) => m.role === 'assistant');
+        expect(reply?.status).toBe(via === 'send' ? undefined : 'incomplete');
+        expect(db.store.usage).toEqual([
+          expect.objectContaining({
+            messageId: reply?.id ?? null,
+            outcome: 'timeout',
+            ...billed(1),
+          }),
+        ]);
+      },
+    );
+
+    it('a client that leaves mid tool loop: the aborted row has the call billed before it', async () => {
+      const client = new AbortController();
+      const { streamer } = setup(toolThenHang());
+
+      const error = await as(ADA, async () => {
+        const events = await streamer.execute(
+          new StreamMessageCommand({
+            ...ADA,
+            conversationId: conversation.id,
+            content: 'Who am I?',
+            signal: client.signal,
+          }),
+        );
+        for await (const event of events) {
+          expect(event).toEqual({ type: 'delta', text: 'Still looking. ' });
+          client.abort(new Error('client left'));
+        }
+      }).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      const reply = storedMessages().find((m) => m.role === 'assistant');
+      expect(reply).toMatchObject({ content: 'Still looking. ', status: 'incomplete' });
+      expect(db.store.usage).toEqual([
+        expect.objectContaining({ messageId: reply?.id, outcome: 'aborted', ...billed(1) }),
+      ]);
+    });
+
+    it('a consumer that stops reading mid tool loop: the aborted row has the call billed before it', async () => {
+      const { streamer } = setup(toolThenHang());
+
+      await as(ADA, async () => {
+        const events = await streamer.execute(
+          new StreamMessageCommand({ ...ADA, conversationId: conversation.id, content: 'Who?' }),
+        );
+        for await (const event of events) {
+          expect(event).toEqual({ type: 'delta', text: 'Still looking. ' });
+          break; // return(): the handler aborts the call and stores the cut
+        }
+      });
+
+      const reply = storedMessages().find((m) => m.role === 'assistant');
+      expect(reply).toMatchObject({ content: 'Still looking. ', status: 'incomplete' });
+      expect(db.store.usage).toEqual([
+        expect.objectContaining({ messageId: reply?.id, outcome: 'aborted', ...billed(1) }),
+      ]);
+    });
   });
 
   it('caps the output: long text clipped, items dropped, still JSON', async () => {

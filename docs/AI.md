@@ -117,6 +117,12 @@ message, and a usage row records the outcome `aborted`. A stream that fails afte
 `AI_TIMEOUT`) is cut the same way, with the outcome `error` or `timeout`. A cut reply never holds the turn's
 `Idempotency-Key` (below).
 
+The usage row of a failed or cut turn holds what OpenRouter billed for it: the tokens and `cost_usd` of every model step
+(one request to OpenRouter) that ended before the failure, metered by `@platform/ai` as each one ends (`aiUsageOf`). A
+tool loop that times out, fails upstream, is abandoned, or ends on a model that calls a tool on its last step anyway
+therefore records the steps it paid for, and `ai_tokens_total` counts the same tokens. A step cut mid-answer reports no
+usage, so a turn that fails during its first step records 0 tokens and no cost.
+
 A conversation deleted while one of its turns runs ends the turn with 404 `CONVERSATION_NOT_FOUND` (streamed: the
 `error` event after the deltas). No message is stored, but the usage row is (`message_id` null), because the tokens were
 spent. The turn's write locks the conversation first (`SELECT … FOR UPDATE` by `(tenant_id, id)`), so a delete that
@@ -147,11 +153,11 @@ Observability, with no content in any of it:
 | Signal                                                   | What                                                                                             |
 | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `ai_requests_total`                                      | counter by `model`, `outcome` (`success`, `error`, `timeout`, `aborted`)                         |
-| `ai_tokens_total`                                        | counter by `model`, `kind` (`input`, `output`)                                                   |
+| `ai_tokens_total`                                        | counter by `model`, `kind` (`input`, `output`), every outcome (a failed call: its ended steps)   |
 | `ai_request_duration_seconds`                            | histogram by `model` (a whole stream for streamed calls)                                         |
 | `AiErrorRate` alert                                      | `error` and `timeout` above 10 % of a model's calls for 10 minutes (ticket); aborts are excluded |
 | span `ai.generate` / `ai.stream` (tracer `@platform/ai`) | `gen_ai.request.model`, `gen_ai.request.max_tokens`, token usage, finish reason, outcome         |
-| `ai.usage` table                                         | one row per model call: tokens, `cost_usd` (OpenRouter usage accounting), latency, outcome       |
+| `ai.usage` table                                         | one row per chat turn: tokens, `cost_usd` (OpenRouter usage accounting), latency, outcome        |
 
 See [OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts).
 
@@ -182,9 +188,9 @@ domain's own checks (RLS, the inbox owner, own payments). Their input schemas ar
   must answer in text there, so a turn whose model called tools on every step before still gets a reply, and the
   stored reply, the response and the stream's `done` event are never empty for want of a final step. With
   `AI_MAX_TOOL_STEPS=1` no tool runs. A model that calls a tool on that step anyway fails the turn with 502
-  `AI_UPSTREAM_ERROR`: no message is stored, only a usage row with outcome `error`. A streamed turn that already sent
-  text is a cut stream instead: that text is stored as an `incomplete` reply that does not hold the key, so a retry
-  runs the turn again, as a sent turn's retry does after the same 502.
+  `AI_UPSTREAM_ERROR`: no message is stored, only a usage row with outcome `error` and every step billed, that one
+  included. A streamed turn that already sent text is a cut stream instead: that text is stored as an `incomplete`
+  reply that does not hold the key, so a retry runs the turn again, as a sent turn's retry does after the same 502.
 - **Stored.** The tool calls and results become messages (`assistant` / `tool`) between the user message and the reply,
   so the next turn's history replays them.
 - **Wiring.** ai imports no other domain: the composition root binds `AiToolSources` to the owners' ports (the

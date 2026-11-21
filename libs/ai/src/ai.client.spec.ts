@@ -1,10 +1,10 @@
 import { HttpStatus, Logger } from '@nestjs/common';
 import { trace } from '@opentelemetry/api';
 import type { AiConfig } from '@platform/config';
-import { APICallError, jsonSchema, type ModelMessage, tool } from 'ai';
-import type { MockLanguageModelV4 } from 'ai/test';
+import { APICallError, jsonSchema, type ModelMessage, simulateReadableStream, tool } from 'ai';
+import { MockLanguageModelV4 } from 'ai/test';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { AiClient, aiInputChars } from './ai.client.js';
+import { AiClient, aiInputChars, aiUsageOf } from './ai.client.js';
 import {
   AiDisabledError,
   AiInputTooLargeError,
@@ -13,7 +13,7 @@ import {
   AiUpstreamError,
 } from './ai.errors.js';
 import { AiMetrics } from './ai.metrics.js';
-import type { AiUsage } from './ai.types.js';
+import type { AiCallInput, AiUsage } from './ai.types.js';
 import {
   aiTestConfig,
   MockAiModelProvider,
@@ -21,6 +21,7 @@ import {
   type MockModelTurn,
   mockFailingModel,
   mockHangingModel,
+  mockModelUsage,
   mockScriptedModel,
   mockStreamModel,
   mockTextModel,
@@ -66,6 +67,14 @@ const upstreamFailure = (message = 'upstream failed'): APICallError =>
     statusCode: 500,
     isRetryable: false,
   });
+
+function lookupTool() {
+  const execute = vi.fn(async () => ({ found: true }));
+  return {
+    execute,
+    tools: { lookup: tool({ inputSchema: jsonSchema({ type: 'object' }), execute }) },
+  };
+}
 
 beforeEach(() => {
   metrics.requests.reset();
@@ -345,22 +354,19 @@ describe('AiClient.stream', () => {
 
 describe('AiClient tool steps', () => {
   const STEP_USAGE = { inputTokens: 3, outputTokens: 2 };
-
-  function lookupTool() {
-    const execute = vi.fn(async () => ({ found: true }));
-    return {
-      execute,
-      tools: { lookup: tool({ inputSchema: jsonSchema({ type: 'object' }), execute }) },
-    };
-  }
+  const STEP_COST = 0.25;
 
   /** Calls `lookup` on every step it may; answers `answer` on a step whose tool choice is none. */
   const toolEveryStep = (answer: string) =>
     mockScriptedModel([
       (call: MockModelCall): MockModelTurn =>
         call.toolChoice?.type === 'none'
-          ? { text: answer, usage: STEP_USAGE }
-          : { toolCalls: [{ toolName: 'lookup', input: {} }], usage: STEP_USAGE },
+          ? { text: answer, usage: STEP_USAGE, costUsd: STEP_COST }
+          : {
+              toolCalls: [{ toolName: 'lookup', input: {} }],
+              usage: STEP_USAGE,
+              costUsd: STEP_COST,
+            },
     ]);
 
   it.each(['generate', 'stream'] as const)(
@@ -390,7 +396,11 @@ describe('AiClient tool steps', () => {
       ]);
       for (const call of calls) expect(call.tools?.map((t) => t.name)).toEqual(['lookup']);
       expect(execute).toHaveBeenCalledTimes(2);
-      expect(usage).toMatchObject({ inputTokens: 9, outputTokens: 6 });
+      // Summed over the three steps, and counted once in the metrics (no metered copy added).
+      expect(usage).toEqual({ inputTokens: 9, outputTokens: 6, costUsd: 3 * STEP_COST });
+      expect(await value(metrics.tokens, { kind: 'input' })).toBe(9);
+      expect(await value(metrics.tokens, { kind: 'output' })).toBe(6);
+      expect(await value(metrics.requests, { outcome: 'success' })).toBe(1);
     },
   );
 
@@ -433,6 +443,268 @@ describe('AiClient tool steps', () => {
       expect(await value(metrics.requests, { outcome: 'error' })).toBe(1);
     },
   );
+});
+
+describe('AiClient usage of a failed call (aiUsageOf)', () => {
+  /** One billed model call: 1000 tokens in, 50 out, 0.01 USD (OpenRouter usage accounting). */
+  const BILLED = { usage: { inputTokens: 1_000, outputTokens: 50 }, costUsd: 0.01 } as const;
+  const LOOKUP = { toolName: 'lookup', input: {} } as const;
+  const KINDS = ['generate', 'stream'] as const;
+  type StreamPart =
+    Awaited<ReturnType<MockLanguageModelV4['doStream']>>['stream'] extends ReadableStream<infer P>
+      ? P
+      : never;
+
+  /** How the call failed: generate's throw, or stream's `usage` rejection once its text ended. */
+  async function failureOf(
+    kind: (typeof KINDS)[number],
+    client: AiClient,
+    input: AiCallInput,
+  ): Promise<unknown> {
+    if (kind === 'generate') {
+      return client.generate(input).then(
+        () => 'resolved',
+        (error: unknown) => error,
+      );
+    }
+    const call = client.stream(input);
+    await read(call.result.textStream).catch(() => undefined);
+    return call.usage.then(
+      () => 'resolved',
+      (error: unknown) => error,
+    );
+  }
+
+  const tokens = async () => ({
+    input: await value(metrics.tokens, { kind: 'input' }),
+    output: await value(metrics.tokens, { kind: 'output' }),
+  });
+
+  it.each(KINDS)(
+    'a model that calls a tool on the last step anyway: the 502 carries its three billed calls (%s)',
+    async (kind) => {
+      // A tool call on every step, the last one (tool choice none) too: three calls, all billed.
+      const model = mockScriptedModel([{ toolCalls: [LOOKUP], ...BILLED }]);
+      const { client } = setup(model, { maxToolSteps: 3 });
+
+      const error = await failureOf(kind, client, { messages: ask(), tools: lookupTool().tools });
+
+      expect(error).toBeInstanceOf(AiUpstreamError);
+      expect(error).toMatchObject({ httpStatus: HttpStatus.BAD_GATEWAY });
+      expect(kind === 'generate' ? model.doGenerateCalls : model.doStreamCalls).toHaveLength(3);
+      expect(aiUsageOf(error)).toEqual({
+        inputTokens: 3_000,
+        outputTokens: 150,
+        costUsd: expect.closeTo(0.03, 10),
+      });
+      expect(await value(metrics.requests, { outcome: 'error' })).toBe(1);
+      expect(await tokens()).toEqual({ input: 3_000, output: 150 });
+    },
+  );
+
+  it.each(KINDS)(
+    'an upstream failure after two billed calls: the 502 carries those two (%s)',
+    async (kind) => {
+      const model = mockScriptedModel([
+        { toolCalls: [LOOKUP], ...BILLED },
+        { toolCalls: [LOOKUP], ...BILLED },
+        (): MockModelTurn => {
+          throw upstreamFailure();
+        },
+      ]);
+      const { client } = setup(model, { maxToolSteps: 5 });
+
+      const error = await failureOf(kind, client, { messages: ask(), tools: lookupTool().tools });
+
+      expect(error).toBeInstanceOf(AiUpstreamError);
+      expect(aiUsageOf(error)).toEqual({
+        inputTokens: 2_000,
+        outputTokens: 100,
+        costUsd: expect.closeTo(0.02, 10),
+      });
+      expect(await tokens()).toEqual({ input: 2_000, output: 100 });
+    },
+  );
+
+  it.each(KINDS)('an upstream failure on the first call carries no usage (%s)', async (kind) => {
+    const { client } = setup(mockFailingModel(upstreamFailure()));
+
+    const error = await failureOf(kind, client, { messages: ask() });
+
+    expect(error).toBeInstanceOf(AiUpstreamError);
+    expect(aiUsageOf(error)).toBeUndefined();
+    expect(await value(metrics.requests, { outcome: 'error' })).toBe(1);
+    expect(await tokens()).toEqual({ input: undefined, output: undefined });
+  });
+
+  it.each(KINDS)('a timeout after one billed call carries that call (%s)', async (kind) => {
+    // The second step never answers: the deadline cuts it, and no usage is reported for it.
+    const model = mockScriptedModel([{ toolCalls: [LOOKUP], ...BILLED }, { hang: true }]);
+    const { client } = setup(model, { requestTimeoutMs: 300 });
+
+    const error = await failureOf(kind, client, { messages: ask(), tools: lookupTool().tools });
+
+    expect(error).toBeInstanceOf(AiTimeoutError);
+    expect(error).toMatchObject({ httpStatus: HttpStatus.GATEWAY_TIMEOUT });
+    expect(aiUsageOf(error)).toEqual({ inputTokens: 1_000, outputTokens: 50, costUsd: 0.01 });
+    expect(await value(metrics.requests, { outcome: 'timeout' })).toBe(1);
+    expect(await tokens()).toEqual({ input: 1_000, output: 50 });
+  });
+
+  it.each(KINDS)(
+    'a caller abort mid tool loop: the abort reason carries the calls billed before it (%s)',
+    async (kind) => {
+      const caller = new AbortController();
+      const reason = new Error('client gone');
+      const model = mockScriptedModel([
+        { toolCalls: [LOOKUP], ...BILLED },
+        (): MockModelTurn => {
+          setTimeout(() => caller.abort(reason), 0);
+          return { text: 'partial ', hang: true };
+        },
+      ]);
+      const { client } = setup(model);
+
+      const error = await failureOf(kind, client, {
+        messages: ask(),
+        tools: lookupTool().tools,
+        signal: caller.signal,
+      });
+
+      expect(error).toBe(reason);
+      expect(aiUsageOf(reason)).toEqual({ inputTokens: 1_000, outputTokens: 50, costUsd: 0.01 });
+      expect(await value(metrics.requests, { outcome: 'aborted' })).toBe(1);
+      expect(await tokens()).toEqual({ input: 1_000, output: 50 });
+    },
+  );
+
+  it('stream: usage still rejects at once on an abort, its error already carrying the billed calls', async () => {
+    const caller = new AbortController();
+    const reason = new Error('client gone');
+    const model = mockScriptedModel([
+      { toolCalls: [LOOKUP], ...BILLED },
+      { text: 'partial ', hang: true },
+    ]);
+    const { client } = setup(model);
+    const call = client.stream({
+      messages: ask(),
+      tools: lookupTool().tools,
+      signal: caller.signal,
+    });
+    const iterator = call.result.textStream[Symbol.asyncIterator]();
+    // The second step's text: the first call ended before it began.
+    expect((await iterator.next()).value).toBe('partial ');
+
+    caller.abort(reason);
+    // Read in the rejection handler, before the SDK does anything more about the abort.
+    const settled = await Promise.race([
+      call.usage.then(
+        () => 'resolved',
+        (error: unknown) => ({ error, usage: aiUsageOf(error) }),
+      ),
+      new Promise((resolve) => setTimeout(() => resolve('pending'), 1_000)),
+    ]);
+
+    expect(settled).toEqual({
+      error: reason,
+      usage: { inputTokens: 1_000, outputTokens: 50, costUsd: 0.01 },
+    });
+  });
+
+  it('stream: an abort reason that is not an object carries no usage; the metrics count it', async () => {
+    const caller = new AbortController();
+    const model = mockScriptedModel([
+      { toolCalls: [LOOKUP], ...BILLED },
+      (): MockModelTurn => {
+        setTimeout(() => caller.abort('bye'), 0);
+        return { hang: true };
+      },
+    ]);
+    const { client } = setup(model);
+
+    const error = await failureOf('stream', client, {
+      messages: ask(),
+      tools: lookupTool().tools,
+      signal: caller.signal,
+    });
+
+    // A primitive cannot key the usage: nothing to read, but the call is still metered.
+    expect(error).toBe('bye');
+    expect(aiUsageOf('bye')).toBeUndefined();
+    expect(await value(metrics.requests, { outcome: 'aborted' })).toBe(1);
+    expect(await tokens()).toEqual({ input: 1_000, output: 50 });
+  });
+
+  it('stream: a call whose usage comes after its error part counts on that error once the stream ended', async () => {
+    // A provider failing mid-answer (as OpenRouter does): an error part, then the call's finish
+    // with its usage. The error rejects `usage` first; the SDK reports the call's end after it.
+    const chunks: StreamPart[] = [
+      { type: 'stream-start', warnings: [] },
+      { type: 'text-start', id: 't0' },
+      { type: 'text-delta', id: 't0', delta: 'par' },
+      { type: 'error', error: upstreamFailure() },
+      { type: 'text-end', id: 't0' },
+      {
+        type: 'finish',
+        finishReason: { unified: 'error', raw: 'error' },
+        usage: mockModelUsage({ inputTokens: 40, outputTokens: 4 }),
+        providerMetadata: { openrouter: { usage: { cost: 0.004 } } },
+      },
+    ];
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({ stream: simulateReadableStream({ chunks, chunkDelayInMs: 0 }) }),
+    });
+    const { client } = setup(model);
+
+    const call = client.stream({ messages: ask() });
+    const deltas = read(call.result.textStream);
+    const rejection = await call.usage.then(
+      () => undefined,
+      (error: unknown) => ({ error, usage: aiUsageOf(error) }),
+    );
+    expect(await deltas).toEqual(['par']);
+
+    expect(rejection?.error).toBeInstanceOf(AiUpstreamError);
+    expect(rejection?.usage).toBeUndefined();
+    // The same error reads the call once the stream ended, and the metrics counted it too.
+    expect(aiUsageOf(rejection?.error)).toEqual({
+      inputTokens: 40,
+      outputTokens: 4,
+      costUsd: 0.004,
+    });
+    expect(await value(metrics.requests, { outcome: 'error' })).toBe(1);
+    expect(await tokens()).toEqual({ input: 40, output: 4 });
+  });
+
+  it('stream: a caller abort after the call ended reads the whole call, counted once', async () => {
+    const caller = new AbortController();
+    const { client } = setup(
+      mockStreamModel(['done'], { usage: { inputTokens: 4, outputTokens: 3 } }),
+    );
+    const call = client.stream({ messages: ask(), signal: caller.signal });
+    expect(await read(call.result.textStream)).toEqual(['done']);
+    const usage = await call.usage;
+
+    // A consumer that leaves after the end (still reading the deltas) aborts with its reason.
+    caller.abort();
+
+    expect(aiUsageOf(caller.signal.reason)).toEqual(usage);
+    expect(await value(metrics.requests, { outcome: 'success' })).toBe(1);
+    expect(await value(metrics.requests, { outcome: 'aborted' })).toBeUndefined();
+    expect(await tokens()).toEqual({ input: 4, output: 3 });
+  });
+
+  it('reads nothing for a guard refusal or any value no call failed with', async () => {
+    const { client } = setup(mockTextModel('hi'));
+    const refused = await client
+      .generate({ messages: ask(), model: 'vendor/expensive' })
+      .catch((e: unknown) => e);
+
+    expect(refused).toBeInstanceOf(AiModelNotAllowedError);
+    for (const other of [refused, new Error('other'), 'text', undefined, null]) {
+      expect(aiUsageOf(other)).toBeUndefined();
+    }
+  });
 });
 
 describe('AiClient privacy', () => {

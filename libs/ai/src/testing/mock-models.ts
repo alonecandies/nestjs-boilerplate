@@ -173,6 +173,13 @@ export interface MockModelTurn {
   readonly text?: string;
   readonly toolCalls?: readonly MockToolCall[];
   readonly usage?: MockTokenUsage;
+  /** The step's cost as OpenRouter usage accounting reports it (`openrouter.usage.cost`). */
+  readonly costUsd?: number;
+  /**
+   * The step never ends: it waits for its abort signal (a `stream` sends its text first), like a
+   * model the deadline or the caller cuts mid-answer. No usage is reported for it.
+   */
+  readonly hang?: boolean;
 }
 
 /** A turn, or a function of the call (its prompt holds the tool results of the step before). */
@@ -204,11 +211,16 @@ export function mockScriptedModel(turns: readonly MockModelScript[]): MockLangua
       toolCalls,
       finishReason: toolCalls.length > 0 ? TOOL_CALLS : STOP,
       usage: mockModelUsage(turn.usage),
+      metadata:
+        turn.costUsd === undefined
+          ? {}
+          : { providerMetadata: { openrouter: { usage: { cost: turn.costUsd } } } },
     };
   };
   return new MockLanguageModelV4({
     doGenerate: async (call) => {
-      const { turn, toolCalls, finishReason, usage } = next(call);
+      const { turn, toolCalls, finishReason, usage, metadata } = next(call);
+      if (turn.hang === true) return untilAborted(call.abortSignal);
       return {
         content: [
           ...(turn.text === undefined ? [] : [{ type: 'text' as const, text: turn.text }]),
@@ -216,11 +228,12 @@ export function mockScriptedModel(turns: readonly MockModelScript[]): MockLangua
         ],
         finishReason,
         usage,
+        ...metadata,
         warnings: [],
       };
     },
     doStream: async (call) => {
-      const { turn, toolCalls, finishReason, usage } = next(call);
+      const { turn, toolCalls, finishReason, usage, metadata } = next(call);
       const text: StreamPart[] =
         turn.text === undefined
           ? []
@@ -229,13 +242,24 @@ export function mockScriptedModel(turns: readonly MockModelScript[]): MockLangua
               { type: 'text-delta', id: 't0', delta: turn.text },
               { type: 'text-end', id: 't0' },
             ];
+      if (turn.hang === true) {
+        const head: StreamPart[] = [{ type: 'stream-start', warnings: [] }, ...text.slice(0, -1)];
+        return {
+          stream: new ReadableStream<StreamPart>({
+            start(controller) {
+              for (const part of head) controller.enqueue(part);
+              untilAborted(call.abortSignal).catch((reason: unknown) => controller.error(reason));
+            },
+          }),
+        };
+      }
       return {
         stream: simulateReadableStream<StreamPart>({
           chunks: [
             { type: 'stream-start', warnings: [] },
             ...text,
             ...toolCalls,
-            { type: 'finish', finishReason, usage },
+            { type: 'finish', finishReason, usage, ...metadata },
           ],
           chunkDelayInMs: 0,
         }),

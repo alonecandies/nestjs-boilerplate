@@ -35,7 +35,8 @@ const TRACER = '@platform/ai';
  * `AI_MAX_TOOL_STEPS` model steps, the last with tool choice `none`: the call ends on an answer in
  * text, never on tool calls (a model that calls one there anyway → 502). Every call records metrics
  * and a span and logs ids, model, token counts and latency only: never prompt or completion text,
- * nor upstream messages.
+ * nor upstream messages. Each model call's usage is metered as it ends, so a call that fails keeps
+ * what its completed model calls were billed: `aiUsageOf(error)`, and its tokens in the metrics.
  */
 @Injectable()
 export class AiClient {
@@ -134,7 +135,7 @@ interface AiCallContext {
   readonly logger: Logger;
 }
 
-/** One model call: its deadline, combined signal, span, and exactly-once metrics and log. */
+/** One call: its deadline, combined signal, span, metered usage, and exactly-once metrics and log. */
 class AiCall<TOOLS extends ToolSet> {
   readonly model: string;
   readonly signal: AbortSignal;
@@ -143,7 +144,10 @@ class AiCall<TOOLS extends ToolSet> {
   private readonly timer: NodeJS.Timeout;
   private readonly span: Span;
   private readonly maxOutputTokens: number;
-  private settled = false;
+  /** The usage of the model calls that ended so far; what `aiUsageOf` reads for a failure. */
+  private readonly metered: UsageMeter = { usage: undefined };
+  /** Set by the first settlement, which alone records the metrics. */
+  private outcome: AiCallOutcome | undefined;
 
   constructor(private readonly ctx: AiCallContext) {
     this.model = ctx.model;
@@ -177,6 +181,8 @@ class AiCall<TOOLS extends ToolSet> {
       maxOutputTokens,
       maxRetries: this.ctx.config.maxRetries,
       abortSignal: this.signal,
+      // Every model call that ends is billed, whether or not the whole call then succeeds.
+      onLanguageModelCallEnd: (event: ModelCallEnd) => this.meter(event),
       ...(input.system === undefined ? {} : { system: input.system }),
       ...(input.tools === undefined
         ? {}
@@ -212,7 +218,10 @@ class AiCall<TOOLS extends ToolSet> {
     );
   }
 
-  /** Maps `error` to what the caller sees; records the failure once (later calls only map). */
+  /**
+   * Maps `error` to what the caller sees, which then carries the metered usage (`aiUsageOf`), every
+   * time; records the failure once (later calls only map).
+   */
   fail(error: unknown): unknown {
     let outcome: AiCallOutcome;
     let mapped: unknown;
@@ -226,7 +235,8 @@ class AiCall<TOOLS extends ToolSet> {
       outcome = 'error';
       mapped = isDomainException(error) ? error : new AiUpstreamError({ cause: error });
     }
-    if (!this.finish(outcome)) return mapped;
+    if (isWeakKey(mapped)) failedCalls.set(mapped, this.metered);
+    if (!this.finish(outcome, this.metered.usage)) return mapped;
     this.span.setAttributes({ 'ai.outcome': outcome, 'error.type': errorName(error) });
     this.span.setStatus({ code: SpanStatusCode.ERROR });
     this.span.end();
@@ -239,13 +249,68 @@ class AiCall<TOOLS extends ToolSet> {
   }
 
   /** First settlement wins: clears the deadline and records the metrics. */
-  private finish(outcome: AiCallOutcome, usage?: AiUsage): boolean {
-    if (this.settled) return false;
-    this.settled = true;
+  private finish(outcome: AiCallOutcome, usage: AiUsage | undefined): boolean {
+    if (this.outcome !== undefined) return false;
+    this.outcome = outcome;
     clearTimeout(this.timer);
     this.ctx.metrics.record(this.model, outcome, this.elapsedMs(), usage);
     return true;
   }
+
+  /**
+   * Adds the usage of one model call as it ends (before its tool calls run). A failure records what
+   * was metered then; a model call that ends after it (a streamed call whose usage the provider
+   * sends after its error part) still adds to the failure's usage and to the token metrics.
+   */
+  private meter(event: ModelCallEnd): void {
+    const usage = toUsage(event.usage, [event]);
+    this.metered.usage = sumUsage(this.metered.usage, usage);
+    if (this.outcome !== undefined && this.outcome !== 'success') {
+      this.ctx.metrics.countTokens(this.model, usage);
+    }
+  }
+}
+
+/** What the SDK reports as each model call ends (`onLanguageModelCallEnd`). */
+interface ModelCallEnd {
+  readonly usage: LanguageModelUsage;
+  readonly providerMetadata?: ProviderMetadata | undefined;
+}
+
+/** The usage a call metered so far, shared by reference with the errors it failed with. */
+interface UsageMeter {
+  usage: AiUsage | undefined;
+}
+
+/** The meter of each failed call by the error it failed with (`aiUsageOf`). */
+const failedCalls = new WeakMap<object, UsageMeter>();
+
+/**
+ * What a failed `AiClient` call was billed for: the tokens and cost of its model calls that ended
+ * before it failed (OpenRouter bills each, the step that broke a tool loop included; one cut
+ * mid-answer reports nothing). Pass what the call failed with: the `AiTimeoutError` or
+ * `AiUpstreamError` that `generate` throws or `stream` rejects `usage` with, or the caller's abort
+ * reason (also when the abort came after the call ended: then the whole call). `undefined` when no
+ * model call ended, for a guard refusal or any other value, and for an abort reason that is not an
+ * object (nothing can key it). Read live: a streamed call whose usage arrives after its error part
+ * is included once the stream ended. One reason object shared by concurrent calls reads only one.
+ */
+export function aiUsageOf(error: unknown): AiUsage | undefined {
+  return isWeakKey(error) ? failedCalls.get(error)?.usage : undefined;
+}
+
+/** Whether `value` can key a `WeakMap` (a primitive abort reason cannot). */
+const isWeakKey = (value: unknown): value is object =>
+  (typeof value === 'object' && value !== null) || typeof value === 'function';
+
+/** `a + b`; the cost stays `undefined` until a model call reports one. */
+function sumUsage(a: AiUsage | undefined, b: AiUsage): AiUsage {
+  if (a === undefined) return b;
+  return {
+    inputTokens: a.inputTokens + b.inputTokens,
+    outputTokens: a.outputTokens + b.outputTokens,
+    costUsd: b.costUsd === undefined ? a.costUsd : (a.costUsd ?? 0) + b.costUsd,
+  };
 }
 
 /**

@@ -28,8 +28,9 @@ import { SendMessageCommand } from './send-message.command.js';
  * last step anyway fails the call (502 `AI_UPSTREAM_ERROR`): no message is stored.
  *
  * A failed call stores no message and records a usage row with the failure outcome (`error`,
- * `timeout`); a call refused by a guard (disabled, model, input size) records nothing. Logs carry
- * ids, model and token counts only, never message text.
+ * `timeout`) and the tokens and cost of the model calls that ended before it failed (`aiUsageOf`:
+ * a tool loop that fails pays for its steps); a call refused by a guard (disabled, model, input
+ * size) records nothing. Logs carry ids, model and token counts only, never message text.
  */
 @CommandHandler(SendMessageCommand)
 export class SendMessageHandler

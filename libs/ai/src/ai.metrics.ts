@@ -13,7 +13,8 @@ const DURATION_BUCKETS = [0.25, 0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300];
 
 /**
  * Prometheus metrics of every model call, on the process-wide registry (`MetricsListener` serves
- * it). The `model` label is the requested model, bounded by the allowlist.
+ * it). The `model` label is the requested model, bounded by the allowlist. Tokens count whatever
+ * the outcome: a failed call's are those of its model calls that completed (`aiUsageOf`).
  */
 @Injectable()
 export class AiMetrics {
@@ -37,7 +38,11 @@ export class AiMetrics {
   record(model: string, outcome: AiCallOutcome, latencyMs: number, usage?: AiUsage): void {
     this.requests.inc({ model, outcome });
     this.duration.observe({ model }, latencyMs / 1_000);
-    if (usage === undefined) return;
+    if (usage !== undefined) this.countTokens(model, usage);
+  }
+
+  /** Adds tokens alone: a failed call's model call whose usage arrived after it was recorded. */
+  countTokens(model: string, usage: AiUsage): void {
     if (usage.inputTokens > 0) this.tokens.inc({ model, kind: 'input' }, usage.inputTokens);
     if (usage.outputTokens > 0) this.tokens.inc({ model, kind: 'output' }, usage.outputTokens);
   }

@@ -51,7 +51,8 @@ export interface AiStreamResult<TOOLS extends ToolSet = ToolSet> {
   readonly result: AiSdkStreamResult<TOOLS>;
   /**
    * Settles when the stream ends: the usage on success; on failure an `AiTimeoutError`, an
-   * `AiUpstreamError`, or the caller's abort reason. Never an unhandled rejection when ignored.
+   * `AiUpstreamError`, or the caller's abort reason, at once on an abort or the deadline, whose
+   * billed usage so far `aiUsageOf` reads. Never an unhandled rejection when ignored.
    */
   readonly usage: Promise<AiUsage>;
 }

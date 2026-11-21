@@ -8,6 +8,7 @@ import {
   type AiSdkGenerateResult,
   AiTimeoutError,
   aiInputChars,
+  aiUsageOf,
 } from '@platform/ai';
 import { generateId, type Principal } from '@platform/common';
 import { type AiConfig, aiConfig } from '@platform/config';
@@ -80,7 +81,8 @@ const toMessageContent = (content: ResponseMessage['content']): MessageContent =
  *    conversation deleted before it (`gone`) gets the usage row only, committed, and a 404.
  *
  * A call that failed before any reply stores no message and records a usage row with the failure
- * outcome (`recordFailure`); a call refused by a guard (disabled, model, input size) records nothing.
+ * outcome and what its completed model calls were billed (`recordFailure`, `aiUsageOf`); a call
+ * refused by a guard (disabled, model, input size) records nothing.
  *
  * Tools (`AiChatTools`, when the app binds `AiToolSources`): the call is offered the read-only
  * tools bound to the caller (`toolOptions`, in `promptOf`), and the tool calls and results of its
@@ -205,7 +207,11 @@ export abstract class ChatTurnHandler {
     return { kind: 'stored', message: appended.message };
   }
 
-  /** Best effort: the model error is what the caller must see, not a database error. */
+  /**
+   * Best effort: the model error is what the caller must see, not a database error. The row holds
+   * what the model calls that ended before the failure were billed (`aiUsageOf`): a failed tool
+   * loop still paid for its steps. None ended: 0 tokens, cost unknown.
+   */
   protected async recordFailure(
     request: SendMessageRequest,
     model: string,
@@ -214,6 +220,7 @@ export abstract class ChatTurnHandler {
     outcome: UsageOutcome = error instanceof AiTimeoutError ? 'timeout' : 'error',
   ): Promise<void> {
     if (REFUSED_BEFORE_CALL.some((type) => error instanceof type)) return;
+    const billed = aiUsageOf(error);
     try {
       await this.usage.record({
         tenantId: request.tenantId,
@@ -222,9 +229,9 @@ export abstract class ChatTurnHandler {
         conversationId: request.conversationId,
         messageId: null,
         model,
-        inputTokens: 0,
-        outputTokens: 0,
-        costUsd: null,
+        inputTokens: billed?.inputTokens ?? 0,
+        outputTokens: billed?.outputTokens ?? 0,
+        costUsd: billed?.costUsd ?? null,
         latencyMs,
         outcome,
         createdAt: new Date(),
