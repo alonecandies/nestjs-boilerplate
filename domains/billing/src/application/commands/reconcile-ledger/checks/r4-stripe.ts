@@ -29,12 +29,10 @@ import {
   StripeOwnerResolver,
 } from '../../../ledger/stripe-owner-resolver.js';
 import { LedgerPort } from '../../../ports/ledger.port.js';
-import {
-  type LedgerCursor,
-  LedgerSystemRepository,
-} from '../../../repositories/ledger.system-repository.js';
+import { LedgerSystemRepository } from '../../../repositories/ledger.system-repository.js';
 import type { LedgerEntryRef } from '../../../repositories/ledger-receipts.repository.js';
 import type { ReconciliationCheck, ReconciliationContext } from '../reconcile-ledger.command.js';
+import { keysetPages } from './keyset-pages.js';
 
 /** Page size of the ref list. */
 export const R4_REF_PAGE_SIZE = 500;
@@ -128,18 +126,18 @@ export class R4StripeCheck implements ReconciliationCheck {
   /** Every ref posted in `[from, to)`, all tenants, by entry id. */
   private async refsByEntry(from: Date, to: Date): Promise<Map<string, LedgerEntryRef[]>> {
     const byEntry = new Map<string, LedgerEntryRef[]>();
-    let after: LedgerCursor | null = null;
-    for (;;) {
-      const batch = await this.system.listEntryRefs(from, to, after, R4_REF_PAGE_SIZE);
-      for (const ref of batch) {
+    for await (const page of keysetPages(
+      R4_REF_PAGE_SIZE,
+      (last: LedgerEntryRef) => ({ tenantId: last.tenantId, id: last.entryId }),
+      (after) => this.system.listEntryRefs(from, to, after, R4_REF_PAGE_SIZE),
+    )) {
+      for (const ref of page) {
         const refs = byEntry.get(ref.entryId);
         if (refs === undefined) byEntry.set(ref.entryId, [ref]);
         else refs.push(ref);
       }
-      const last = batch.at(-1);
-      if (last === undefined || batch.length < R4_REF_PAGE_SIZE) return byEntry;
-      after = { tenantId: last.tenantId, id: last.entryId };
     }
+    return byEntry;
   }
 
   /** The first ref whose entry the ledger returns under the ref's tenant. */

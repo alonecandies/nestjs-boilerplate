@@ -12,6 +12,7 @@ import {
 } from '../../../repositories/ledger.system-repository.js';
 import type { LedgerEntryRef } from '../../../repositories/ledger-receipts.repository.js';
 import type { ReconciliationCheck, ReconciliationContext } from '../reconcile-ledger.command.js';
+import { keysetPages } from './keyset-pages.js';
 
 /** Page size of both system lists. */
 export const R3_PAGE_SIZE = 500;
@@ -56,12 +57,22 @@ export class R3PaymentsCheck implements ReconciliationCheck {
   async run(ctx: ReconciliationContext): Promise<readonly LedgerDiscrepancyInput[]> {
     const listFrom = new Date(ctx.from.getTime() - R3_PAYMENT_LOOKBEHIND_MS);
     const listTo = new Date(ctx.to.getTime() + LEDGER_RECONCILE_GRACE_MS);
-    const payments = await this.readAll((after) =>
-      this.system.listSucceededPayments(listFrom, listTo, after, R3_PAGE_SIZE),
-    );
-    const refs = await this.readAll((after) =>
-      this.system.listEntryRefs(listFrom, listTo, after, R3_PAGE_SIZE),
-    );
+    const payments: PaidPaymentRow[] = [];
+    for await (const page of keysetPages(
+      R3_PAGE_SIZE,
+      (last: PaidPaymentRow) => ({ tenantId: last.tenantId, id: last.id }),
+      (after) => this.system.listSucceededPayments(listFrom, listTo, after, R3_PAGE_SIZE),
+    )) {
+      payments.push(...page);
+    }
+    const refs: LedgerEntryRef[] = [];
+    for await (const page of keysetPages(
+      R3_PAGE_SIZE,
+      (last: LedgerEntryRef) => ({ tenantId: last.tenantId, id: last.entryId }),
+      (after) => this.system.listEntryRefs(listFrom, listTo, after, R3_PAGE_SIZE),
+    )) {
+      refs.push(...page);
+    }
     const paid = new Set(payments.map((payment) => key(payment.tenantId, payment.id)));
     const refsByPayment = Map.groupBy(
       refs.filter((ref) => ref.paymentId !== null),
@@ -131,21 +142,6 @@ export class R3PaymentsCheck implements ReconciliationCheck {
       }
     }
     return paid;
-  }
-
-  /** Every page of a keyset list, cursor = the last row's `(tenantId, id)`. */
-  private async readAll<T extends PaidPaymentRow | LedgerEntryRef>(
-    page: (after: LedgerCursor | null) => Promise<readonly T[]>,
-  ): Promise<T[]> {
-    const rows: T[] = [];
-    let after: LedgerCursor | null = null;
-    for (;;) {
-      const batch = await page(after);
-      rows.push(...batch);
-      const last = batch.at(-1);
-      if (last === undefined || batch.length < R3_PAGE_SIZE) return rows;
-      after = { tenantId: last.tenantId, id: 'entryId' in last ? last.entryId : last.id };
-    }
   }
 
   /** The entry of a `charge` ref against its payment: tenant first, then the presentment. */

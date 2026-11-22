@@ -6,16 +6,14 @@ import type { LedgerTrustedState } from '../../../../domain/ledger/ledger.types.
 import type { LedgerDiscrepancyInput } from '../../../../domain/ledger/ledger-discrepancy.js';
 import { LedgerMetrics } from '../../../../infrastructure/ledger/ledger-metrics.js';
 import { LedgerPort } from '../../../ports/ledger.port.js';
-import {
-  type LedgerCursor,
-  LedgerSystemRepository,
-} from '../../../repositories/ledger.system-repository.js';
+import { LedgerSystemRepository } from '../../../repositories/ledger.system-repository.js';
 import type { LedgerEntryRef } from '../../../repositories/ledger-receipts.repository.js';
 import {
   type ReconciliationCheck,
   ReconciliationCheckFailure,
   type ReconciliationContext,
 } from '../reconcile-ledger.command.js';
+import { keysetPages } from './keyset-pages.js';
 
 /** Page size of the ref list. */
 export const R5_REF_PAGE_SIZE = 500;
@@ -114,18 +112,18 @@ export class R5VerificationCheck implements ReconciliationCheck {
     const since = cutoff === null || ctx.from.getTime() <= cutoff.getTime() ? ctx.from : cutoff;
     const oldTxId = trusted?.txId ?? 0n;
     const found: LedgerDiscrepancyInput[] = [];
-    let after: LedgerCursor | null = null;
-    for (;;) {
-      const batch = await this.system.listEntryRefs(since, readAt, after, R5_REF_PAGE_SIZE);
-      for (const ref of batch) {
+    for await (const page of keysetPages(
+      R5_REF_PAGE_SIZE,
+      (last: LedgerEntryRef) => ({ tenantId: last.tenantId, id: last.entryId }),
+      (after) => this.system.listEntryRefs(since, readAt, after, R5_REF_PAGE_SIZE),
+    )) {
+      for (const ref of page) {
         if (!needsVerification(ref, oldTxId, next.txId, cutoff)) continue;
         const failure = await this.verify(ref, next);
         if (failure !== null) found.push(this.finding(ctx, failure));
       }
-      const last = batch.at(-1);
-      if (last === undefined || batch.length < R5_REF_PAGE_SIZE) return found;
-      after = { tenantId: last.tenantId, id: last.entryId };
     }
+    return found;
   }
 
   /** The finding of a ref whose entry does not verify against `state`; null when it does. */
