@@ -38,6 +38,11 @@ interface StreamTurn {
  * then the write. `execute` resolves once the call started, so refusals (404, 409, 422, 503) reach
  * the client as a plain error, before any event.
  *
+ * A caller whose `signal` aborted before the model call (during `prepare`) gets a stream that
+ * rejects with the abort reason on its first read: no model call, no metric and no usage row, as
+ * nothing was sent (a refusal's "nothing spent, nothing recorded"). An abort once the call started
+ * is a cut (below).
+ *
  * The returned stream yields each text delta, then stores the reply and yields `done`. A stream cut
  * short stores what it has, exactly once:
  * - the caller's `signal` aborts (the client disconnected), or the consumer stops reading (the
@@ -70,6 +75,8 @@ export class StreamMessageHandler
 
     const prepared = await this.prepare(request, requestHash);
     if (prepared.kind === 'replay') return replayOf(prepared.message);
+    // The client left during prepare: nothing was sent, so no model call, metric or usage row.
+    if (request.signal?.aborted === true) return cutBeforeCall(request.signal);
 
     const model = request.model ?? prepared.conversation.model;
     const userMessage = this.newMessage(request, { role: 'user', content: request.content });
@@ -240,6 +247,23 @@ export class StreamMessageHandler
 /** A replayed `Idempotency-Key`: the stored reply as the only event, no model call. */
 async function* replayOf(message: Message): AsyncGenerator<ChatStreamEvent> {
   yield { type: 'done', message, replayed: true, usage: null };
+}
+
+/**
+ * A turn whose client left before the model call: the stream rejects with the abort reason on its
+ * first read, and a stream released unread (`return()`) ends quietly. Not thrown from `execute`,
+ * so a consumer handles it as any other abort (the SSE route has no reply to answer on).
+ */
+function cutBeforeCall(signal: AbortSignal): AsyncIterable<ChatStreamEvent> {
+  return {
+    [Symbol.asyncIterator]: () => ({
+      next: async () => {
+        signal.throwIfAborted(); // an aborted signal stays aborted: always throws its reason
+        return { done: true, value: undefined };
+      },
+      return: async () => ({ done: true, value: undefined }),
+    }),
+  };
 }
 
 function outcomeOf(error: unknown, signal: AbortSignal): UsageOutcome {

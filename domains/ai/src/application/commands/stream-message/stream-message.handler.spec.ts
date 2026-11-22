@@ -355,15 +355,25 @@ describe('StreamMessageHandler', () => {
     expect(db.store.usage.map((u) => [u.outcome, u.messageId])).toEqual([['aborted', null]]);
   });
 
-  it('a client that disconnects during prepare ends the stream at once and stores no message', async () => {
-    const model = mockHangingModel(['never']);
-    const { handler } = setup(model);
+  /** A client that disconnects while the turn reads the conversation (`prepare`). */
+  function disconnectDuringPrepare(): AbortSignal {
     const client = new AbortController();
     const findById = db.conversations.findById.bind(db.conversations);
     db.conversations.findById = async (...args) => {
       client.abort();
       return findById(...args);
     };
+    return client.signal;
+  }
+  /** `ai_requests_total` samples so far: a turn that makes no model call adds none. */
+  const requestsCounted = async () =>
+    (await metrics.requests.get()).values.reduce((total, sample) => total + sample.value, 0);
+
+  it('a client that disconnects during prepare ends the stream at once with no model call and nothing stored', async () => {
+    const model = mockHangingModel(['never']);
+    const { handler } = setup(model);
+    const signal = disconnectDuringPrepare();
+    const counted = await requestsCounted();
 
     const outcome = await as(ADA, async () => {
       const events = await handler.execute(
@@ -372,7 +382,7 @@ describe('StreamMessageHandler', () => {
           conversationId: conversation.id,
           content: 'Go',
           idempotencyKey: 'stream-0009',
-          signal: client.signal,
+          signal,
         }),
       );
       return Promise.race([
@@ -382,10 +392,40 @@ describe('StreamMessageHandler', () => {
     });
 
     expect(outcome).not.toBe('hung');
-    expect(outcome).toMatchObject({ events: [], error: expect.anything() });
+    // The drained stream (SSE, GraphQL over HTTP) rejects with the client's abort reason.
+    expect(outcome).toMatchObject({ events: [], error: signal.reason });
+    // Nothing was sent: no model call, no metric, no message and no usage row.
+    expect(model.doStreamCalls).toEqual([]);
+    expect(await requestsCounted()).toBe(counted);
     expect(db.store.messages).toEqual([]);
-    // Like any abort before the first token: no message, one usage row recorded as aborted.
-    expect(db.store.usage.map((u) => [u.outcome, u.messageId])).toEqual([['aborted', null]]);
+    expect(db.store.usage).toEqual([]);
+  });
+
+  it('a stream released before its first read after a disconnect during prepare calls no model', async () => {
+    const model = mockHangingModel(['never']);
+    const { handler } = setup(model);
+    const signal = disconnectDuringPrepare();
+    const counted = await requestsCounted();
+
+    await as(ADA, async () => {
+      const events = await handler.execute(
+        new StreamMessageCommand({
+          ...ADA,
+          conversationId: conversation.id,
+          content: 'Go',
+          signal,
+        }),
+      );
+      // The gRPC controller's shape: the call is already closed, so it releases the stream unread.
+      await events[Symbol.asyncIterator]().return?.();
+    });
+    // A model call started at execute() would reach the provider within a few ticks.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(model.doStreamCalls).toEqual([]);
+    expect(await requestsCounted()).toBe(counted);
+    expect(db.store.messages).toEqual([]);
+    expect(db.store.usage).toEqual([]);
   });
 
   it('an upstream failure before any token ends the stream with AI_UPSTREAM_ERROR and stores no message', async () => {

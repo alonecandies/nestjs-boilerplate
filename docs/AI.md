@@ -109,7 +109,9 @@ Every response carries one of these codes when a call is refused or fails (REST 
 | `IDEMPOTENCY_KEY_REUSED` | 409    | an `Idempotency-Key` replayed with a different message (content or model)                                             |
 | `TENANT_MISMATCH`        | 403    | the request names a tenant or user other than the caller's principal (gRPC callers)                                   |
 
-A refusal before the call (`AI_DISABLED`, `AI_MODEL_NOT_ALLOWED`, `AI_INPUT_TOO_LARGE`) stores nothing. A failed call
+A refusal before the call (`AI_DISABLED`, `AI_MODEL_NOT_ALLOWED`, `AI_INPUT_TOO_LARGE`) stores nothing. Neither does a
+streamed turn whose client left before the model call (while the history was read): it makes no call, so no usage row
+and no metric are recorded, and its stream ends with the abort at once. A failed call
 (`AI_TIMEOUT`, `AI_UPSTREAM_ERROR`) stores no message but a usage row with outcome `timeout` or `error`, because tokens
 may have been spent. A streamed turn the client abandons (it disconnects, or closes the GraphQL request) aborts the
 upstream call: no tokens are spent after the client left. The reply so far, if any text arrived, is stored once as an `incomplete`

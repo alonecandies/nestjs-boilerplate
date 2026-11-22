@@ -95,7 +95,9 @@ export abstract class AiPort {
    * here, before any event. The reply is stored when the stream ends; a stream cut short (the
    * caller's `signal`, a consumer that stops reading, a failure after the first token) stores the
    * text so far once, as an `incomplete` reply that does not hold the `Idempotency-Key` (a retry
-   * with it runs a new turn). An `Idempotency-Key` replay is a single `done`.
+   * with it runs a new turn). An `Idempotency-Key` replay is a single `done`. A turn whose `signal`
+   * aborted before the model call makes none and stores nothing: its stream rejects with the abort
+   * reason on the first read.
    */
   abstract streamMessage(input: StreamMessageRequest): Promise<AsyncIterable<ChatStreamEvent>>;
 }
