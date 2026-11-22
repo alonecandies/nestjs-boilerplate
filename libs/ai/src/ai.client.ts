@@ -135,7 +135,7 @@ interface AiCallContext {
   readonly logger: Logger;
 }
 
-/** One call: its deadline, combined signal, span, metered usage, and exactly-once metrics and log. */
+/** One call: its deadline, abort signal, span, metered usage, and exactly-once metrics and log. */
 class AiCall<TOOLS extends ToolSet> {
   readonly model: string;
   readonly signal: AbortSignal;
@@ -157,10 +157,18 @@ class AiCall<TOOLS extends ToolSet> {
       requestTimeoutMs,
     );
     this.timer.unref();
-    this.signal =
-      ctx.callerSignal === undefined
-        ? this.deadline.signal
-        : AbortSignal.any([ctx.callerSignal, this.deadline.signal]);
+    // One plain signal that the deadline and the caller abort, not an `AbortSignal.any` composite:
+    // Node keeps a composite with an abort listener (stream's, never removed) in a strong set
+    // while its sources live, which pinned every finished call. The forwarders stay after the call
+    // ends, so a caller abort then still reaches it (`aiUsageOf` of its reason).
+    const call = new AbortController();
+    const forward = (source: AbortSignal): void => {
+      if (source.aborted) call.abort(source.reason);
+      else source.addEventListener('abort', () => call.abort(source.reason), { once: true });
+    };
+    forward(this.deadline.signal);
+    if (ctx.callerSignal !== undefined) forward(ctx.callerSignal);
+    this.signal = call.signal;
     this.maxOutputTokens = ctx.config.maxOutputTokens;
     this.span = trace.getTracer(TRACER).startSpan(`ai.${ctx.kind}`, {
       attributes: {
