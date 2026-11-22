@@ -322,6 +322,27 @@ describe('AI chat tools (read-only, as the caller)', () => {
     expect(db.store.usage.map((u) => [u.outcome, u.messageId])).toEqual([['error', stored[1]?.id]]);
   });
 
+  it.each(['send', 'stream'] as const)(
+    'a turn that succeeds records its cost on the success row (%s)',
+    async (via) => {
+      const model = mockScriptedModel([
+        { text: 'You are Ada.', usage: { inputTokens: 9, outputTokens: 3 }, costUsd: 0.000_12 },
+      ]);
+      const { send, stream } = setup(model);
+
+      await (via === 'send' ? send() : stream());
+
+      expect(db.store.usage).toEqual([
+        expect.objectContaining({
+          outcome: 'success',
+          inputTokens: 9,
+          outputTokens: 3,
+          costUsd: 0.000_12,
+        }),
+      ]);
+    },
+  );
+
   describe('a failed tool loop records the model calls billed before it failed', () => {
     /** One billed model call: 1000 tokens in, 50 out, 0.01 USD (OpenRouter usage accounting). */
     const BILLED = { usage: { inputTokens: 1_000, outputTokens: 50 }, costUsd: 0.01 } as const;
@@ -425,6 +446,70 @@ describe('AI chat tools (read-only, as the caller)', () => {
 
       const reply = storedMessages().find((m) => m.role === 'assistant');
       expect(reply).toMatchObject({ content: 'Still looking. ', status: 'incomplete' });
+      expect(db.store.usage).toEqual([
+        expect.objectContaining({ messageId: reply?.id, outcome: 'aborted', ...billed(1) }),
+      ]);
+    });
+
+    /** `getUser` never settles (a slow lookup the deadline or the client cuts); `onStart` first. */
+    class SlowProfileSources extends FakeAiToolSources {
+      constructor(private readonly onStart: () => void = () => undefined) {
+        super();
+      }
+      override getUser(): ReturnType<FakeAiToolSources['getUser']> {
+        this.onStart();
+        return new Promise(() => undefined);
+      }
+    }
+    /** One billed call that asks for the profile, then a step the cut never reaches. */
+    const askThenWait = () =>
+      mockScriptedModel([
+        { text: 'Looking. ', toolCalls: [PROFILE], ...BILLED },
+        { text: 'never' },
+      ]);
+
+    // A cut while the tool runs: the call that asked for it ended (billed), its step has not.
+    // Streamed only: a sent turn waits for the tool (generateText ends the step before it throws).
+    it('the deadline while a tool runs: the timeout row has the call that asked for it', async () => {
+      const tools = new AiChatTools(permissions, new SlowProfileSources());
+      const { stream } = setup(askThenWait(), { requestTimeoutMs: 300 }, tools);
+
+      const error = await stream().catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(AiTimeoutError);
+      const reply = storedMessages().find((m) => m.role === 'assistant');
+      expect(reply).toMatchObject({ content: 'Looking. ', status: 'incomplete' });
+      expect(db.store.usage).toEqual([
+        expect.objectContaining({ messageId: reply?.id, outcome: 'timeout', ...billed(1) }),
+      ]);
+    });
+
+    it('a client that leaves while a tool runs: the aborted row has the call that asked for it', async () => {
+      const client = new AbortController();
+      const leave = () => setTimeout(() => client.abort(new Error('client left')), 0);
+      const { streamer } = setup(
+        askThenWait(),
+        {},
+        new AiChatTools(permissions, new SlowProfileSources(leave)),
+      );
+
+      const error = await as(ADA, async () => {
+        const events = await streamer.execute(
+          new StreamMessageCommand({
+            ...ADA,
+            conversationId: conversation.id,
+            content: 'Who am I?',
+            signal: client.signal,
+          }),
+        );
+        for await (const _event of events) {
+          // drain: the cut ends the stream
+        }
+      }).catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(Error);
+      const reply = storedMessages().find((m) => m.role === 'assistant');
+      expect(reply).toMatchObject({ content: 'Looking. ', status: 'incomplete' });
       expect(db.store.usage).toEqual([
         expect.objectContaining({ messageId: reply?.id, outcome: 'aborted', ...billed(1) }),
       ]);

@@ -120,8 +120,9 @@ message, and a usage row records the outcome `aborted`. A stream that fails afte
 The usage row of a failed or cut turn holds what OpenRouter billed for it: the tokens and `cost_usd` of every model step
 (one request to OpenRouter) that ended before the failure, metered by `@platform/ai` as each one ends (`aiUsageOf`). A
 tool loop that times out, fails upstream, is abandoned, or ends on a model that calls a tool on its last step anyway
-therefore records the steps it paid for, and `ai_tokens_total` counts the same tokens. A step cut mid-answer reports no
-usage, so a turn that fails during its first step records 0 tokens and no cost.
+therefore records the steps it paid for, and `ai_tokens_total` counts the same tokens. A step cut mid-answer (a timeout
+or abort) reports no usage, so a turn cut during its first step records 0 tokens and no cost. A step the provider fails
+mid-answer counts when its usage arrives after the error, as OpenRouter's can.
 
 A conversation deleted while one of its turns runs ends the turn with 404 `CONVERSATION_NOT_FOUND` (streamed: the
 `error` event after the deltas). No message is stored, but the usage row is (`message_id` null), because the tokens were

@@ -578,6 +578,57 @@ describe('AiClient usage of a failed call (aiUsageOf)', () => {
     },
   );
 
+  /** A lookup that settles only when its call aborts (rejecting); `onStart` runs first. */
+  function slowLookup(onStart: () => void = () => undefined) {
+    const cut = (signal?: AbortSignal) => new Error('lookup cut', { cause: signal?.reason });
+    return {
+      lookup: tool({
+        inputSchema: jsonSchema({ type: 'object' }),
+        execute: (_input: unknown, { abortSignal }: { abortSignal?: AbortSignal }) =>
+          new Promise((_resolve, reject) => {
+            onStart();
+            abortSignal?.addEventListener('abort', () => reject(cut(abortSignal)), { once: true });
+          }),
+      }),
+    };
+  }
+  /** One billed call that asks for the lookup, then a step the cut never reaches. */
+  const askThenWait = () =>
+    mockScriptedModel([{ text: 'Looking. ', toolCalls: [LOOKUP], ...BILLED }, { text: 'never' }]);
+
+  // A cut while a tool runs: the call that asked for it ended (billed), its step has not. A
+  // stream ends without that step's end, so only the per-call meter counts it. Stream only:
+  // generateText waits for the tool and ends the step before it throws.
+  it('stream: the deadline lands while a tool runs: the timeout carries the call that asked for it', async () => {
+    const model = askThenWait();
+    const { client } = setup(model, { requestTimeoutMs: 300 });
+
+    const error = await failureOf('stream', client, { messages: ask(), tools: slowLookup() });
+
+    expect(error).toBeInstanceOf(AiTimeoutError);
+    expect(model.doStreamCalls).toHaveLength(1);
+    expect(aiUsageOf(error)).toEqual({ inputTokens: 1_000, outputTokens: 50, costUsd: 0.01 });
+    expect(await tokens()).toEqual({ input: 1_000, output: 50 });
+  });
+
+  it('stream: the caller aborts while a tool runs: the reason carries the call that asked for it', async () => {
+    const caller = new AbortController();
+    const reason = new Error('client gone');
+    const model = askThenWait();
+    const { client } = setup(model);
+
+    const error = await failureOf('stream', client, {
+      messages: ask(),
+      tools: slowLookup(() => setTimeout(() => caller.abort(reason), 0)),
+      signal: caller.signal,
+    });
+
+    expect(error).toBe(reason);
+    expect(model.doStreamCalls).toHaveLength(1);
+    expect(aiUsageOf(reason)).toEqual({ inputTokens: 1_000, outputTokens: 50, costUsd: 0.01 });
+    expect(await tokens()).toEqual({ input: 1_000, output: 50 });
+  });
+
   it('stream: usage still rejects at once on an abort, its error already carrying the billed calls', async () => {
     const caller = new AbortController();
     const reason = new Error('client gone');

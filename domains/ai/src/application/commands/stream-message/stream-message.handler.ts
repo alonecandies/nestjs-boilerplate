@@ -51,8 +51,9 @@ interface StreamTurn {
  *
  * With text received, the user message and an `incomplete` assistant reply are stored with the
  * usage row; without any, only the usage row. The row of a cut call holds what its model calls
- * that ended were billed (`aiUsageOf`); one cut mid-answer reports nothing, so a call cut in its
- * first model call records 0 tokens and no cost. The incomplete reply's own token counts stay
+ * that ended were billed (`aiUsageOf`, read once the stream ended, so a call whose usage came
+ * after its error part counts); one cut mid-answer (timeout, abort) reports nothing, so a call cut
+ * in its first model call records 0 tokens and no cost. The incomplete reply's own token counts stay
  * unknown (null). It carries no `Idempotency-Key` nor request hash: only a complete reply
  * binds the key, so a retry with it runs a new turn instead of replaying the cut text, and the
  * history of that turn and of later ones leaves out the cut exchange it repeats (`promptOf`).

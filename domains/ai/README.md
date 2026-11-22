@@ -91,8 +91,9 @@ either way (a retry sends it again). Logs carry ids, model and token counts, nev
 The usage row of a failed call holds what OpenRouter billed for it: the tokens and cost of the
 model steps that ended before the failure (`aiUsageOf(error)` from `@platform/ai`, which meters
 each step as it ends). A tool loop that times out or fails upstream after some steps, or whose
-model calls a tool on the last step anyway, records those steps; a step cut mid-answer reports
-nothing, so a call that fails during its first step records 0 tokens and a null cost.
+model calls a tool on the last step anyway, records those steps; a step cut mid-answer (a timeout
+or abort) reports nothing, so a call cut during its first step records 0 tokens and a null cost. A
+step the provider fails mid-answer counts when its usage arrives after the error.
 
 A conversation deleted during the call (the locked read in step 3 finds none) stores no message
 but commits the usage row (`message_id` null: the tokens were spent) and answers 404
