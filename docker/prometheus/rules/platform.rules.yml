@@ -1,5 +1,8 @@
-# Platform alerts (audit fixes Task 4). The series come from @platform/transport
-# (libs/transport/src/kafka/kafka-metrics.ts); Prometheus adds `service` from the scrape target.
+# Platform alerts (audit fixes Tasks 4 and 21). The series come from @platform/transport (Kafka in
+# libs/transport/src/kafka/kafka-metrics.ts, gRPC in libs/transport/src/grpc/grpc-metrics.ts),
+# @platform/redis (rate_limit_fail_open_total, redis_eviction_policy_safe), @platform/database
+# (db_pool_operations_waiting), @platform/observability (http_request_duration_seconds) and
+# @platform/mailer (mail_jobs_total); Prometheus adds `service` from the scrape target.
 # severity: page = wake someone; ticket = look at it in working hours.
 groups:
   - name: platform
@@ -41,9 +44,11 @@ groups:
             service's logs (a dependency that is down, or the DLQ publish failing) and at the
             consumer's lag.
 
-      # Lag above 1000 messages that also grew over the last 15 minutes: the consumer falls behind
-      # (slow handler, stuck partition, too few replicas). An idle partition holds its last value, so
-      # a high but flat lag does not fire.
+      # Lag above 1000 messages that also grew over the last 15 minutes: a consumer that progresses
+      # too slowly (slow handler, too few replicas). kafka_consumer_lag is set only at the end of a
+      # batch (END_BATCH_PROCESS), so an idle partition and a hung handler both freeze it and a high
+      # but flat lag does not fire: this rule cannot see a hung consumer. Detecting one needs a
+      # broker-side lag source (for example kafka-exporter's kafka_consumergroup_lag), a follow-up.
       - alert: KafkaConsumerLagGrowing
         expr: >-
           kafka_consumer_lag > 1000
