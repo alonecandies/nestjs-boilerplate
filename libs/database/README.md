@@ -237,8 +237,9 @@ blocker ends, and each queued request fails at its own 15 s `statement_timeout`.
   stay applied), so rerunning the job is safe. Find the blocker first (`pg_stat_activity`,
   `pg_locks`, `pg_blocking_pids()`), let it end or stop it, then rerun. Raise the timeout only for a change you know
   waits behind short transactions; `0` brings the unbounded wait back.
-- **One lock-taking change per release.** All pending files of a set run in one transaction, so a lock the first file
-  takes is held until the last file commits. Keep each release to one `ALTER` (or one group on one table) per set,
+- **One lock-taking change per release.** All pending files of a set run in one transaction (one per stretch between
+  online-step anchors while an online step is pending), so a lock the first file takes is held until the last file of
+  that transaction commits. Keep each release to one `ALTER` (or one group on one table) per set,
   and ship expand/contract steps in separate releases.
 - **Covered by tests.** `test/database.int-spec.ts` runs the `test/fixtures/lock-wait` set against a table that
   another connection holds `ACCESS SHARE` on: it fails within seconds with `55P03`, recording nothing, and applies once
