@@ -1,5 +1,6 @@
 import type { DatabaseMigrationSet } from '../database.types.js';
 import { platformMigrations } from '../platform/platform.migrations.js';
+import { readOnlineSteps } from './migration-files.js';
 import { ONLINE_MIGRATIONS_TABLE } from './migrations.constants.js';
 
 /** The platform set itself, not a set that only shares its name. */
@@ -15,6 +16,8 @@ const isPlatformSet = (set: DatabaseMigrationSet): boolean =>
  * and no two sets share a bookkeeping table: drizzle's migrator compares file timestamps only with
  * the newest row of the table it writes to, so the set with older timestamps would be skipped
  * silently. Nor do two sets with online steps share a schema (and so its `__online_migrations`).
+ * A set with an `onlineFolder` is read (only such a set touches the file system): each step must
+ * be a valid file anchored at a migration of the set's journal (`readOnlineSteps`).
  * `withPlatformMigrations` and `runMigrations` both call it.
  */
 export function assertMigrationSets(sets: readonly DatabaseMigrationSet[]): void {
@@ -59,12 +62,14 @@ export function assertMigrationSets(sets: readonly DatabaseMigrationSet[]): void
     }
     onlineOwners.set(set.migrationsSchema, set.name);
   }
+  for (const set of sets) readOnlineSteps(set);
 }
 
 /**
  * The sets one process applies, in order: `platformMigrations` first (it cannot be left out or
  * reordered), then `sets` in array order. Rejects what `assertMigrationSets` rejects (a set listed
- * twice, two sets sharing one bookkeeping table), here at module definition.
+ * twice, two sets sharing one bookkeeping table, an online step anchored beyond its journal), here
+ * at module definition.
  */
 export function withPlatformMigrations(
   sets: readonly DatabaseMigrationSet[],

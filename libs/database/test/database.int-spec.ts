@@ -28,6 +28,8 @@ import {
   runMigrations,
 } from '../src/index.js';
 import {
+  anchoredAt0000,
+  anchoredMigrations,
   gadgetsMigrations,
   gizmosMigrations,
   gizmosTablesMigrations,
@@ -474,6 +476,74 @@ describe('@platform/database against PostgreSQL 18', () => {
       expect(await recorded(url)).toEqual([]);
       expect(await indexValid(url, 'gizmos_name_idx')).toBeUndefined();
       expect(await indexValid(url, 'gizmos_code_idx')).toBeUndefined();
+    });
+
+    describe('at their place in the history (review #4)', () => {
+      /** The `anchored` table's key constraints, by name and type (`p` primary, `u` unique). */
+      const anchoredConstraints = (url: string): Promise<string[]> =>
+        withClient(url, async (client) => {
+          const rows = await client<{ constraint: string }[]>`
+            select conname || ':' || contype::text as constraint from pg_constraint
+            where conrelid = to_regclass('anchored.anchored') and contype in ('p', 'u')
+            order by conname`;
+          return rows.map((row) => row.constraint);
+        });
+
+      /** The anchored set's online steps recorded so far. */
+      const anchoredRecorded = (url: string): Promise<string[]> =>
+        withClient(url, async (client) => {
+          const rows = await client<{ name: string }[]>`
+            select name from anchored.__online_migrations order by name`;
+          return rows.map((row) => row.name);
+        });
+
+      it('a fresh database runs the step anchored at 0000 before 0001, which needs its index', async () => {
+        const url = await createDatabase('anchored_fresh');
+
+        const summary = await runMigrations(url, {
+          migrations: [platformMigrations, anchoredMigrations],
+          logger: silent,
+        });
+
+        expect(summary.sets.at(-1)).toMatchObject({
+          name: 'anchored',
+          total: 2,
+          applied: 2,
+          online: { total: 1, applied: 1 },
+        });
+        expect(await anchoredConstraints(url)).toEqual(['anchored_code_key:u', 'anchored_pkey:p']);
+        expect(await anchoredRecorded(url)).toEqual(['0000_anchored_code_key.sql']);
+        expect(await migrationRows(url, anchoredMigrations)).toBe(2);
+        await expect(
+          runMigrations(url, {
+            migrations: [platformMigrations, anchoredMigrations],
+            logger: silent,
+          }),
+        ).resolves.toMatchObject({ applied: 0, online: { total: 1, applied: 0 } });
+      });
+
+      it('a database at 0000 with the step applied applies 0001 alone', async () => {
+        const url = await createDatabase('anchored_existing');
+        const before = await runMigrations(url, {
+          migrations: [platformMigrations, anchoredAt0000],
+          logger: silent,
+        });
+        expect(before.sets.at(-1)).toMatchObject({ applied: 1, online: { total: 1, applied: 1 } });
+        expect(await anchoredConstraints(url)).toEqual(['anchored_pkey:p']);
+
+        const summary = await runMigrations(url, {
+          migrations: [platformMigrations, anchoredMigrations],
+          logger: silent,
+        });
+
+        expect(summary.sets.at(-1)).toMatchObject({
+          total: 2,
+          applied: 1,
+          online: { total: 1, applied: 0 },
+        });
+        expect(await anchoredConstraints(url)).toEqual(['anchored_code_key:u', 'anchored_pkey:p']);
+        expect(await migrationRows(url, anchoredMigrations)).toBe(2);
+      });
     });
 
     it('on Citus, builds the index on every shard of a distributed table and waits for a writer although the set timeout is 500 ms; the role default is back at 500 ms afterwards', async () => {

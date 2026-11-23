@@ -29,14 +29,14 @@ code (`DatabaseModule` `postgres.ssl`) wins at runtime, but the boot check only 
 | `DatabaseMigrationSet`                                                                                                                                  | interface               | `{ name; folder; migrationsSchema; migrationsTable; onlineFolder? }`: one migration history with its own bookkeeping table, and optional [online steps](#online-steps)                                                                                                                             |
 | `platformMigrations`                                                                                                                                    | const                   | The platform set (`src/platform/migrations`, bookkeeping `app.__drizzle_migrations`): always applied first                                                                                                                                                                                         |
 | `withPlatformMigrations(sets)`                                                                                                                          | fn                      | `[platformMigrations, ...sets]`; throws on a set listed twice or two sets sharing a bookkeeping table                                                                                                                                                                                              |
-| `assertMigrationSets(sets)`                                                                                                                             | fn                      | Throws unless the platform set is first, no set is listed twice, each set has its own bookkeeping table and no two sets with online steps share a schema (`runMigrations` calls it)                                                                                                                |
+| `assertMigrationSets(sets)`                                                                                                                             | fn                      | Throws unless the platform set is first, no set is listed twice, each set has its own bookkeeping table and no two sets with online steps share a schema and every online step is anchored within its set's journal (`runMigrations` calls it)                                                     |
 | `DRIZZLE`, `DATABASE_MODULE_OPTIONS`                                                                                                                    | symbols                 | Injection tokens                                                                                                                                                                                                                                                                                   |
 | `InjectDrizzle()`                                                                                                                                       | decorator               | `@InjectDrizzle() private readonly db: DrizzleDB<typeof schema>`                                                                                                                                                                                                                                   |
 | `DrizzleDB<S>`, `DrizzleTransaction<S>`, `DrizzleExecutor<S>`, `DrizzleSchema`                                                                          | types                   | Handle (`PostgresJsDatabase<S> & { $client: Sql }`), tx handle, db-or-tx, schema record                                                                                                                                                                                                            |
 | `DrizzleTransactionalAdapter<S>`, `DrizzleTransactionHost<S>`                                                                                           | types                   | Adapter and `TransactionHost` typing for your schema                                                                                                                                                                                                                                               |
 | `Transactional`, `TransactionHost`, `InjectTransaction`, `InjectTransactionHost`, `Propagation`                                                         | re-exports              | From `@nestjs-cls/transactional` (same package instance)                                                                                                                                                                                                                                           |
 | `DrizzlePostgresTransactionalAdapter`, `normalizeTxConfig(config)`                                                                                      | class, fn               | Drizzle adapter that drops empty tx configs (see Gotchas)                                                                                                                                                                                                                                          |
-| `runMigrations(url, options): Promise<MigrationRunSummary>`                                                                                             | fn                      | Exactly `options.migrations`, in order: single-session client + `pg_try_advisory_lock` polling + drizzle `migrate()` per set, then the set's online steps on a second session                                                                                                                      |
+| `runMigrations(url, options): Promise<MigrationRunSummary>`                                                                                             | fn                      | Exactly `options.migrations`, in order: single-session client + `pg_try_advisory_lock` polling + drizzle `migrate()` per set, with its online steps on a second session at their place in the history                                                                                              |
 | `RunMigrationsOptions`, `MigrationRunSummary`, `MigrationSetSummary`                                                                                    | types                   | `{ migrations, logger?, applicationName?, lockTimeoutMs?, lockPollIntervalMs?, lockWaitTimeoutMs?, lockWaitRetries?, lockWaitRetryDelayMs?, onlineLockTimeoutMs? }` → `{ sets: [{ name, folder, total, applied, online }], total, applied, online }` (`online`: `{ total, applied }` online steps) |
 | `runMigrationsCli(migrations, args?)`                                                                                                                   | fn                      | Body of every app's `src/migrate.ts`: config from env, platform set + `migrations`, JSON log lines, `process.exitCode`                                                                                                                                                                             |
 | `MIGRATIONS_TABLE` (`__drizzle_migrations`), `ONLINE_MIGRATIONS_TABLE` (`__online_migrations`), `MIGRATIONS_ADVISORY_LOCK_ID`                           | consts                  | The bookkeeping table name of every set, and of its online steps; the one lock key                                                                                                                                                                                                                 |
@@ -195,9 +195,10 @@ exact rows for the allowed and the forbidden case. Without step 3 the boot guard
   (`citus_is_coordinator()` false on a node that is in a cluster; a fresh single node counts as the coordinator).
   Its session sends `statement_timeout = '0'` as a startup parameter, which PgBouncer refuses (`08P01`): the runner
   rethrows that as an error naming `DATABASE_MIGRATION_URL`, which must never point at the pooler.
-- Each set's pending files run in one transaction (all-or-nothing per set); a set that already ran stays applied when
-  a later set fails. What a transaction cannot run (`CREATE INDEX CONCURRENTLY`, `VALIDATE CONSTRAINT`) goes in the
-  set's [online steps](#online-steps).
+- Each set's pending files run in one transaction (all-or-nothing per set), unless one of its
+  [online steps](#online-steps) is pending: then one transaction per stretch between the steps' places. A set that
+  already ran stays applied when a later set fails. What a transaction cannot run (`CREATE INDEX CONCURRENTLY`,
+  `VALIDATE CONSTRAINT`) goes in the set's online steps.
 - **Bounded lock waits.** The session also sends `lock_timeout` (`DATABASE_MIGRATION_LOCK_TIMEOUT_MS`, 5 s), and a set
   that hits it is retried; see [Lock waits](#lock-waits).
 
@@ -222,13 +223,15 @@ blocker ends, and each queued request fails at its own 15 s `statement_timeout`.
   the next set runs. (A short preliminary connection checks for the coordinator first, before the lock.)
   `docker/postgres/init/02-roles.sql` and the production SQL in [SECURITY.md](../../docs/SECURITY.md) give `app_owner`
   the same default up front. It also bounds drizzle-kit and operator sessions as `app_owner`.
-- **Retry, then fail.** drizzle has rolled the set back whole, so nothing of it is recorded. The runner retries it after
+- **Retry, then fail.** drizzle has rolled the transaction back whole (the set's pending files, or the stretch of them
+  up to an online step's place), so nothing of it is recorded. The runner retries it after
   a backoff (1 s, doubling, at most 30 s), still under the advisory lock, up to `DATABASE_MIGRATION_LOCK_RETRIES`
   times (default 5), logging a warning per retry. Then the run fails with
   `Migration set "<name>" (<folder>) failed: lock_timeout (<ms>ms) expired on all <n> attempts (SQLSTATE 55P03)`,
   and the `55P03` error as `cause`. The sets before it stay applied; the ones after it are not attempted.
 - **What a `55P03` failure means.** Some transaction kept a lock on a table the set changes for the whole retry window.
-  Nothing of the set was applied, so rerunning the job is safe. Find the blocker first (`pg_stat_activity`,
+  Nothing of the failed transaction was applied (only an online step that ran before it, and the files it follows,
+  stay applied), so rerunning the job is safe. Find the blocker first (`pg_stat_activity`,
   `pg_locks`, `pg_blocking_pids()`), let it end or stop it, then rerun. Raise the timeout only for a change you know
   waits behind short transactions; `0` brings the unbounded wait back.
 - **One lock-taking change per release.** All pending files of a set run in one transaction, so a lock the first file
@@ -250,15 +253,26 @@ for the whole set). A set can therefore declare an `onlineFolder` (convention:
 `join(import.meta.dirname, 'migrations', 'online')`; drizzle reads only the files its journal lists, so the subfolder
 is left alone, and it ships in `dist/` like the other migration files):
 
-- **Files.** `NNNN_<name>.sql`, numbered like drizzle-kit's, ONE statement each, hand-written. The runner reads the
-  folder before it connects: a declared folder that is missing, another file, two files with one number or a file
-  without a statement fail the run up front, and so does a `CREATE INDEX CONCURRENTLY` without `IF NOT EXISTS` and
-  an explicit index name (the retry below finds a failed build by that name). A file goes to the server on the
-  extended protocol, which refuses several statements (`42601`) instead of running them as one implicit transaction.
-- **When.** Right after the set's transactional files, still under the advisory lock, each pending file runs on its
-  own, outside any transaction, and is recorded in `<schema>.__online_migrations` (`name`, `applied_at`) only after it
-  succeeded. The run summary counts them per set and in total (`online: { total, applied }`); the CLI's `Done:` line
-  adds them when a set has any. Two sets with online steps cannot share a schema (`assertMigrationSets`).
+- **Files.** `NNNN_<name>.sql`, ONE statement each, hand-written. `NNNN` is the step's anchor: the 4-digit index of
+  the transactional migration it follows (`0003` for a step written with `0003_add_status.sql`, the next drizzle-kit
+  file being `0004_…`). Several steps may share an anchor; they run in file-name order. The folder is read before
+  connecting, by `assertMigrationSets` (so at module definition through `withPlatformMigrations`) and by the runner: a
+  declared folder that is missing, another file, a file without a statement or an anchor beyond the set's journal
+  fail up front, and so does a `CREATE INDEX CONCURRENTLY` without `IF NOT EXISTS` and an explicit index name (the
+  retry below finds a failed build by that name). A file goes to the server on the extended protocol, which refuses
+  several statements (`42601`) instead of running them as one implicit transaction.
+- **When: at their place in the history.** Under the advisory lock, each pending step runs right after the
+  transactional file it is anchored at and before the next one, on a fresh database as on one migrated release by
+  release: so a later file can use the step's index (`ADD CONSTRAINT … USING INDEX`), and a later drop or rename of its
+  table never strands it. Without a pending step, the set's pending files run in one `migrate()`, as always. With
+  some, the runner applies the files up to the first pending anchor (drizzle `migrate()` over a temporary copy of the
+  folder whose journal stops there, in `os.tmpdir()`, removed afterwards), runs the steps anchored there, and so on,
+  then the files after the last anchor; a stretch the database already has is skipped. A step anchored behind the
+  database's position (added after its anchor was applied, or failed last time) therefore runs before the remaining
+  files. Each step runs on its own, outside any transaction, and is recorded in `<schema>.__online_migrations`
+  (`name`, `applied_at`) only after it succeeded. The run summary counts them per set and in total
+  (`online: { total, applied }`); the CLI's `Done:` line adds them when a set has any. Two sets with online steps cannot
+  share a schema (`assertMigrationSets`).
 - **A second session.** The steps run on a session of their own, opened while the migration session keeps the lock,
   with `lock_timeout` = `DATABASE_MIGRATION_ONLINE_LOCK_TIMEOUT_MS` (default `0`, wait). Not the 5 s of
   [Lock waits](#lock-waits): a lock timeout cancels a concurrent build and leaves an invalid index (verified point 6),
@@ -272,8 +286,8 @@ is left alone, and it ships in `dist/` like the other migration files):
   multi-node cluster it is UNTESTED.
 - **Failure and retry.** A failing file stops the run with
   `Migration set "<name>": online step <file> (<path>) failed; nothing was recorded for it, …` and the driver's error
-  as `cause`; the transactional files stay applied, the sets after it are not attempted, and the next run retries the
-  file. Write each statement to be re-runnable (`CREATE INDEX CONCURRENTLY IF NOT EXISTS …`). A failed concurrent
+  as `cause`; the transactional files before it stay applied, the ones after its anchor and the sets after it are not
+  attempted, and the next run retries the file before them. Write each statement to be re-runnable (`CREATE INDEX CONCURRENTLY IF NOT EXISTS …`). A failed concurrent
   build leaves an INVALID index, which `IF NOT EXISTS` would then skip, so before a file runs the runner drops
   (`DROP INDEX CONCURRENTLY`) an invalid index with the name that file's own `CREATE INDEX CONCURRENTLY` builds, on its
   table, and logs a warning. Only that one: an invalid index elsewhere may be another session's build in progress.
@@ -283,7 +297,10 @@ is left alone, and it ships in `dist/` like the other migration files):
   transaction that wrote the table, with the sets' timeout at 500 ms (with that timeout it fails with `55P03`); and on
   the Citus database the index built on all four shards of the distributed table while another transaction holds a
   lock on one shard for 3 s, with the sets' timeout at 500 ms, and the role default back at 500 ms afterwards. Without
-  the role switch that case fails with `55P03` from a shard connection.
+  the role switch that case fails with `55P03` from a shard connection. With the `test/fixtures/anchored` set, a fresh
+  database runs the step anchored at `0000` (a unique index built concurrently) before `0001`, which turns that index
+  into a constraint (`UNIQUE USING INDEX`; run after `0001` instead, that file fails), and a database at `0000` with
+  the step applied applies `0001` alone.
 
 ```bash
 bun run db:generate                                    # drizzle-kit generate in every domain (commit the output)

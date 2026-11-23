@@ -1,4 +1,5 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Logger, type LoggerService } from '@nestjs/common';
 import { retry, sleep } from '@platform/common';
@@ -6,8 +7,16 @@ import { drizzle } from 'drizzle-orm/postgres-js';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { noop, sumBy } from 'lodash-es';
 import postgres, { type Sql } from 'postgres';
-import { z } from 'zod';
 import type { DatabaseMigrationSet } from '../database.types.js';
+import {
+  CREATE_INDEX_CONCURRENTLY,
+  journalPath,
+  type MigrationJournal,
+  type OnlineStep,
+  readJournal,
+  readOnlineSteps,
+  withoutComments,
+} from './migration-files.js';
 import { assertMigrationSets } from './migration-sets.js';
 import { MIGRATIONS_ADVISORY_LOCK_ID, ONLINE_MIGRATIONS_TABLE } from './migrations.constants.js';
 
@@ -89,133 +98,6 @@ interface LockWaitPolicy {
 }
 
 /**
- * What drizzle's migrator reads from each journal entry: `tag` names the `.sql` file, `when` becomes
- * the bookkeeping row's `created_at`, `breakpoints` how the file is split. drizzle applies only the
- * files whose `when` is newer than the last applied row, so `when` must be a positive integer that
- * grows within the set: an entry without one (or an older one) would be skipped silently.
- */
-const journalSchema = z.object({
-  entries: z
-    .array(z.object({ tag: z.string(), when: z.int().positive(), breakpoints: z.boolean() }))
-    .superRefine((entries, ctx) => {
-      for (const [index, entry] of entries.entries()) {
-        const previous = entries[index - 1];
-        if (previous !== undefined && entry.when <= previous.when) {
-          ctx.addIssue({
-            code: 'custom',
-            path: [index, 'when'],
-            message: `must be greater than the previous entry's (${previous.when}): drizzle skips a file that is not newer than the last applied one`,
-          });
-        }
-      }
-    }),
-});
-
-/** Number of journal entries; a set whose folder has no drizzle journal fails the run. */
-function readJournalSize(set: DatabaseMigrationSet): number {
-  return readJournal(set).entries.length;
-}
-
-/** The set's parsed drizzle journal; a missing or invalid journal fails the run. */
-function readJournal(set: DatabaseMigrationSet): z.infer<typeof journalSchema> {
-  const journalPath = join(set.folder, 'meta', '_journal.json');
-  if (!existsSync(journalPath)) {
-    throw new Error(
-      `Migration set "${set.name}" has no drizzle journal (${journalPath}): generate its first migration, or leave the set out`,
-    );
-  }
-  const journal = journalSchema.safeParse(JSON.parse(readFileSync(journalPath, 'utf8')));
-  if (!journal.success) {
-    throw new Error(
-      `Invalid drizzle migration journal: ${journalPath}\n${z.prettifyError(journal.error)}`,
-    );
-  }
-  return journal.data;
-}
-
-/** A Postgres identifier as written: double-quoted (kept exactly) or bare (folded to lower case). */
-const IDENTIFIER = String.raw`(?:"(?:[^"]|"")+"|[A-Za-z_][\w$]*)`;
-
-/** Any `CREATE [UNIQUE] INDEX CONCURRENTLY`, named or not. */
-const ANY_INDEX_CONCURRENTLY = /^\s*create\s+(?:unique\s+)?index\s+concurrently\b/i;
-
-/**
- * `CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <index> ON [ONLY] <table>`: the only form an
- * online step may take (`readOnlineSteps`).
- */
-const CREATE_INDEX_CONCURRENTLY = new RegExp(
-  String.raw`^\s*create\s+(?:unique\s+)?index\s+concurrently\s+if\s+not\s+exists\s+` +
-    String.raw`(${IDENTIFIER})\s+on\s+(?:only\s+)?(${IDENTIFIER}(?:\.${IDENTIFIER})?)`,
-  'i',
-);
-
-/** One file of a set's `onlineFolder`: a single statement, run outside a transaction. */
-interface OnlineStep {
-  /** The file name, also its bookkeeping key (`__online_migrations.name`). */
-  name: string;
-  path: string;
-  statement: string;
-}
-
-/** `NNNN_<name>.sql`: the number orders the files, as drizzle-kit numbers its own. */
-const ONLINE_STEP_FILE = /^(\d{4})_[\w-]+\.sql$/;
-
-/** SQL text without its comments: enough to see whether a file holds a statement, and which. */
-const withoutComments = (text: string): string =>
-  text.replaceAll(/\/\*[\s\S]*?\*\//g, ' ').replaceAll(/--[^\n]*/g, ' ');
-
-/**
- * The set's online steps in file order, read before connecting like the journal: a declared folder
- * that is missing, a file that is not `NNNN_<name>.sql`, two files with one number or a file with
- * no statement fail the run up front. One statement per file is enforced by the server (the file
- * is sent on the extended protocol, which refuses several commands).
- */
-function readOnlineSteps(set: DatabaseMigrationSet): OnlineStep[] {
-  const folder = set.onlineFolder;
-  if (folder === undefined) return [];
-  if (!existsSync(folder) || !statSync(folder).isDirectory()) {
-    throw new Error(
-      `Migration set "${set.name}" declares online steps in ${folder}, which does not exist`,
-    );
-  }
-  const numbers = new Map<string, string>();
-  return readdirSync(folder)
-    .toSorted()
-    .map((name) => {
-      const number = ONLINE_STEP_FILE.exec(name)?.[1];
-      if (number === undefined) {
-        throw new Error(
-          `Migration set "${set.name}": online folder ${folder} holds "${name}"; only NNNN_<name>.sql files, one statement each, belong there`,
-        );
-      }
-      const other = numbers.get(number);
-      if (other !== undefined) {
-        throw new Error(
-          `Migration set "${set.name}": online steps "${other}" and "${name}" share the number ${number}`,
-        );
-      }
-      numbers.set(number, name);
-      const path = join(folder, name);
-      const statement = readFileSync(path, 'utf8');
-      const code = withoutComments(statement);
-      if (code.replaceAll(';', ' ').trim() === '') {
-        throw new Error(
-          `Migration set "${set.name}": online step ${name} (${path}) holds no statement`,
-        );
-      }
-      if (ANY_INDEX_CONCURRENTLY.test(code) && !CREATE_INDEX_CONCURRENTLY.test(code)) {
-        throw new Error(
-          `Migration set "${set.name}": online step ${name} (${path}) must name its index and say ` +
-            'IF NOT EXISTS (CREATE INDEX CONCURRENTLY IF NOT EXISTS <name> ON <table> …): the ' +
-            'runner finds an invalid index left by a failed build by that name, and a rerun must ' +
-            'skip a built one',
-        );
-      }
-      return { name, path, statement };
-    });
-}
-
-/**
  * Polls `pg_try_advisory_lock` instead of blocking in `pg_advisory_lock`, so a waiting replica
  * logs why it is stuck and gives up after `timeoutMs` instead of hanging its boot forever.
  */
@@ -256,48 +138,37 @@ async function countAppliedMigrations(sql: Sql, set: DatabaseMigrationSet): Prom
 }
 
 /**
+ * The database's position in the set's history: the `created_at` (journal `when`) of its newest
+ * bookkeeping row, which is what drizzle compares each file with; `null` before the first row.
+ */
+async function latestApplied(sql: Sql, set: DatabaseMigrationSet): Promise<number | null> {
+  const [row] = await sql<{ latest: string | null }[]>`
+    select max(created_at)::text as latest
+    from ${sql(set.migrationsSchema)}.${sql(set.migrationsTable)}`;
+  return row?.latest === null || row?.latest === undefined ? null : Number(row.latest);
+}
+
+/**
  * A database whose latest applied migration is older than the set's FIRST journal entry was migrated
  * by a history that has since been squashed into a new baseline (SH-12) and stopped part-way. drizzle
  * would replay the baseline on top of it and fail with an opaque "already exists"; refuse it with the
  * fix instead. A database at the squashed history's tip carries the baseline's own timestamp (the
  * squash keeps it), so it passes and drizzle skips the baseline.
  */
-async function assertNotOlderThanBaseline(sql: Sql, set: DatabaseMigrationSet): Promise<void> {
-  const firstWhen = readJournal(set).entries[0]?.when;
-  if (firstWhen === undefined) return;
-  const [row] = await sql<{ latest: string | null }[]>`
-    select max(created_at)::text as latest
-    from ${sql(set.migrationsSchema)}.${sql(set.migrationsTable)}`;
-  const latest = row?.latest === null || row?.latest === undefined ? null : Number(row.latest);
-  if (latest !== null && latest < firstWhen) {
+function assertNotOlderThanBaseline(
+  set: DatabaseMigrationSet,
+  journal: MigrationJournal,
+  latest: number | null,
+): void {
+  const firstWhen = journal.entries[0]?.when;
+  if (firstWhen === undefined || latest === null) return;
+  if (latest < firstWhen) {
     throw new Error(
       `Migration set "${set.name}": the database's latest applied migration (${latest}) is older than ` +
         `the set's first migration (${firstWhen}); its history was squashed into a new baseline. ` +
         'Recreate this database (for compose: docker compose down -v), then migrate again.',
     );
   }
-}
-
-async function applySet(
-  sql: Sql,
-  set: DatabaseMigrationSet,
-  total: number,
-  logger: LoggerService,
-): Promise<MigrationSetSummary> {
-  const before = await countAppliedMigrations(sql, set);
-  if (before > 0) await assertNotOlderThanBaseline(sql, set);
-  await migrate(drizzle({ client: sql }), {
-    migrationsFolder: set.folder,
-    migrationsSchema: set.migrationsSchema,
-    migrationsTable: set.migrationsTable,
-  });
-  const applied = Math.max(0, (await countAppliedMigrations(sql, set)) - before);
-  logger.log(
-    applied > 0
-      ? `${set.name}: applied ${applied} migration(s); ${total} in total`
-      : `${set.name}: schema is up to date (${total} migrations)`,
-  );
-  return { name: set.name, folder: set.folder, total, applied, online: { total: 0, applied: 0 } };
 }
 
 /**
@@ -314,47 +185,93 @@ function lockTimeoutIn(error: unknown): Error | undefined {
 }
 
 /**
- * Applies one set, retrying it when a statement hit `lock_timeout`: drizzle has rolled the set's
- * transaction back (nothing recorded), so the retry, with exponential backoff and still under the
- * advisory lock, starts the set over. Any other failure, or the last 55P03, fails the run naming
- * the set; for a lock timeout the 55P03 error is the `cause`.
+ * The error that fails the run for a failure of the set's transactional part: it names the set and
+ * carries the driver's error as `cause`; for a lock timeout that outlived its retries, the 55P03.
  */
-async function applySetWithRetries(
+function setFailure(set: DatabaseMigrationSet, lockWait: LockWaitPolicy, error: unknown): Error {
+  const lockTimeout = lockTimeoutIn(error);
+  if (lockTimeout === undefined) {
+    return new Error(`Migration set "${set.name}" (${set.folder}) failed`, { cause: error });
+  }
+  const attempts = lockWait.retries + 1;
+  return new Error(
+    `Migration set "${set.name}" (${set.folder}) failed: lock_timeout (${lockWait.timeoutMs}ms) ` +
+      `expired ${attempts === 1 ? 'on its only attempt' : `on all ${attempts} attempts`} ` +
+      `(SQLSTATE ${LOCK_NOT_AVAILABLE}): another transaction kept a lock this set needs. Its pending ` +
+      'files were rolled back (all of them, unless an online step ran before them: then that step ' +
+      'and the files it follows stay applied); find the blocker (pg_stat_activity, pg_locks) or ' +
+      'rerun once it ends (libs/database/README.md, "Lock waits")',
+    { cause: lockTimeout },
+  );
+}
+
+/**
+ * One drizzle `migrate()` of the set's files listed in `folder`'s journal (one transaction),
+ * retried when a statement hit `lock_timeout`: drizzle has rolled the transaction back (nothing
+ * recorded), so the retry, with exponential backoff and still under the advisory lock, starts it
+ * over. Any other failure, or the last 55P03, fails the run naming the set (`setFailure`).
+ */
+async function migrateWithRetries(
   sql: Sql,
   set: DatabaseMigrationSet,
-  total: number,
+  folder: string,
   lockWait: LockWaitPolicy,
   logger: LoggerService,
-): Promise<MigrationSetSummary> {
+): Promise<void> {
   try {
-    return await retry(() => applySet(sql, set, total, logger), {
-      retries: lockWait.retries,
-      minDelayMs: lockWait.retryDelayMs,
-      maxDelayMs: Math.max(MAX_LOCK_WAIT_RETRY_DELAY_MS, lockWait.retryDelayMs),
-      jitter: false, // one runner at a time (advisory lock): nothing to spread out
-      shouldRetry: (error) => lockTimeoutIn(error) !== undefined,
-      onRetry: (_error, attempt, delayMs) => {
-        logger.warn(
-          `${set.name}: lock_timeout (${lockWait.timeoutMs}ms) expired (${LOCK_NOT_AVAILABLE}); ` +
-            `retry ${attempt} of ${lockWait.retries} in ${delayMs}ms: another transaction holds a ` +
-            'lock this set needs (the set was rolled back)',
-        );
+    await retry(
+      () =>
+        migrate(drizzle({ client: sql }), {
+          migrationsFolder: folder,
+          migrationsSchema: set.migrationsSchema,
+          migrationsTable: set.migrationsTable,
+        }),
+      {
+        retries: lockWait.retries,
+        minDelayMs: lockWait.retryDelayMs,
+        maxDelayMs: Math.max(MAX_LOCK_WAIT_RETRY_DELAY_MS, lockWait.retryDelayMs),
+        jitter: false, // one runner at a time (advisory lock): nothing to spread out
+        shouldRetry: (error) => lockTimeoutIn(error) !== undefined,
+        onRetry: (_error, attempt, delayMs) => {
+          logger.warn(
+            `${set.name}: lock_timeout (${lockWait.timeoutMs}ms) expired (${LOCK_NOT_AVAILABLE}); ` +
+              `retry ${attempt} of ${lockWait.retries} in ${delayMs}ms: another transaction holds ` +
+              'a lock this set needs (its pending files were rolled back)',
+          );
+        },
       },
-    });
-  } catch (error) {
-    const lockTimeout = lockTimeoutIn(error);
-    if (lockTimeout === undefined) {
-      throw new Error(`Migration set "${set.name}" (${set.folder}) failed`, { cause: error });
-    }
-    const attempts = lockWait.retries + 1;
-    throw new Error(
-      `Migration set "${set.name}" (${set.folder}) failed: lock_timeout (${lockWait.timeoutMs}ms) ` +
-        `expired ${attempts === 1 ? 'on its only attempt' : `on all ${attempts} attempts`} ` +
-        `(SQLSTATE ${LOCK_NOT_AVAILABLE}): another transaction kept a lock this set needs. Nothing ` +
-        'of the set was applied; find the blocker (pg_stat_activity, pg_locks) or rerun once it ' +
-        'ends (libs/database/README.md, "Lock waits")',
-      { cause: lockTimeout },
     );
+  } catch (error) {
+    throw setFailure(set, lockWait, error);
+  }
+}
+
+/**
+ * Runs `fn` with a temporary copy of the set's folder whose journal stops at entry `anchor`: drizzle
+ * then applies the files up to that one and no further. Only the journal and those files are
+ * copied (drizzle reads nothing else); the journal keeps every other field as written. The copy is
+ * removed afterwards.
+ */
+async function withJournalUpTo<T>(
+  set: DatabaseMigrationSet,
+  journal: MigrationJournal,
+  anchor: number,
+  fn: (folder: string) => Promise<T>,
+): Promise<T> {
+  const folder = mkdtempSync(join(tmpdir(), `migrations-${set.migrationsSchema}-`));
+  try {
+    const raw = JSON.parse(readFileSync(journalPath(set.folder), 'utf8')) as { entries: unknown[] };
+    mkdirSync(join(folder, 'meta'));
+    writeFileSync(
+      journalPath(folder),
+      JSON.stringify({ ...raw, entries: raw.entries.slice(0, anchor + 1) }, null, 2),
+    );
+    for (const { tag } of journal.entries.slice(0, anchor + 1)) {
+      copyFileSync(join(set.folder, `${tag}.sql`), join(folder, `${tag}.sql`));
+    }
+    return await fn(folder);
+  } finally {
+    rmSync(folder, { recursive: true, force: true });
   }
 }
 
@@ -591,22 +508,19 @@ interface OnlineRun {
 }
 
 /**
- * Runs the set's pending online steps (if any) on a second session, opened while `sql` keeps the
- * advisory lock, with the online `lock_timeout`. On Citus the shard connections start from the
- * role's default instead, so a throwaway connection first sets it to the online value, and another
- * one sets it back to the sets' value once the online session closed (whatever happened; a run that
- * crashed in between leaves the online value, which the next run's alignment under the lock
- * repairs). Throwaway connections, so neither session caches a shard connection opened with the
- * other value. Nothing pending: no session.
+ * Runs `pending` (one anchor's steps, at least one) on a second session, opened while the
+ * migration session keeps the advisory lock, with the online `lock_timeout`. On Citus the shard
+ * connections start from the role's default instead, so a throwaway connection first sets it to the
+ * online value, and another one sets it back to the sets' value once the online session closed
+ * (whatever happened; a run that crashed in between leaves the online value, which the next run's
+ * alignment under the lock repairs). Throwaway connections, so neither session caches a shard
+ * connection opened with the other value.
  */
 async function applyOnlineSteps(
-  sql: Sql,
   set: DatabaseMigrationSet,
-  steps: readonly OnlineStep[],
+  pending: readonly OnlineStep[],
   run: OnlineRun,
-): Promise<OnlineStepsSummary> {
-  const pending = await pendingOnlineSteps(sql, set, steps);
-  if (pending.length === 0) return { total: steps.length, applied: 0 };
+): Promise<void> {
   const { logger } = run;
   const switchRole = run.citus && run.onlineTimeoutMs !== run.setTimeoutMs;
   const setRoleDefault = (timeoutMs: number): Promise<void> =>
@@ -634,7 +548,85 @@ async function applyOnlineSteps(
       });
     }
   }
-  return { total: steps.length, applied: pending.length };
+}
+
+/** A set as `runMigrations` reads it before connecting. */
+interface PlannedSet {
+  set: DatabaseMigrationSet;
+  journal: MigrationJournal;
+  onlineSteps: readonly OnlineStep[];
+}
+
+/** `steps` (in file order, so anchor order) grouped by anchor, in anchor order. */
+function groupByAnchor(steps: readonly OnlineStep[]): Map<number, OnlineStep[]> {
+  const groups = new Map<number, OnlineStep[]>();
+  for (const step of steps) groups.set(step.anchor, [...(groups.get(step.anchor) ?? []), step]);
+  return groups;
+}
+
+/**
+ * Applies one set: its pending transactional files, each pending online step at its place among
+ * them. Without a pending online step that is ONE drizzle `migrate()` of the whole folder (one
+ * transaction). Otherwise, for each anchor of a pending step in order: the files up to the anchor
+ * (`migrate()` over a copy whose journal stops there, skipped when the database is already there),
+ * then the steps anchored there; then the files after the last anchor. A fresh database thus runs
+ * every step right after the file it follows, as a database that was migrated release by release
+ * did. A step anchored behind the database's position (added later, or failed last time) runs
+ * before the remaining files. Each `migrate()` is retried on a lock timeout
+ * (`migrateWithRetries`); a failure of the transactional part names the set (`setFailure`), a
+ * failing online step names the step (`runOnlineSteps`).
+ */
+async function applySet(
+  sql: Sql,
+  { set, journal, onlineSteps }: PlannedSet,
+  lockWait: LockWaitPolicy,
+  run: OnlineRun,
+): Promise<MigrationSetSummary> {
+  const { logger } = run;
+  const total = journal.entries.length;
+  const migrateFolder = (folder: string): Promise<void> =>
+    migrateWithRetries(sql, set, folder, lockWait, logger);
+  let before: number;
+  let latest: number | null;
+  try {
+    before = await countAppliedMigrations(sql, set);
+    latest = before > 0 ? await latestApplied(sql, set) : null;
+    assertNotOlderThanBaseline(set, journal, latest);
+  } catch (error) {
+    throw setFailure(set, lockWait, error);
+  }
+  const pending = await pendingOnlineSteps(sql, set, onlineSteps);
+  const last = total - 1;
+  for (const [anchor, steps] of groupByAnchor(pending)) {
+    // `readOnlineSteps` refused an anchor beyond the journal.
+    const when = journal.entries[anchor]?.when ?? Number.POSITIVE_INFINITY;
+    if (latest === null || latest < when) {
+      await (anchor === last
+        ? migrateFolder(set.folder)
+        : withJournalUpTo(set, journal, anchor, migrateFolder));
+      latest = when;
+    }
+    await applyOnlineSteps(set, steps, run);
+  }
+  if (pending.at(-1)?.anchor !== last) await migrateFolder(set.folder);
+  let applied: number;
+  try {
+    applied = Math.max(0, (await countAppliedMigrations(sql, set)) - before);
+  } catch (error) {
+    throw setFailure(set, lockWait, error);
+  }
+  logger.log(
+    applied > 0
+      ? `${set.name}: applied ${applied} migration(s); ${total} in total`
+      : `${set.name}: schema is up to date (${total} migrations)`,
+  );
+  return {
+    name: set.name,
+    folder: set.folder,
+    total,
+    applied,
+    online: { total: onlineSteps.length, applied: pending.length },
+  };
 }
 
 /**
@@ -658,28 +650,31 @@ async function applyOnlineSteps(
  *   (`alignRoleLockTimeout`), so the worker connections the session opens later start with it.
  *   Under the lock, so a runner that waits never undoes another's online window, and the value a
  *   crashed run's online window left is repaired before any set;
- * - a set that fails with 55P03 (lock timeout) was rolled back whole; it is retried with backoff
- *   (`lockWaitRetries`, default 5) under the same advisory lock, then fails the run naming the set
- *   and the timeout, with the 55P03 error as `cause`;
+ * - a `migrate()` that fails with 55P03 (lock timeout) was rolled back whole; it is retried with
+ *   backoff (`lockWaitRetries`, default 5) under the same advisory lock, then fails the run naming
+ *   the set and the timeout, with the 55P03 error as `cause`;
  * - on Citus (the `citus` extension is installed), `citus.enable_local_execution = on` and
  *   `citus.multi_shard_modify_mode = 'sequential'` for this session, so a set can create a schema
  *   or enum, distribute tables and add their foreign keys in one transaction;
  * - each set writes its own bookkeeping table: drizzle applies only files newer than the LAST row
  *   of that table, so a shared table would skip the files of the set with older timestamps;
- * - drizzle runs a set's pending migrations in one transaction (all-or-nothing per set); a set
- *   that already ran stays applied when a later set fails;
+ * - drizzle runs a set's pending migrations in one transaction (all-or-nothing per set) unless an
+ *   online step is pending; a set that already ran stays applied when a later set fails;
  * - a set's online steps (`onlineFolder`: `CREATE INDEX CONCURRENTLY`, `VALIDATE CONSTRAINT`, one
- *   statement per file) run after its transactional files, still under the advisory lock, on a
- *   second session with `onlineLockTimeoutMs` (default 0, wait: a lock timeout would cancel a
- *   concurrent build), each recorded in `<schema>.__online_migrations` once it succeeded
- *   (`applyOnlineSteps`); a failing one stops the run naming it, unrecorded;
+ *   statement per file, `NNNN_<name>.sql` anchored at the transactional file `NNNN` they follow)
+ *   run at their place in the history: right after that file, before the next one, on a fresh
+ *   database too (`applySet`: one `migrate()` per stretch between pending anchors). Still under the
+ *   advisory lock, on a second session with `onlineLockTimeoutMs` (default 0, wait: a lock timeout
+ *   would cancel a concurrent build), each recorded in `<schema>.__online_migrations` once it
+ *   succeeded (`applyOnlineSteps`); a failing one stops the run naming it, unrecorded, and the
+ *   files before it stay applied;
  * - a failing set stops the run (the sets after it are not attempted) with an error that names it
  *   and carries the driver's error as `cause`.
  *
  * Every journal is read before connecting: a missing one, or a malformed one (an entry without a
  * string `tag`, a positive integer `when` or a boolean `breakpoints`, or a `when` that does not
  * grow) fails the run up front, naming the set or the entry. So is every online folder
- * (`readOnlineSteps`).
+ * (`readOnlineSteps`, also through `assertMigrationSets`), and an anchor beyond its journal.
  */
 export async function runMigrations(
   url: string,
@@ -687,9 +682,9 @@ export async function runMigrations(
 ): Promise<MigrationRunSummary> {
   const logger = options.logger ?? new Logger('DatabaseMigrations');
   assertMigrationSets(options.migrations);
-  const plan = options.migrations.map((set) => ({
+  const plan: PlannedSet[] = options.migrations.map((set) => ({
     set,
-    total: readJournalSize(set),
+    journal: readJournal(set),
     onlineSteps: readOnlineSteps(set),
   }));
   const lockWait: LockWaitPolicy = {
@@ -759,10 +754,8 @@ export async function runMigrations(
       logger,
     };
     const results: MigrationSetSummary[] = [];
-    for (const { set, total, onlineSteps } of plan) {
-      const applied = await applySetWithRetries(sql, set, total, lockWait, logger);
-      const online = await applyOnlineSteps(sql, set, onlineSteps, onlineRun);
-      results.push({ ...applied, online });
+    for (const planned of plan) {
+      results.push(await applySet(sql, planned, lockWait, onlineRun));
     }
     return summarize(results);
   } finally {
