@@ -689,25 +689,28 @@ images (`src/cli/ledger-reanchor.ts` → `runLedgerReanchorCli`), runbook `docs/
 builds its own context (`BillingLedgerReanchorModule`, the only module that registers `ReanchorLedgerHandler`, so no
 running app can dispatch it) and sends `ReanchorLedgerCommand` inside `SystemContext.run('billing.ledger-reanchor')`.
 It runs no Postgres or immudb migrations, whatever `DATABASE_RUN_MIGRATIONS` and `IMMUDB_RUN_MIGRATIONS` say.
-In order it refuses, writing nothing: the ledger off; `--lost-from` not in the past; no pinned signing key
+In order it refuses, writing nothing: the ledger off; `--lost-from` not in the past; `--lost-from` inside the last
+15 minutes (`lost-from-in-grace`: its window would be empty); no pinned signing key
 (`LedgerPort.signedState`; `LEDGER_ALLOW_UNVERIFIED` does not help); a current state whose signature does not verify;
 `--database` not the store's; no stored state; a current state that still extends the stored one (dual proof:
 nothing was lost). Then `ledgerTrustedState.reanchor` inserts the audit row (`ledger_reanchors`) and compare-and-sets
 the stored state to exactly the verified one, `lost-from` as its `read_at`, in one transaction (a lost compare-and-set
-writes neither), and one `ReconcileLedgerCommand` runs over `[lost-from, now)`. Expected findings of that first run:
+writes neither), and one `ReconcileLedgerCommand` runs over `[lost-from, now − LEDGER_RECONCILE_GRACE_MS)`.
+Expected findings of that first run:
 R4 reports each Stripe transaction whose entry the restore lost as `missing_entry` and re-enqueues it; R5 reports its
 ref as `verification_failed` (`ledger_entries:<id>`); for a lost charge whose payment was paid in the window, R3 also
 reports its ref as `tenant_mismatch` (no entry under the ref's tenant). Once the relay and the consumer post it again
 (once: the restored immudb lacks it; the Postgres ref keeps its old tx id), the next run verifies the ref against the
-new entry and appends nothing (the findings already stored stay: they are append-only). The run's window ends at
-now, without the cron's 15-minute grace, so a payment paid in the last minutes whose posting is still in flight can
-add a `payment_without_entry`. The CLI dispatches inside the hourly cron's `RECONCILE_LEDGER_LOCK` (`RedisModule` in
+new entry and appends nothing (the findings already stored stay: they are append-only). The run's window ends
+15 minutes before now, like the cron's default one (audit batch 1 review #3), so a payment paid in the last minutes
+whose posting is still in flight adds no false `payment_without_entry` or re-enqueue; the next hourly run covers
+that tail. The CLI dispatches inside the hourly cron's `RECONCILE_LEDGER_LOCK` (`RedisModule` in
 its context, Redis from the app's env): it tries the lock every 5 s for up to 10 minutes, then exits 4 having written
 nothing, so its run never loses R5's compare-and-set to the cron's. The result carries the run's id, status and failed
 checks (`ReconcileLedgerCommand`'s `onFinished`; the command still resolves with the counts alone): a run that ends
 `failed` (a Stripe error in R4, say) exits 3 after the re-anchor committed, its failed checks logged. A second
 re-anchor is then refused (`nothing-lost`), so `--reconcile-only` (same flags) dispatches
-`RerunLedgerReconciliationCommand`: the same run over `[lost-from, now)` under the same lock, no audit row, refused
+`RerunLedgerReconciliationCommand`: the same run over `[lost-from, now − 15 min)` under the same lock, no audit row, refused
 (`reanchor-needed`) while the current state does not extend the trusted one. Exit codes: 0 done, 1 refused or failed
 (Redis unreachable too), 2 usage, 3 the run failed, 4 the lock stayed busy. R5 honours only the latest re-anchor: a ref lost in an earlier restore and not posted again can fall out of
 the lost-history rule after a second re-anchor and be skipped, so heal the previous run's `verification_failed` refs

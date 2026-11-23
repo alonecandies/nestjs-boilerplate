@@ -5,7 +5,7 @@ import type { LedgerRunOutcome } from '../reconcile-ledger/reconcile-ledger.comm
 export interface LedgerReanchorRequest {
   /** The immudb database whose trusted state is replaced: the one the store names. */
   readonly database: string;
-  /** Where the lost history starts (the restore point); must be in the past. */
+  /** Where the lost history starts (the restore point); must be older than the 15-minute grace. */
   readonly lostFrom: Date;
   /** Who runs it (stored in the audit row). */
   readonly operator: string;
@@ -21,14 +21,14 @@ export interface LedgerReanchorResult {
   readonly replacedTxId: bigint;
   /** The tx id of the restored server's state it stored. */
   readonly txId: bigint;
-  /** The reconciliation run over `[lostFrom, now)`: its id, status, failed checks and counts. */
+  /** The run over `[lostFrom, now − 15 min)`: its id, status, failed checks and counts. */
   readonly reconciliation: LedgerRunOutcome;
 }
 
 /** A re-run of the reconciliation over the lost window (`--reconcile-only`): no re-anchor. */
 export interface LedgerReconcileOnlyResult {
   readonly database: string;
-  /** The reconciliation run over `[lostFrom, now)`: its id, status, failed checks and counts. */
+  /** The run over `[lostFrom, now − 15 min)`: its id, status, failed checks and counts. */
   readonly reconciliation: LedgerRunOutcome;
 }
 
@@ -46,10 +46,10 @@ export class ReanchorLedgerCommand extends Command<LedgerReanchorResult> {
 
 /**
  * The ledger-reanchor CLI's `--reconcile-only` mode (audit batch 1 review #2): one
- * `ReconcileLedgerCommand` over `[lostFrom, now)` again, without re-anchoring and without an audit
- * row, for a lost window older than the cron's lookback whose follow-up run failed. Refused while
- * the trusted state still needs a re-anchor. Dispatched only by `runLedgerReanchorCli`, inside
- * `SystemContext`; see `RerunLedgerReconciliationHandler`.
+ * `ReconcileLedgerCommand` over `[lostFrom, now − 15 min)` again (the cron's grace), without
+ * re-anchoring and without an audit row, for a lost window older than the cron's lookback whose
+ * follow-up run failed. Refused while the trusted state still needs a re-anchor. Dispatched only
+ * by `runLedgerReanchorCli`, inside `SystemContext`; see `RerunLedgerReconciliationHandler`.
  */
 export class RerunLedgerReconciliationCommand extends Command<LedgerReconcileOnlyResult> {
   constructor(readonly request: LedgerReanchorRequest) {

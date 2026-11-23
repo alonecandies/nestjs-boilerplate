@@ -55,12 +55,13 @@ const USAGE =
   '       ledger-reanchor --reconcile-only --database <db> --lost-from <ISO time> --operator <name>\n' +
   '                       --reason <text>\n' +
   '  Re-anchors billing.ledger_trusted_state after an immudb restore, with an audit row\n' +
-  '  (billing.ledger_reanchors), then runs one reconciliation over [lost-from, now).\n' +
+  '  (billing.ledger_reanchors), then runs one reconciliation over [lost-from, now - 15 min)\n' +
+  '  (the hourly run covers the last 15 minutes once their postings landed).\n' +
   '  --reconcile-only: only runs that reconciliation again (no re-anchor, no audit row);\n' +
   '                    refused while the trusted state still needs a re-anchor\n' +
   '  --database <db>: the immudb database (IMMUDB_DATABASE of the apps)\n' +
   '  --lost-from <ISO time>: where the lost history starts (the restore point), e.g.\n' +
-  '                          2026-11-20T03:00:00Z\n' +
+  '                          2026-11-20T03:00:00Z; at least 15 minutes ago\n' +
   '  --operator <name>: who runs it (stored in the audit row)\n' +
   '  --reason <text>: why (stored in the audit row)\n' +
   '  Refused, writing nothing, with the ledger off, without a pinned signing key\n' +
@@ -97,7 +98,8 @@ export interface LedgerReanchorCliOptions {
  * command's handler.
  *
  * With `--reconcile-only` (audit batch 1 review #2) it dispatches `RerunLedgerReconciliationCommand`
- * instead: the same reconciliation over `[lost-from, now)` again, no re-anchor, no audit row.
+ * instead: the same reconciliation over `[lost-from, now − 15 min)` again (the cron's grace:
+ * the next hourly run covers the tail), no re-anchor, no audit row.
  *
  * Both modes run under the hourly cron's `RECONCILE_LEDGER_LOCK` (review #5; Redis from the app's
  * env, `RedisModule` in the CLI's context), so the CLI's run never races the cron's R5

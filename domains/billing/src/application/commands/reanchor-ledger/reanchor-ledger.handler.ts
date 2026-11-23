@@ -2,6 +2,7 @@ import { Inject, Logger } from '@nestjs/common';
 import { CommandBus, CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { generateId, SystemContext } from '@platform/common';
 import { SystemDatabaseError } from '@platform/database';
+import { LEDGER_RECONCILE_GRACE_MS } from '../../../billing.constants.js';
 import {
   LedgerReanchorRefusedException,
   LedgerSigningKeyNotPinnedException,
@@ -23,7 +24,14 @@ import {
   RerunLedgerReconciliationCommand,
 } from './reanchor-ledger.command.js';
 
-/** The refusals both commands share: outside `SystemContext`, the ledger off, a future lost-from. */
+/** Where a window reconciled at `now` ends: the cron's grace before it. */
+const graceEnd = (now: Date): Date => new Date(now.getTime() - LEDGER_RECONCILE_GRACE_MS);
+
+/**
+ * The refusals both commands share: outside `SystemContext`, the ledger off, a lost-from not in the
+ * past, or one inside the cron's grace (no window would end before
+ * `now − LEDGER_RECONCILE_GRACE_MS`; the next hourly run covers it).
+ */
 function assertCanRun(
   command: string,
   config: LedgerConfig,
@@ -48,6 +56,15 @@ function assertCanRun(
       `--lost-from ${lostFrom.toISOString()} is not in the past`,
     );
   }
+  const graceStart = graceEnd(now);
+  if (!(lostFrom.getTime() < graceStart.getTime())) {
+    throw new LedgerReanchorRefusedException(
+      'lost-from-in-grace',
+      `--lost-from ${lostFrom.toISOString()} is inside the reconciliation's ` +
+        `${LEDGER_RECONCILE_GRACE_MS / 60_000}-minute grace (from ${graceStart.toISOString()}): ` +
+        'run it again once it is older than that',
+    );
+  }
 }
 
 /** Whether the current state is proven (dual proof) to extend `trusted`. */
@@ -63,8 +80,10 @@ async function extendsTrusted(ledger: LedgerPort, trusted: LedgerTrustedState): 
 }
 
 /**
- * One `ReconcileLedgerCommand` over `[lostFrom, now)`, resolving with how the run finished (its
- * status and failed checks, from the command's `onFinished`).
+ * One `ReconcileLedgerCommand` over `[lostFrom, now − LEDGER_RECONCILE_GRACE_MS)` (audit batch 1
+ * review #3): like the cron's default window, it stops short of the postings still in flight, and
+ * the next hourly run covers that tail. It resolves with how the run finished (its status and
+ * failed checks, from the command's `onFinished`). `assertCanRun` keeps the window non-empty.
  */
 async function reconcileLostWindow(
   commands: CommandBus,
@@ -72,7 +91,7 @@ async function reconcileLostWindow(
 ): Promise<LedgerRunOutcome> {
   const finished: { outcome?: LedgerRunOutcome } = {};
   await commands.execute(
-    new ReconcileLedgerCommand({ from: lostFrom, to: new Date() }, (outcome) => {
+    new ReconcileLedgerCommand({ from: lostFrom, to: graceEnd(new Date()) }, (outcome) => {
       finished.outcome = outcome;
     }),
   );
@@ -87,6 +106,8 @@ async function reconcileLostWindow(
  * `LedgerReanchorRefusedException` naming why:
  * 1. `ledger-disabled`: `LEDGER_ENABLED=false`;
  * 2. `lost-from-not-past`: the lost history would start now or later;
+ *    `lost-from-in-grace`: it starts inside the last `LEDGER_RECONCILE_GRACE_MS` (15 min), so the
+ *    follow-up window would be empty (retry once it is older; the next hourly run covers it);
  * 3. `signing-key-not-pinned`: the client pins no server signing key (`LedgerPort.signedState`;
  *    `LEDGER_ALLOW_UNVERIFIED` does not help);
  * 4. `signature-invalid`: the restored server's current state is not signed by that key;
@@ -96,7 +117,8 @@ async function reconcileLostWindow(
  * 8. `trusted-state-changed`: the stored state changed meanwhile (the compare-and-set lost).
  * Otherwise `LedgerSystemRepository.reanchorTrustedState` writes the audit row and replaces the
  * stored state with exactly the state whose signature was verified, `lostFrom` as its read time,
- * in one transaction; then one `ReconcileLedgerCommand` over `[lostFrom, now)` runs: R4 re-enqueues
+ * in one transaction; then one `ReconcileLedgerCommand` over `[lostFrom, now − 15 min)` runs (the
+ * cron's grace: the next hourly run covers the tail): R4 re-enqueues
  * what Stripe lists there and the ledger lacks, R5 reports each lost entry as `verification_failed`
  * (until the posting path posts it again); the result carries that run's status and failed checks
  * (a failed run is not an error here: the re-anchor committed). Only an `LedgerVerificationFailedException` of the dual
@@ -196,9 +218,10 @@ export class ReanchorLedgerHandler implements ICommandHandler<ReanchorLedgerComm
 
 /**
  * The `--reconcile-only` re-run (audit batch 1 review #2): one `ReconcileLedgerCommand` over
- * `[lostFrom, now)` again, for a lost window whose follow-up run failed (or is older than the
- * cron's lookback). It writes no audit row and leaves the trusted state to R5. In this order it
- * refuses, reconciling nothing: `ledger-disabled`; `lost-from-not-past`; `other-database`
+ * `[lostFrom, now − 15 min)` again (the cron's grace), for a lost window whose follow-up run failed
+ * (or is older than the cron's lookback). It writes no audit row and leaves the trusted state to
+ * R5. In this order it refuses, reconciling nothing: `ledger-disabled`; `lost-from-not-past`;
+ * `lost-from-in-grace`; `other-database`
  * (`--database` is not the database the store names); `reanchor-needed` (a trusted state is stored
  * and the current state is not proven to extend it: re-anchor first). With no stored state it runs
  * (R5 stores the first one). A transport error of the proof propagates. Runs only inside

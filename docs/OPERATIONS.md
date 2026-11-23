@@ -157,7 +157,10 @@ the server **with the same key**: the apps pin the public key ([SECURITY.md](SEC
 
    The entrypoint is in the monolith and billing-service images. It records an audit row
    (`billing.ledger_reanchors`) and the new state in one transaction, then runs one reconciliation over
-   `[lost-from, now)`. It first takes the hourly reconciliation's Redis lock (`billing:reconcile-ledger`, from
+   `[lost-from, now - 15 min)`: like the hourly run, it leaves out the last 15 minutes
+   (`LEDGER_RECONCILE_GRACE_MS`), whose postings may still be in flight, and the next hourly run covers them.
+   A `--lost-from` inside those 15 minutes is refused (`lost-from-in-grace`, nothing written): run it again
+   once it is older. It first takes the hourly reconciliation's Redis lock (`billing:reconcile-ledger`, from
    the app's `REDIS_URL` and `REDIS_KEY_PREFIX`), so its run never overlaps the cron's; while the cron holds it,
    the CLI tries again every 5 seconds for up to 10 minutes.
 
@@ -188,7 +191,7 @@ the server **with the same key**: the apps pin the public key ([SECURITY.md](SEC
      --operator <who runs it> --reason "<why>"
    ```
 
-   It runs the same reconciliation over `[lost-from, now)` under the same lock, writes no audit row, and exits
+   It runs the same reconciliation over `[lost-from, now - 15 min)` under the same lock, writes no audit row, and exits
    with the codes above. It is refused (`reanchor-needed`, exit 1) while the current state does not extend the
    trusted one: re-anchor first.
 

@@ -28,6 +28,8 @@ import {
 const DB = 'in-memory';
 const NOW = new Date('2026-11-23T12:00:00.000Z');
 const LOST_FROM = new Date('2026-11-23T03:00:00.000Z');
+/** Where the follow-up run's window ends: the cron's 15-minute grace before now (review #3). */
+const GRACE_END = new Date(NOW.getTime() - 15 * 60_000);
 const REQUEST: LedgerReanchorRequest = {
   database: DB,
   lostFrom: LOST_FROM,
@@ -114,7 +116,7 @@ describe('ReanchorLedgerHandler (audit fixes OPS-1)', () => {
     vi.useRealTimers();
   });
 
-  it('writes the audit row and the restored state together, lost-from as its read time, then reconciles [lost-from, now)', async () => {
+  it('writes the audit row and the restored state together, lost-from as its read time, then reconciles [lost-from, now − 15 min)', async () => {
     const state = await ledger.currentState();
 
     const result = await reanchor();
@@ -148,7 +150,17 @@ describe('ReanchorLedgerHandler (audit fixes OPS-1)', () => {
     expect(commands.execute).toHaveBeenCalledTimes(1);
     const [[command]] = commands.execute.mock.calls as [[ReconcileLedgerCommand]];
     expect(command).toBeInstanceOf(ReconcileLedgerCommand);
-    expect(command.window).toEqual({ from: LOST_FROM, to: NOW });
+    expect(command.window).toEqual({ from: LOST_FROM, to: GRACE_END });
+  });
+
+  it('re-anchors a lost-from just before the grace: the window is that last millisecond', async () => {
+    const lostFrom = new Date(GRACE_END.getTime() - 1);
+
+    await reanchor({ ...REQUEST, lostFrom });
+
+    expect(store.reanchors).toHaveLength(1);
+    const [[command]] = commands.execute.mock.calls as [[ReconcileLedgerCommand]];
+    expect(command.window).toEqual({ from: lostFrom, to: GRACE_END });
   });
 
   it('carries a failed reconciliation run: its status and failed checks (review #2)', async () => {
@@ -209,6 +221,14 @@ describe('ReanchorLedgerHandler (audit fixes OPS-1)', () => {
       ['in the future', new Date(NOW.getTime() + 60_000)],
     ])('lost-from-not-past: a lost-from %s', async (_, lostFrom) => {
       await expect(refusal(reanchor({ ...REQUEST, lostFrom }))).resolves.toBe('lost-from-not-past');
+      nothingWritten();
+    });
+
+    it.each([
+      ['15 minutes ago (the grace boundary)', GRACE_END],
+      ['a minute ago', new Date(NOW.getTime() - 60_000)],
+    ])('lost-from-in-grace: a lost-from %s', async (_, lostFrom) => {
+      await expect(refusal(reanchor({ ...REQUEST, lostFrom }))).resolves.toBe('lost-from-in-grace');
       nothingWritten();
     });
 
@@ -331,7 +351,7 @@ describe('RerunLedgerReconciliationHandler (--reconcile-only, review #2)', () =>
     vi.useRealTimers();
   });
 
-  it('reconciles [lost-from, now) again, writing no audit row and leaving the trusted state', async () => {
+  it('reconciles [lost-from, now − 15 min) again, writing no audit row and leaving the trusted state', async () => {
     const before = stored();
 
     const result = await rerun();
@@ -342,7 +362,14 @@ describe('RerunLedgerReconciliationHandler (--reconcile-only, review #2)', () =>
     expect(commands.execute).toHaveBeenCalledTimes(1);
     const [[command]] = commands.execute.mock.calls as [[ReconcileLedgerCommand]];
     expect(command).toBeInstanceOf(ReconcileLedgerCommand);
-    expect(command.window).toEqual({ from: LOST_FROM, to: NOW });
+    expect(command.window).toEqual({ from: LOST_FROM, to: GRACE_END });
+  });
+
+  it('reconciles a lost-from just before the grace: the window is that last millisecond', async () => {
+    const lostFrom = new Date(GRACE_END.getTime() - 1);
+    await rerun({ ...REQUEST, lostFrom });
+    const [[command]] = commands.execute.mock.calls as [[ReconcileLedgerCommand]];
+    expect(command.window).toEqual({ from: lostFrom, to: GRACE_END });
   });
 
   it('carries a failed run: its status and failed checks', async () => {
@@ -385,6 +412,12 @@ describe('RerunLedgerReconciliationHandler (--reconcile-only, review #2)', () =>
     it('lost-from-not-past', async () => {
       await expect(refusal(rerun({ ...REQUEST, lostFrom: NOW }))).resolves.toBe(
         'lost-from-not-past',
+      );
+    });
+
+    it('lost-from-in-grace: no window before the 15-minute grace (the next cron run covers it)', async () => {
+      await expect(refusal(rerun({ ...REQUEST, lostFrom: GRACE_END }))).resolves.toBe(
+        'lost-from-in-grace',
       );
     });
 

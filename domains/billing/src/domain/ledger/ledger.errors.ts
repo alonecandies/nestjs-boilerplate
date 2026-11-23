@@ -33,6 +33,7 @@ export class LedgerSigningKeyNotPinnedException extends Error {
 export type LedgerReanchorRefusal =
   | 'ledger-disabled'
   | 'lost-from-not-past'
+  | 'lost-from-in-grace'
   | 'signing-key-not-pinned'
   | 'signature-invalid'
   | 'other-database'

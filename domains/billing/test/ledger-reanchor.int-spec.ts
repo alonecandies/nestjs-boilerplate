@@ -237,7 +237,11 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     let commands: CommandBus;
     let restoredClient: ImmudbClient;
     const modules: TestingModule[] = [];
-    /** Set by (1): where the restore's lost history starts, and B's ref's tx id in it. */
+    /**
+     * Set by (1): where the restore's lost history starts (20 minutes back, before A: the re-anchor
+     * refuses a lost-from inside the reconcile grace, review #3; earlier is allowed), and B's ref's
+     * tx id in it.
+     */
     let lostFrom: Date;
     let lostTxIdOfB: bigint;
 
@@ -394,9 +398,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     it('(1) after a restore to before B, every reconciliation run fails R5 and nothing moves the trusted state', async () => {
       if (original === undefined || restored === undefined) throw new Error('not started');
       // A, then B a moment later: the restore keeps A and loses B.
+      lostFrom = new Date(Date.now() - 20 * 60_000);
       await consume(POSTING_A);
-      await sleep(5);
-      lostFrom = new Date();
       await sleep(5);
       await consume(POSTING_B);
       const [refB] = await db().superuser.execute<{ tx_id: string }>(
