@@ -51,6 +51,7 @@ const METRIC_NAMES: readonly string[] = [
   // Audit fixes Task 21: the series of the platform and billing rules and the mail job counter.
   'kafka_consumer_lag',
   'grpc_client_circuit_breaker_state',
+  'grpc_client_handled_total',
   'rate_limit_fail_open_total',
   'db_pool_operations_waiting',
   'http_request_duration_seconds',
@@ -269,11 +270,16 @@ describe('the platform and billing rules of audit fixes Task 21', () => {
     expect(waits('KafkaConsumerLagGrowing')).toBe('15m');
   });
 
-  it('GrpcCircuitBreakerOpen: a breaker in state open for 5 m', () => {
-    expect(expr('GrpcCircuitBreakerOpen')).toContain(
-      'grpc_client_circuit_breaker_state{state="open"}',
+  // The breaker cycles open and half_open against a hung upstream (5 s each, a 15 s scrape), so the
+  // rule reads "not closed", and only while calls are refused: an idle breaker stays half_open.
+  it('GrpcCircuitBreakerOpen: a breaker not closed for 5 m while its service refuses calls', () => {
+    const rule = expr('GrpcCircuitBreakerOpen');
+    expect(rule).toContain('grpc_client_circuit_breaker_state{state!="closed"}) == 1');
+    expect(rule).not.toContain('{state="open"}');
+    expect(rule).toContain(' and on (service) sum by (service) ');
+    expect(rule).toMatch(
+      /rate\(grpc_client_handled_total\{grpc_code="CIRCUIT_OPEN"\}\[2m\]\)\) > 0$/,
     );
-    expect(expr('GrpcCircuitBreakerOpen')).toMatch(/== 1$/);
     expect(waits('GrpcCircuitBreakerOpen')).toBe('5m');
   });
 

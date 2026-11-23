@@ -58,20 +58,30 @@ groups:
             behind for group {{ $labels.group }} and the lag grew over 15 minutes. Check the handler's
             latency, kafka_consumer_messages_total{outcome="redelivery"} and the replica count.
 
-      # A gRPC client circuit breaker has failed fast for 5 minutes: the upstream is down or too slow
-      # and every call to it is refused (CIRCUIT_OPEN), a 503 at the gateway.
+      # A gRPC client circuit breaker has not been closed for 5 minutes while its service refuses calls
+      # (CIRCUIT_OPEN, a 503 at the gateway): the upstream is down or too slow. Against a hung upstream
+      # the breaker cycles open (5 s) and half_open (the probe waits out GRPC_DEADLINE_MS), so the rule
+      # reads "not closed" rather than "open". An idle breaker stays half_open until its next call
+      # (opossum), so refused calls in the last 2 minutes are required too. Limits: the refusal
+      # counter has no `upstream` label, so the join is per service (an idle half_open breaker fires
+      # alongside a refusing one of the same service); traffic too sparse to be refused (every call
+      # is the probe and ends DEADLINE_EXCEEDED) does not fire here but shows in the 5xx ratio.
       - alert: GrpcCircuitBreakerOpen
         expr: >-
           max by (service, upstream)
-          (grpc_client_circuit_breaker_state{state="open"}) == 1
+          (grpc_client_circuit_breaker_state{state!="closed"}) == 1
+          and on (service)
+          sum by (service) (rate(grpc_client_handled_total{grpc_code="CIRCUIT_OPEN"}[2m])) > 0
         for: 5m
         labels:
           severity: page
         annotations:
-          summary: "{{ $labels.service }}: circuit breaker to {{ $labels.upstream }} is open"
+          summary: "{{ $labels.service }}: circuit breaker to {{ $labels.upstream }} refuses calls"
           description: >-
-            Calls from {{ $labels.service }} to {{ $labels.upstream }} have been refused for 5 minutes.
-            Check that service's health and logs, and grpc_client_handled_total{grpc_code="CIRCUIT_OPEN"}.
+            The circuit breaker from {{ $labels.service }} to {{ $labels.upstream }} has not been closed
+            for 5 minutes and {{ $labels.service }} keeps refusing calls (CIRCUIT_OPEN). Check that
+            upstream's health, latency and logs, and grpc_client_handled_total{grpc_code="CIRCUIT_OPEN"}
+            by grpc_service.
 
       # A rate-limit budget let requests through unmetered because Redis was down or slow
       # (THROTTLE_REDIS_TIMEOUT_MS). Abuse protection is off for that throttler until Redis recovers.
