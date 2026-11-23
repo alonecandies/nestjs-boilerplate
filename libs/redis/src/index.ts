@@ -5,8 +5,9 @@
  * adapter and the readiness contributor. Test doubles live in `@platform/redis/testing`.
  */
 
-// Re-exported for apps; prefer RateLimit/SkipRateLimit (they know every throttler name).
-export { SkipThrottle, Throttle } from '@nestjs/throttler';
+// Re-exported for apps; prefer RateLimit/SkipRateLimit (they know every throttler name). `Throttle`
+// is not re-exported: a per-route override rewrites the shared global bucket, and boot refuses it.
+export { SkipThrottle } from '@nestjs/throttler';
 export { AppCacheModule, createCacheOptions } from './cache/app-cache.module.js';
 export {
   BoundedTtlKeyv,

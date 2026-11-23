@@ -456,8 +456,10 @@ identity-service (loaded by `IdentityCoreModule`)
 `DEFAULT_THROTTLER_NAME` was removed (throttlers are `ip`, `user`, `route`, `auth`), and `@SkipThrottle()` must
 become `@SkipRateLimit()`. The old names are not accepted: setting an old variable fails config validation at boot
 with a message naming its replacement, and `AuthThrottle`/`AUTH_THROTTLE_KEY`/`DEFAULT_THROTTLER_NAME` no longer
-compile. `SkipThrottle`/`Throttle` are still re-exported and still compile, but with no `default` throttler they have
-NO effect: use `SkipRateLimit()`/`RateLimit()`.
+compile. `SkipThrottle` is still re-exported but, with no `default` throttler, has NO effect: use `SkipRateLimit()`.
+`Throttle` is no longer re-exported, and a `@Throttle()` override (also one imported straight from
+`@nestjs/throttler`) fails boot, because the global buckets are shared by every route: declare a policy and
+use `RateLimit()`.
 
 ### `identityRateLimit` — credential endpoints (identity)
 
