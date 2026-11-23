@@ -6,6 +6,7 @@ import { TEST_CASSANDRA_STARTUP_TIMEOUT_MS } from '@platform/testing/cassandra';
 import { testPostgresStartupTimeoutMs } from '@platform/testing/postgres';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import config, {
+  COVERAGE_THRESHOLDS,
   INT_HOOK_MARGIN_MS,
   intHookTimeoutMs,
   SETUP_FILES,
@@ -71,6 +72,16 @@ describe('vitest.config.ts', () => {
     // on the container's own message, not on a hook timeout.
     expect(intHookTimeoutMs({})).toBeGreaterThanOrEqual(Math.max(...budgets) + INT_HOOK_MARGIN_MS);
     expect(intHookTimeoutMs({})).toBeGreaterThanOrEqual(180_000 + INT_HOOK_MARGIN_MS);
+  });
+
+  it('sets the four global coverage thresholds the CI coverage run enforces (CI-1)', () => {
+    const thresholds = config.test?.coverage?.thresholds;
+    expect(thresholds).toEqual(COVERAGE_THRESHOLDS);
+    for (const metric of ['lines', 'functions', 'branches', 'statements'] as const) {
+      const value = COVERAGE_THRESHOLDS[metric];
+      expect(value, metric).toBeGreaterThan(50);
+      expect(value, metric).toBeLessThan(100);
+    }
   });
 
   it('names a lib that shares a domain folder name platform-<name>, and leaves the others alone', () => {

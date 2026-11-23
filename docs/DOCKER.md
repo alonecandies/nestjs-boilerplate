@@ -399,7 +399,7 @@ node:24-trixie-slim ── toolchain ── manifests (package.json × N, bun.lo
                                       └─ prod-deps ─── bun install --production --filter ./apps/$APP (the app's closure only)
                                            └─ assemble ── scripts/docker/assemble-image.mjs (copy dist, verify, trace, prune)
                                                 ├─ runtime-alpine ── node:24-alpine + tini, user node
-                                                └─ runtime (default) ── gcr.io/distroless/nodejs24-debian13:nonroot
+                                                └─ runtime (default) ── gcr.io/distroless/nodejs24-debian13:nonroot@sha256:… (pinned)
 ```
 
 ```bash
@@ -412,6 +412,10 @@ docker build --build-arg APP=gateway --target dev -t boilerplate/gateway:dev .  
 Build args: `APP` (required; the build fails fast without it), `NODE_VERSION` (24.21.0), `BUN_VERSION` (1.4.3),
 `ALPINE_VERSION` (3.24), `DISTROLESS_IMAGE`, `UV_THREADPOOL_SIZE` (4), `PRUNE_NODE_MODULES` (true), `TRACE_FILES`
 (true), `VCS_REF`.
+`DISTROLESS_IMAGE` defaults to `gcr.io/distroless/nodejs24-debian13:nonroot@sha256:39b0407…` (the full digest is in
+the `Dockerfile`): the multi-arch index digest, resolved 2026-11-24, so a rebuild gets the same Node and Debian packages.
+The runtime Node is the distroless image's Node 24, not `NODE_VERSION` (that pins the toolchain and `runtime-alpine`);
+CI prints it. How to bump the digest: [RELEASING.md](RELEASING.md#pinned-actions-and-base-image).
 Compose builds the same targets (`APP_TARGET`, tag `boilerplate/<app>:${TAG:-local}`).
 
 - **Bun installs, Node runs.** The toolchain is `node:24-trixie-slim` with the Bun binary copied in, so swc runs on
@@ -611,17 +615,22 @@ start what you need, or raise Docker Desktop's memory.
 
 ## CI ([`.github/workflows/ci.yml`](../.github/workflows/ci.yml))
 
-Runs on pushes to `master` and on pull requests. Test layout and the integration projects: [TESTING.md](TESTING.md).
+Runs on pushes to `master` and on pull requests; a weekly schedule runs only the advisory check. Every action is
+pinned to a commit SHA. The gates: [RELEASING.md](RELEASING.md#ci-pipeline). Test layout and the integration projects:
+[TESTING.md](TESTING.md).
 
-- **verify**: Node 24 (`.nvmrc`) + Bun 1.4.3, `bun install --frozen-lockfile`, `bun run check` (Biome, ESLint,
-  Prettier, tsc), `bun run test`, `bun run build`, generated-artefact drift (`proto:gen` + `buf lint` + `db:generate` + `db:check`,
+- **verify**: Node 24 (`.nvmrc`) + Bun 1.4.3, `bun install --frozen-lockfile`, the advisory gate
+  (`node scripts/check-audit.mjs`: high or critical production advisories), `bun run check` (Biome, ESLint,
+  Prettier, tsc), `bun run test:cov` (coverage thresholds), `bun run build`, generated-artefact drift (`proto:gen` + `buf lint` + `db:generate` + `db:check`,
   then a clean `git diff`/`git status` of `domains/*/contracts/src/generated` and `domains/*/src/infrastructure/persistence/migrations`),
-  commitlint over the PR's commits and `buf breaking` against the PR base (pull requests only), then the config drift checks (`.env.example`, Kafka topics).
+  commitlint over the PR's commits and `buf breaking` against the PR base (on a push to `master`: against
+  `github.event.before`), then the config drift checks (`.env.example`, Kafka topics).
 - **integration**: `bun run test:int` (`INTEGRATION=1`, every `<package>:int` project). The specs start their own
   stores with testcontainers: Citus (Postgres), Cassandra, Kafka, immudb, RustFS and fake-gcs-server. Redis comes from a
   job service container (`REDIS_URL=redis://localhost:6379`). A step first pulls every image the specs start
   (`node scripts/int-images.mjs` lists them from the image constants), so no hook timeout is spent on a download.
-- **image** (matrix of the 6 apps): `docker buildx` of the `runtime` target, not pushed, GitHub Actions cache per app.
+- **image** (matrix of the 6 apps): `docker buildx` of the `runtime` target, not pushed, GitHub Actions cache per app,
+  then a Trivy scan of its OS packages (fixable HIGH and CRITICAL fail the job) and the runtime `node --version`.
 - **topology** (matrix `monolith`, `microservices`; needs `image`): loads the images the `image` job saved as
   artifacts and runs `node scripts/docker/check-topology.ts up <topology>` (see below).
 - **compose**: `scripts/docker/validate-compose.sh` (`docker compose config` for every profile combination + one `api`

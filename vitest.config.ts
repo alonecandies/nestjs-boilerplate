@@ -35,6 +35,20 @@ export function intHookTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   );
 }
 
+/**
+ * Global coverage floor of `bun run test:cov` (the CI verify job runs it): the baseline measured
+ * on 2026-11-24 (audit fixes batch 3, lane ci; unit + e2e, 500 files, 4,637 tests) minus two
+ * points. Baseline: statements 92.16 %, branches 87.53 %, functions 90.51 %, lines 93.29 %.
+ * They measure the whole repo, so `--coverage` with a path filter (`vitest run --coverage libs/x`)
+ * fails them: the rest counts as uncovered.
+ */
+export const COVERAGE_THRESHOLDS = {
+  statements: 90.16,
+  branches: 85.53,
+  functions: 88.51,
+  lines: 91.29,
+} as const;
+
 /** reflect-metadata first (decorator metadata), then the repo setup (silent Nest logger). */
 export const SETUP_FILES = ['reflect-metadata', join(ROOT, 'vitest.setup.ts')];
 
@@ -186,6 +200,7 @@ export default defineConfig({
       ],
       exclude: ['**/generated/**', '**/*.spec.ts', '**/*.int-spec.ts', '**/index.ts', '**/main.ts'],
       reporter: ['text-summary', 'html', 'lcov'],
+      thresholds: { ...COVERAGE_THRESHOLDS },
     },
     projects: [
       ...domains.map(unitProject),

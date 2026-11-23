@@ -1,7 +1,10 @@
-# CI: quality gate (lint + typecheck + tests + build + generated-artefact drift + commitlint), the
-# integration tests against real Citus, Cassandra, Kafka, immudb, object storage and Redis, one
-# production image per app (built, not pushed), a boot check of the docker compose infra stack, and
-# a smoke test that boots both app topologies from those images.
+# CI: quality gate (production advisories, lint + typecheck, tests with coverage thresholds, build,
+# generated-artefact drift, commitlint and buf breaking), the integration tests against real Citus,
+# Cassandra, Kafka, immudb, object storage and Redis, one production image per app (built, scanned
+# for fixable HIGH/CRITICAL OS vulnerabilities, not pushed), a boot check of the docker compose infra
+# stack, and a smoke test that boots both app topologies from those images. A weekly scheduled run
+# reports new production advisories only. Every action is pinned to a commit SHA (tag in the
+# comment); .github/dependabot.yml proposes the bumps.
 name: CI
 
 on:
@@ -9,9 +12,15 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
+  # Mondays 05:17 UTC: the advisories job alone, so an advisory published against an unchanged
+  # lockfile is reported without a push.
+  schedule:
+    - cron: "17 5 * * 1"
 
+# The weekly run has its own group: a group keeps one pending run, so a scheduled run queued behind
+# a master push would otherwise cancel the push run waiting next to it.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name == 'schedule' && 'schedule' || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -28,23 +37,24 @@ env:
 jobs:
   verify:
     name: Lint, typecheck, test, build
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # lerna/nx `--since` and commitlint need history
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc # 24 (runtime of every tool and test)
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Cache Bun downloads
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
@@ -53,8 +63,13 @@ jobs:
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
 
+      # bun audit --json --production minus the unexpired entries of .github/audit-ignore.json: a
+      # high or critical production advisory, or an expired ignore entry, fails the job.
+      - name: Production advisories (bun audit, high and critical)
+        run: node scripts/check-audit.mjs
+
       - name: Cache Nx / ESLint results
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             .nx/cache
@@ -69,8 +84,9 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: bun run check
 
-      - name: Unit + e2e tests
-        run: bun run test
+      # Thresholds: COVERAGE_THRESHOLDS in vitest.config.ts (the measured baseline minus two points).
+      - name: Unit + e2e tests with coverage
+        run: bun run test:cov
 
       - name: Build (swc, all packages)
         run: bun run build
@@ -88,22 +104,37 @@ jobs:
           test -z "$(git status --porcelain -- domains/*/contracts/src/generated libs/transport/test/fixtures/src/generated libs/immudb/src/generated libs/immudb/proto 'domains/*/src/infrastructure/persistence/migrations/*')"
 
       # Releases (lerna --conventional-commits) derive versions and changelogs from commit messages;
-      # husky's commit-msg hook is skipped by --no-verify and web edits, so validate the PR range.
+      # husky's commit-msg hook is skipped by --no-verify and web edits, so validate the range: a
+      # pull request's commits, or on a push (how merges reach master) the commits since
+      # github.event.before. A new branch (before = zeros), a manual run (no before) or a force push
+      # whose old head is not in the history has no range: the step says so and passes.
       - name: Commit messages (commitlint)
-        if: github.event_name == 'pull_request'
-        run: >-
-          bunx commitlint --verbose
-          --from ${{ github.event.pull_request.base.sha }}
-          --to ${{ github.event.pull_request.head.sha }}
+        env:
+          FROM: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          TO: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          if [ -z "$FROM" ] || [ "$FROM" = 0000000000000000000000000000000000000000 ]; then
+            echo "No previous commit to compare against (new branch or manual run): skipped."
+          elif ! git cat-file -e "$FROM^{commit}" 2>/dev/null; then
+            echo "::warning::$FROM is not in the history (force push?): commitlint skipped."
+          else
+            bunx commitlint --verbose --from "$FROM" --to "$TO"
+          fi
 
       # A deleted field, renamed RPC or changed type in a contracts package breaks running
       # consumers: ship it as <ctx>.v2 instead (docs/RELEASING.md). New packages are skipped.
-      - name: Proto breaking changes (buf, PRs only)
-        if: github.event_name == 'pull_request'
-        run: >-
-          node scripts/check-proto-breaking.mjs
-          --against ${{ github.event.pull_request.base.sha }}
-          --error-format github-actions
+      # Against the pull request's base, or on a push against github.event.before (as above).
+      - name: Proto breaking changes (buf)
+        env:
+          AGAINST: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ -z "$AGAINST" ] || [ "$AGAINST" = 0000000000000000000000000000000000000000 ]; then
+            echo "No previous commit to compare against (new branch or manual run): skipped."
+          elif ! git cat-file -e "$AGAINST^{commit}" 2>/dev/null; then
+            echo "::warning::$AGAINST is not in the history (force push?): buf breaking skipped."
+          else
+            node scripts/check-proto-breaking.mjs --against "$AGAINST" --error-format github-actions
+          fi
 
       - name: Config drift (.env.example, Kafka topics)
         run: |
@@ -112,6 +143,7 @@ jobs:
 
   integration:
     name: Integration tests (Citus, Cassandra, Kafka, immudb, object storage, Redis)
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # *.int-spec.ts only run with INTEGRATION=1 (`bun run test:int` = every '<pkg>:int' project).
@@ -127,18 +159,18 @@ jobs:
     env:
       REDIS_URL: redis://localhost:6379
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
       - name: Cache Bun downloads
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
@@ -160,6 +192,7 @@ jobs:
 
   image:
     name: Image ${{ matrix.app }}
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -168,12 +201,12 @@ jobs:
         app:
           [gateway, monolith, identity-service, notifications-service, billing-service, ai-service]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
       - name: Build ${{ matrix.app }} (runtime target, not pushed)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           target: runtime
@@ -187,17 +220,31 @@ jobs:
           cache-from: type=gha,scope=image-${{ matrix.app }}
           cache-to: type=gha,mode=max,scope=image-${{ matrix.app }}
 
+      # Fixable HIGH and CRITICAL vulnerabilities in the image's OS packages fail the job (npm
+      # dependencies are gated by scripts/check-audit.mjs in verify). An unfixed one cannot be acted
+      # on and is skipped; a fixed one is resolved by bumping DISTROLESS_IMAGE (docs/RELEASING.md).
+      - name: Scan ${{ matrix.app }} (OS packages, fixable HIGH and CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: boilerplate/${{ matrix.app }}:ci
+          vuln-type: os
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+      # The runtime Node comes from the pinned distroless digest, not from NODE_VERSION.
       - name: Inspect image
         run: |
           docker image inspect boilerplate/${{ matrix.app }}:ci \
             --format 'size={{.Size}} user={{.Config.User}} workdir={{.Config.WorkingDir}} cmd={{json .Config.Cmd}}'
           docker image ls boilerplate/${{ matrix.app }}:ci
+          echo "runtime node: $(docker run --rm boilerplate/${{ matrix.app }}:ci --version)"
 
       # The topology job boots these exact images (no rebuild).
       - name: Save ${{ matrix.app }} for the topology smoke test
         run: docker save boilerplate/${{ matrix.app }}:ci | gzip -1 > "${RUNNER_TEMP}/image-${{ matrix.app }}.tar.gz"
 
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: image-${{ matrix.app }}
           path: ${{ runner.temp }}/image-${{ matrix.app }}.tar.gz
@@ -214,13 +261,13 @@ jobs:
       matrix:
         topology: [monolith, microservices]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
 
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: image-*
           path: ${{ runner.temp }}/images
@@ -241,12 +288,13 @@ jobs:
 
   compose:
     name: Compose config + infra boot
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
 
@@ -255,3 +303,24 @@ jobs:
 
       - name: Boot infra, assert topics / keyspace / buckets / extensions / roles / PgBouncer, tear down
         run: scripts/docker/check-infra.sh
+
+  # Weekly (schedule only; pushes and pull requests run the same check in verify). bun audit reads
+  # bun.lock alone, so no install. A failure is the report: GitHub notifies on a failed scheduled run.
+  advisories:
+    name: Production advisories (weekly)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Production advisories (bun audit, high and critical)
+        run: node scripts/check-audit.mjs

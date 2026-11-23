@@ -15,7 +15,9 @@
 ARG NODE_VERSION=24.21.0
 ARG BUN_VERSION=1.4.3
 ARG ALPINE_VERSION=3.24
-ARG DISTROLESS_IMAGE=gcr.io/distroless/nodejs24-debian13:nonroot
+# The runtime base is pinned by its multi-arch index digest (resolved 2026-11-24), so a rebuild gets
+# the same Node and Debian packages. Bump it by hand: docs/RELEASING.md ("Base image digest").
+ARG DISTROLESS_IMAGE=gcr.io/distroless/nodejs24-debian13:nonroot@sha256:39b0407357c9fadf1a9708d22088f02de21f0e1e8a688474eea2d8701e7d5693
 
 # ---- bun binary donor ----------------------------------------------------------------------
 FROM oven/bun:${BUN_VERSION}-slim AS bun

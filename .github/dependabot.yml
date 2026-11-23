@@ -1,0 +1,29 @@
+# Update pull requests for the CI actions (pinned to commit SHAs, with the tag in a comment) and the
+# Docker base images. npm is not listed: every version is pinned in the root package.json catalog,
+# which neither Dependabot nor Renovate was confirmed to update. npm advisories are caught by the
+# advisory gate instead (scripts/check-audit.mjs, docs/RELEASING.md). Whether Dependabot bumps the
+# digest in the Dockerfile's `ARG DISTROLESS_IMAGE` default is untested: docs/RELEASING.md gives
+# the manual bump. Commit headers are `ci(deps): ...` and `build(deps): ...`, which commitlint
+# accepts.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: build
+      include: scope

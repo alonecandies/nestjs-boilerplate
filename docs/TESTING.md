@@ -69,7 +69,11 @@ Shared settings: `globals: true`, `setupFiles: ['reflect-metadata']`, `pool: 'fo
 sockets and timers, and forks isolate them most reliably), `clearMocks` and `restoreMocks`. Coverage
 uses the `v8` provider over `apps/*/src/**`, `domains/*/src/**`, `domains/*/contracts/src/**` and
 `libs/*/src/**`. It skips generated code, specs, `index.ts` and `main.ts`, and writes the
-`text-summary`, `html` and `lcov` reporters to `coverage/`.
+`text-summary`, `html` and `lcov` reporters to `coverage/`. Global thresholds (`COVERAGE_THRESHOLDS` in
+`vitest.config.ts`): statements 90.16 %, branches 85.53 %, functions 88.51 % and lines 91.29 %, the
+baseline measured on 2026-11-24 minus two points. A coverage run under any of them fails. They measure
+the whole repo, so `--coverage` with a path filter (`bunx vitest run --coverage libs/config`) fails them,
+because the rest counts as uncovered: read the package's own lines in the report instead.
 
 ## Commands
 
@@ -78,7 +82,7 @@ uses the `v8` provider over `apps/*/src/**`, `domains/*/src/**`, `domains/*/cont
 | `bun run test`                                         | `vitest run`: every unit **and** e2e project (integration projects do not exist without `INTEGRATION=1`)       |
 | `bun run test:watch`                                   | `vitest` in watch mode                                                                                         |
 | `bun run test:e2e`                                     | `vitest run --project '*:e2e'`: the six app e2e suites only                                                    |
-| `bun run test:cov`                                     | `vitest run --coverage`: unit + e2e with v8 coverage                                                           |
+| `bun run test:cov`                                     | `vitest run --coverage`: unit + e2e with v8 coverage, failing under the thresholds (what CI runs)              |
 | `bun run test:int`                                     | `INTEGRATION=1 vitest run --project '*:int'`: integration specs (needs Docker and Redis, see below)            |
 | `bunx vitest run --project redis`                      | one project                                                                                                    |
 | `bunx vitest run --project 'identity*'`                | glob over project names (here `identity`, `identity-contracts`, `identity-service` and `identity-service:e2e`) |
@@ -87,8 +91,9 @@ uses the `v8` provider over `apps/*/src/**`, `domains/*/src/**`, `domains/*/cont
 | `bun run --filter @app/gateway test` / `test:e2e`      | the package's own script (`vitest run --config ../../vitest.config.ts --project gateway[:e2e]`)                |
 
 `bun run check` is the static gate (Biome, ESLint, Prettier, `tsc`, the layer boundary check). It does
-**not** run tests, so run `bun run test` too before pushing. CI
-([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs `bun run test` in the quality job and
+**not** run tests, so run `bun run test` (or `bun run test:cov`) too before pushing. CI
+([`.github/workflows/ci.yml`](../.github/workflows/ci.yml)) runs `bun run test:cov` in the quality job
+(the coverage gate, [RELEASING.md](RELEASING.md#coverage-gate)) and
 `bun run test:int` in a separate `integration` job. That job has Docker for testcontainers and a `redis`
 service container with `REDIS_URL=redis://localhost:6379`. Before the specs run, the job pulls every image they
 start (`node scripts/int-images.mjs` prints the list from the image constants: Citus, Cassandra, Kafka, immudb,
