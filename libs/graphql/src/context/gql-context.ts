@@ -32,6 +32,11 @@ export interface GqlContext {
   req: GqlRequest;
   /** Fastify reply (HTTP operations only). */
   reply?: unknown;
+  /**
+   * graphql-ws operations only: the connection's signal, aborted when its socket closes. One per
+   * connection, shared by its operations; a long-running resolver passes it on to stop its work.
+   */
+  connectionSignal?: AbortSignal;
   /** Fresh DataLoaders for this operation: per-request cache, never shared across users. */
   loaders: GraphqlLoaders;
 }

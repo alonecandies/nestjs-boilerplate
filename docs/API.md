@@ -373,7 +373,8 @@ a stable `code` and an HTTP status. Each transport turns that exception into its
 ```
 
 - `type` is built as `https://errors.nestjs-boilerplate.dev/` + the code in kebab-case. `title` is derived from the
-  code.
+  code. An app that sets `problemTypeBaseUrl` (`CommonEnhancersOptions`) uses that base for the REST problems and for
+  the AI SSE `error` event; GraphQL errors and the notifications WebSocket keep the default base.
 - Clients should branch on `code`. Codes are part of the public API and are never renamed.
 - `errors[]` holds `{ path, message, code? }` issues. The shape is the same for class-validator, zod and the gRPC zod
   pipe. Paths are dotted (`items.0.sku`).

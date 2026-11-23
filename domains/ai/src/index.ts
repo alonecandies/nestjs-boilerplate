@@ -23,7 +23,11 @@ export * from './application/repositories/messages.repository.js';
 export * from './application/repositories/usage.repository.js';
 // Application: the chat tools and the sources the app binds to the owners' ports
 export { AI_TOOLS_SYSTEM_PROMPT, AiChatTools } from './application/tools/ai-chat-tools.js';
-export { AiToolSources } from './application/tools/ai-tool-sources.js';
+export {
+  type AiToolOwnerPorts,
+  AiToolSources,
+  OwnerPortsAiToolSources,
+} from './application/tools/ai-tool-sources.js';
 export {
   AI_TOOL_NAMES,
   AI_TOOLS,

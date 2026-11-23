@@ -451,6 +451,44 @@ describe('AI chat tools (read-only, as the caller)', () => {
       ]);
     });
 
+    it('the deadline while the consumer holds a delta, then it stops reading: the timeout row has the call billed before it, as the metrics count it', async () => {
+      metrics.requests.reset();
+      metrics.tokens.reset();
+      /** The `ai_requests_total` samples with `outcome`, and the `ai_tokens_total` of `kind`. */
+      const requestsWith = async (outcome: string) =>
+        (await metrics.requests.get()).values
+          .filter((sample) => sample.labels.outcome === outcome)
+          .reduce((total, sample) => total + sample.value, 0);
+      const tokensOf = async (kind: string) =>
+        (await metrics.tokens.get()).values
+          .filter((sample) => sample.labels.kind === kind)
+          .reduce((total, sample) => total + sample.value, 0);
+      const { streamer } = setup(toolThenHang(), { requestTimeoutMs: 300 });
+
+      await as(ADA, async () => {
+        const events = await streamer.execute(
+          new StreamMessageCommand({ ...ADA, conversationId: conversation.id, content: 'Who?' }),
+        );
+        for await (const event of events) {
+          expect(event).toEqual({ type: 'delta', text: 'Still looking. ' });
+          // The deadline fails the call while the delta is held, then the consumer stops reading.
+          await vi.waitFor(async () => expect(await requestsWith('timeout')).toBe(1), {
+            timeout: 5_000,
+          });
+          break;
+        }
+      });
+
+      const reply = storedMessages().find((m) => m.role === 'assistant');
+      expect(reply).toMatchObject({ content: 'Still looking. ', status: 'incomplete' });
+      expect(db.store.usage).toEqual([
+        expect.objectContaining({ messageId: reply?.id, outcome: 'timeout', ...billed(1) }),
+      ]);
+      expect(await requestsWith('aborted')).toBe(0);
+      expect(await tokensOf('input')).toBe(1_000);
+      expect(await tokensOf('output')).toBe(50);
+    });
+
     /** `getUser` never settles (a slow lookup the deadline or the client cuts); `onStart` first. */
     class SlowProfileSources extends FakeAiToolSources {
       constructor(private readonly onStart: () => void = () => undefined) {

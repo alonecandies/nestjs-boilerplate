@@ -29,7 +29,11 @@ export interface CommonEnhancersOptions {
   defaultTimeoutMs?: number;
   /** Reveal unexpected error messages in problem responses. Default `false` — keep it off in prod. */
   exposeInternalErrors?: boolean;
-  /** Problem `type` base URI. */
+  /**
+   * Problem `type` base URI (default `DEFAULT_PROBLEM_TYPE_BASE_URL`). It applies to the REST
+   * problems of `AllExceptionsFilter` and to the AI SSE `error` event. GraphQL errors
+   * (`formatGraphqlError`) and the notifications WebSocket gateway keep the default.
+   */
   problemTypeBaseUrl?: string;
   /** Maintenance switch read by `MaintenanceModeMiddleware`. Default `false`. */
   maintenanceMode?: MaintenanceModeSwitch;

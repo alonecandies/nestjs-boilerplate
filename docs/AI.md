@@ -90,10 +90,10 @@ ai-service's `AI_REQUEST_TIMEOUT_MS`, so the model's own timeout (504 `AI_TIMEOU
   between, in its own turn and in every later one. A cut the user did not retry stays in the history, so the model can
   go on from it. Both questions and the partial reply stay stored and listed; only what the model receives changes.
 - The chat routes have no handler timeout (`@Timeout(0)`): `AI_REQUEST_TIMEOUT_MS` bounds them.
-- **Known limit:** a `streamAiMessage` turn sent over graphql-ws (a WebSocket) is bounded only by
-  `AI_REQUEST_TIMEOUT_MS`. Closing the socket does not abort the upstream call, because the mutation has no HTTP request
-  to cancel; over HTTP POST, closing the request aborts it as for the SSE route. Prefer the SSE route for streams a user
-  may abandon, and keep `AI_REQUEST_TIMEOUT_MS` and `AI_MAX_OUTPUT_TOKENS` modest.
+- A `streamAiMessage` turn stops when its client leaves, as on the SSE route: over HTTP POST when the request closes,
+  over graphql-ws (a WebSocket) when the socket closes. The upstream call is aborted, the reply so far is stored
+  `incomplete` and its usage row has the outcome `aborted`. Each graphql-ws connection has one abort signal, aborted when
+  its socket closes; stopping one operation on a socket that stays open does not abort its turn.
 
 Every response carries one of these codes when a call is refused or fails (REST problem+json, GraphQL
 `extensions.code`, gRPC `x-error-code`, the SSE `error` event):
@@ -109,7 +109,9 @@ Every response carries one of these codes when a call is refused or fails (REST 
 | `IDEMPOTENCY_KEY_REUSED` | 409    | an `Idempotency-Key` replayed with a different message (content or model)                                             |
 | `TENANT_MISMATCH`        | 403    | the request names a tenant or user other than the caller's principal (gRPC callers)                                   |
 
-A refusal before the call (`AI_DISABLED`, `AI_MODEL_NOT_ALLOWED`, `AI_INPUT_TOO_LARGE`) stores nothing. A failed call
+A refusal before the call (`AI_DISABLED`, `AI_MODEL_NOT_ALLOWED`, `AI_INPUT_TOO_LARGE`) stores nothing. Neither does a
+streamed turn whose client left before the model call (while the history was read): it makes no call, so no usage row
+and no metric are recorded, and its stream ends with the abort at once. A failed call
 (`AI_TIMEOUT`, `AI_UPSTREAM_ERROR`) stores no message but a usage row with outcome `timeout` or `error`, because tokens
 may have been spent. A streamed turn the client abandons (it disconnects, or closes the GraphQL request) aborts the
 upstream call: no tokens are spent after the client left. The reply so far, if any text arrived, is stored once as an `incomplete`
@@ -122,11 +124,9 @@ The usage row of a failed or cut turn holds what OpenRouter billed for it: the t
 tool loop that times out, fails upstream, is abandoned, or ends on a model that calls a tool on its last step anyway
 therefore records the steps it paid for, and `ai_tokens_total` counts the same tokens. A step cut mid-answer (a timeout
 or abort) reports no usage, so a turn cut during its first step records 0 tokens and no cost. A step the provider fails
-mid-answer counts when its usage arrives after the error, as OpenRouter's can. One known gap: a streamed turn whose
-deadline passes while its consumer holds a delta, and whose consumer then stops reading, records an `aborted` row with 0
-tokens and no cost, while the metrics count a `timeout` with the billed tokens. The SSE writer always reads to the end;
-the ai-service gRPC stream can hit it for about one event-loop turn after the deadline, and the GraphQL subscription only
-when publishing fails after it.
+mid-answer counts when its usage arrives after the error, as OpenRouter's can. A consumer that stops reading after the
+call already failed (its deadline, or an upstream error) records that failure's outcome and billed usage, as the metrics
+do.
 
 A conversation deleted while one of its turns runs ends the turn with 404 `CONVERSATION_NOT_FOUND` (streamed: the
 `error` event after the deltas). No message is stored, but the usage row is (`message_id` null), because the tokens were
@@ -198,9 +198,11 @@ domain's own checks (RLS, the inbox owner, own payments). Their input schemas ar
   reply that does not hold the key, so a retry runs the turn again, as a sent turn's retry does after the same 502.
 - **Stored.** The tool calls and results become messages (`assistant` / `tool`) between the user message and the reply,
   so the next turn's history replays them.
-- **Wiring.** ai imports no other domain: the composition root binds `AiToolSources` to the owners' ports (the
-  monolith's `AiToolSourcesModule` in-process; ai-service's over the identity, notifications and billing gRPC clients,
-  forwarding the caller's principal). Without a binding no tools are offered. To add a tool, add it to `AI_TOOLS`
+- **Wiring.** ai imports no other domain: the composition root binds `AiToolSources` to ai's one delegate,
+  `OwnerPortsAiToolSources` (three one-line forwards over structurally typed owner ports), built by a `useFactory`
+  provider over `UsersPort`, `NotificationsPort` and `BillingPort` (the monolith's `AiToolSourcesModule` in-process;
+  ai-service's over the identity, notifications and billing gRPC clients, forwarding the caller's principal). Without a
+  binding no tools are offered. To add a tool, add it to `AI_TOOLS`
   (`domains/ai/src/application/tools/ai-tools.ts`) with a strict schema, a caller-scoped read and, when its REST twin has
   one, the same permission; to drop one, remove it there.
 

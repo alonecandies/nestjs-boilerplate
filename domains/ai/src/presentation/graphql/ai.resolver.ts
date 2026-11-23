@@ -170,7 +170,8 @@ export class AiResolver {
     description:
       'sendAiMessage, streamed: subscribe to `aiMessageStream(conversationId)` first to receive ' +
       'each chunk (`DELTA`), then `DONE` or `ERROR`; the mutation resolves with the stored reply. ' +
-      'Over HTTP, closing the request aborts the model call (the reply so far is stored INCOMPLETE).',
+      'Closing the request (HTTP) or the socket (graphql-ws) aborts the model call (the reply so ' +
+      'far is stored INCOMPLETE).',
   })
   @RateLimit(AI_RATE_LIMITS.CHAT)
   @Timeout(0)
@@ -185,14 +186,19 @@ export class AiResolver {
       conversationId: input.conversationId,
     };
     const trigger = aiMessageStreamTrigger(user.tenantId, user.id, input.conversationId);
+    // Over HTTP the request's close aborts the turn; over graphql-ws the socket's close does.
     const disconnect = abortOnDisconnect(rawResponseOf(context.reply));
+    const signal =
+      context.connectionSignal === undefined
+        ? disconnect.signal
+        : AbortSignal.any([disconnect.signal, context.connectionSignal]);
     try {
       const events = await this.ai.streamMessage({
         ...base,
         content: input.content,
         model: input.model ?? undefined,
         idempotencyKey: input.idempotencyKey ?? undefined,
-        signal: disconnect.signal,
+        signal,
       });
       let result: SendMessageResult | undefined;
       try {
@@ -210,7 +216,7 @@ export class AiResolver {
           }
         }
       } catch (error) {
-        const errorCode = disconnect.signal.aborted ? CLIENT_DISCONNECTED : errorCodeOf(error);
+        const errorCode = signal.aborted ? CLIENT_DISCONNECTED : errorCodeOf(error);
         await this.publish(trigger, { ...base, type: 'error', errorCode });
         throw error;
       }

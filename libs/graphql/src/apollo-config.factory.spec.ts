@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createApolloDriverConfig } from './apollo-config.factory.js';
 import type { GraphqlWsAuthHandlers } from './auth/subscription-auth.js';
 import type { GqlContext } from './context/gql-context.js';
+import { GraphqlWsConnectionClosedError } from './context/graphql-context.factory.js';
 import { DataLoaderRegistry } from './loaders/data-loader.registry.js';
 import { JSONObjectResolver, UUIDResolver } from './scalars/index.js';
 import { SubscriptionGuardRef } from './subscriptions/subscription-guard.js';
@@ -170,6 +171,28 @@ describe('createApolloDriverConfig', () => {
       errors: [{ message: 'An unexpected error occurred.', extensions: { code: 'INTERNAL' } }],
     });
     expect(ws.onNext({}, '1', {}, {}, { data: { x: 1 } })).toBeUndefined();
+  });
+
+  it('gives each graphql-ws operation its connection signal, aborted when the socket closes', async () => {
+    const { config } = build({});
+    const ws = config.subscriptions?.['graphql-ws'] as WsOptions;
+    const context = config.context as (req: unknown, reply?: unknown) => GqlContext;
+    const ctx = { connectionParams: { token: 't' }, extra: {} };
+    const other = { connectionParams: { token: 'u' }, extra: {} };
+    await ws.onConnect(ctx);
+    await ws.onConnect(other);
+
+    const first = context(ctx).connectionSignal;
+    expect(first).toBeInstanceOf(AbortSignal);
+    expect(context(ctx).connectionSignal).toBe(first); // one per connection, not per operation
+    expect(first?.aborted).toBe(false);
+    expect(context({ id: 'r1', headers: {} }, {}).connectionSignal).toBeUndefined();
+
+    ws.onClose(ctx);
+
+    expect(first?.aborted).toBe(true);
+    expect(first?.reason).toBeInstanceOf(GraphqlWsConnectionClosedError);
+    expect(context(other).connectionSignal?.aborted).toBe(false);
   });
 
   it('builds a per-operation context with fresh loaders', () => {
