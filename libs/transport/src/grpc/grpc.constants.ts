@@ -16,6 +16,11 @@ export const GRPC_METADATA_KEYS = {
   TENANT_ID: 'x-tenant-id',
   /** `true` only for a staff switch-in principal; absent otherwise. */
   STAFF: 'x-staff',
+  /**
+   * The edge's signed assertion of the user, tenant, roles and staff flag above (a compact ES256
+   * JWS, `grpc-principal-assertion.ts`). Services forward it unchanged on their own calls.
+   */
+  PRINCIPAL_ASSERTION: 'x-principal-assertion',
   /** Trailer: stable `DomainException.code` (e.g. `EMAIL_TAKEN`) that survives the hop. */
   ERROR_CODE: 'x-error-code',
   /** Trailer: JSON of the client-safe `DomainException.details` (issues, entity/id). */

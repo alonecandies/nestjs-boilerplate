@@ -2,7 +2,8 @@
  * @platform/transport — gRPC and Kafka infrastructure shared by every service:
  * - gRPC: server/client options (health, reflection, service config with deadlines, retries and
  *   round_robin, keepalive), `GrpcClientsModule`, `grpcCall` + circuit breakers, status mapping
- *   (DomainException <-> gRPC <-> HTTP), metadata helpers, `@GrpcController()`, zod payload pipe.
+ *   (DomainException <-> gRPC <-> HTTP), metadata helpers, `@GrpcController()`, zod payload pipe,
+ *   the edge-signed principal assertion.
  * - Kafka: server/client options, `KafkaProducerModule` / `KafkaProducer` (validated envelopes),
  *   `FakeKafkaProducer`, `@KafkaEventPattern()`, `ParseEventEnvelopePipe`, `KafkaDeadLetterFilter`,
  *   `@KafkaConsumerController()`, `KafkaHealthIndicator`.
@@ -23,6 +24,7 @@ export * from './grpc/grpc-metadata.js';
 export * from './grpc/grpc-metrics.interceptor.js';
 export * from './grpc/grpc-metrics.js';
 export * from './grpc/grpc-principal.js';
+export * from './grpc/grpc-principal-assertion.js';
 export * from './grpc/grpc-server.options.js';
 export * from './grpc/grpc-status.mapping.js';
 export * from './grpc/grpc-tls.js';

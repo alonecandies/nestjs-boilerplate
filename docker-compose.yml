@@ -156,6 +156,20 @@ x-env-ai: &env-ai
   AI_ENABLED: ${AI_ENABLED:-false}
   OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
 
+# Signed gRPC principal (x-principal-assertion): grpc-principal-keygen generates a development ES256
+# pair on the first start. The gateway alone mounts the private key and signs the
+# caller of every gRPC call; the services mount only the public key and run in enforce mode: a call
+# with a user and no valid assertion is refused (UNAUTHENTICATED INVALID_PRINCIPAL), anonymous calls
+# pass. A gateway run on the host (bun run dev:gateway) has no key, so its calls with a user are
+# refused: set the services to warn for that. Key id and both files carry a "compose-local" marker
+# that NODE_ENV=production refuses unless ALLOW_KNOWN_LOCAL_SECRETS.
+x-env-grpc-principal-sign: &env-grpc-principal-sign
+  GRPC_PRINCIPAL_SIGNING_KEY_FILE: /etc/grpc-principal/signing.key
+  GRPC_PRINCIPAL_SIGNING_KEY_ID: compose-local
+x-env-grpc-principal-verify: &env-grpc-principal-verify
+  GRPC_PRINCIPAL_ASSERTION: enforce
+  GRPC_PRINCIPAL_PUBLIC_KEYS_FILE: /etc/grpc-principal-pub/public-keys
+
 x-env-edge: &env-edge
   DOCS_ENABLED: ${DOCKER_DOCS_ENABLED:-true} # /docs (Scalar) + /openapi.json even in production mode
   # LOCAL ONLY: trust X-Forwarded-For from private-network peers (k6 sends one per iteration to
@@ -510,6 +524,38 @@ services:
       resources:
         limits: { cpus: "0.2", memory: 64M }
 
+  # One-shot: generates the development gRPC principal key pair (ECDSA P-256, ES256) on its first
+  # run and keeps it afterwards: the private key into grpc-principal-key (mounted by the gateway
+  # only), `compose-local=<base64 public PEM>` into grpc-principal-pub (mounted by the services).
+  # Nothing is committed; 0644 so the non-root apps can read it (development only). No profile, like
+  # the other init jobs: `up --wait` and the topology smoke treat every profiled service as an app.
+  grpc-principal-keygen:
+    image: apache/kafka:4.3.1 # reused for its openssl
+    user: "0"
+    restart: "no"
+    logging: *logging
+    network_mode: none
+    volumes:
+      - grpc-principal-key:/keys/private
+      - grpc-principal-pub:/keys/public
+    entrypoint:
+      - sh
+      - -c
+      - >-
+        cd /keys &&
+        if [ -s private/signing.key ] && [ -s public/public-keys ]; then echo 'grpc principal key present'; exit 0; fi;
+        openssl ecparam -name prime256v1 -genkey -noout -out private/ec.tmp &&
+        { echo '# compose-local development gRPC principal signing key, generated at start: not for production';
+        openssl pkcs8 -topk8 -nocrypt -in private/ec.tmp; } > private/signing.key.tmp &&
+        { echo '# compose-local development gRPC principal public key, generated at start: not for production';
+        printf 'compose-local=%s\n' "$$(openssl ec -in private/ec.tmp -pubout 2>/dev/null | openssl base64 -A)"; } > public/public-keys.tmp &&
+        rm private/ec.tmp && chmod 0644 private/signing.key.tmp public/public-keys.tmp &&
+        mv private/signing.key.tmp private/signing.key && mv public/public-keys.tmp public/public-keys &&
+        echo 'grpc principal key generated'
+    deploy:
+      resources:
+        limits: { cpus: "0.2", memory: 64M }
+
   immudb-init:
     image: redis:8.10.2-alpine3.23 # any already-pulled image with busybox wget
     restart: "no"
@@ -703,7 +749,7 @@ services:
   # Sentinel: `docker compose up --wait` only treats a one-shot container that EXITED as success
   # when an enabled service depends on it with service_completed_successfully. Without an app
   # profile nothing would, and `--wait` would fail on "kafka-init exited (0)". This idle process
-  # also means "infra bootstrapped": it starts only after all five init jobs succeeded.
+  # also means "infra bootstrapped": it starts only after all six init jobs succeeded.
   infra-ready:
     image: redis:8.10.2-alpine3.23 # any already-pulled image with busybox `sleep`
     restart: unless-stopped
@@ -716,6 +762,7 @@ services:
       cassandra-init: { condition: service_completed_successfully }
       storage-init: { condition: service_completed_successfully }
       immudb-keygen: { condition: service_completed_successfully }
+      grpc-principal-keygen: { condition: service_completed_successfully }
       immudb-init: { condition: service_completed_successfully }
       # Only with the `citus` profile on: the apps then start after the worker has joined.
       citus-init: { condition: service_completed_successfully, required: false }
@@ -787,7 +834,7 @@ services:
       target: ${APP_TARGET:-runtime}
       args: { APP: gateway }
     environment:
-      <<: [*env-base, *env-auth, *env-storage, *env-edge]
+      <<: [*env-base, *env-auth, *env-storage, *env-edge, *env-grpc-principal-sign]
       SERVICE_NAME: gateway
       KAFKA_GROUP_ID: gateway-push
       # Off-heap headroom (512 − 384 MiB) also holds streamed uploads' Buffers:
@@ -799,10 +846,12 @@ services:
       BILLING_GRPC_URL: billing-service:50051
       AI_GRPC_URL: ai-service:50051
     ports: ["127.0.0.1:${API_HOST_PORT:-3000}:3000"]
+    volumes: [grpc-principal-key:/etc/grpc-principal:ro] # GRPC_PRINCIPAL_SIGNING_KEY_FILE (edge only)
     networks:
       backend:
         aliases: [api]
     depends_on:
+      grpc-principal-keygen: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
       kafka-init: { condition: service_completed_successfully }
       storage-init: { condition: service_completed_successfully }
@@ -834,14 +883,16 @@ services:
       target: ${APP_TARGET:-runtime}
       args: { APP: identity-service }
     environment:
-      <<: [*env-base, *env-auth, *env-identity, *env-postgres]
+      <<: [*env-base, *env-auth, *env-identity, *env-postgres, *env-grpc-principal-verify]
       SERVICE_NAME: identity-service
       KAFKA_GROUP_ID: identity-service
       NODE_OPTIONS: --max-old-space-size=320
       GRPC_URL: 0.0.0.0:50051
     # Published so an app on the host (e.g. `bun run dev:gateway`) reaches it at its default URL.
     ports: ["127.0.0.1:${IDENTITY_GRPC_HOST_PORT:-50051}:50051"]
+    volumes: [grpc-principal-pub:/etc/grpc-principal-pub:ro] # GRPC_PRINCIPAL_PUBLIC_KEYS_FILE
     depends_on:
+      grpc-principal-keygen: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
       pgbouncer: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -868,13 +919,15 @@ services:
       target: ${APP_TARGET:-runtime}
       args: { APP: notifications-service }
     environment:
-      <<: [*env-base, *env-cassandra, *env-mail]
+      <<: [*env-base, *env-cassandra, *env-mail, *env-grpc-principal-verify]
       SERVICE_NAME: notifications-service
       KAFKA_GROUP_ID: notifications-service
       NODE_OPTIONS: --max-old-space-size=320
       GRPC_URL: 0.0.0.0:50051
     ports: ["127.0.0.1:${NOTIFICATIONS_GRPC_HOST_PORT:-50052}:50051"]
+    volumes: [grpc-principal-pub:/etc/grpc-principal-pub:ro] # GRPC_PRINCIPAL_PUBLIC_KEYS_FILE
     depends_on:
+      grpc-principal-keygen: { condition: service_completed_successfully }
       redis: { condition: service_healthy }
       mailpit: { condition: service_healthy }
       kafka-init: { condition: service_completed_successfully }
@@ -901,14 +954,17 @@ services:
       target: ${APP_TARGET:-runtime}
       args: { APP: billing-service }
     environment:
-      <<: [*env-base, *env-postgres, *env-stripe, *env-immudb]
+      <<: [*env-base, *env-postgres, *env-stripe, *env-immudb, *env-grpc-principal-verify]
       SERVICE_NAME: billing-service
       KAFKA_GROUP_ID: billing-service
       NODE_OPTIONS: --max-old-space-size=320
       GRPC_URL: 0.0.0.0:50051
     ports: ["127.0.0.1:${BILLING_GRPC_HOST_PORT:-50053}:50051"]
-    volumes: [immudb-signing:/etc/immudb-signing:ro] # the pinned public key (IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE)
+    volumes:
+      - immudb-signing:/etc/immudb-signing:ro # the pinned public key (IMMUDB_SERVER_SIGNING_PUBLIC_KEY_FILE)
+      - grpc-principal-pub:/etc/grpc-principal-pub:ro # GRPC_PRINCIPAL_PUBLIC_KEYS_FILE
     depends_on:
+      grpc-principal-keygen: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
       pgbouncer: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -936,7 +992,7 @@ services:
       target: ${APP_TARGET:-runtime}
       args: { APP: ai-service }
     environment:
-      <<: [*env-base, *env-postgres, *env-ai]
+      <<: [*env-base, *env-postgres, *env-ai, *env-grpc-principal-verify]
       SERVICE_NAME: ai-service
       NODE_OPTIONS: --max-old-space-size=320
       GRPC_URL: 0.0.0.0:50051
@@ -945,7 +1001,9 @@ services:
       NOTIFICATIONS_GRPC_URL: notifications-service:50051
       BILLING_GRPC_URL: billing-service:50051
     ports: ["127.0.0.1:${AI_GRPC_HOST_PORT:-50054}:50051"]
+    volumes: [grpc-principal-pub:/etc/grpc-principal-pub:ro] # GRPC_PRINCIPAL_PUBLIC_KEYS_FILE
     depends_on:
+      grpc-principal-keygen: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
       pgbouncer: { condition: service_healthy }
     deploy:
@@ -1179,6 +1237,8 @@ volumes:
   cassandra-data:
   immudb-data:
   immudb-signing:
+  grpc-principal-key:
+  grpc-principal-pub:
   kafka-data:
   mailpit-data:
   rustfs-data:

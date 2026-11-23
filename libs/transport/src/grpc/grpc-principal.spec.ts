@@ -4,11 +4,13 @@ import type { CallHandler, ExecutionContext } from '@nestjs/common';
 import { CLS_PRINCIPAL, createPrincipal, generateId, PLATFORM_TENANT_ID } from '@platform/common';
 import { CLS_REQ, ClsService } from 'nestjs-cls';
 import { defer, lastValueFrom, of } from 'rxjs';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { createTestPrincipalSigner } from '../testing/test-principal-signer.js';
 import { callerContextFromCls } from './grpc-caller-context.js';
 import { GrpcContextInterceptor } from './grpc-context.interceptor.js';
 import { createOutgoingMetadata, readIncomingMetadata } from './grpc-metadata.js';
 import { principalFromRpcCaller, rpcCallerOf } from './grpc-principal.js';
+import { configurePrincipalAssertions } from './grpc-principal-assertion.js';
 
 const userId = generateId();
 const tenantId = generateId();
@@ -17,6 +19,11 @@ function rpcContext(metadata: unknown): ExecutionContext {
   return {
     getType: () => 'rpc',
     switchToRpc: () => ({ getContext: () => metadata, getData: () => ({}) }),
+    getClass: () => class UsersRpc {},
+    getHandler: () =>
+      function getUser() {
+        return undefined;
+      },
   } as unknown as ExecutionContext;
 }
 
@@ -163,6 +170,124 @@ describe('GrpcContextInterceptor and callerContextFromCls', () => {
       expect(metadata.get('x-user-id')).toEqual([userId]);
       expect(metadata.get('x-tenant-id')).toEqual([tenantId]);
       expect(metadata.get('x-staff')).toEqual([]);
+    });
+  });
+});
+
+describe('GrpcContextInterceptor with GRPC_PRINCIPAL_ASSERTION=enforce', () => {
+  const cls = new ClsService(new AsyncLocalStorage());
+  const interceptor = new GrpcContextInterceptor(cls);
+  const signer = createTestPrincipalSigner('edge-1');
+  const caller = { userId, tenantId, roles: ['owner'], staff: true };
+  const seen = (metadata: unknown) => {
+    const next: CallHandler = {
+      handle: () =>
+        defer(() =>
+          of({
+            principal: cls.get<unknown>(CLS_PRINCIPAL),
+            forwarded: callerContextFromCls(cls).principalAssertion,
+          }),
+        ),
+    };
+    return lastValueFrom(interceptor.intercept(rpcContext(metadata), next));
+  };
+  const refused = { code: 'INVALID_PRINCIPAL', httpStatus: 401 };
+
+  afterEach(() => {
+    configurePrincipalAssertions(undefined);
+    vi.useRealTimers();
+  });
+  const enforce = (publicKeys = signer.publicKeys): void =>
+    configurePrincipalAssertions({ mode: 'enforce', publicKeys });
+
+  it('builds the principal from a valid assertion and forwards its bytes', async () => {
+    enforce();
+    const metadata = signer.metadata(caller);
+    const [assertion] = metadata.get('x-principal-assertion');
+    await expect(seen(metadata)).resolves.toEqual({
+      principal: { userId, tenantId, roles: ['owner'], staff: true },
+      forwarded: assertion,
+    });
+  });
+
+  it('refuses plain headers without an assertion (UNAUTHENTICATED INVALID_PRINCIPAL)', async () => {
+    enforce();
+    await expect(seen(createOutgoingMetadata(caller))).rejects.toMatchObject(refused);
+  });
+
+  it('lets an anonymous call through with no principal (register, login, a webhook)', async () => {
+    enforce();
+    await expect(seen(createOutgoingMetadata({ requestId: generateId() }))).resolves.toEqual({
+      principal: undefined,
+      forwarded: undefined,
+    });
+  });
+
+  it('refuses an assertion signed by another key', async () => {
+    enforce();
+    const other = createTestPrincipalSigner('edge-1');
+    await expect(seen(other.metadata(caller))).rejects.toMatchObject(refused);
+  });
+
+  it('refuses an expired assertion, and one replayed after its expiry', async () => {
+    enforce();
+    const ttlMs = signer.signingKey.ttlSec * 1000;
+    await expect(
+      seen(signer.metadata(caller, { nowMs: Date.now() - ttlMs - 60_000 })),
+    ).rejects.toMatchObject(refused);
+
+    const captured = signer.metadata(caller);
+    await expect(seen(captured)).resolves.toMatchObject({ principal: { userId } });
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + ttlMs + 60_000);
+    await expect(seen(captured)).rejects.toMatchObject(refused);
+  });
+
+  it('refuses a tampered claim (another role and the staff flag on a member assertion)', async () => {
+    enforce();
+    const member = { userId, tenantId, roles: ['member'] };
+    const [header = '', , signature = ''] = signer.sign(member).split('.');
+    const now = Math.floor(Date.now() / 1000);
+    const claims = Buffer.from(
+      JSON.stringify({
+        iss: 'edge',
+        sub: userId,
+        tid: tenantId,
+        roles: ['owner'],
+        staff: true,
+        iat: now,
+        exp: now + 120,
+      }),
+    ).toString('base64url');
+    const metadata = createOutgoingMetadata({
+      ...caller,
+      principalAssertion: `${header}.${claims}.${signature}`,
+    });
+    await expect(seen(metadata)).rejects.toMatchObject(refused);
+  });
+
+  it('refuses plain headers that differ from a valid assertion: the signed claims decide', async () => {
+    enforce();
+    const member = { userId, tenantId, roles: ['member'] };
+    const metadata = createOutgoingMetadata({
+      ...caller,
+      principalAssertion: signer.sign(member),
+    });
+    await expect(seen(metadata)).rejects.toMatchObject(refused);
+  });
+
+  it('refuses an assertion without x-user-id, and one whose claims are not a valid principal', async () => {
+    enforce();
+    const metadata = createOutgoingMetadata({ principalAssertion: signer.sign(caller) });
+    await expect(seen(metadata)).rejects.toMatchObject(refused);
+    const platform = { userId, tenantId: PLATFORM_TENANT_ID };
+    await expect(seen(signer.metadata(platform))).rejects.toMatchObject(refused);
+  });
+
+  it('keeps the plain-header principal in warn (nothing refused)', async () => {
+    configurePrincipalAssertions({ mode: 'warn', publicKeys: signer.publicKeys });
+    await expect(seen(createOutgoingMetadata(caller))).resolves.toMatchObject({
+      principal: { userId, tenantId, roles: ['owner'], staff: true },
     });
   });
 });

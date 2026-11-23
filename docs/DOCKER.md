@@ -42,6 +42,7 @@ Budget: the stack is sized for **4 CPUs / 4 GB** of Docker Desktop memory (see [
 | `cassandra-init`        | `cassandra:5.0.9` (cqlsh)                         | —                            | —                   | one-shot: keyspace `$CASSANDRA_KEYSPACE`                                                   |
 | `immudb`                | `codenotary/immudb:1.11.2` (distroless)           | 3322 (gRPC)                  | —                   | ledger store (append-only, verifiable SQL); pg-wire off; metrics 9497 in-network           |
 | `immudb-keygen`         | `apache/kafka:4.3.1` (openssl)                    | —                            | —                   | one-shot: development state-signing key pair into the `immudb-signing` volume (first run)  |
+| `grpc-principal-keygen` | `apache/kafka:4.3.1` (openssl)                    | —                            | —                   | one-shot: development gRPC principal key pair (ES256) into `grpc-principal-*` (first run)  |
 | `immudb-init`           | `redis:8.10.2-alpine3.23` (busybox)               | —                            | —                   | one-shot: waits for immudb `/readyz`                                                       |
 | `kafka`                 | `apache/kafka:4.3.1` (KRaft, single node)         | 9094 (EXTERNAL listener)     | —                   | integration events                                                                         |
 | `kafka-init`            | `apache/kafka:4.3.1` (CLI)                        | —                            | —                   | one-shot: topics from `docker/kafka/topics.txt`                                            |
@@ -92,7 +93,7 @@ Prometheus scrapes `:9464` inside the network) and gRPC **50051**.
 
 ## Topologies & profiles
 
-- **No profile**: infrastructure only. The init jobs (`kafka-init`, `cassandra-init`, `storage-init`, `immudb-keygen`, `immudb-init`) run once per
+- **No profile**: infrastructure only. The init jobs (`kafka-init`, `cassandra-init`, `storage-init`, `immudb-keygen`, `grpc-principal-keygen`, `immudb-init`) run once per
   `up`, idempotently, and exit 0.
 - **`monolith`** or **`microservices`**: never both. Each topology's edge app carries the network alias **`api`** and
   publishes host port 3000, so k6, docs and your browser don't care which one runs.
@@ -238,6 +239,13 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   opts out with `ALLOW_KNOWN_LOCAL_SECRETS`). Removing the `immudb-signing` volume makes the next start generate a new
   key: see [SECURITY.md](SECURITY.md#immudb-state-signing-key) for what that means for the trusted state.
   [`docker/immudb/README.md`](../docker/immudb/README.md) has the commands.
+- **gRPC principal signing**: `grpc-principal-keygen` generates an ES256 (P-256) key pair on its first run and keeps
+  it. The private key goes into the `grpc-principal-key` volume, which only the gateway mounts
+  (`GRPC_PRINCIPAL_SIGNING_KEY_FILE`, key id `compose-local`); `compose-local=<base64 public PEM>` goes into
+  `grpc-principal-pub`, which the four services mount (`GRPC_PRINCIPAL_PUBLIC_KEYS_FILE`) to verify the signed
+  principal in `GRPC_PRINCIPAL_ASSERTION=enforce`: a call with a user and no valid assertion is refused, so a gateway
+  run on the host (no key) needs the services set to `warn`. Both files carry a `compose-local` marker that
+  `NODE_ENV=production` refuses unless `ALLOW_KNOWN_LOCAL_SECRETS`. See [`libs/transport/README.md`](../libs/transport/README.md).
 - **immudb**: `immudb-init` only waits for readiness (the image has no shell, so no healthcheck; metrics and
   `/readyz` are on port 9497, in-network only; pg-wire is off). The
   database, the SELECT/INSERT-only application user and the tables come from the apps' migrate step
@@ -270,7 +278,7 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   prints its usage and exits 2.
 - **`infra-ready`**: `docker compose up --wait` only accepts a one-shot container that _exited_ when an enabled service
   depends on it with `service_completed_successfully`. Without an app profile nothing would, and `--wait` would fail
-  with `kafka-init exited (0)`. This idle 1 MB container depends on the five init jobs, and so means "infra bootstrapped".
+  with `kafka-init exited (0)`. This idle 1 MB container depends on the six init jobs, and so means "infra bootstrapped".
 
 `scripts/docker/check-infra.sh` boots the infra in an isolated project (`bp-infra-check`), asserts all of the above
 (topics + partitions + auto-create off, keyspace + DC, Citus + extensions + `uuidv7()`, the three roles, PgBouncer

@@ -1,5 +1,12 @@
-import { createPrincipal, type Principal } from '@platform/common';
+import {
+  createPrincipal,
+  type Principal,
+  TenancyErrorCode,
+  UnauthenticatedException,
+} from '@platform/common';
+import type { GrpcPrincipalAssertionMode } from '@platform/config';
 import type { IncomingRpcContext, RpcCallerContext } from './grpc-metadata.js';
+import type { PrincipalAssertionCheck } from './grpc-principal-assertion.js';
 
 /**
  * The principal a gRPC caller asserted in metadata (spec §7). The gateway authenticated the user and
@@ -19,6 +26,32 @@ export function principalFromRpcCaller(caller: IncomingRpcContext): Principal | 
     roles: caller.roles,
     staff: caller.staff,
   });
+}
+
+/**
+ * The principal of one incoming call under `GRPC_PRINCIPAL_ASSERTION` (`check` is
+ * `assessPrincipalAssertion`'s result, `undefined` in `off` or for an anonymous call):
+ * - `off` and `warn`: the plain headers (`principalFromRpcCaller`), whatever the assertion says;
+ * - `enforce`: no user and no assertion → anonymous (`undefined`); a valid assertion → the principal
+ *   of its signed claims alone, through the same `createPrincipal` rules; anything else (no
+ *   assertion beside `x-user-id`, expired, invalid, another key, or plain headers that differ from
+ *   the claims) → `UnauthenticatedException` `INVALID_PRINCIPAL`. A mesh peer without the edge's
+ *   private key thus cannot assert a user, a tenant, roles or the staff flag.
+ */
+export function principalForRpcCall(
+  caller: IncomingRpcContext,
+  mode: GrpcPrincipalAssertionMode,
+  check: PrincipalAssertionCheck | undefined,
+): Principal | undefined {
+  if (mode !== 'enforce') return principalFromRpcCaller(caller);
+  if (check === undefined) return undefined;
+  if (check.outcome !== 'valid') {
+    throw new UnauthenticatedException('Invalid principal', {
+      code: TenancyErrorCode.INVALID_PRINCIPAL,
+      details: { reason: `principal assertion ${check.outcome}` },
+    });
+  }
+  return principalFromRpcCaller({ ...check.caller });
 }
 
 /** What an outgoing call asserts for `principal`. `staff` only when true. */

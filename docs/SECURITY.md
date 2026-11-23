@@ -250,7 +250,9 @@ The gateway forwards the authenticated principal on every gRPC call as `x-user-i
 without a user) fails closed with `UNAUTHENTICATED` / `INVALID_PRINCIPAL`; `staff` is true only for the exact string
 `true`; unknown roles are dropped; no `x-user-id` means no principal (not an error). Permissions are never sent: the
 service recomputes them from the roles with its own RBAC registry. This metadata is trusted only inside the mesh: gRPC
-mTLS (`GRPC_TLS_*`), or `GRPC_ALLOW_INSECURE` only behind a mesh that does mTLS plus a NetworkPolicy. Kafka envelopes
+mTLS (`GRPC_TLS_*`), or `GRPC_ALLOW_INSECURE` only behind a mesh that does mTLS plus a NetworkPolicy. The gateway also
+signs it (`x-principal-assertion`, ES256, key only at the edge); with `GRPC_PRINCIPAL_ASSERTION=enforce` a service builds
+the principal from that signature's claims alone ([signed principal](#signed-principal-assertion)). Kafka envelopes
 carry `tenantId` and `actorId`; a consumer acts as that actor (an envelope without them, from a deploy in flight, sets no
 principal), and DataLoader batches keep the request's context.
 
@@ -401,10 +403,11 @@ when they match `[A-Za-z0-9._:-]{1,128}`.
 
 ## Internal gRPC (mTLS, reflection)
 
-The services (identity, notifications, billing, ai) **trust their caller**: `rpc` handlers run no JWT
-guard, and the principal (`x-user-id`, `x-tenant-id`, `x-user-roles`, `x-staff`) and the `actorId`/`userId`/`tenantId`
-fields come from the caller. Whoever reaches port 50051 can act as any user of any tenant. Protect the
-transport (see also [Principal propagation](#principal-propagation)):
+The services (identity, notifications, billing, ai) **trust their caller** unless
+`GRPC_PRINCIPAL_ASSERTION=enforce`: `rpc` handlers run no JWT guard, and the principal (`x-user-id`, `x-tenant-id`,
+`x-user-roles`, `x-staff`) and the `actorId`/`userId`/`tenantId` fields come from the caller. In `off` (the default) and
+`warn`, whoever reaches port 50051 can act as any user of any tenant. Protect the transport, and run the services in
+`enforce` ([signed principal](#signed-principal-assertion); see also [Principal propagation](#principal-propagation)):
 
 | Variable                           | Default              | Effect                                                                                  |
 | ---------------------------------- | -------------------- | --------------------------------------------------------------------------------------- |
@@ -419,6 +422,38 @@ mesh doing mTLS with `GRPC_ALLOW_INSECURE=true`, **plus** a NetworkPolicy that l
 reach the services' gRPC ports, and ai-service reach identity-, notifications- and billing-service (its chat tools call
 them as the caller). Keep reflection off. ai-service re-checks tenant and user of every request against the principal
 (403 `TENANT_MISMATCH`).
+
+### Signed principal assertion
+
+The gateway signs the principal it forwards: `x-principal-assertion`, a compact ES256 JWS (claims user, tenant, roles,
+staff, `iat`, `exp` = `iat` + `GRPC_PRINCIPAL_ASSERTION_TTL_SEC`, 120 s; keep it above `AI_GRPC_CHAT_DEADLINE_MS`).
+Only the edge holds the private key (`GRPC_PRINCIPAL_SIGNING_KEY` / `_FILE`, `GRPC_PRINCIPAL_SIGNING_KEY_ID`); the
+services verify with the public keys (`GRPC_PRINCIPAL_PUBLIC_KEYS` / `_FILE`, `kid=base64 PEM`) and forward the same
+bytes on their own calls (ai-service's chat tools), never signing. `GRPC_PRINCIPAL_ASSERTION` on each service:
+
+- `off` (default): the header is ignored; the plain metadata decides.
+- `warn`: the assertion is verified and counted in `grpc_principal_assertions_total{outcome}` (`valid`, `missing`,
+  `expired`, `invalid`, `mismatch`); every other outcome is logged; the plain metadata still decides.
+- `enforce`: the principal comes from a valid assertion's claims only. A call with `x-user-id` and no valid assertion
+  (missing, expired, signed by another key, or plain headers that differ from the claims) fails `UNAUTHENTICATED`
+  `INVALID_PRINCIPAL` before any handler runs; a call without `x-user-id` stays anonymous (register, login, the Stripe
+  webhook). A mesh peer without the edge's private key cannot assert a user, a tenant, roles or the staff flag.
+
+No Kafka consumer makes a gRPC call. One added later must run in a process that holds the signing key, or call
+anonymously. The compose microservices stack and its topology smoke (`check-topology.ts`) run in `enforce`.
+
+Rollout, for a running deployment (mixed versions keep working at every step):
+
+1. Deploy the new code everywhere with `GRPC_PRINCIPAL_ASSERTION=off` (the default).
+2. Distribute the keys: the private key to the gateway only, the public keys to every service.
+3. Switch the services to `warn`.
+4. Watch `grpc_principal_assertions_total` until it counts only `valid`. `missing` means an old gateway or an old
+   ai-service: an old ai-service drops the assertion on its tool calls, so identity-, notifications- and
+   billing-service go to `enforce` only once every ai-service replica runs the new code.
+5. Switch the services to `enforce`.
+
+To rotate the key, list the new public key next to the old one on every service, then sign with it at the gateway,
+then drop the old one.
 
 Client-side resilience (not a security control, but it limits blast radius): every call has a
 deadline (`GRPC_DEADLINE_MS`, 5 s), a circuit breaker per upstream, and `UNAVAILABLE` retries only
@@ -979,6 +1014,9 @@ At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) pu
 
 ## Known gaps
 
+- Under `GRPC_PRINCIPAL_ASSERTION=off` (the default) and `warn`, internal gRPC trusts unsigned principal metadata: a mesh
+  peer that reaches a service's port can assert any user, tenant, roles or staff flag. Only `enforce` closes this
+  ([rollout](#signed-principal-assertion)); anonymous calls stay possible in every mode.
 - `notifications.notification-created.v1` is published directly (the notifications context has no Postgres
   store to hold an outbox row): a crash between the inbox write and the publish loses the push. The events of
   identity and billing go through the transactional outbox and are delivered at least once.

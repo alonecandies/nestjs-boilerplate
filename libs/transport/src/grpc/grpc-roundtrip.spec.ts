@@ -1,15 +1,19 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { createServer } from 'node:net';
 import {
   type ChannelCredentials,
   credentials,
   loadPackageDefinition,
   Metadata,
+  type ServiceError,
+  status,
 } from '@grpc/grpc-js';
 import { loadSync } from '@grpc/proto-loader';
 import { type INestMicroservice, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ClientGrpcProxy, Ctx, Payload } from '@nestjs/microservices';
 import {
+  CLS_PRINCIPAL,
   DomainConflictException,
   DomainValidationException,
   EntityNotFoundException,
@@ -19,7 +23,9 @@ import {
 import { type GrpcConfig, grpcConfig } from '@platform/config';
 import { protoPath as healthProtoPath } from 'grpc-health-check';
 import { ClsModule, ClsService } from 'nestjs-cls';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { register } from 'prom-client';
+import { lastValueFrom } from 'rxjs';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   FIXTURE_GRPC_PACKAGE,
@@ -35,11 +41,19 @@ import {
   UsersServiceControllerMethods,
 } from '../../test/fixtures/fixture.grpc-package.js';
 import { RPC_CLS_KEYS } from '../context/transport-context.js';
+import { createTestPrincipalSigner } from '../testing/test-principal-signer.js';
+import { GRPC_METADATA_KEYS } from './grpc.constants.js';
 import { grpcCall } from './grpc-call.js';
+import { callerContextFromCls } from './grpc-caller-context.js';
 import { GrpcCircuitBreakers } from './grpc-circuit-breakers.js';
 import { createGrpcClientOptions } from './grpc-client.options.js';
 import { GrpcController } from './grpc-controller.decorator.js';
 import { createOutgoingMetadata, readIncomingMetadata } from './grpc-metadata.js';
+import {
+  configurePrincipalAssertions,
+  GRPC_PRINCIPAL_ASSERTIONS_TOTAL,
+  type PrincipalAssertionSettings,
+} from './grpc-principal-assertion.js';
 import { createGrpcServerStrategy } from './grpc-server.options.js';
 import { ZodRpcValidationPipe } from './zod-rpc-validation.pipe.js';
 
@@ -70,6 +84,14 @@ interface SeenCall {
 }
 const seen: SeenCall[] = [];
 
+interface SeenPrincipal {
+  /** The principal the handler runs as (CLS_PRINCIPAL). */
+  principal: unknown;
+  /** The assertion this service would send on its own outgoing call. */
+  forwarded: string | undefined;
+}
+const principals: SeenPrincipal[] = [];
+
 @GrpcController()
 @UsersServiceControllerMethods()
 class TestUsersGrpcController implements UsersServiceController {
@@ -91,6 +113,10 @@ class TestUsersGrpcController implements UsersServiceController {
   }
 
   getUsersByIds(_request: GetUsersByIdsRequest): UserList {
+    principals.push({
+      principal: this.cls.get<unknown>(CLS_PRINCIPAL),
+      forwarded: callerContextFromCls(this.cls).principalAssertion,
+    });
     return { users: [KNOWN_USER] };
   }
 
@@ -259,5 +285,176 @@ describe('gRPC round trip (in-process server + ClientGrpc)', () => {
 
   it('did not open the circuit for caller errors', () => {
     expect(breakers.states()['fixture']).toBe('closed');
+  });
+
+  describe('principal assertion (warn mode: verified and counted, nothing refused)', () => {
+    const { privateKey, publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const publicKeys = new Map([['edge-1', publicKey]]);
+    const signingKey = { keyId: 'edge-1', privateKey, ttlSec: 120 };
+    const principal = { userId: generateId(), tenantId: generateId(), roles: ['admin'] };
+    const asPrincipal = { ...principal, staff: false };
+
+    afterEach(() => configurePrincipalAssertions(undefined));
+
+    const count = async (outcome: string): Promise<number> => {
+      const metric = register.getSingleMetric(GRPC_PRINCIPAL_ASSERTIONS_TOTAL);
+      const values = metric === undefined ? [] : (await metric.get()).values;
+      return values.find((sample) => sample.labels['outcome'] === outcome)?.value ?? 0;
+    };
+    const counts = async (): Promise<Record<string, number>> => {
+      const outcomes = ['valid', 'missing', 'expired', 'invalid', 'mismatch'];
+      return Object.fromEntries(
+        await Promise.all(outcomes.map(async (o) => [o, await count(o)] as const)),
+      );
+    };
+    /** Metadata the way a gateway adapter builds it: from the CLS principal of an HTTP request. */
+    const edgeMetadata = (): Metadata => {
+      const cls = app.get(ClsService);
+      return cls.run(() => {
+        cls.set(CLS_PRINCIPAL, asPrincipal);
+        return createOutgoingMetadata(callerContextFromCls(cls));
+      });
+    };
+    const assertionOf = (metadata: Metadata): string | undefined => {
+      const [value] = metadata.get(GRPC_METADATA_KEYS.PRINCIPAL_ASSERTION);
+      return typeof value === 'string' ? value : undefined;
+    };
+    const warn = (extra: Partial<PrincipalAssertionSettings> = {}): void =>
+      configurePrincipalAssertions({ mode: 'warn', publicKeys, ...extra });
+
+    it('a call from a signing client carries an assertion the server verifies (valid)', async () => {
+      warn({ signingKey });
+      const before = await counts();
+      const metadata = edgeMetadata();
+      expect(assertionOf(metadata)).toMatch(/^[\w-]+\.[\w-]+\.[\w-]+$/);
+
+      await call(users.getUsersByIds({ ids: [KNOWN_USER.id] }, metadata));
+
+      expect(await counts()).toEqual({ ...before, valid: (before['valid'] ?? 0) + 1 });
+      expect(principals.at(-1)?.principal).toEqual(asPrincipal);
+    });
+
+    it('a service that received an assertion forwards the same bytes on its own calls', async () => {
+      warn({ signingKey });
+      const metadata = edgeMetadata();
+      await call(users.getUsersByIds({ ids: [KNOWN_USER.id] }, metadata));
+      expect(principals.at(-1)?.forwarded).toBe(assertionOf(metadata));
+    });
+
+    it('plain headers without an assertion (an old gateway) still reach the handler: missing', async () => {
+      warn(); // this process has no signing key: it plays the old gateway
+      const before = await counts();
+      const metadata = edgeMetadata();
+      expect(assertionOf(metadata)).toBeUndefined();
+
+      await call(users.getUsersByIds({ ids: [KNOWN_USER.id] }, metadata));
+
+      expect(await counts()).toEqual({ ...before, missing: (before['missing'] ?? 0) + 1 });
+      expect(principals.at(-1)).toEqual({ principal: asPrincipal, forwarded: undefined });
+    });
+
+    it('a tampered claim counts invalid; the plain headers still build the principal', async () => {
+      warn({ signingKey });
+      const [header = '', , signature = ''] = (assertionOf(edgeMetadata()) ?? '').split('.');
+      const payload = Buffer.from(
+        JSON.stringify({
+          iss: 'edge',
+          sub: principal.userId,
+          tid: principal.tenantId,
+          roles: ['owner'],
+          staff: true,
+          iat: Math.floor(Date.now() / 1000),
+          exp: Math.floor(Date.now() / 1000) + 120,
+        }),
+      ).toString('base64url');
+      const before = await counts();
+      const tampered = createOutgoingMetadata({
+        ...principal,
+        roles: ['owner'],
+        staff: true,
+        principalAssertion: `${header}.${payload}.${signature}`,
+      });
+
+      await call(users.getUsersByIds({ ids: [KNOWN_USER.id] }, tampered));
+
+      expect(await counts()).toEqual({ ...before, invalid: (before['invalid'] ?? 0) + 1 });
+      expect(principals.at(-1)?.principal).toMatchObject({ roles: ['owner'], staff: true });
+    });
+
+    it('a server in off mode (and an old server) ignores the header', async () => {
+      configurePrincipalAssertions({ mode: 'off', signingKey, publicKeys });
+      const metadata = edgeMetadata();
+      metadata.set(GRPC_METADATA_KEYS.PRINCIPAL_ASSERTION, 'not.a.jws');
+      const before = await counts();
+
+      await call(users.getUsersByIds({ ids: [KNOWN_USER.id] }, metadata));
+
+      expect(await counts()).toEqual(before);
+      expect(principals.at(-1)?.principal).toEqual(asPrincipal);
+    });
+  });
+
+  describe('principal assertion (enforce: only signed principals pass)', () => {
+    const signer = createTestPrincipalSigner('edge-1');
+    const caller = { userId: generateId(), tenantId: generateId(), roles: ['owner'], staff: true };
+
+    beforeAll(() => {
+      configurePrincipalAssertions({ mode: 'enforce', publicKeys: signer.publicKeys });
+    });
+    afterAll(() => configurePrincipalAssertions(undefined));
+
+    const count = async (outcome: string): Promise<number> => {
+      const metric = register.getSingleMetric(GRPC_PRINCIPAL_ASSERTIONS_TOTAL);
+      const values = metric === undefined ? [] : (await metric.get()).values;
+      return values.find((sample) => sample.labels['outcome'] === outcome)?.value ?? 0;
+    };
+    const failure = (metadata: Metadata): Promise<ServiceError> =>
+      lastValueFrom(users.getUsersByIds({ ids: [KNOWN_USER.id] }, metadata)).then(
+        () => {
+          throw new Error('expected the call to be refused');
+        },
+        (error: unknown) => error as ServiceError,
+      );
+    const expectRefused = (error: ServiceError): void => {
+      expect(error.code).toBe(status.UNAUTHENTICATED);
+      expect(error.metadata.get(GRPC_METADATA_KEYS.ERROR_CODE)).toEqual(['INVALID_PRINCIPAL']);
+    };
+
+    it('a signed call passes with the principal of its claims (valid)', async () => {
+      const before = await count('valid');
+      await call(users.getUsersByIds({ ids: [KNOWN_USER.id] }, signer.metadata(caller)));
+      expect(await count('valid')).toBe(before + 1);
+      expect(principals.at(-1)?.principal).toEqual(caller);
+    });
+
+    it('plain headers asserting staff and owner without an assertion are refused (missing)', async () => {
+      const before = await count('missing');
+      const calls = principals.length;
+      expectRefused(await failure(createOutgoingMetadata(caller)));
+      expect(await count('missing')).toBe(before + 1);
+      expect(principals).toHaveLength(calls);
+    });
+
+    it('an assertion signed by another key is refused (invalid)', async () => {
+      const before = await count('invalid');
+      const other = createTestPrincipalSigner('edge-1');
+      expectRefused(await failure(other.metadata(caller)));
+      expect(await count('invalid')).toBe(before + 1);
+    });
+
+    it('an expired assertion is refused (expired)', async () => {
+      const before = await count('expired');
+      const late = Date.now() - (signer.signingKey.ttlSec + 60) * 1000;
+      expectRefused(await failure(signer.metadata(caller, { nowMs: late })));
+      expect(await count('expired')).toBe(before + 1);
+    });
+
+    it('an anonymous call still passes, uncounted', async () => {
+      const before = await count('missing');
+      await expect(call(users.getUser({ id: KNOWN_USER.id }))).resolves.toMatchObject({
+        id: KNOWN_USER.id,
+      });
+      expect(await count('missing')).toBe(before);
+    });
   });
 });

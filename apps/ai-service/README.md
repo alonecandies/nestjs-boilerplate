@@ -57,6 +57,15 @@ CLS context, so the caller's principal travels on and each owner applies its own
 connect on the first tool call; an unreachable owner is a tool error returned to the model, never a
 failed turn.
 
+**Signed principal.** ai-service holds no signing key. A tool call forwards the gateway's
+`x-principal-assertion` exactly as the turn received it, so an owner in
+`GRPC_PRINCIPAL_ASSERTION=enforce` accepts it while it is in date: keep
+`GRPC_PRINCIPAL_ASSERTION_TTL_SEC` (120 s) above the gateway's `AI_GRPC_CHAT_DEADLINE_MS` (70 s).
+Under `enforce`, ai-service itself refuses a turn whose caller has no valid assertion
+(`UNAUTHENTICATED` `INVALID_PRINCIPAL`). An older ai-service drops the assertion on its tool calls,
+so identity-, notifications- and billing-service go to `enforce` only once every ai-service replica
+runs this code ([rollout](../../docs/SECURITY.md#signed-principal-assertion)).
+
 ## Configuration
 
 `.env.example` holds only what differs per service; `bun run setup:env` copies it to `.env`.
