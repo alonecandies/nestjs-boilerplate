@@ -170,6 +170,19 @@ describe('docs/CONFIGURATION.md: the database keys of Tasks 3 and 17', () => {
   });
 });
 
+describe('docs/CONFIGURATION.md: the connection-cap rollout (review minors, final review F6)', () => {
+  it('warns that the wsslot key replaces the wsconn counter and a rolling deploy can double the cap', () => {
+    const throttle = flat(
+      section(configuration, '### `throttle` — rate limiting (Redis-backed `@nestjs/throttler`)'),
+    );
+    expect(throttle).toContain('`wsslot`');
+    expect(throttle).toContain('`wsconn`');
+    expect(throttle).toMatch(/rolling deploy/i);
+    expect(throttle).toMatch(/twice the cap/i);
+    expect(throttle).toMatch(/full restart/i);
+  });
+});
+
 describe('the B3 spec delta (ruling b3-identity-policies, 2026-11-17)', () => {
   const program = read('docs/superpowers/specs/2026-10-12-domains-tenancy-rls-program-design.md');
   const sharding = read('docs/superpowers/specs/2026-11-09-sharding-citus-pgbouncer-design.md');
