@@ -690,13 +690,16 @@ images (`src/cli/ledger-reanchor.ts` → `runLedgerReanchorCli`), runbook `docs/
 builds its own context (`BillingLedgerReanchorModule`, the only module that registers `ReanchorLedgerHandler`, so no
 running app can dispatch it) and sends `ReanchorLedgerCommand` inside `SystemContext.run('billing.ledger-reanchor')`.
 It runs no Postgres or immudb migrations, whatever `DATABASE_RUN_MIGRATIONS` and `IMMUDB_RUN_MIGRATIONS` say.
-In order it refuses, writing nothing: the ledger off; `--lost-from` not in the past; `--lost-from` inside the last
-15 minutes (`lost-from-in-grace`: its window would be empty); no pinned signing key
+In order it refuses, writing nothing: the ledger off; `--lost-from` not in the past; no pinned signing key
 (`LedgerPort.signedState`; `LEDGER_ALLOW_UNVERIFIED` does not help); a current state whose signature does not verify;
 `--database` not the store's; no stored state; a current state that still extends the stored one (dual proof:
 nothing was lost). Then `ledgerTrustedState.reanchor` inserts the audit row (`ledger_reanchors`) and compare-and-sets
 the stored state to exactly the verified one, `lost-from` as its `read_at`, in one transaction (a lost compare-and-set
 writes neither), and one `ReconcileLedgerCommand` runs over `[lost-from, now − LEDGER_RECONCILE_GRACE_MS)`.
+A `--lost-from` inside the last 15 minutes is not refused (audit batch 1, Task 39): that window is empty, so the run is
+skipped and the result says so (`reconciliation: { status: 'skipped', reason: 'lost-from-in-grace' }`; the CLI logs
+that the hourly reconciliation covers the window and exits 0). The lost window is recent, so the hourly run's own
+window covers it, and R5's lost-history rule keys off the re-anchor row, not this run.
 Expected findings of that first run:
 R4 reports each Stripe transaction whose entry the restore lost as `missing_entry` and re-enqueues it; R5 reports its
 ref as `verification_failed` (`ledger_entries:<id>`); for a lost charge whose payment was paid in the window, R3 also
@@ -712,7 +715,9 @@ checks (`ReconcileLedgerCommand`'s `onFinished`; the command still resolves with
 `failed` (a Stripe error in R4, say) exits 3 after the re-anchor committed, its failed checks logged. A second
 re-anchor is then refused (`nothing-lost`), so `--reconcile-only` (same flags) dispatches
 `RerunLedgerReconciliationCommand`: the same run over `[lost-from, now − 15 min)` under the same lock, no audit row, refused
-(`reanchor-needed`) while the current state does not extend the trusted one. Exit codes: 0 done, 1 refused or failed
+(`reanchor-needed`) while the current state does not extend the trusted one, and (`lost-from-in-grace`) while
+`--lost-from` is inside the last 15 minutes (nothing to reconcile yet). Exit codes: 0 done (or the run skipped), 1
+refused or failed
 (Redis unreachable too), 2 usage, 3 the run failed, 4 the lock stayed busy. R5 honours only the latest re-anchor: a ref lost in an earlier restore and not posted again can fall out of
 the lost-history rule after a second re-anchor and be skipped, so heal the previous run's `verification_failed` refs
 before re-anchoring again. Without arguments the CLI prints its usage and exits 2, reading no config and opening no connection (the image build's

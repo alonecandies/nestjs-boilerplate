@@ -20,6 +20,7 @@ import {
   type LedgerReanchorRequest,
   type LedgerReanchorResult,
   type LedgerReconcileOnlyResult,
+  type LedgerReconciliationSkipped,
   ReanchorLedgerCommand,
   RerunLedgerReconciliationCommand,
 } from './reanchor-ledger.command.js';
@@ -28,9 +29,8 @@ import {
 const graceEnd = (now: Date): Date => new Date(now.getTime() - LEDGER_RECONCILE_GRACE_MS);
 
 /**
- * The refusals both commands share: outside `SystemContext`, the ledger off, a lost-from not in the
- * past, or one inside the cron's grace (no window would end before
- * `now − LEDGER_RECONCILE_GRACE_MS`; the next hourly run covers it).
+ * The refusals both commands share: outside `SystemContext`, the ledger off, or a lost-from not in
+ * the past.
  */
 function assertCanRun(
   command: string,
@@ -56,6 +56,14 @@ function assertCanRun(
       `--lost-from ${lostFrom.toISOString()} is not in the past`,
     );
   }
+}
+
+/**
+ * `--reconcile-only`'s refusal of a lost-from inside the cron's grace: no window would end before
+ * `now − LEDGER_RECONCILE_GRACE_MS`, so there is nothing to reconcile yet (the next hourly run
+ * covers it). The re-anchor does not refuse it: it skips its follow-up run instead (Task 39).
+ */
+function assertOutsideGrace(lostFrom: Date, now: Date = new Date()): void {
   const graceStart = graceEnd(now);
   if (!(lostFrom.getTime() < graceStart.getTime())) {
     throw new LedgerReanchorRefusedException(
@@ -80,18 +88,20 @@ async function extendsTrusted(ledger: LedgerPort, trusted: LedgerTrustedState): 
 }
 
 /**
- * One `ReconcileLedgerCommand` over `[lostFrom, now − LEDGER_RECONCILE_GRACE_MS)` (audit batch 1
- * review #3): like the cron's default window, it stops short of the postings still in flight, and
- * the next hourly run covers that tail. It resolves with how the run finished (its status and
- * failed checks, from the command's `onFinished`). `assertCanRun` keeps the window non-empty.
+ * One `ReconcileLedgerCommand` over `[lostFrom, to)`, `to` being `now − LEDGER_RECONCILE_GRACE_MS`
+ * (audit batch 1 review #3): like the cron's default window, it stops short of the postings still
+ * in flight, and the next hourly run covers that tail. It resolves with how the run finished (its
+ * status and failed checks, from the command's `onFinished`). The caller keeps the window
+ * non-empty.
  */
 async function reconcileLostWindow(
   commands: CommandBus,
   lostFrom: Date,
+  to: Date,
 ): Promise<LedgerRunOutcome> {
   const finished: { outcome?: LedgerRunOutcome } = {};
   await commands.execute(
-    new ReconcileLedgerCommand({ from: lostFrom, to: graceEnd(new Date()) }, (outcome) => {
+    new ReconcileLedgerCommand({ from: lostFrom, to }, (outcome) => {
       finished.outcome = outcome;
     }),
   );
@@ -101,13 +111,17 @@ async function reconcileLostWindow(
   return finished.outcome;
 }
 
+/** What a skipped follow-up run reports: its lost-from is inside the grace. */
+const SKIPPED_IN_GRACE: LedgerReconciliationSkipped = {
+  status: 'skipped',
+  reason: 'lost-from-in-grace',
+};
+
 /**
  * The audited re-anchor (audit fixes OPS-1). In this order it refuses, writing nothing, with
  * `LedgerReanchorRefusedException` naming why:
  * 1. `ledger-disabled`: `LEDGER_ENABLED=false`;
  * 2. `lost-from-not-past`: the lost history would start now or later;
- *    `lost-from-in-grace`: it starts inside the last `LEDGER_RECONCILE_GRACE_MS` (15 min), so the
- *    follow-up window would be empty (retry once it is older; the next hourly run covers it);
  * 3. `signing-key-not-pinned`: the client pins no server signing key (`LedgerPort.signedState`;
  *    `LEDGER_ALLOW_UNVERIFIED` does not help);
  * 4. `signature-invalid`: the restored server's current state is not signed by that key;
@@ -121,9 +135,12 @@ async function reconcileLostWindow(
  * cron's grace: the next hourly run covers the tail): R4 re-enqueues
  * what Stripe lists there and the ledger lacks, R5 reports each lost entry as `verification_failed`
  * (until the posting path posts it again); the result carries that run's status and failed checks
- * (a failed run is not an error here: the re-anchor committed). Only an `LedgerVerificationFailedException` of the dual
- * proof means "does not extend"; any other failure (a transport error) propagates. Runs only inside
- * `SystemContext` (the CLI opens it). Registered by `BillingLedgerReanchorModule` alone.
+ * (a failed run is not an error here: the re-anchor committed). A lost-from inside those last
+ * 15 minutes is not refused (Task 39): that window is empty, so the run is skipped and the result
+ * says so (`{ status: 'skipped', reason: 'lost-from-in-grace' }`); the hourly run's own window
+ * covers the lost one, and R5's lost-history rule keys off the re-anchor row, not this run. Only a
+ * `LedgerVerificationFailedException` of the dual proof means "does not extend"; any other failure
+ * (a transport error) propagates. Runs only inside `SystemContext` (the CLI opens it). Registered by `BillingLedgerReanchorModule` alone.
  */
 @CommandHandler(ReanchorLedgerCommand)
 export class ReanchorLedgerHandler implements ICommandHandler<ReanchorLedgerCommand> {
@@ -190,8 +207,25 @@ export class ReanchorLedgerHandler implements ICommandHandler<ReanchorLedgerComm
       'Ledger trusted state re-anchored after a restore',
     );
 
-    const reconciliation = await reconcileLostWindow(this.commands, lostFrom);
+    const reconciliation = await this.reconcile(database, lostFrom);
     return { reanchorId, database, replacedTxId: trusted.txId, txId: state.txId, reconciliation };
+  }
+
+  /** The follow-up run over `[lostFrom, now − 15 min)`, or none when that window is empty. */
+  private async reconcile(
+    database: string,
+    lostFrom: Date,
+  ): Promise<LedgerRunOutcome | LedgerReconciliationSkipped> {
+    const to = graceEnd(new Date());
+    if (lostFrom.getTime() < to.getTime()) {
+      return reconcileLostWindow(this.commands, lostFrom, to);
+    }
+    this.logger.warn(
+      { database, lostFrom, graceFrom: to },
+      'Ledger re-anchor follow-up reconciliation skipped: lost-from is inside the grace, ' +
+        'the hourly reconciliation covers the window',
+    );
+    return SKIPPED_IN_GRACE;
   }
 
   /** The restored server's current state, its signature verified against the pinned key. */
@@ -243,6 +277,7 @@ export class RerunLedgerReconciliationHandler
   async execute({ request }: RerunLedgerReconciliationCommand): Promise<LedgerReconcileOnlyResult> {
     const { database, lostFrom, operator, reason }: LedgerReanchorRequest = request;
     assertCanRun('RerunLedgerReconciliationCommand', this.config, lostFrom);
+    assertOutsideGrace(lostFrom);
 
     // The database name only: the extension proof below is what checks the state.
     const current = await this.ledger.currentState();
@@ -268,7 +303,8 @@ export class RerunLedgerReconciliationHandler
       { database, lostFrom, operator, reason },
       'Ledger reconciliation re-run over the lost window (no re-anchor)',
     );
-    const reconciliation = await reconcileLostWindow(this.commands, lostFrom);
+    // Time only moves on: the window that passed `assertOutsideGrace` is still non-empty.
+    const reconciliation = await reconcileLostWindow(this.commands, lostFrom, graceEnd(new Date()));
     return { database, reconciliation };
   }
 }

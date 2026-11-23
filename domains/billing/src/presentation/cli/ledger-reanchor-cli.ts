@@ -22,7 +22,11 @@ import {
   ReanchorLedgerCommand,
   RerunLedgerReconciliationCommand,
 } from '../../application/commands/reanchor-ledger/reanchor-ledger.command.js';
-import { RECONCILE_LEDGER_LOCK, RECONCILE_LEDGER_LOCK_TTL_MS } from '../../billing.constants.js';
+import {
+  LEDGER_RECONCILE_GRACE_MS,
+  RECONCILE_LEDGER_LOCK,
+  RECONCILE_LEDGER_LOCK_TTL_MS,
+} from '../../billing.constants.js';
 import { billingLedgerMigrations } from '../../infrastructure/ledger/billing-ledger.migrations.js';
 import { BillingLedgerReanchorModule } from '../../infrastructure/ledger/billing-ledger-reanchor.module.js';
 import { ledgerConfig } from '../../infrastructure/ledger/ledger.config.js';
@@ -33,7 +37,7 @@ export const LEDGER_REANCHOR_REASON = 'billing.ledger-reanchor';
 
 /** The CLI's exit codes (documented in its usage and in docs/OPERATIONS.md, immudb step 5). */
 export const LEDGER_REANCHOR_EXIT = {
-  /** Done, and the reconciliation run succeeded. */
+  /** Done, and the reconciliation run succeeded (or a re-anchor inside the grace skipped it). */
   ok: 0,
   /** Refused (nothing written) or failed (logged). */
   error: 1,
@@ -61,14 +65,16 @@ const USAGE =
   '                    refused while the trusted state still needs a re-anchor\n' +
   '  --database <db>: the immudb database (IMMUDB_DATABASE of the apps)\n' +
   '  --lost-from <ISO time>: where the lost history starts (the restore point), e.g.\n' +
-  '                          2026-11-20T03:00:00Z; at least 15 minutes ago\n' +
+  '                          2026-11-20T03:00:00Z; within the last 15 minutes, the re-anchor\n' +
+  '                          skips its run (the hourly run covers the window) and\n' +
+  '                          --reconcile-only is refused\n' +
   '  --operator <name>: who runs it (stored in the audit row)\n' +
   '  --reason <text>: why (stored in the audit row)\n' +
   '  Refused, writing nothing, with the ledger off, without a pinned signing key\n' +
   '  (LEDGER_ALLOW_UNVERIFIED does not help), when the state signature does not verify, and\n' +
   '  when the current state still extends the trusted one. Both modes take the hourly\n' +
   "  reconciliation's Redis lock first, waiting up to 10 minutes for it.\n" +
-  '  Exit codes: 0 done; 1 refused or failed; 2 usage; 3 the reconciliation run failed\n' +
+  '  Exit codes: 0 done (or the run skipped); 1 refused or failed; 2 usage; 3 the run failed\n' +
   '  (re-run it with --reconcile-only); 4 the lock stayed busy, nothing written (run it again).\n' +
   '  Runbook: docs/OPERATIONS.md (immudb).\n';
 
@@ -101,6 +107,11 @@ export interface LedgerReanchorCliOptions {
  * instead: the same reconciliation over `[lost-from, now − 15 min)` again (the cron's grace:
  * the next hourly run covers the tail), no re-anchor, no audit row.
  *
+ * A re-anchor whose `--lost-from` is inside those 15 minutes skips its (empty) run: the result
+ * says `reconciliation: { status: 'skipped', reason: 'lost-from-in-grace' }`, the CLI logs that
+ * the hourly reconciliation covers the window, and exits 0 (audit batch 1, Task 39).
+ * `--reconcile-only` refuses such a lost-from (exit 1): there is nothing to reconcile yet.
+ *
  * Both modes run under the hourly cron's `RECONCILE_LEDGER_LOCK` (review #5; Redis from the app's
  * env, `RedisModule` in the CLI's context), so the CLI's run never races the cron's R5
  * compare-and-set. The lock never waits on its own: the CLI tries it every
@@ -111,8 +122,8 @@ export interface LedgerReanchorCliOptions {
  * `--reconcile-only` at most once), or with anything else, it prints the usage and exits 2 BEFORE
  * reading any config or building anything (no Redis either): run without arguments it only prints
  * its usage, which is what the image build's load check relies on. Sets `process.exitCode`
- * (`LEDGER_REANCHOR_EXIT`) instead of exiting: 0 = done and the run succeeded, the result printed
- * as one JSON line on stdout; 1 = refused or failed, logged; 3 = the reconciliation run finished
+ * (`LEDGER_REANCHOR_EXIT`) instead of exiting: 0 = done and the run succeeded or was skipped, the
+ * result printed as one JSON line on stdout; 1 = refused or failed, logged; 3 = the reconciliation run finished
  * `failed`, the result printed and its failed checks logged (a re-anchor itself committed); 4 =
  * the lock stayed busy, nothing written. The caller imports `reflect-metadata` first, as the other
  * entrypoints do.
@@ -133,12 +144,12 @@ export async function runLedgerReanchorCli(options: LedgerReanchorCliOptions): P
     context = await (options.createContext ?? createContext(logger))(root);
     const commands = context.get(CommandBus);
     const { request, reconcileOnly } = invocation;
+    const dispatch = (): Promise<LedgerReanchorResult | LedgerReconcileOnlyResult> =>
+      reconcileOnly
+        ? commands.execute(new RerunLedgerReconciliationCommand(request))
+        : commands.execute(new ReanchorLedgerCommand(request));
     const locked = await underReconcileLock(context.get(DistributedLockService), logger, () =>
-      SystemContext.run(LEDGER_REANCHOR_REASON, () =>
-        reconcileOnly
-          ? commands.execute(new RerunLedgerReconciliationCommand(request))
-          : commands.execute(new ReanchorLedgerCommand(request)),
-      ),
+      SystemContext.run(LEDGER_REANCHOR_REASON, dispatch),
     );
     if (!locked.acquired) {
       process.exitCode = lockNotAcquired(logger, locked.reason);
@@ -146,7 +157,17 @@ export async function runLedgerReanchorCli(options: LedgerReanchorCliOptions): P
     }
     const result = locked.result;
     process.stdout.write(`${JSON.stringify(printable(result))}\n`);
-    const { runId, status, failedChecks } = result.reconciliation;
+    const { reconciliation } = result;
+    if (reconciliation.status === 'skipped') {
+      logger.log(
+        `no reconciliation run: --lost-from is inside the last ` +
+          `${LEDGER_RECONCILE_GRACE_MS / 60_000} minutes (the grace), so its window is empty; ` +
+          'the hourly reconciliation covers the window',
+      );
+      process.exitCode = LEDGER_REANCHOR_EXIT.ok;
+      return;
+    }
+    const { runId, status, failedChecks } = reconciliation;
     if (status === 'failed') {
       logger.error(
         `the reconciliation run ${runId} failed (checks: ${failedChecks.join(', ')})` +

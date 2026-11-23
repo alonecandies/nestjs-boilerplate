@@ -194,6 +194,25 @@ describe('runLedgerReanchorCli (the dist/cli/ledger-reanchor.js body, audit fixe
     expect(`${written(stdout)}${written(stderr)}`).toContain('--reconcile-only');
   });
 
+  it('a re-anchor that skipped its follow-up run (lost-from inside the grace): exit 0, the result printed, the hourly run named', async () => {
+    const skipped = {
+      ...reanchored(),
+      reconciliation: { status: 'skipped', reason: 'lost-from-in-grace' },
+    };
+    const { createContext, close } = fakeContext(async () => skipped);
+
+    await runLedgerReanchorCli({ migrations: [billingMigrations], args: ARGS, createContext });
+
+    expect(process.exitCode).toBe(0);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(written(stdout)).toContain('"reanchorId":"r-1"');
+    expect(written(stdout)).toContain('"status":"skipped"');
+    expect(written(stdout)).toContain('"reason":"lost-from-in-grace"');
+    expect(`${written(stdout)}${written(stderr)}`).toContain(
+      'the hourly reconciliation covers the window',
+    );
+  });
+
   it('--reconcile-only dispatches RerunLedgerReconciliationCommand under the lock, never the re-anchor', async () => {
     const result = {
       database: 'ledger',
