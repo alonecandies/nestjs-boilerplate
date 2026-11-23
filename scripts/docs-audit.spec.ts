@@ -168,3 +168,51 @@ describe('ARCH-8: the architecture doc covers every app and the gRPC policy lets
     expect(hits).toEqual([]);
   });
 });
+
+describe('OPS-1: one runbook says how each store is backed up and restored', () => {
+  it('docs/OPERATIONS.md exists and is linked from the README docs list', () => {
+    expect(existsSync(join(root, 'docs/OPERATIONS.md'))).toBe(true);
+    expect(read('README.md')).toMatch(/\| \[docs\/OPERATIONS\.md\]\(docs\/OPERATIONS\.md\) +\|/);
+  });
+
+  it('the runbook names the Postgres, Cassandra and immudb steps and the re-anchor entrypoint', () => {
+    const runbook = read('docs/OPERATIONS.md');
+    for (const term of [
+      'citus_create_restore_point',
+      'nodetool snapshot',
+      'immuadmin hot-backup',
+      'dist/cli/ledger-reanchor.js',
+    ]) {
+      expect(runbook, term).toContain(term);
+    }
+  });
+
+  it('every store has a section and the restore order is stated', () => {
+    const runbook = read('docs/OPERATIONS.md');
+    for (const heading of [
+      '## Postgres and Citus',
+      '## Cassandra',
+      '## immudb',
+      '## Restore order and loss windows',
+    ]) {
+      expect(runbook.split('\n'), heading).toContain(heading);
+    }
+  });
+
+  it('every restore step that was not run end to end says UNTESTED', () => {
+    const runbook = read('docs/OPERATIONS.md');
+    for (const heading of ['## Postgres and Citus', '## Cassandra', '## immudb']) {
+      expect(section(runbook, heading), heading).toContain('UNTESTED');
+    }
+  });
+
+  it('DOCKER.md and the production checklist link to the runbook', () => {
+    expect(read('docs/DOCKER.md')).toContain('(OPERATIONS.md');
+    const checklist = flat(section(read('docs/SECURITY.md'), '## Production checklist'));
+    expect(checklist).toMatch(/- \[ \] Backups(?:(?!- \[ \]).)*\]\(OPERATIONS\.md\)/);
+  });
+
+  it('DOCKER.md no longer tells an operator to stop immudb and snapshot its volume', () => {
+    expect(flat(read('docs/DOCKER.md'))).not.toContain('stop the service, snapshot the volume');
+  });
+});

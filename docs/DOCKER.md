@@ -6,7 +6,7 @@ Files: [`Dockerfile`](../Dockerfile), [`.dockerignore`](../.dockerignore), [`doc
 
 Related: [README](../README.md) · [Architecture](ARCHITECTURE.md) · [Development](DEVELOPMENT.md) ·
 [Configuration](CONFIGURATION.md) · [API](API.md) · [Observability](OBSERVABILITY.md) · [Performance](PERFORMANCE.md) ·
-[Testing](TESTING.md) · [Releasing](RELEASING.md) · [Security](SECURITY.md).
+[Testing](TESTING.md) · [Releasing](RELEASING.md) · [Security](SECURITY.md) · [Operations](OPERATIONS.md).
 
 ## TL;DR
 
@@ -242,8 +242,10 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   `/readyz` are on port 9497, in-network only; pg-wire is off). The
   database, the SELECT/INSERT-only application user and the tables come from the apps' migrate step
   (`@platform/immudb` `runImmudbMigrations`, gRPC `ChangeSQLPrivileges`), wired in ledger wave 2. Data is
-  append-only and cannot be erased: back up the `immudb-data` volume (stop the service, snapshot the
-  volume) and never configure truncation for the ledger database. Licence: the server image is
+  append-only and cannot be erased: never configure truncation for the ledger database. Backups
+  (`immuadmin hot-backup`, or synchronous replicas), the restore and the trusted-state re-anchor are in
+  [OPERATIONS.md](OPERATIONS.md#immudb); for a local volume you want to keep, copy `immudb-data` with the
+  service stopped. Licence: the server image is
   BUSL-1.1 (`LICENSE` at v1.11.2: "Licensed Work: immudb Version 1.9DOM.2 or later"); its Additional
   Use Grant allows production use unless the product offers immudb to third parties, hosted or
   embedded, in competition with Codenotary's paid versions (internal use is not competitive). The

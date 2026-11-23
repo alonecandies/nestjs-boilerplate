@@ -877,6 +877,10 @@ At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) pu
       ([CONFIGURATION.md](CONFIGURATION.md#redis--cache-locks-throttling-bullmq-socketio-adapter-graphql-pubsub)).
 - [ ] immudb runs with `--signingKey` (private key in the secret store, never the compose development key), apps pin the
       public key, `LEDGER_VERIFY=true` ([immudb state signing key](#immudb-state-signing-key)).
+- [ ] Backups of every store, rehearsed: Postgres/Citus base backups and a WAL archive on every node (with
+      `citus_create_restore_point` before a release), `immuadmin hot-backup` or synchronous replicas for immudb,
+      `nodetool snapshot` per Cassandra node, and the restore order, including the ledger re-anchor
+      ([OPERATIONS.md](OPERATIONS.md)). The signing key is backed up with the secret store, not the data.
 - [ ] Database roles created from the production SQL in [Database roles](#database-roles), with
       secret-store passwords; on a multi-node cluster, TLS (`verify-full`) and SCRAM between nodes.
 - [ ] Every app that uses the database has `DATABASE_URL` (`app_runtime`), `DATABASE_SYSTEM_URL` (`app_system`) and,
