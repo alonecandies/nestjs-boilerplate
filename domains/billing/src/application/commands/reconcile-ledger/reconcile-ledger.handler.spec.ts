@@ -12,6 +12,7 @@ import {
   LEDGER_DISCREPANCIES_TOTAL,
   LEDGER_RECONCILIATION_LAST_SUCCESS,
   LEDGER_RECONCILIATION_RUNS_TOTAL,
+  LedgerMetrics,
 } from '../../../infrastructure/ledger/ledger-metrics.js';
 import type { StripeService } from '../../../infrastructure/stripe/stripe.service.js';
 import { InMemoryLedger } from '../../../testing/in-memory-ledger.js';
@@ -132,7 +133,8 @@ describe('ReconcileLedgerHandler', () => {
       r2,
       r3,
       r4,
-      new R5VerificationCheck(ledger, store.system),
+      new R5VerificationCheck(ledger, store.system, LedgerMetrics),
+      LedgerMetrics,
     );
   });
 

@@ -14,7 +14,10 @@ import {
 } from '../../../../test/billing-test.utils.js';
 import { LEDGER_TEST_TENANT as TENANT_A } from '../../../../test/ledger-fixtures.js';
 import { ledgerEntryId } from '../../../domain/ledger/ledger.ids.js';
-import { LEDGER_DISCREPANCIES_TOTAL } from '../../../infrastructure/ledger/ledger-metrics.js';
+import {
+  LEDGER_DISCREPANCIES_TOTAL,
+  LedgerMetrics,
+} from '../../../infrastructure/ledger/ledger-metrics.js';
 import type { LedgerSource, StripeService } from '../../../infrastructure/stripe/stripe.service.js';
 import { InMemoryLedger } from '../../../testing/in-memory-ledger.js';
 import { InMemoryLedgerStore } from '../../../testing/in-memory-ledger-store.js';
@@ -99,6 +102,7 @@ describe('ProcessLedgerPostingHandler', () => {
       new LedgerService(ledger),
       store.receipts,
       store.system,
+      LedgerMetrics,
     );
     const commandBus = {
       execute: (command: unknown) => {
@@ -114,7 +118,13 @@ describe('ProcessLedgerPostingHandler', () => {
         return ledgerSource(...args);
       },
     } as unknown as StripeService;
-    handler = new ProcessLedgerPostingHandler(commandBus, stripe, store.receipts, store.system);
+    handler = new ProcessLedgerPostingHandler(
+      commandBus,
+      stripe,
+      store.receipts,
+      store.system,
+      LedgerMetrics,
+    );
   });
 
   afterEach(() => {

@@ -1,6 +1,11 @@
+import type { FactoryProvider } from '@nestjs/common';
 import type { ConfigType } from '@nestjs/config';
 import { defineConfigNamespace, zBool, zInt, zNodeEnv, zStr } from '@platform/config';
 import { z } from 'zod';
+import {
+  LEDGER_SETTINGS,
+  type LedgerSettings,
+} from '../../application/ports/ledger-settings.port.js';
 
 /**
  * The ledger switches (ledger design §6.2). `LEDGER_NAMESPACE` is a code constant, never env:
@@ -55,3 +60,14 @@ export const ledgerEnvSchema = z
 /** The immudb ledger: posting, reconciliation lookback, verification (owned by billing). */
 export const ledgerConfig = defineConfigNamespace('ledger', ledgerEnvSchema);
 export type LedgerConfig = ConfigType<typeof ledgerConfig>;
+
+/**
+ * Binds the application's `LEDGER_SETTINGS` to this namespace (the same object, so a test that
+ * overrides `ledgerConfig.KEY` overrides the settings too). For a module that loads the namespace
+ * (`ConfigModule.forFeature(ledgerConfig)`).
+ */
+export const ledgerSettingsProvider: FactoryProvider<LedgerSettings> = {
+  provide: LEDGER_SETTINGS,
+  inject: [ledgerConfig.KEY],
+  useFactory: (config: LedgerConfig): LedgerSettings => config,
+};

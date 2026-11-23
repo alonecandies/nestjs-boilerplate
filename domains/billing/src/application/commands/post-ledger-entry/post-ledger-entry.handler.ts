@@ -3,8 +3,8 @@ import { isPlatformTenantId, SystemContext } from '@platform/common';
 import { ledgerAccountId } from '../../../domain/ledger/ledger.ids.js';
 import type { LedgerEntryDraft, LedgerPostOutcome } from '../../../domain/ledger/ledger.types.js';
 import type { LedgerDiscrepancyInput } from '../../../domain/ledger/ledger-discrepancy.js';
-import { LedgerMetrics } from '../../../infrastructure/ledger/ledger-metrics.js';
 import { LedgerService } from '../../ledger/ledger.service.js';
+import { LedgerMetricsPort } from '../../ports/ledger-metrics.port.js';
 import { LedgerSystemRepository } from '../../repositories/ledger.system-repository.js';
 import {
   type LedgerAccountRef,
@@ -40,24 +40,25 @@ export class PostLedgerEntryHandler implements ICommandHandler<PostLedgerEntryCo
     private readonly ledger: LedgerService,
     private readonly receipts: LedgerReceiptsRepository,
     private readonly system: LedgerSystemRepository,
+    private readonly metrics: LedgerMetricsPort,
   ) {}
 
   async execute({ draft }: PostLedgerEntryCommand): Promise<LedgerPostOutcome> {
-    const end = LedgerMetrics.startPost();
+    const end = this.metrics.startPost();
     let outcome: LedgerPostOutcome;
     try {
       outcome = await this.ledger.post(draft);
     } finally {
       end();
     }
-    LedgerMetrics.posted(outcome.status);
+    this.metrics.posted(outcome.status);
     const asSystem = SystemContext.isActive();
     if (outcome.status === 'conflict') {
       const finding = postConflict(draft, outcome);
       const appended = asSystem
         ? (await this.system.appendDiscrepancies([finding])) > 0
         : await this.receipts.appendDiscrepancy(finding);
-      if (appended) LedgerMetrics.discrepancies('post_conflict');
+      if (appended) this.metrics.discrepancies('post_conflict');
       return outcome;
     }
     const ref: LedgerEntryRef = {

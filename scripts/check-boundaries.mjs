@@ -22,6 +22,12 @@
 // `SYSTEM_DATABASE` or `InjectSystemDatabase`. The rule covers the packages that can reach it (those
 // declaring @platform/database, and @platform/database itself); test code and whole-line comments
 // are exempt as above.
+// Layer direction inside a domain (audit fixes ARCH-6): a file under a domain package's
+// src/application/ or src/domain/ must not import that package's src/infrastructure/ or
+// src/presentation/ (dependencies point inward; application code reaches infrastructure through the
+// ports in application/ports, bound in the domain's modules). The exceptions are listed in
+// LAYER_EXCEPTIONS, each documented in docs/ARCHITECTURE.md §3. Test code is exempt (a spec may
+// wire a concrete adapter); the check reads relative specifiers, resolved to the file they name.
 //   node scripts/check-boundaries.mjs [--root <repo root>]
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { dirname, join, relative, resolve, sep } from 'node:path';
@@ -65,6 +71,39 @@ const ELEVATION_HOME = '@platform/database';
 const SYSTEM_DATABASE_NAME = /\b(?:SystemDatabase|SYSTEM_DATABASE|InjectSystemDatabase)\b/;
 const SYSTEM_REPOSITORY_FILE = /\.system-repository\.ts$/;
 const DATABASE_PACKAGE = '@platform/database';
+// Layer direction inside a domain package (paths relative to the package, `/`-separated).
+const INNER_LAYER = /^src\/(?:application|domain)\//;
+const OUTER_LAYER = /^src\/(?:infrastructure|presentation)(?:\/|$)/;
+const SOURCE_EXTENSION = /\.(?:[cm]?[jt]s|tsx)$/;
+// The documented exceptions (docs/ARCHITECTURE.md §3): a path ending in `/` allows that folder, any
+// other path that one module (without its extension). Add an entry only with its paragraph there.
+const LAYER_EXCEPTIONS = Object.freeze([
+  // identity's PasswordHasher, TokenIssuer and their config namespaces.
+  { domain: 'identity', path: 'src/infrastructure/security/' },
+  // billing's Stripe adapter, StripeService, and its config namespace (a port would restate the
+  // Stripe SDK's types).
+  { domain: 'billing', path: 'src/infrastructure/stripe/' },
+  // IdentityOutbox: an empty OutboxWriter subclass, the platform library under identity's token.
+  { domain: 'identity', path: 'src/infrastructure/persistence/identity-outbox' },
+]);
+const posix = (path) => path.split(sep).join('/');
+
+/**
+ * Why `from` (a file of the domain package `domain`) must not import `to` (the path it resolves to),
+ * both relative to the package; null when the layer rule allows it.
+ */
+function layerViolation(domain, from, to) {
+  if (!INNER_LAYER.test(from) || !OUTER_LAYER.test(to)) return null;
+  const module = to.replace(SOURCE_EXTENSION, '');
+  const allowed = LAYER_EXCEPTIONS.some(
+    (exception) =>
+      exception.domain === domain &&
+      (exception.path.endsWith('/') ? to.startsWith(exception.path) : module === exception.path),
+  );
+  return allowed
+    ? null
+    : 'application and domain code must not import infrastructure or presentation: depend on a port in application/ports, or document an exception';
+}
 
 /** Returns why `specifier` is forbidden in a package of `kind` (for domains: of `domain`), or null. */
 function violation(kind, domain, specifier) {
@@ -188,11 +227,19 @@ for (const pkg of packages) {
     }
     for (const [, specifier] of source.matchAll(SPECIFIER)) {
       if (specifier.startsWith('.')) {
-        if (ownerOf(resolve(dirname(file), specifier)) !== pkg) {
+        const target = resolve(dirname(file), specifier);
+        if (ownerOf(target) !== pkg) {
           problems.push(
             `${relative(root, file)}: must not reach outside its package through "${specifier}"`,
           );
+          continue;
         }
+        const layer =
+          pkg.kind === 'domain' && !TEST_CODE.test(inPackage)
+            ? layerViolation(pkg.domain, posix(inPackage), posix(relative(pkg.dir, target)))
+            : null;
+        if (layer)
+          problems.push(`${relative(root, file)}: must not import "${specifier}" (${layer})`);
         continue;
       }
       if (TEST_ONLY.test(specifier) && !TEST_CODE.test(relative(pkg.dir, file))) {

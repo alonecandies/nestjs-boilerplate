@@ -7,7 +7,7 @@ import {
 import { LedgerSystemRepository } from '../../application/repositories/ledger.system-repository.js';
 import { DrizzleLedgerSystemRepository } from '../persistence/drizzle-ledger.system-repository.js';
 import { BillingLedgerModule } from './billing-ledger.module.js';
-import { ledgerConfig } from './ledger.config.js';
+import { ledgerConfig, ledgerSettingsProvider } from './ledger.config.js';
 
 /**
  * The audited re-anchor (audit fixes OPS-1): `ReanchorLedgerHandler` (and its `--reconcile-only`
@@ -22,6 +22,7 @@ import { ledgerConfig } from './ledger.config.js';
   providers: [
     ReanchorLedgerHandler,
     RerunLedgerReconciliationHandler,
+    ledgerSettingsProvider,
     { provide: LedgerSystemRepository, useClass: DrizzleLedgerSystemRepository },
   ],
 })

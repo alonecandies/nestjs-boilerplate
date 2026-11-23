@@ -3,6 +3,7 @@ import {
   getOrCreateGauge,
   getOrCreateHistogram,
 } from '@platform/observability';
+import type { LedgerMetricsPort } from '../../application/ports/ledger-metrics.port.js';
 import type { LedgerPostOutcome } from '../../domain/ledger/ledger.types.js';
 import type { LedgerDiscrepancyKind } from '../../domain/ledger/ledger-discrepancy.js';
 
@@ -66,9 +67,10 @@ const unverifiedTxLag = () =>
 
 /**
  * The ledger's Prometheus series (prom-client's default registry through GM's `getOrCreate*`, so
- * several apps in one process share them). Labels carry no tenant, user or amount.
+ * several apps in one process share them). Labels carry no tenant, user or amount. The
+ * application's `LedgerMetricsPort`, bound by `BillingLedgerModule`.
  */
-export const LedgerMetrics = Object.freeze({
+export const LedgerMetrics: LedgerMetricsPort = Object.freeze({
   /** One `LedgerPort.post` outcome. */
   posted(outcome: LedgerPostOutcome['status']): void {
     postings().inc({ outcome });

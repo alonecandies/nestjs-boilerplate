@@ -13,6 +13,7 @@ import {
   LEDGER_DISCREPANCIES_TOTAL,
   LEDGER_POST_DURATION_SECONDS,
   LEDGER_POSTINGS_TOTAL,
+  LedgerMetrics,
 } from '../../../infrastructure/ledger/ledger-metrics.js';
 import { InMemoryLedger } from '../../../testing/in-memory-ledger.js';
 import { InMemoryLedgerStore } from '../../../testing/in-memory-ledger-store.js';
@@ -71,7 +72,12 @@ describe('PostLedgerEntryHandler', () => {
     register.resetMetrics();
     ledger = new InMemoryLedger();
     store = new InMemoryLedgerStore();
-    handler = new PostLedgerEntryHandler(new LedgerService(ledger), store.receipts, store.system);
+    handler = new PostLedgerEntryHandler(
+      new LedgerService(ledger),
+      store.receipts,
+      store.system,
+      LedgerMetrics,
+    );
     platformAccountReasons = [];
     const recordPlatformAccounts = store.system.recordPlatformAccounts.bind(store.system);
     vi.spyOn(store.system, 'recordPlatformAccounts').mockImplementation((rows) => {

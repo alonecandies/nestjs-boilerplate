@@ -4,8 +4,8 @@ import { SystemDatabaseError } from '@platform/database';
 import { LedgerVerificationFailedException } from '../../../../domain/ledger/ledger.errors.js';
 import type { LedgerTrustedState } from '../../../../domain/ledger/ledger.types.js';
 import type { LedgerDiscrepancyInput } from '../../../../domain/ledger/ledger-discrepancy.js';
-import { LedgerMetrics } from '../../../../infrastructure/ledger/ledger-metrics.js';
 import { LedgerPort } from '../../../ports/ledger.port.js';
+import { LedgerMetricsPort } from '../../../ports/ledger-metrics.port.js';
 import {
   type LedgerReanchorMark,
   LedgerSystemRepository,
@@ -57,6 +57,7 @@ export class R5VerificationCheck implements ReconciliationCheck {
   constructor(
     private readonly ledger: LedgerPort,
     private readonly system: LedgerSystemRepository,
+    private readonly metrics: LedgerMetricsPort,
   ) {}
 
   async run(ctx: ReconciliationContext): Promise<readonly LedgerDiscrepancyInput[]> {
@@ -71,8 +72,8 @@ export class R5VerificationCheck implements ReconciliationCheck {
     const stored = await this.system.readTrustedState(db);
     const trusted: LedgerTrustedState | null =
       stored === null ? null : { database: db, txId: stored.txId, txHash: stored.txHash };
-    if (trusted !== null) LedgerMetrics.verifiedTxId(trusted.txId);
-    LedgerMetrics.unverifiedTxLag(current.txId, trusted?.txId ?? 0n);
+    if (trusted !== null) this.metrics.verifiedTxId(trusted.txId);
+    this.metrics.unverifiedTxLag(current.txId, trusted?.txId ?? 0n);
 
     // Every ref recorded before this instant belongs to an immudb tx the state below includes.
     const readAt = new Date();
@@ -109,8 +110,8 @@ export class R5VerificationCheck implements ReconciliationCheck {
         `the trusted ledger state of ${db} changed during the run (compare-and-set lost)`,
       );
     }
-    LedgerMetrics.verifiedTxId(next.txId);
-    LedgerMetrics.unverifiedTxLag(current.txId, next.txId);
+    this.metrics.verifiedTxId(next.txId);
+    this.metrics.unverifiedTxLag(current.txId, next.txId);
 
     // Refs of txs the stored state includes but recorded after the last run read it: posted since
     // `cutoff`, the read time that run stored (it listed only the refs posted before it). A ref

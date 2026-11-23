@@ -7,8 +7,8 @@ import type {
   LedgerDiscrepancyInput,
   LedgerDiscrepancyKind,
 } from '../../../domain/ledger/ledger-discrepancy.js';
-import { type LedgerConfig, ledgerConfig } from '../../../infrastructure/ledger/ledger.config.js';
-import { LedgerMetrics } from '../../../infrastructure/ledger/ledger-metrics.js';
+import { LedgerMetricsPort } from '../../ports/ledger-metrics.port.js';
+import { LEDGER_SETTINGS, type LedgerSettings } from '../../ports/ledger-settings.port.js';
 import {
   type LedgerRunCounts,
   LedgerSystemRepository,
@@ -54,13 +54,14 @@ export class ReconcileLedgerHandler implements ICommandHandler<ReconcileLedgerCo
   readonly checks: readonly ReconciliationCheck[];
 
   constructor(
-    @Inject(ledgerConfig.KEY) private readonly config: LedgerConfig,
+    @Inject(LEDGER_SETTINGS) private readonly config: LedgerSettings,
     private readonly system: LedgerSystemRepository,
     r1: R1InvariantCheck,
     r2: R2MutationCheck,
     r3: R3PaymentsCheck,
     r4: R4StripeCheck,
     r5: R5VerificationCheck,
+    private readonly metrics: LedgerMetricsPort,
   ) {
     this.checks = config.verify ? [r1, r2, r3, r4, r5] : [r1, r2, r3, r4];
   }
@@ -94,7 +95,7 @@ export class ReconcileLedgerHandler implements ICommandHandler<ReconcileLedgerCo
         found[kind] = (found[kind] ?? 0) + rows.length;
         const added = await this.system.appendDiscrepancies(rows);
         appended[kind] = (appended[kind] ?? 0) + added;
-        LedgerMetrics.discrepancies(kind, added);
+        this.metrics.discrepancies(kind, added);
       }
     };
     for (const check of this.checks) {
@@ -117,7 +118,7 @@ export class ReconcileLedgerHandler implements ICommandHandler<ReconcileLedgerCo
     const counts: LedgerRunCounts = { found, appended };
     const status = failedChecks.length === 0 ? 'succeeded' : 'failed';
     await this.system.finishRun(runId, status, counts);
-    LedgerMetrics.reconciliationRun(status, new Date());
+    this.metrics.reconciliationRun(status, new Date());
     this.logger.log(
       { runId, from: window.from, to: window.to, status, failedChecks, counts },
       'Ledger reconciliation run finished',

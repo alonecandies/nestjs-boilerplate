@@ -9,8 +9,8 @@ import {
   LedgerVerificationFailedException,
 } from '../../../domain/ledger/ledger.errors.js';
 import type { LedgerTrustedState } from '../../../domain/ledger/ledger.types.js';
-import { type LedgerConfig, ledgerConfig } from '../../../infrastructure/ledger/ledger.config.js';
 import { LedgerPort } from '../../ports/ledger.port.js';
+import { LEDGER_SETTINGS, type LedgerSettings } from '../../ports/ledger-settings.port.js';
 import { LedgerSystemRepository } from '../../repositories/ledger.system-repository.js';
 import {
   type LedgerRunOutcome,
@@ -34,7 +34,7 @@ const graceEnd = (now: Date): Date => new Date(now.getTime() - LEDGER_RECONCILE_
  */
 function assertCanRun(
   command: string,
-  config: LedgerConfig,
+  config: LedgerSettings,
   lostFrom: Date,
   now: Date = new Date(),
 ): void {
@@ -147,7 +147,7 @@ export class ReanchorLedgerHandler implements ICommandHandler<ReanchorLedgerComm
   private readonly logger = new Logger(ReanchorLedgerHandler.name);
 
   constructor(
-    @Inject(ledgerConfig.KEY) private readonly config: LedgerConfig,
+    @Inject(LEDGER_SETTINGS) private readonly config: LedgerSettings,
     private readonly ledger: LedgerPort,
     private readonly system: LedgerSystemRepository,
     private readonly commands: CommandBus,
@@ -268,7 +268,7 @@ export class RerunLedgerReconciliationHandler
   private readonly logger = new Logger(RerunLedgerReconciliationHandler.name);
 
   constructor(
-    @Inject(ledgerConfig.KEY) private readonly config: LedgerConfig,
+    @Inject(LEDGER_SETTINGS) private readonly config: LedgerSettings,
     private readonly ledger: LedgerPort,
     private readonly system: LedgerSystemRepository,
     private readonly commands: CommandBus,
