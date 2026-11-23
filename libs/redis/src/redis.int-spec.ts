@@ -86,9 +86,20 @@ describe('throttle Lua script, weighted hits (real Redis)', () => {
   });
 });
 
-describe('connection-count Lua script (real Redis) == JS model', () => {
-  it('caps, releases, never goes below zero and sets a safety TTL — like the model', async () => {
-    const env = { THROTTLE_WS_SOCKETS_PER_USER: '2' };
+describe('connection-slot Lua script (real Redis) == JS model', () => {
+  const nowSec = (): number => Math.floor(Date.now() / 1000);
+  /** A token that expired two minutes ago: the slot ttl wins its deadline. */
+  const expiredToken = (): number => nowSec() - 120;
+  /** The slot ttl the expiry steps use (the `THROTTLE_WS_SOCKET_TTL_MS` minimum). */
+  const SHORT_TTL_MS = 1_000;
+
+  /**
+   * One user's sockets on real Redis and on the JS model, cap 2. Every step runs on both and must
+   * give the same answer; the slot ids differ (one per acquire), so each side keeps its own.
+   */
+  function slotPair(ttlMs = 3_600_000) {
+    const env = { THROTTLE_WS_SOCKETS_PER_USER: '2', THROTTLE_WS_SOCKET_TTL_MS: String(ttlMs) };
+    const model = new InMemoryRedis();
     const make = (client: Redis) =>
       new ConnectionCaps(
         client,
@@ -97,34 +108,130 @@ describe('connection-count Lua script (real Redis) == JS model', () => {
         new RateLimitCharger(new RedisThrottlerStorage(client, keys)),
       );
     const real = make(redis);
-    const model = make(new InMemoryRedis().asRedis());
+    const fake = make(model.asRedis());
     const user = generateId();
-    const steps: ['acquire' | 'release', boolean?][] = [
-      ['release'],
-      ['acquire', true],
-      ['acquire', true],
-      ['acquire', false],
-      ['release'],
-      ['acquire', true],
-      ['release'],
-      ['release'],
-      ['release'],
-      ['acquire', true],
-    ];
-    for (const [action, admitted] of steps) {
-      if (action === 'release') {
-        await Promise.all([real.releaseSocket(user), model.releaseSocket(user)]);
-      } else {
-        // Redis is up: an admitted slot is always counted (held), a refused one never.
-        const slot = { admitted, held: admitted };
-        await expect(
-          Promise.all([real.acquireSocket(user), model.acquireSocket(user)]),
-        ).resolves.toEqual([slot, slot]);
-      }
-    }
-    const ttl = await redis.pttl(keys.key('wsconn', `{${user}}`));
-    expect(ttl).toBeGreaterThan(0);
-    expect(ttl).toBeLessThanOrEqual(3_600_000);
+    const key = keys.key('wsslot', `{${user}}`);
+    const ids = new Map<string, [real: string, model: string]>();
+    const idsOf = (name: string): [string, string] => {
+      const pair = ids.get(name);
+      if (pair === undefined) throw new Error(`${name} is not open`);
+      return pair;
+    };
+    return {
+      key,
+      async open(name: string, tokenExpSec = nowSec() + 900): Promise<boolean> {
+        const [r, m] = await Promise.all([
+          real.acquireSocket(user, tokenExpSec),
+          fake.acquireSocket(user, tokenExpSec),
+        ]);
+        expect(r.admitted).toBe(m.admitted);
+        if (r.admitted && m.admitted) ids.set(name, [r.id, m.id]);
+        return r.admitted;
+      },
+      /** Sends `name`'s acquire again with the same slot id (an ioredis resend). */
+      async resend(name: string, tokenExpSec = nowSec() + 900): Promise<number> {
+        const [r, m] = idsOf(name);
+        const args = [2, ttlMs, tokenExpSec * 1000 + 60_000] as const;
+        const [a, b] = await Promise.all([
+          redis.appConnSlot(key, r, ...args),
+          model.asRedis().appConnSlot(key, m, ...args),
+        ]);
+        expect(a).toBe(b);
+        return a;
+      },
+      /** An admitted socket whose acquire never reached Redis (rejected before it was sent). */
+      failOpen(name: string): void {
+        ids.set(name, [generateId(), generateId()]);
+      },
+      /** Releases `name`'s slot `times` times (2 = a resent release). */
+      async close(name: string, times = 1): Promise<void> {
+        const [r, m] = idsOf(name);
+        for (let i = 0; i < times; i++) {
+          await Promise.all([real.releaseSocket(user, r), fake.releaseSocket(user, m)]);
+        }
+        ids.delete(name);
+      },
+      /** Members of the user's slot set, expired ones not yet pruned included. */
+      async held(): Promise<number> {
+        const [r, m] = [await redis.zcard(key), model.zcardSync(key)];
+        expect(r).toBe(m);
+        return r;
+      },
+      /** The real key expires exactly with its latest slot. */
+      async expectKeyExpiryAtLatestSlot(): Promise<void> {
+        const [, latest] = await redis.zrange(key, -1, '-1', 'WITHSCORES');
+        expect(await redis.call('PEXPIRETIME', key)).toBe(Number(latest));
+        // The model reads the wall clock, so allow the few ms between its two reads.
+        const [modelLatest] = model.zrangeWithScoresSync(key, -1, -1);
+        expect(modelLatest).toBeDefined();
+        const modelExpiry = Date.now() + model.pttlSync(key);
+        expect(Math.abs(modelExpiry - (modelLatest?.[1] ?? 0))).toBeLessThanOrEqual(5);
+      },
+    };
+  }
+
+  it('a resent release never over-admits', async () => {
+    const slots = slotPair();
+    expect(await slots.open('A')).toBe(true);
+    expect(await slots.open('B')).toBe(true);
+    await slots.close('A', 2);
+    const admitted = [await slots.open('C'), await slots.open('D')];
+    expect(admitted.filter(Boolean)).toHaveLength(1);
+    expect(await slots.held()).toBe(2);
+    await slots.expectKeyExpiryAtLatestSlot();
+  });
+
+  it('a resent acquire at the cap is admitted again and counted once', async () => {
+    const slots = slotPair();
+    expect(await slots.open('A')).toBe(true);
+    expect(await slots.open('B')).toBe(true);
+    expect(await slots.resend('B')).toBe(1);
+    expect(await slots.held()).toBe(2);
+    expect(await slots.open('C')).toBe(false);
+  });
+
+  it('a lost reply is released by its id; a release never sent leaks only until the deadline', async () => {
+    const slots = slotPair(SHORT_TTL_MS);
+    // E's acquire ran (its reply lost): the caller still releases it by id.
+    expect(await slots.open('E', expiredToken())).toBe(true);
+    await slots.close('E');
+    expect(await slots.held()).toBe(0);
+    // F's release never reaches Redis: its slot stays until its deadline.
+    expect(await slots.open('F', expiredToken())).toBe(true);
+    expect(await slots.held()).toBe(1);
+    await sleep(SHORT_TTL_MS + 200);
+    // The key itself went with F's deadline, its last.
+    expect(await redis.exists(slots.key)).toBe(0);
+    // 15-minute tokens: X and Y cannot expire mid-step however slow the host is.
+    expect(await slots.open('X')).toBe(true);
+    expect(await slots.open('Y')).toBe(true);
+    expect(await slots.open('Z')).toBe(false);
+    expect(await slots.held()).toBe(2);
+  });
+
+  it('an acquire that never ran is released without freeing another slot', async () => {
+    const slots = slotPair();
+    expect(await slots.open('I')).toBe(true);
+    slots.failOpen('H');
+    await slots.close('H');
+    expect(await slots.held()).toBe(1);
+    expect(await slots.open('J')).toBe(true);
+    expect(await slots.open('K')).toBe(false);
+  });
+
+  it("the key's expiry never shortens: a later, shorter slot does not drop an earlier one", async () => {
+    const slots = slotPair(SHORT_TTL_MS);
+    // A's token outlives the ttl: its deadline is its expiry + 60 s, about 10 s from now.
+    expect(await slots.open('A', nowSec() - 60 + 10)).toBe(true);
+    expect(await slots.open('B', expiredToken())).toBe(true);
+    await slots.expectKeyExpiryAtLatestSlot();
+    await slots.close('B');
+    // Past B's deadline, not A's.
+    await sleep(SHORT_TTL_MS + 200);
+    expect(await slots.held()).toBe(1);
+    // 15-minute tokens: C cannot expire before D asks, however slow the host is.
+    expect(await slots.open('C')).toBe(true);
+    expect(await slots.open('D')).toBe(false);
   });
 });
 

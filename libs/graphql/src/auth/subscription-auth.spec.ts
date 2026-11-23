@@ -293,14 +293,18 @@ describe('createGraphqlWsAuthHandlers with a revocation sweeper', () => {
   });
 });
 
-const HELD: SocketSlot = { admitted: true, held: true };
-const REFUSED: SocketSlot = { admitted: false, held: false };
-const FAILED_OPEN: SocketSlot = { admitted: true, held: false };
+const SLOT: SocketSlot = { admitted: true, id: 'slot-1' };
+const REFUSED: SocketSlot = { admitted: false };
+/**
+ * Admitted while Redis was unusable: to the caller it looks like any admitted slot. Its reply may
+ * have been lost after Redis counted it, so it is released all the same.
+ */
+const FAILED_OPEN: SocketSlot = { admitted: true, id: 'slot-open' };
 
 describe('connection caps (C-9)', () => {
   const jane = user();
 
-  it('refuses the connection past the per-user socket cap, and releases the slot on close', async () => {
+  it('refuses the connection past the per-user socket cap, and releases the same slot on close', async () => {
     const caps = {
       admitHandshake: vi.fn(async () => ({ ok: true as const })),
       acquireSocket: vi.fn(async (): Promise<SocketSlot> => REFUSED),
@@ -309,18 +313,22 @@ describe('connection caps (C-9)', () => {
     const handlers = createGraphqlWsAuthHandlers(async () => jane, { caps });
     await expect(handlers.onConnect(wsContext({ token: 'ok' }))).resolves.toBe(false);
     expect(caps.admitHandshake).toHaveBeenCalledWith(undefined);
-    caps.acquireSocket.mockResolvedValue(HELD);
+    caps.acquireSocket.mockResolvedValue(SLOT);
     const ctx = wsContext({ token: 'ok' });
     await expect(handlers.onConnect(ctx)).resolves.toBe(true);
+    // The slot's deadline follows the token's expiry.
+    expect(caps.acquireSocket).toHaveBeenLastCalledWith(jane.id, jane.exp);
     handlers.onClose(ctx);
-    await vi.waitFor(() => expect(caps.releaseSocket).toHaveBeenCalledWith(jane.id));
+    handlers.onClose(ctx);
+    await vi.waitFor(() => expect(caps.releaseSocket).toHaveBeenCalledWith(jane.id, 'slot-1'));
+    expect(caps.releaseSocket).toHaveBeenCalledTimes(1);
   });
 
   it('refuses a connection from an IP over the handshake limit before authenticating', async () => {
     const authenticate = vi.fn(async () => jane);
     const caps = {
       admitHandshake: vi.fn(async () => ({ ok: false as const, retryAfterSeconds: 5 })),
-      acquireSocket: vi.fn(async () => HELD),
+      acquireSocket: vi.fn(async () => SLOT),
       releaseSocket: vi.fn(async () => undefined),
     };
     const handlers = createGraphqlWsAuthHandlers(authenticate, { caps });
@@ -346,22 +354,24 @@ describe('connection caps (C-9)', () => {
     const connecting = handlers.onConnect(ctx);
     await vi.waitFor(() => expect(caps.acquireSocket).toHaveBeenCalled());
     handlers.onClose(ctx);
-    grant(HELD);
+    grant(SLOT);
     await expect(connecting).resolves.toBe(false);
-    expect(caps.releaseSocket).toHaveBeenCalledWith(jane.id);
+    expect(caps.releaseSocket).toHaveBeenCalledTimes(1);
+    expect(caps.releaseSocket).toHaveBeenCalledWith(jane.id, 'slot-1');
   });
 
-  it('never releases a slot admitted while Redis was down (nothing was counted, F2)', async () => {
+  it('releases a slot admitted while Redis was unusable, by its id (a lost reply may have counted it)', async () => {
     const caps = {
       admitHandshake: vi.fn(async () => ({ ok: true as const })),
-      acquireSocket: vi.fn(async () => FAILED_OPEN),
+      acquireSocket: vi.fn(async (): Promise<SocketSlot> => FAILED_OPEN),
       releaseSocket: vi.fn(async () => undefined),
     };
     const handlers = createGraphqlWsAuthHandlers(async () => jane, { caps });
     const ctx = wsContext({ token: 'ok' });
     await expect(handlers.onConnect(ctx)).resolves.toBe(true);
     handlers.onClose(ctx);
-    // Closed while a failed-open slot is being taken: nothing to release either.
+    expect(caps.releaseSocket).toHaveBeenCalledWith(jane.id, 'slot-open');
+    // Closed while a failed-open slot is being taken: released too.
     let grant: (slot: SocketSlot) => void = () => undefined;
     caps.acquireSocket.mockImplementationOnce(
       () =>
@@ -373,8 +383,9 @@ describe('connection caps (C-9)', () => {
     const connecting = handlers.onConnect(late);
     await vi.waitFor(() => expect(caps.acquireSocket).toHaveBeenCalledTimes(2));
     handlers.onClose(late);
-    grant(FAILED_OPEN);
+    grant({ admitted: true, id: 'slot-late' });
     await expect(connecting).resolves.toBe(false);
-    expect(caps.releaseSocket).not.toHaveBeenCalled();
+    expect(caps.releaseSocket).toHaveBeenCalledTimes(2);
+    expect(caps.releaseSocket).toHaveBeenLastCalledWith(jane.id, 'slot-late');
   });
 });

@@ -55,8 +55,8 @@ import { WsSessionGuard } from './ws-session.guard.js';
 /** `socket.data` of this namespace: the user authenticated at the handshake. */
 export interface NotificationsSocketData {
   user?: AuthUser;
-  /** This socket holds a per-user socket slot (`ConnectionCaps`), freed on disconnect. */
-  capAcquired?: boolean;
+  /** The id of this socket's per-user slot (`ConnectionCaps`), released on disconnect. */
+  capSlot?: string | undefined;
 }
 
 export type NotificationsSocket = Socket<
@@ -172,18 +172,20 @@ export class NotificationsGateway
         extractSocketToken(socket.handshake),
       );
       if (this.caps !== undefined) {
-        const slot = await this.caps.acquireSocket(socket.data.user.id);
+        const { id: userId, exp } = socket.data.user;
+        const slot = await this.caps.acquireSocket(userId, exp);
         if (!slot.admitted) {
           return this.refuse(TOO_MANY_CONNECTIONS, 'Too many open connections for this user.');
         }
         if (socket.conn.readyState !== 'open') {
           // The client dropped during the handshake: socket.io discards the socket without a
           // connect or disconnect event, so `handleDisconnect` would never free this slot.
-          if (slot.held) void this.caps.releaseSocket(socket.data.user.id);
+          void this.caps.releaseSocket(userId, slot.id);
           return new Error('Client disconnected during the handshake');
         }
-        // A slot admitted while Redis was unusable was never counted: nothing to release.
-        socket.data.capAcquired = slot.held;
+        // Released at disconnect even when admitted while Redis was unusable: its reply may have
+        // been lost after the slot was counted, and releasing a slot never counted frees nothing.
+        socket.data.capSlot = slot.id;
       }
       return undefined;
     } catch (error) {
@@ -219,9 +221,10 @@ export class NotificationsGateway
     this.expiryTimers.delete(client);
     this.untrackers.get(client)?.();
     this.untrackers.delete(client);
-    if (client.data.capAcquired === true && client.data.user) {
-      client.data.capAcquired = false;
-      void this.caps?.releaseSocket(client.data.user.id);
+    const slotId = client.data.capSlot;
+    if (slotId !== undefined && client.data.user) {
+      client.data.capSlot = undefined;
+      void this.caps?.releaseSocket(client.data.user.id, slotId);
     }
   }
 

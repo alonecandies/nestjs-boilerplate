@@ -57,7 +57,7 @@ export const throttleEnvSchema = z
     /** WebSockets (Socket.IO, graphql-ws): handshakes per client IP per window. */
     wsHandshakeLimit: env.THROTTLE_WS_HANDSHAKE_LIMIT,
     wsHandshakeTtlMs: env.THROTTLE_WS_HANDSHAKE_TTL_MS,
-    /** Concurrent sockets per user; the counter's safety TTL bounds leaks from crashed replicas. */
+    /** Concurrent sockets per user; a slot's TTL (or its token's expiry) bounds a leaked slot. */
     wsSocketsPerUser: env.THROTTLE_WS_SOCKETS_PER_USER,
     wsSocketTtlMs: env.THROTTLE_WS_SOCKET_TTL_MS,
     /** Bound for one throttle command; past it, budgets fail open and auth fails closed. */
