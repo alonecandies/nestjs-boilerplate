@@ -3,6 +3,7 @@ import { Injectable } from '@nestjs/common';
 import { PLATFORM_TENANT_ID } from '@platform/common';
 import type Stripe from 'stripe';
 import { v5 as uuidv5 } from 'uuid';
+import { LEDGER_RECONCILE_GRACE_MS } from '../../../../billing.constants.js';
 import { resolveLedgerAccount } from '../../../../domain/ledger/ledger.accounts.js';
 import { ledgerEntryId } from '../../../../domain/ledger/ledger.ids.js';
 import {
@@ -72,8 +73,11 @@ function movement(entry: LedgerEntry, account: string, currency: string): bigint
  * the self-healing path for a lost webhook, a `fee_unavailable` posting and a ledger enabled late.
  * Takes the refs of all tenants posted until now, when R4 starts, into a map by entry id: the
  * run's shared read (`ctx.entryRefs`, refs since `from − 24 h`) plus every page
- * (`R4_REF_PAGE_SIZE`) of `listEntryRefs` from that read's `readAt` until now (its own read from
- * `from` when the context has none). The shared rows reach 24 h before `from`: a ref there whose
+ * (`R4_REF_PAGE_SIZE`) of `listEntryRefs` from `max(from, readAt − LEDGER_RECONCILE_GRACE_MS)`
+ * until now, `readAt` being that read's (its own read from `from` when the context has none). The
+ * top-up reaches back over the grace window because a ref's `postedAt` is stamped before its insert
+ * commits, so a ref stamped before `readAt` can commit after the shared read passed it; a ref in
+ * both reads is kept once. The shared rows reach 24 h before `from`: a ref there whose
  * entry id is a transaction's own is that transaction's entry. So the lookup does not depend on the
  * owner Stripe's metadata names today and sees entries posted during the grace period; then every
  * balance transaction Stripe lists with `created` in `[from, to)` (a transaction that moves
@@ -129,21 +133,29 @@ export class R4StripeCheck implements ReconciliationCheck {
 
   /**
    * Every ref posted until now (R4's start), all tenants, by entry id: the run's shared read, then
-   * the refs posted since its `readAt` (none to list when the read started after now).
+   * the refs posted from `max(from, readAt − LEDGER_RECONCILE_GRACE_MS)` until now (none to list
+   * when the read started after now). `postedAt` is stamped before the insert commits, so a ref
+   * stamped just before `readAt` may have committed after the shared read passed its keyset page:
+   * the top-up reaches back over the grace window to find it. A ref in both reads (same tenant and
+   * entry id) is kept once.
    */
   private async refsByEntry(ctx: ReconciliationContext): Promise<Map<string, LedgerEntryRef[]>> {
     const now = new Date();
     const read = ctx.entryRefs ?? memoizedEntryRefs(this.system, ctx.from, R4_REF_PAGE_SIZE);
     const shared = await read();
+    const topUpFrom = new Date(
+      Math.max(ctx.from.getTime(), shared.readAt.getTime() - LEDGER_RECONCILE_GRACE_MS),
+    );
     const topUp =
       shared.readAt.getTime() < now.getTime()
-        ? await listAllEntryRefs(this.system, shared.readAt, now, R4_REF_PAGE_SIZE)
+        ? await listAllEntryRefs(this.system, topUpFrom, now, R4_REF_PAGE_SIZE)
         : [];
     const byEntry = new Map<string, LedgerEntryRef[]>();
-    for (const ref of [...shared.rows, ...topUp]) {
-      const refs = byEntry.get(ref.entryId);
-      if (refs === undefined) byEntry.set(ref.entryId, [ref]);
-      else refs.push(ref);
+    for (const ref of shared.rows) add(byEntry, ref);
+    for (const ref of topUp) {
+      if (!byEntry.get(ref.entryId)?.some((kept) => kept.tenantId === ref.tenantId)) {
+        add(byEntry, ref);
+      }
     }
     return byEntry;
   }
@@ -231,6 +243,13 @@ export class R4StripeCheck implements ReconciliationCheck {
     ]);
     return postingOwnerOf(owner, payment ?? null);
   }
+}
+
+/** Appends `ref` to the refs of its entry id. */
+function add(byEntry: Map<string, LedgerEntryRef[]>, ref: LedgerEntryRef): void {
+  const refs = byEntry.get(ref.entryId);
+  if (refs === undefined) byEntry.set(ref.entryId, [ref]);
+  else refs.push(ref);
 }
 
 /** The entry of a transaction against Stripe's amounts (see `R4StripeCheck`). */

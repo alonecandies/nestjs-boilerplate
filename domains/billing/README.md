@@ -639,8 +639,10 @@ rows of the window only: `payment_without_entry`, `entry_without_payment`,
 `status_mismatch` (refund and dispute refs vs the payment status). **R4** (the self-healing path for a lost webhook,
 a `fee_unavailable` posting or a ledger enabled late): every Stripe balance transaction created in the window
 (`StripeService.listBalanceTransactions`, auto-paginated, source expanded) is looked up by
-`ledgerEntryId('stripe:txn:' + id)` among the shared refs plus those posted since that read until R4 starts (so an
-entry posted during the grace period, or under another tenant than the metadata names today, is found). No entry →
+`ledgerEntryId('stripe:txn:' + id)` among the shared refs plus those posted from `LEDGER_RECONCILE_GRACE_MS` before
+that read (never before the window's start) until R4 starts, each `(tenant, entry id)` once (so an entry posted
+during the grace period, a ref stamped before the shared read that committed after it, or an entry under another
+tenant than the metadata names today, is found). No entry →
 `missing_entry` and one `billing.ledger-posting.v1` record (`objectType: 'balance_transaction'`, envelope id
 `uuidv5('reconcile:' + runId + ':' + txnId)`, new per run) through `enqueueMissingPostings`, under the owner
 `StripeOwnerResolver` gives for the source (platform kinds: the platform tenant; an unresolved tenant-level owner: the

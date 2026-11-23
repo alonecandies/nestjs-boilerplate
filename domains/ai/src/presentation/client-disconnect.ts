@@ -19,9 +19,9 @@ export interface ClientDisconnect {
  * Watches the raw HTTP response of a request: its `close` before `finish` means the client
  * disconnected (a closed tab, a cancelled `fetch`, a dropped proxy connection). The response's
  * `close` is used, not the request's: since Node 16 `IncomingMessage` emits `close` as soon as its
- * body has been read, which for a POST is long before the reply ends. Without a response (a
- * graphql-ws operation) the signal never aborts: the resolver combines it with the GraphQL
- * context's `connectionSignal`, which aborts when the socket closes.
+ * body has been read, which for a POST is long before the reply ends. Without a response the
+ * signal never aborts. A graphql-ws operation has none: the resolver aborts it from the GraphQL
+ * context's `connectionSignal` instead, which aborts when the socket closes.
  */
 export function abortOnDisconnect(response: ServerResponse | undefined): ClientDisconnect {
   const controller = new AbortController();

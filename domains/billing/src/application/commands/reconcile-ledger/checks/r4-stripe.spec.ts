@@ -5,6 +5,7 @@ import type Stripe from 'stripe';
 import { v5 as uuidv5 } from 'uuid';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { LEDGER_TEST_TENANT as TENANT_A } from '../../../../../test/ledger-fixtures.js';
+import { LEDGER_RECONCILE_GRACE_MS } from '../../../../billing.constants.js';
 import { ledgerEntryId } from '../../../../domain/ledger/ledger.ids.js';
 import { LEDGER_NAMESPACE } from '../../../../domain/ledger/ledger.types.js';
 import type { LedgerDiscrepancyInput } from '../../../../domain/ledger/ledger-discrepancy.js';
@@ -364,7 +365,7 @@ describe('R4StripeCheck (reconciliation R4: Stripe balance transactions against 
     expect(records()).toEqual([]);
   });
 
-  it("uses the run's shared refs and lists only the top-up from their read time until now", async () => {
+  it("uses the run's shared refs and lists only the top-up from the grace period before their read time until now", async () => {
     const shared = bt('txn_shared');
     const sharedRef = await post(shared);
     const late = bt('txn_posted_after_the_shared_read');
@@ -377,8 +378,56 @@ describe('R4StripeCheck (reconciliation R4: Stripe balance transactions against 
     await expect(run({ ...ctx, entryRefs })).resolves.toEqual([]);
 
     expect(entryRefs).toHaveBeenCalledTimes(1);
-    expect(listRefs).toHaveBeenCalledExactlyOnceWith(readAt, NOW, null, R4_REF_PAGE_SIZE);
+    expect(listRefs).toHaveBeenCalledExactlyOnceWith(
+      new Date(readAt.getTime() - LEDGER_RECONCILE_GRACE_MS),
+      NOW,
+      null,
+      R4_REF_PAGE_SIZE,
+    );
     expect(records()).toEqual([]);
+  });
+
+  it('finds a ref stamped before the shared read that committed after the read passed it', async () => {
+    const readAt = new Date(NOW.getTime() - 60_000);
+    const txn = bt('txn_committed_after_the_shared_read');
+    // `postedAt` is stamped before the insert commits: the shared read listed `[…, readAt)` and
+    // did not return this row, which committed after its keyset page.
+    await post(txn, { postedAt: new Date(readAt.getTime() - 30_000) });
+    stripe.pages = [[txn]];
+    const entryRefs = vi.fn(async () => ({ readAt, rows: [] }));
+
+    await expect(run({ ...ctx, entryRefs })).resolves.toEqual([]);
+    expect(records()).toEqual([]);
+  });
+
+  it('counts a ref present in both the shared read and the top-up once', async () => {
+    const readAt = new Date(NOW.getTime() - 60_000);
+    const txn = bt('txn_in_both_reads');
+    // Its ref names tenant B, where the ledger has no such entry: every copy of the ref is a
+    // `getEntry` call, so a duplicate would be a second call.
+    const ref = await post(txn, {
+      refTenant: TENANT_B,
+      postedAt: new Date(readAt.getTime() - 30_000),
+    });
+    stripe.pages = [[txn]];
+    const getEntry = vi.spyOn(ledger, 'getEntry');
+    const entryRefs = vi.fn(async () => ({ readAt, rows: [ref] }));
+
+    const found = await run({ ...ctx, entryRefs });
+
+    expect(found.map((row) => row.kind)).toEqual(['missing_entry']);
+    expect(getEntry).toHaveBeenCalledExactlyOnceWith(TENANT_B, ref.entryId);
+  });
+
+  it('starts the top-up no earlier than the window start', async () => {
+    const readAt = new Date(NOW.getTime() - 60_000);
+    const from = new Date(readAt.getTime() - LEDGER_RECONCILE_GRACE_MS + 60_000);
+    const listRefs = vi.spyOn(store.system, 'listEntryRefs');
+    const entryRefs = vi.fn(async () => ({ readAt, rows: [] }));
+
+    await expect(run({ ...ctx, from, entryRefs })).resolves.toEqual([]);
+
+    expect(listRefs).toHaveBeenCalledExactlyOnceWith(from, NOW, null, R4_REF_PAGE_SIZE);
   });
 
   it('an equal entry under another tenant than the resolver now returns is found, without asking the resolver', async () => {

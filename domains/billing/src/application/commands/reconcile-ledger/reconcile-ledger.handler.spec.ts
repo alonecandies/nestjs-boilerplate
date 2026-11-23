@@ -204,7 +204,7 @@ describe('ReconcileLedgerHandler', () => {
     expect(r4Run.mock.calls[0]?.[0]).toBe(r2Run.mock.calls[0]?.[0]);
   });
 
-  it('reads the refs from 24 h before the window once per run; R4 lists only the top-up since that read', async () => {
+  it('reads the refs from 24 h before the window once per run; R4 lists only the top-up from the grace period before that read', async () => {
     const listRefs = vi.spyOn(store.system, 'listEntryRefs');
     const r3Run = r3.run.bind(r3);
     vi.spyOn(r3, 'run').mockImplementation(async (ctx) => {
@@ -218,7 +218,12 @@ describe('ReconcileLedgerHandler', () => {
     const from = new Date(NOW.getTime() - LEDGER_RECONCILE_GRACE_MS - 72 * HOUR);
     expect(listRefs.mock.calls).toEqual([
       [new Date(from.getTime() - 24 * HOUR), NOW, null, 500],
-      [NOW, new Date(NOW.getTime() + MINUTE), null, 500],
+      [
+        new Date(NOW.getTime() - LEDGER_RECONCILE_GRACE_MS),
+        new Date(NOW.getTime() + MINUTE),
+        null,
+        500,
+      ],
     ]);
   });
 

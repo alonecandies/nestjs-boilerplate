@@ -31,7 +31,8 @@ export interface GraphqlWsConnectionSignals {
 
 /**
  * The per-connection signals, keyed by the connection's `extra` (weakly, so a closed connection
- * holds nothing). One listener-free controller per connection, not one per operation.
+ * holds nothing). One controller per connection, not one per operation: its signal and its abort
+ * reason are shared by every operation of the socket (see `GqlContext.connectionSignal`).
  */
 export function createGraphqlWsConnectionSignals(): GraphqlWsConnectionSignals {
   const controllers = new WeakMap<GqlWsExtra, AbortController>();

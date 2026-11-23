@@ -450,6 +450,10 @@ identity-service (loaded by `IdentityCoreModule`)
 | `THROTTLE_WS_SOCKET_TTL_MS`    | `3600000` | Lifetime of a per-socket slot: it lasts max(this, the access token's expiry + 60 s), so a slot leaked by a crashed replica or a lost release frees itself then.                                |
 | `THROTTLE_REDIS_TIMEOUT_MS`    | `250`     | Bound for one rate-limit Redis command. On timeout or outage, budgets fail open (`rate_limit_fail_open_total`) and credential endpoints fail closed with 503.                                  |
 
+**Connection-cap rollout.** The per-socket slots (`THROTTLE_WS_SOCKETS_PER_USER`) live under a new Redis key
+(`wsslot`), not the per-user counter (`wsconn`) of earlier releases. During a rolling deploy from the counter, old and
+new replicas count separately, so a user can briefly hold up to twice the cap; deploy with a full restart to avoid it.
+
 **Renamed (no aliases).** `THROTTLE_AUTH_LIMIT` and `THROTTLE_AUTH_TTL_MS` were removed: set
 `IDENTITY_CREDENTIALS_LIMIT` / `IDENTITY_CREDENTIALS_TTL_MS` instead. In code, `@AuthThrottle()` became
 `@RateLimit('identity.credentials')`, `AUTH_THROTTLE_KEY` became `RATE_LIMIT_POLICY_KEY`,
