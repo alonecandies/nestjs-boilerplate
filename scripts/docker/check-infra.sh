@@ -43,7 +43,7 @@ compose up -d --wait --wait-timeout "${WAIT_TIMEOUT}"
 log "stack healthy after $(($(date +%s) - start))s"
 
 log "one-shot init containers exited 0"
-inits=(kafka-init cassandra-init storage-init immudb-keygen immudb-init)
+inits=(kafka-init cassandra-init storage-init immudb-keygen grpc-principal-keygen immudb-init)
 [ "${CITUS:-0}" = 1 ] && inits+=(citus-init)
 for svc in "${inits[@]}"; do
   cid="$(compose ps -a -q "${svc}")"

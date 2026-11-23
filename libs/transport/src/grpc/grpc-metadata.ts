@@ -11,6 +11,8 @@ export interface RpcCallerContext {
   roles?: readonly string[] | undefined;
   tenantId?: string | undefined;
   staff?: boolean | undefined;
+  /** The edge's signed assertion of the caller (`x-principal-assertion`), sent as is. */
+  principalAssertion?: string | undefined;
 }
 
 /** A sanitized `RpcCallerContext` read from incoming metadata. `roles` is always present. */
@@ -20,6 +22,16 @@ export interface IncomingRpcContext {
   userId?: string;
   roles: string[];
   tenantId?: string;
+  staff: boolean;
+  /** The raw `x-principal-assertion` value; verified by `GrpcContextInterceptor`, not here. */
+  principalAssertion?: string;
+}
+
+/** The user, tenant, roles and staff flag a call carries in plain metadata (and an assertion signs). */
+export interface AssertedCaller {
+  userId: string;
+  tenantId?: string;
+  roles: string[];
   staff: boolean;
 }
 
@@ -36,6 +48,8 @@ const PRINTABLE_ASCII = /^[\x20-\x7E]*$/;
 const SAFE_ERROR_CODE = /^[A-Za-z0-9_.:-]{1,64}$/;
 const MAX_VALUE_LENGTH = 256;
 const MAX_ROLES = 32;
+/** A signed assertion is longer than the other values; 4 KiB keeps the whole block below 8 KiB. */
+const MAX_ASSERTION_LENGTH = 4096;
 /** The whole trailer block must stay far below grpc-js' 8 KiB default `max_metadata_size`. */
 const MAX_ERROR_DETAILS_BYTES = 4096;
 const MAX_TRAILER_ISSUES = 20;
@@ -83,7 +97,31 @@ export function createOutgoingMetadata(ctx: RpcCallerContext = {}): Metadata {
   if (ctx.staff === true) metadata.set(GRPC_METADATA_KEYS.STAFF, 'true');
   const roles = normalizeRoles(ctx.roles);
   if (roles.length > 0) metadata.set(GRPC_METADATA_KEYS.USER_ROLES, roles.join(','));
+  const assertion = ctx.principalAssertion;
+  if (
+    assertion !== undefined &&
+    assertion.length > 0 &&
+    assertion.length <= MAX_ASSERTION_LENGTH &&
+    PRINTABLE_ASCII.test(assertion)
+  ) {
+    metadata.set(GRPC_METADATA_KEYS.PRINCIPAL_ASSERTION, assertion);
+  }
   return metadata;
+}
+
+/**
+ * The caller `createOutgoingMetadata(ctx)` writes in plain metadata, as `readIncomingMetadata`
+ * reads it back: what the edge signs, so the claims equal the headers. `undefined` = anonymous.
+ */
+export function assertedCallerOf(ctx: RpcCallerContext): AssertedCaller | undefined {
+  if (ctx.userId === undefined || !isLegalValue(ctx.userId)) return undefined;
+  const caller: AssertedCaller = {
+    userId: ctx.userId,
+    roles: normalizeRoles(ctx.roles),
+    staff: ctx.staff === true,
+  };
+  if (ctx.tenantId !== undefined && isLegalValue(ctx.tenantId)) caller.tenantId = ctx.tenantId;
+  return caller;
 }
 
 /**
@@ -103,6 +141,8 @@ export function readIncomingMetadata(metadata: Metadata | undefined): IncomingRp
   if (userId && isLegalValue(userId)) context.userId = userId;
   const tenantId = firstValue(metadata, GRPC_METADATA_KEYS.TENANT_ID)?.trim();
   if (tenantId && isLegalValue(tenantId)) context.tenantId = tenantId;
+  const assertion = firstValue(metadata, GRPC_METADATA_KEYS.PRINCIPAL_ASSERTION);
+  if (assertion !== undefined && assertion.length > 0) context.principalAssertion = assertion;
   return context;
 }
 

@@ -117,6 +117,7 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       maxMessageBytes: 4_194_304,
       tls: undefined,
       reflection: true,
+      principalAssertion: { mode: 'off', ttlSec: 120, signingKey: undefined, publicKeys: [] },
     });
     expect(mailConfig.parse({})).toMatchObject({
       host: 'localhost',

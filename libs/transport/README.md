@@ -23,7 +23,8 @@ consumers never block a partition, and every event is a validated, versioned env
 | `grpcErrorToDomainException`, `grpcStatusToDomainException`                                                                                                                          | Client side: `ServiceError`, rxjs `TimeoutError` and opossum rejections become a `DomainException`. Details are hidden for 5xx-class statuses.                                                                                                                                                                                                        |
 | `GRPC_STATUS_TO_HTTP_STATUS`, `HTTP_STATUS_TO_GRPC_STATUS`, `httpStatusFromGrpcStatus`, `grpcStatusFromHttpStatus`, `isServerSideGrpcStatus`, `grpcStatusName`, `isGrpcServiceError` | Mapping tables and helpers.                                                                                                                                                                                                                                                                                                                           |
 | `RpcStatusException`                                                                                                                                                                 | Upstream `RESOURCE_EXHAUSTED` (429) / `UNIMPLEMENTED` (501), which `@platform/common` has no class for.                                                                                                                                                                                                                                               |
-| `createOutgoingMetadata(ctx)`, `readIncomingMetadata(md)`, `createErrorTrailers`, `readErrorTrailers`, `isGrpcMetadata`, `GRPC_METADATA_KEYS`                                        | Metadata for request id, correlation id, user id, tenant id, roles, staff flag and error trailers. Unsafe values are dropped.                                                                                                                                                                                                                         |
+| `createOutgoingMetadata(ctx)`, `readIncomingMetadata(md)`, `createErrorTrailers`, `readErrorTrailers`, `isGrpcMetadata`, `GRPC_METADATA_KEYS`                                        | Metadata for request id, correlation id, user id, tenant id, roles, staff flag, the signed principal assertion and error trailers. Unsafe values are dropped.                                                                                                                                                                                         |
+| `signPrincipalAssertion`, `verifyPrincipalAssertion`, `checkPrincipalAssertion`, `principalAssertionSettings`, `configurePrincipalAssertions`, `GRPC_PRINCIPAL_ASSERTIONS_TOTAL`     | The edge-signed principal assertion (see below).                                                                                                                                                                                                                                                                                                      |
 | `x-user-id`, `x-tenant-id`, `x-user-roles`, `x-staff`                                                                                                                                | The principal metadata the gateway forwards on every call. `x-tenant-id` is a UUID; `x-staff` is `true` only for a staff switch-in principal and absent otherwise (anything but the exact string `true` reads as false). Built only from the CLS principal, never from request headers.                                                               |
 | `principalFromRpcCaller(caller)`, `rpcCallerOf(principal)`                                                                                                                           | Rebuild the caller's principal from incoming metadata (`undefined` without `x-user-id`; malformed values fail closed with `UNAUTHENTICATED` `INVALID_PRINCIPAL`), and the outgoing caller context of a principal.                                                                                                                                     |
 | `callerContextFromCls(cls, overrides?)`                                                                                                                                              | Caller context for an outgoing call, built from nestjs-cls: request id, correlation id and the CLS principal (user, tenant, roles, staff). An override naming another user drops the tenant, roles and staff.                                                                                                                                         |
@@ -126,16 +127,47 @@ export class OrdersEventsConsumer {
 }
 ```
 
+## Signed principal assertion (`x-principal-assertion`)
+
+The gateway asserts the caller in plain metadata (`x-user-id`, `x-tenant-id`, `x-user-roles`, `x-staff`). Any mesh peer could
+send the same headers, so the edge also signs them:
+
+- **Format.** A compact ES256 JWS made with `node:crypto`: header `{ alg: "ES256", typ: "JWT", kid }`, claims `iss` (`edge`),
+  `sub` (user), `tid` (tenant), `roles`, `staff`, `iat`, `exp`. `exp` is `iat` + `GRPC_PRINCIPAL_ASSERTION_TTL_SEC` (120 s);
+  keep that above the longest gRPC deadline (`AI_GRPC_CHAT_DEADLINE_MS`, 70 s), or a tool call late in an AI turn carries an
+  expired assertion. Verifiers allow 10 s of clock skew.
+- **Signer.** `callerContextFromCls` signs at the edge: a process with `GRPC_PRINCIPAL_SIGNING_KEY` (or `_FILE`) and
+  `GRPC_PRINCIPAL_SIGNING_KEY_ID` signs exactly the caller its plain headers carry. Only the gateway gets the private key.
+- **Forwarding.** Inside a gRPC call (ai-service's tools, any service-to-service hop) the received bytes are forwarded
+  unchanged, and the process never signs, even with a key: a principal adopted from metadata is never turned into a
+  signature. An override naming another user drops the assertion, as it drops the tenant and roles. Forwarding does not
+  depend on the local mode.
+- **Verifier.** `GrpcContextInterceptor` reads `GRPC_PRINCIPAL_ASSERTION`. `off` (default) ignores the header. `warn`
+  verifies it against `GRPC_PRINCIPAL_PUBLIC_KEYS` (`kid=base64 PEM`, comma-separated, so keys rotate: list the new key
+  everywhere, then sign with it, then drop the old one): ES256 only, the key chosen by `kid`, the signature checked before
+  any claim. It counts `grpc_principal_assertions_total{outcome}` (`valid`, `missing`, `expired`, `invalid`, `mismatch`
+  when the claims differ from the plain headers) and logs every outcome but `valid` at `warn`, without the token. An
+  anonymous call (no `x-user-id`, no assertion) is not counted. The plain headers still build the principal: nothing
+  is refused in `warn`.
+- **Mixed versions.** An old gateway sends no assertion (`missing`); an old or `off` server ignores the header; unknown
+  claims are ignored, so a newer edge may add some.
+- **Settings.** `principalAssertionSettings()` parses the `grpc` namespace from the environment once per process;
+  `configurePrincipalAssertions(settings)` replaces it (tests, or one process playing several roles).
+- **Keys.** The compose stack generates a development pair (`grpc-principal-keygen`, key id `compose-local`), which
+  `NODE_ENV=production` refuses unless `ALLOW_KNOWN_LOCAL_SECRETS=true`. Generate a real one with
+  `openssl ecparam -name prime256v1 -genkey -noout | openssl pkcs8 -topk8 -nocrypt` and derive the public key with
+  `openssl ec -pubout`.
+
 ## Environment variables (through `@platform/config`)
 
-- `grpc`: `GRPC_URL`, `GRPC_DEADLINE_MS`, `GRPC_MAX_MESSAGE_BYTES`, `GRPC_TLS_CA_PATH`, `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, `GRPC_TLS_REQUIRE_CLIENT_CERT`, `GRPC_ALLOW_INSECURE`, `GRPC_REFLECTION`.
+- `grpc`: `GRPC_URL`, `GRPC_DEADLINE_MS`, `GRPC_MAX_MESSAGE_BYTES`, `GRPC_TLS_CA_PATH`, `GRPC_TLS_CERT_PATH`, `GRPC_TLS_KEY_PATH`, `GRPC_TLS_REQUIRE_CLIENT_CERT`, `GRPC_ALLOW_INSECURE`, `GRPC_REFLECTION`, `GRPC_PRINCIPAL_ASSERTION`, `GRPC_PRINCIPAL_SIGNING_KEY` / `_FILE`, `GRPC_PRINCIPAL_SIGNING_KEY_ID`, `GRPC_PRINCIPAL_PUBLIC_KEYS` / `_FILE`, `GRPC_PRINCIPAL_ASSERTION_TTL_SEC` (see the signed principal assertion below).
 - client targets: each domain's `*GrpcClient` namespace (e.g. `ORDERS_GRPC_URL`), passed in as `url`.
 - `kafka`: `KAFKA_BROKERS`, `KAFKA_CLIENT_ID`, `KAFKA_GROUP_ID`, `KAFKA_CONSUMER_CONCURRENCY`, `KAFKA_SSL`, `KAFKA_SASL_MECHANISM`, `KAFKA_SASL_USERNAME`, `KAFKA_SASL_PASSWORD`, `KAFKA_CONNECTION_TIMEOUT_MS`, `KAFKA_REQUEST_TIMEOUT_MS`.
 - `app`: `SERVICE_NAME`, used as the envelope `source` and as the default client and group id.
 
 ## Gotchas
 
-- **Internal gRPC is unauthenticated.** The servers trust every caller (no JWT on `rpc`; `actorId` and `userId` come from the request), so whoever reaches the port can act as any user. Without `GRPC_TLS_*` the transport is also plaintext, and `NODE_ENV=production` refuses that unless `GRPC_ALLOW_INSECURE=true`. In production, use mutual TLS (or a mesh doing it) plus a NetworkPolicy that lets only the gateway and ai-service reach the gRPC ports. Reflection is off in production by default.
+- **Internal gRPC is unauthenticated.** The servers trust every caller (no JWT on `rpc`; `actorId` and `userId` come from the request), so whoever reaches the port can act as any user. The signed principal assertion below is the way out; in `off` and `warn` the plain metadata still decides. Without `GRPC_TLS_*` the transport is also plaintext, and `NODE_ENV=production` refuses that unless `GRPC_ALLOW_INSECURE=true`. In production, use mutual TLS (or a mesh doing it) plus a NetworkPolicy that lets only the gateway and ai-service reach the gRPC ports. Reflection is off in production by default.
 - **Only idempotent reads are retried on `UNAVAILABLE`.** A replica can commit a mutation and die before answering; a replayed `RefreshTokens` would trip reuse detection and revoke every session of the user. Add a method to the package spec's `idempotentMethods` (in its contracts package) only if running it twice is harmless.
 - **Transient Kafka handler failures are retried in-process, then dead-lettered.** Keep the retry budget (`DEFAULT_KAFKA_RETRY_OPTIONS`) far below the consumer `sessionTimeout` (30 s): Nest does not heartbeat while a handler runs. Once the cause is fixed, replay the dead-letter topic with `dist/cli/dlq-replay.js` (in the image) or `kafka-dlq-replay.mjs` (checkout); `KafkaDeadLetters` pages on any dead letter.
 - **gRPC filters must be controller-scoped.** Use `@GrpcController()`. A global RPC filter combined with `inheritAppConfig: true` makes HTTP requests hang.
