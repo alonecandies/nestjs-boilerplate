@@ -75,6 +75,18 @@ describe('scripts/int-images.mjs', () => {
     for (const image of list) expect(image).toMatch(/^[\w./-]+:[\w.-]+$/);
   });
 
+  it('prints the Ryuk reaper image the installed testcontainers starts first in every fork', () => {
+    // Read here independently of the script: the default of testcontainers' reaper.
+    const reaper = readFileSync(
+      join(ROOT, 'node_modules', 'testcontainers', 'build', 'reaper', 'reaper.js'),
+      'utf8',
+    );
+    const ryuk = /ImageName\.fromString\("(testcontainers\/ryuk:[\w.-]+)"\)/.exec(reaper)?.[1];
+    expect(ryuk).toMatch(/^testcontainers\/ryuk:\d/);
+    expect(images()).toContain(ryuk);
+    expect(named().get('RYUK_IMAGE')).toBe(ryuk);
+  });
+
   it('names every container image a spec or helper starts, so a new one cannot be missed', () => {
     const list = images();
     const names = named();

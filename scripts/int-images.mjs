@@ -5,8 +5,12 @@
 // spends its hook timeout on a download. --names prints `CONSTANT=image` instead (the spec
 // scripts/int-images.spec.ts checks every container a spec or helper starts is named here).
 // --root reads another tree (fixtures). Exits 1 when a constant cannot be found.
+// The list also holds RYUK_IMAGE, the reaper testcontainers starts first in every fork, read from
+// the installed testcontainers (its default; RYUK_CONTAINER_IMAGE is not set in CI), so the
+// integration job runs this after `bun install`.
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 
 const { values: args } = parseArgs({
@@ -52,6 +56,24 @@ for (const [file, names] of SOURCES) {
       rows.push([name, image]);
     }
   }
+}
+
+// testcontainers resolved as libs/testing (which starts the containers) resolves it.
+try {
+  const require = createRequire(join(root, 'libs', 'testing', 'package.json'));
+  const reaper = join(
+    dirname(require.resolve('testcontainers/package.json')),
+    'build',
+    'reaper',
+    'reaper.js',
+  );
+  const ryuk = /ImageName\.fromString\("([^"]+)"\)/.exec(readFileSync(reaper, 'utf8'))?.[1];
+  if (ryuk === undefined) problems.push(`${reaper}: no default Ryuk image (RYUK_IMAGE)`);
+  else rows.unshift(['RYUK_IMAGE', ryuk]);
+} catch (error) {
+  problems.push(
+    `testcontainers: cannot read its Ryuk image (RYUK_IMAGE): ${error instanceof Error ? error.message : error}`,
+  );
 }
 
 if (problems.length > 0) {
