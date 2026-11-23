@@ -212,6 +212,9 @@ describe('DatabaseModule', () => {
         expect.objectContaining({
           applicationName: 'app',
           migrations: [platformMigrations, itemsMigrations],
+          // Bounded lock waits at boot too, as in the release job (OPS-2 defaults).
+          lockWaitTimeoutMs: 5000,
+          lockWaitRetries: 5,
         }),
       );
       const [migrateOrder] = vi.mocked(runMigrations).mock.invocationCallOrder;

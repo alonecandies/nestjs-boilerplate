@@ -85,6 +85,19 @@ const LEDGER_CALLS: Record<
     method: 'ledgerTrustedState.advance',
     call: (r) => r.advanceTrustedState('ledger', null, STATE, new Date(0)),
   },
+  reanchorTrustedState: {
+    method: 'ledgerTrustedState.reanchor',
+    call: (r) =>
+      r.reanchorTrustedState({
+        id: PLATFORM_TENANT_ID,
+        database: 'ledger',
+        from: STATE,
+        to: { ...STATE, txId: 0n },
+        lostFrom: new Date(0),
+        operator: 'ops',
+        reason: 'restore',
+      }),
+  },
   startRun: {
     method: 'ledgerRuns.start',
     call: (r) => r.startRun({ id: PLATFORM_TENANT_ID, from: new Date(0), to: new Date(1) }),
@@ -108,7 +121,7 @@ const publicMethods = (prototype: object | null): string[] => {
 };
 
 describe('BILLING_SYSTEM_METHODS (spec §9: methods 5, 6, 8 (stripe_events half), 9-11 and G-1)', () => {
-  it('pins exactly the two stripe_events, four outbox and eleven ledger methods, all in system scope', () => {
+  it('pins exactly the two stripe_events, four outbox and twelve ledger methods, all in system scope', () => {
     const methods = Object.values(BILLING_SYSTEM_METHODS).flatMap((repository) =>
       Object.values(repository).map(({ name, scope }) => ({ name, scope })),
     );
@@ -132,6 +145,8 @@ describe('BILLING_SYSTEM_METHODS (spec §9: methods 5, 6, 8 (stripe_events half)
       { name: 'ledgerAccounts.recordPlatformAccounts', scope: 'system' },
       { name: 'ledgerTrustedState.read', scope: 'system' },
       { name: 'ledgerTrustedState.advance', scope: 'system' },
+      // Audit fixes OPS-1: the audited re-anchor, the ledger-reanchor CLI's alone.
+      { name: 'ledgerTrustedState.reanchor', scope: 'system' },
       { name: 'ledgerRuns.start', scope: 'system' },
       { name: 'ledgerRuns.finish', scope: 'system' },
     ]);
@@ -177,7 +192,7 @@ describe('BILLING_SYSTEM_METHODS (spec §9: methods 5, 6, 8 (stripe_events half)
     );
   });
 
-  it('the ledger system repository has exactly the ten methods of its port', () => {
+  it('the ledger system repository has exactly the eleven methods of its port', () => {
     // LEDGER_CALLS is keyed by the port (a compile error when a method is missing or extra).
     expect(publicMethods(DrizzleLedgerSystemRepository.prototype)).toEqual(
       Object.keys(LEDGER_CALLS).toSorted(),

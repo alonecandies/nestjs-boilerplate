@@ -3,7 +3,10 @@ import { Injectable } from '@nestjs/common';
 import { ImmudbClient, ImmudbError, type ImmudbState } from '@platform/immudb';
 import { LedgerPort } from '../../application/ports/ledger.port.js';
 import { resolveLedgerAccount } from '../../domain/ledger/ledger.accounts.js';
-import { LedgerVerificationFailedException } from '../../domain/ledger/ledger.errors.js';
+import {
+  LedgerSigningKeyNotPinnedException,
+  LedgerVerificationFailedException,
+} from '../../domain/ledger/ledger.errors.js';
 import {
   ledgerAccountId,
   ledgerEntryId,
@@ -384,6 +387,15 @@ export class ImmudbLedgerAdapter extends LedgerPort {
       throw error;
     }
     return { database: state.database, txId: state.txId, txHash: state.txHash };
+  }
+
+  /**
+   * The first-use proof of `advanceTrustedState(null)` (from tx 0, so the client checks the state
+   * signature), but only when the client pins a key: without one that proof checks nothing.
+   */
+  override async signedState(): Promise<LedgerTrustedState> {
+    if (!this.immudb.pinsSigningKey()) throw new LedgerSigningKeyNotPinnedException();
+    return this.advanceTrustedState(null);
   }
 }
 

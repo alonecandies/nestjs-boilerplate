@@ -78,15 +78,17 @@ RUN --mount=type=cache,id=bun-install-cache,target=/var/cache/bun,sharing=locked
 # assemble-image.mjs prunes apps/domains/libs outside the closure, copies their dist/ and FAILS the build
 # on a missing asset (src/**/*.{proto,hbs,cql,sql,json} not in dist/), a missing runtime dependency,
 # a dangling workspace symlink or a missing dist/main.js / dist/instrument.js (and dist/migrate.js
-# for an app with a src/migrate.ts: monolith, identity-, billing-, ai-service). PRUNE_NODE_MODULES
+# for an app with a src/migrate.ts: monolith, identity-, billing-, ai-service; dist/cli/<name>.js for
+# each one-off CLI src/cli/<name>.ts, e.g. dist/cli/dlq-replay.js). PRUNE_NODE_MODULES
 # also drops *.d.ts, *.map, TS sources, docs and the `typescript` package from node_modules
 # (never read at runtime; ~35-40 % of the image: monolith 465 -> 294 MB). Build with
 # --build-arg PRUNE_NODE_MODULES=false to keep them.
 FROM toolchain AS assemble
 ARG APP
 ARG PRUNE_NODE_MODULES=true
-# File tracing (only what dist/main.js, instrument.js and migrate.js import) + a load check of
-# dist/app.module.js. `--build-arg TRACE_FILES=false` copies every closure package whole, as before.
+# File tracing (only what dist/main.js, instrument.js, migrate.js and dist/cli/*.js import) + a load
+# check of dist/app.module.js and every dist/cli/*.js (a CLI run without arguments only prints its
+# usage). `--build-arg TRACE_FILES=false` copies every closure package whole, as before.
 ARG TRACE_FILES=true
 COPY --from=prod-deps /repo /out
 COPY scripts/docker/assemble-image.mjs scripts/docker/trace-imports.mjs /usr/local/lib/

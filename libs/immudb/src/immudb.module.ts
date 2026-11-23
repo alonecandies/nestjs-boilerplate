@@ -63,7 +63,9 @@ export class ImmudbModule {
             opts: ImmudbModuleOptions,
           ): Promise<ImmudbSessionPool> => {
             // Before any provider can inject the client (like CassandraModule's boot migrations).
-            if (cfg.runMigrations) await runImmudbMigrations(cfg, opts.migrations ?? [], { grpc });
+            if (opts.runMigrations ?? cfg.runMigrations) {
+              await runImmudbMigrations(cfg, opts.migrations ?? [], { grpc });
+            }
             return new ImmudbSessionPool(
               () =>
                 ImmudbSession.open(

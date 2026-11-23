@@ -31,4 +31,6 @@ export interface ImmudbMigrationSource {
 export interface ImmudbModuleOptions {
   /** Applied at boot when IMMUDB_RUN_MIGRATIONS=true (needs IMMUDB_ADMIN_PASSWORD). */
   readonly migrations?: readonly ImmudbMigrationSource[];
+  /** Overrides `IMMUDB_RUN_MIGRATIONS` (e.g. `false` in a one-off CLI that must not provision). */
+  readonly runMigrations?: boolean;
 }

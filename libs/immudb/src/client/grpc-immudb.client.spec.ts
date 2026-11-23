@@ -95,4 +95,13 @@ describe('GrpcImmudbClient', () => {
     expect(sessions).toHaveLength(2);
     expect(sessions[0]?.close).toHaveBeenCalledTimes(1);
   });
+
+  it('pins a signing key only when it was given one (the ledger re-anchor asks before trusting a state)', () => {
+    const pool = new ImmudbSessionPool(async () => newSession() as unknown as ImmudbSession, 1, 1);
+    expect(client.pinsSigningKey()).toBe(false);
+    expect(new GrpcImmudbClient(pool, {}).pinsSigningKey()).toBe(false);
+    expect(new GrpcImmudbClient(pool, { serverSigningPublicKeyPem: 'PEM' }).pinsSigningKey()).toBe(
+      true,
+    );
+  });
 });

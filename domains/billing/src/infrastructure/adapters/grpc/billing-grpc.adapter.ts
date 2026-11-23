@@ -25,7 +25,11 @@ import { isNil } from 'lodash-es';
 import { ClsService } from 'nestjs-cls';
 import type { Observable } from 'rxjs';
 import type { BillingPort } from '../../../application/ports/billing.port.js';
-import { BILLING_GRPC_UPSTREAM } from '../../../billing.constants.js';
+import { BILLING_GRPC_STRIPE_UPSTREAM, BILLING_GRPC_UPSTREAM } from '../../../billing.constants.js';
+import {
+  type BillingGrpcClientConfig,
+  billingGrpcClientConfig,
+} from './billing-grpc-client.config.js';
 
 /** A `Date`, or `undefined` for the `null` proto-loader (`defaults: true`) sends for absent messages. */
 const optionalDate = (value: Date | null | undefined): Date | undefined =>
@@ -50,10 +54,21 @@ export function normalizePayment(payment: Payment): Payment {
   };
 }
 
+/** How a call is bounded: its local deadline and the breaker it counts against. */
+interface CallBudget {
+  timeoutMs: number;
+  upstream: string;
+}
+
 /**
- * `BillingPort` over gRPC (gateway → billing-service): per-call deadline, the `billing` circuit
- * breaker, request/correlation id + caller propagation in metadata, and upstream failures mapped
- * back to the same `DomainException`s the local adapter throws (`grpcCall`).
+ * `BillingPort` over gRPC (gateway → billing-service): per-call deadline and circuit breaker,
+ * request/correlation id + caller propagation in metadata, and upstream failures mapped back to the
+ * same `DomainException`s the local adapter throws (`grpcCall`).
+ *
+ * The calls that wait on Stripe (`CreateCheckoutSession`, `HandleStripeWebhook`) get
+ * `BILLING_GRPC_STRIPE_DEADLINE_MS` and the `billing-stripe` breaker; `ListPayments` keeps
+ * `GRPC_DEADLINE_MS` and the `billing` breaker. Slow Stripe calls thus neither time out at the
+ * generic deadline nor cut off payment listing.
  */
 @Injectable()
 export class BillingGrpcAdapter implements BillingPort, OnModuleInit {
@@ -62,6 +77,7 @@ export class BillingGrpcAdapter implements BillingPort, OnModuleInit {
   constructor(
     @Inject(BILLING_GRPC_PACKAGE.clientToken) private readonly grpc: ClientGrpc,
     @Inject(grpcConfig.KEY) private readonly config: GrpcConfig,
+    @Inject(billingGrpcClientConfig.KEY) private readonly billing: BillingGrpcClientConfig,
     private readonly breakers: GrpcCircuitBreakers,
     @Optional() private readonly cls?: ClsService,
   ) {}
@@ -71,15 +87,22 @@ export class BillingGrpcAdapter implements BillingPort, OnModuleInit {
   }
 
   createCheckoutSession(input: CreateCheckoutSessionRequest): Promise<CheckoutSession> {
-    return this.call('CreateCheckoutSession', { userId: input.userId }, (md) =>
-      this.client.createCheckoutSession(input, md),
+    return this.call(
+      'CreateCheckoutSession',
+      { userId: input.userId },
+      (md) => this.client.createCheckoutSession(input, md),
+      this.stripeBudget(),
     );
   }
 
   handleStripeWebhook(input: HandleStripeWebhookRequest): Promise<HandleStripeWebhookResponse> {
     // `bytes` on the wire: the raw body travels untouched, the service verifies the signature.
-    return this.call('HandleStripeWebhook', {}, (md) =>
-      this.client.handleStripeWebhook({ payload: input.payload, signature: input.signature }, md),
+    return this.call(
+      'HandleStripeWebhook',
+      {},
+      (md) =>
+        this.client.handleStripeWebhook({ payload: input.payload, signature: input.signature }, md),
+      this.stripeBudget(),
     );
   }
 
@@ -93,16 +116,21 @@ export class BillingGrpcAdapter implements BillingPort, OnModuleInit {
     };
   }
 
+  private stripeBudget(): CallBudget {
+    return { timeoutMs: this.billing.stripeDeadlineMs, upstream: BILLING_GRPC_STRIPE_UPSTREAM };
+  }
+
   private call<T>(
     method: string,
     caller: RpcCallerContext,
     invoke: (metadata: Metadata) => Observable<T>,
+    budget: CallBudget = { timeoutMs: this.config.deadlineMs, upstream: BILLING_GRPC_UPSTREAM },
   ): Promise<T> {
     const metadata = createOutgoingMetadata(callerContextFromCls(this.cls, caller));
     return grpcCall(invoke(metadata), {
-      timeoutMs: this.config.deadlineMs,
+      timeoutMs: budget.timeoutMs,
       operation: `${BILLING_GRPC_PACKAGE.package}.${BILLING_SERVICE_NAME}/${method}`,
-      breaker: this.breakers.get(BILLING_GRPC_UPSTREAM),
+      breaker: this.breakers.get(budget.upstream),
     });
   }
 }

@@ -14,6 +14,45 @@ export class LedgerUnbalancedException extends BusinessRuleViolationException {
   }
 }
 
+/**
+ * The ledger client pins no server signing key (`IMMUDB_SERVER_SIGNING_PUBLIC_KEY[_FILE]`), so no
+ * state can be proven signed: the re-anchor refuses (audit fixes OPS-1). Operator-facing only.
+ */
+export class LedgerSigningKeyNotPinnedException extends Error {
+  override readonly name = 'LedgerSigningKeyNotPinnedException';
+
+  constructor() {
+    super('no immudb server signing key is pinned: set IMMUDB_SERVER_SIGNING_PUBLIC_KEY[_FILE]');
+  }
+}
+
+/** Why the ledger-reanchor command refused; it wrote nothing. */
+export type LedgerReanchorRefusal =
+  | 'ledger-disabled'
+  | 'lost-from-not-past'
+  | 'signing-key-not-pinned'
+  | 'signature-invalid'
+  | 'other-database'
+  | 'no-trusted-state'
+  | 'nothing-lost'
+  | 'trusted-state-changed';
+
+/**
+ * The ledger-reanchor command refused (audit fixes OPS-1): an operator's error or a state that
+ * needs no re-anchor, never a partial write. Operator-facing only (the CLI prints it).
+ */
+export class LedgerReanchorRefusedException extends Error {
+  override readonly name = 'LedgerReanchorRefusedException';
+
+  constructor(
+    readonly refusal: LedgerReanchorRefusal,
+    message: string,
+    options?: { readonly cause?: unknown },
+  ) {
+    super(message, options);
+  }
+}
+
 /** A ledger row did not verify against the trusted state (tamper evidence; page someone). */
 export class LedgerVerificationFailedException extends ExternalServiceException {
   /** Why it failed (no PII: tx ids, hashes, the proof that did not hold); R5 stores it. */

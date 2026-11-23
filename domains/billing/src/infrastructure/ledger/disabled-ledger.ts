@@ -50,6 +50,10 @@ export class DisabledLedger extends LedgerPort {
   override advanceTrustedState(): Promise<LedgerTrustedState> {
     return disabled();
   }
+
+  override signedState(): Promise<LedgerTrustedState> {
+    return disabled();
+  }
 }
 
 function disabled(): Promise<never> {

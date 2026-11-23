@@ -1361,6 +1361,80 @@
           "refId": "B"
         }
       ]
+    },
+    {
+      "type": "row",
+      "id": 24,
+      "title": "Kafka consumers (kafka_consumer_messages_total{topic,outcome})",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 56
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "id": 25,
+      "title": "Dead-lettered messages by topic (15 m increase; KafkaDeadLetters alert)",
+      "description": "Messages a consumer published to <topic>.dlq after its in-process retries. Any value above 0 fires the KafkaDeadLetters alert (docker/prometheus/rules/platform.rules.yml); runbook in docs/OBSERVABILITY.md.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 57
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "min": 0,
+          "decimals": 0,
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (service, topic) (increase(kafka_consumer_messages_total{outcome=\"dead_letter\",service=~\"$service\"}[15m]))",
+          "legendFormat": "{{service}} {{topic}}",
+          "range": true,
+          "refId": "A"
+        }
+      ]
     }
   ]
 }

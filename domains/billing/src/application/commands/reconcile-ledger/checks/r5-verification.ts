@@ -6,7 +6,10 @@ import type { LedgerTrustedState } from '../../../../domain/ledger/ledger.types.
 import type { LedgerDiscrepancyInput } from '../../../../domain/ledger/ledger-discrepancy.js';
 import { LedgerMetrics } from '../../../../infrastructure/ledger/ledger-metrics.js';
 import { LedgerPort } from '../../../ports/ledger.port.js';
-import { LedgerSystemRepository } from '../../../repositories/ledger.system-repository.js';
+import {
+  type LedgerReanchorMark,
+  LedgerSystemRepository,
+} from '../../../repositories/ledger.system-repository.js';
 import type { LedgerEntryRef } from '../../../repositories/ledger-receipts.repository.js';
 import {
   type ReconciliationCheck,
@@ -39,6 +42,11 @@ const hex = (bytes: Uint8Array): string => Buffer.from(bytes).toString('hex');
  *    so that run never saw it, however long its proof took), or null (a `replayed` receipt):
  *    `LedgerPort.verifyEntry(entryId, payloadHash, next)`; a failure → `verification_failed` under
  *    the ref's tenant (source key `ledger_entries:<id>`). Entry failures do not undo step 3.
+ *    After a re-anchor (`readTrustedState`'s latest one, audit fixes OPS-1), a ref posted before it
+ *    whose tx id is above the re-anchored state's, or posted since its lost-from time, may name the
+ *    lost history: its tx id says nothing about the restored one, so it is verified like a ref
+ *    without a tx id, on every run that lists it, until its entry is back (R4 re-enqueues it and
+ *    the posting path posts it once; the ref keeps its old tx id).
  * `ledger_verified_tx_id` follows the stored state. Runs only inside `SystemContext`.
  */
 @Injectable()
@@ -118,7 +126,9 @@ export class R5VerificationCheck implements ReconciliationCheck {
       (after) => this.system.listEntryRefs(since, readAt, after, R5_REF_PAGE_SIZE),
     )) {
       for (const ref of page) {
-        if (!needsVerification(ref, oldTxId, next.txId, cutoff)) continue;
+        if (!needsVerification(ref, oldTxId, next.txId, cutoff, stored?.reanchor ?? null)) {
+          continue;
+        }
         const failure = await this.verify(ref, next);
         if (failure !== null) found.push(this.finding(ctx, failure));
       }
@@ -161,16 +171,32 @@ export class R5VerificationCheck implements ReconciliationCheck {
  * A ref the new state has to vouch for (a tx above the new one is verified by the next run):
  * - posted after the old trusted state (`immudbTxId` above it, up to the new one);
  * - of a tx the old state includes but recorded since `cutoff`, after the last run read its state;
- * - a `replayed` receipt without a tx id, which is verified on every run that lists it.
+ * - a `replayed` receipt without a tx id, which is verified on every run that lists it;
+ * - a ref of the lost history (`fromLostHistory`), whatever its tx id, on every run that lists it.
  */
 function needsVerification(
   ref: LedgerEntryRef,
   oldTxId: bigint,
   nextTxId: bigint,
   cutoff: Date | null,
+  reanchor: LedgerReanchorMark | null,
 ): boolean {
   if (ref.immudbTxId === null) return true;
+  if (fromLostHistory(ref, ref.immudbTxId, reanchor)) return true;
   if (ref.immudbTxId > nextTxId) return false;
   if (ref.immudbTxId > oldTxId) return true;
   return cutoff !== null && ref.postedAt.getTime() >= cutoff.getTime();
+}
+
+/**
+ * A ref recorded before the latest re-anchor whose tx id is above the re-anchored state's, or that
+ * was posted since the lost-from time: its tx id may belong to the history the restore lost.
+ */
+function fromLostHistory(
+  ref: LedgerEntryRef,
+  txId: bigint,
+  reanchor: LedgerReanchorMark | null,
+): boolean {
+  if (reanchor === null || ref.postedAt.getTime() >= reanchor.at.getTime()) return false;
+  return txId > reanchor.txId || ref.postedAt.getTime() >= reanchor.lostFrom.getTime();
 }

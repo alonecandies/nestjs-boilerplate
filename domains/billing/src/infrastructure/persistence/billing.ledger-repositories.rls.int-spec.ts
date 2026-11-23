@@ -160,6 +160,24 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         select database, tx_id::text, encode(tx_hash, 'hex') as hash
         from billing.ledger_trusted_state order by database`)),
     ];
+    const reanchorRows = async () =>
+      [
+        ...(await db().superuser.execute<{
+          id: string;
+          database: string;
+          replaced: string;
+          replaced_hash: string;
+          new_tx: string;
+          new_hash: string;
+          lost_from: Date;
+          operator: string;
+          reason: string;
+        }>(sql`
+        select id, database, replaced_tx_id::text as replaced,
+          encode(replaced_tx_hash, 'hex') as replaced_hash, new_tx_id::text as new_tx,
+          encode(new_tx_hash, 'hex') as new_hash, lost_from, operator, reason
+        from billing.ledger_reanchors order by created_at, id`)),
+      ].map((row) => ({ ...row, lost_from: new Date(row.lost_from) }));
     const everything = async () => [
       await refKeys(),
       await accountKeys(),
@@ -167,6 +185,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       await outboxKeys(),
       await runRows(),
       await trustedRows(),
+      await reanchorRows(),
     ];
 
     beforeAll(async () => {
@@ -187,7 +206,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     beforeEach(async () => {
       await db().superuser.execute(sql`truncate billing.payments, billing.outbox,
         billing.ledger_accounts, billing.ledger_entry_refs, billing.ledger_discrepancies,
-        billing.ledger_reconciliation_runs, billing.ledger_trusted_state`);
+        billing.ledger_reconciliation_runs, billing.ledger_trusted_state,
+        billing.ledger_reanchors`);
     });
 
     describe('LedgerReceiptsRepository (app_runtime, a non-elevated member)', () => {
@@ -320,7 +340,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         await expect(
           inSystem(() => receipts.recordEntryRef(ref(TENANT_A, id('e1')))),
         ).rejects.toMatchObject(NO_PRINCIPAL);
-        expect(await everything()).toEqual([[], [], [], [], [], []]);
+        expect(await everything()).toEqual([[], [], [], [], [], [], []]);
       });
     });
 
@@ -614,6 +634,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           txHash: new Uint8Array([0x03, 0x04]),
           verifiedAt: expect.any(Date),
           readAt: READ,
+          reanchor: null,
         });
         expect(Object.getPrototypeOf(read?.txHash)).toBe(Uint8Array.prototype);
         // An equal state re-verified: allowed (no new transaction since).
@@ -659,6 +680,106 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         expect(await trustedRows()).toEqual(before);
       });
 
+      it('reanchorTrustedState: the audit row and a backwards compare-and-set commit together, and a stale state writes neither', async () => {
+        const original = state(12n, [0x03, 0x04]);
+        const restored = state(9n, [0x0a]);
+        const lostFrom = new Date('2026-11-10T03:00:00.456Z');
+        const reanchor = {
+          id: id('ae1'),
+          database: 'ledger',
+          from: original,
+          to: restored,
+          lostFrom,
+          operator: 'ops-oncall',
+          reason: 'immudb restored from the nightly backup',
+        };
+        await inSystem(() => system.advanceTrustedState('ledger', null, original, READ));
+        await expect(inSystem(() => system.readTrustedState('ledger'))).resolves.toMatchObject({
+          txId: 12n,
+          reanchor: null,
+        });
+
+        // A stale `from` (another hash at the same tx id): no state change and no audit row.
+        await expect(
+          inSystem(() => system.reanchorTrustedState({ ...reanchor, from: state(12n, [0xff]) })),
+        ).resolves.toBe(false);
+        expect(await trustedRows()).toEqual([{ database: 'ledger', tx_id: '12', hash: '0304' }]);
+        expect(await reanchorRows()).toEqual([]);
+
+        await expect(inSystem(() => system.reanchorTrustedState(reanchor))).resolves.toBe(true);
+        expect(await trustedRows()).toEqual([{ database: 'ledger', tx_id: '9', hash: '0a' }]);
+        expect(await reanchorRows()).toEqual([
+          {
+            id: id('ae1'),
+            database: 'ledger',
+            replaced: '12',
+            replaced_hash: '0304',
+            new_tx: '9',
+            new_hash: '0a',
+            lost_from: lostFrom,
+            operator: 'ops-oncall',
+            reason: 'immudb restored from the nightly backup',
+          },
+        ]);
+        const read = await inSystem(() => system.readTrustedState('ledger'));
+        expect(read).toEqual({
+          database: 'ledger',
+          txId: 9n,
+          txHash: new Uint8Array([0x0a]),
+          verifiedAt: expect.any(Date),
+          readAt: lostFrom,
+          reanchor: { txId: 9n, lostFrom, at: expect.any(Date) },
+        });
+        // The same re-anchor again: its `from` is stale now, so the UPDATE matches nothing.
+        await expect(inSystem(() => system.reanchorTrustedState(reanchor))).resolves.toBe(false);
+        expect(await reanchorRows()).toHaveLength(1);
+        // A current `from` with a reused audit id: the compare-and-set matches, then the audit
+        // INSERT fails on its primary key, and the transaction rolls the state change back.
+        await expect(
+          sqlState(
+            inSystem(() =>
+              system.reanchorTrustedState({ ...reanchor, from: restored, to: state(8n, [0x0b]) }),
+            ),
+          ),
+        ).resolves.toBe('23505');
+        expect(await trustedRows()).toEqual([{ database: 'ledger', tx_id: '9', hash: '0a' }]);
+        expect(await reanchorRows()).toHaveLength(1);
+        // R5 advances from the re-anchored state as from any other.
+        await expect(
+          inSystem(() => system.advanceTrustedState('ledger', restored, state(10n, [0x0b]), READ)),
+        ).resolves.toBe(true);
+        await expect(inSystem(() => system.readTrustedState('ledger'))).resolves.toMatchObject({
+          txId: 10n,
+          reanchor: { txId: 9n, lostFrom },
+        });
+      });
+
+      it('reanchorTrustedState throws before SQL for another database or a blank operator or reason', async () => {
+        const original = state(12n, [0x03]);
+        await inSystem(() => system.advanceTrustedState('ledger', null, original, READ));
+        const valid = {
+          id: id('ae2'),
+          database: 'ledger',
+          from: original,
+          to: state(9n, [0x0a]),
+          lostFrom: READ,
+          operator: 'ops',
+          reason: 'restore',
+        };
+        for (const bad of [
+          { ...valid, to: { ...valid.to, database: 'other' } },
+          { ...valid, from: { ...valid.from, database: 'other' } },
+          { ...valid, operator: ' ' },
+          { ...valid, reason: '' },
+        ]) {
+          await expect(inSystem(() => system.reanchorTrustedState(bad))).rejects.toThrow(
+            /re-anchor of ledger/,
+          );
+        }
+        expect(await trustedRows()).toEqual([{ database: 'ledger', tx_id: '12', hash: '03' }]);
+        expect(await reanchorRows()).toEqual([]);
+      });
+
       it('startRun records a running run; finishRun finishes it once and a second finish changes nothing', async () => {
         const runId = id('r1');
         await inSystem(() => system.startRun({ id: runId, from: FROM, to: TO }));
@@ -693,6 +814,16 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           readTrustedState: () => system.readTrustedState('ledger'),
           advanceTrustedState: () =>
             system.advanceTrustedState('ledger', null, state(1n, [1]), READ),
+          reanchorTrustedState: () =>
+            system.reanchorTrustedState({
+              id: id('ae9'),
+              database: 'ledger',
+              from: state(1n, [1]),
+              to: state(1n, [2]),
+              lostFrom: READ,
+              operator: 'ops',
+              reason: 'restore',
+            }),
           startRun: () => system.startRun({ id: id('r1'), from: FROM, to: TO }),
           finishRun: () => system.finishRun(id('r1'), 'failed', { found: {}, appended: {} }),
         };
@@ -705,7 +836,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
             name,
           ).rejects.toMatchObject(SYSTEM_CONTEXT_REQUIRED);
         }
-        expect(await everything()).toEqual([[], [], [], [], [], []]);
+        expect(await everything()).toEqual([[], [], [], [], [], [], []]);
       });
 
       it('no UPDATE or DELETE exists for ledger_entry_refs or ledger_discrepancies in either repository', () => {

@@ -2,12 +2,44 @@ import type { BillingServiceClient, Payment } from '@domain/billing-contracts';
 import { Metadata, status } from '@grpc/grpc-js';
 import type { ClientGrpc } from '@nestjs/microservices';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
-import { EntityNotFoundException, generateId } from '@platform/common';
+import {
+  EntityNotFoundException,
+  generateId,
+  OperationTimeoutException,
+  ServiceUnavailableException,
+} from '@platform/common';
 import { grpcConfig } from '@platform/config';
 import { GRPC_METADATA_KEYS, GrpcCircuitBreakers } from '@platform/transport';
-import { of, throwError } from 'rxjs';
+import { defer, NEVER, type Observable, of, throwError } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BillingGrpcAdapter, normalizePayment } from './billing-grpc.adapter.js';
+import type { BillingGrpcClientConfig } from './billing-grpc-client.config.js';
+
+/** The Stripe-backed calls' deadline here: shorter than GRPC_DEADLINE_MS keeps the specs fast. */
+const STRIPE_DEADLINE_MS = 100;
+/** opossum's volume threshold (DEFAULT_GRPC_CIRCUIT_BREAKER_OPTIONS): calls before it may open. */
+const BREAKER_VOLUME = 10;
+
+/**
+ * A cold upstream call that counts its subscriptions: the stub client builds the observable before
+ * the breaker runs, so only a subscription means the call reached billing-service.
+ */
+function counted<T>(source: () => Observable<T>): { call: Observable<T>; reached: () => number } {
+  let reached = 0;
+  const call = defer(() => {
+    reached += 1;
+    return source();
+  });
+  return { call, reached: () => reached };
+}
+
+const checkoutRequest = () => ({
+  tenantId: TEST_TENANT_ID,
+  userId: generateId(),
+  customerEmail: 'a@b.co',
+  priceId: 'price_1',
+  quantity: 1,
+});
 
 describe('BillingGrpcAdapter (port → billing.v1.BillingService)', () => {
   let client: { [K in keyof BillingServiceClient]: ReturnType<typeof vi.fn> };
@@ -25,7 +57,16 @@ describe('BillingGrpcAdapter (port → billing.v1.BillingService)', () => {
       getClientByServiceName: vi.fn(),
     } as unknown as ClientGrpc;
     breakers = new GrpcCircuitBreakers();
-    adapter = new BillingGrpcAdapter(grpc, grpcConfig.parse({ GRPC_DEADLINE_MS: '500' }), breakers);
+    const billing: BillingGrpcClientConfig = {
+      url: 'billing.test:50051',
+      stripeDeadlineMs: STRIPE_DEADLINE_MS,
+    };
+    adapter = new BillingGrpcAdapter(
+      grpc,
+      grpcConfig.parse({ GRPC_DEADLINE_MS: '500' }),
+      billing,
+      breakers,
+    );
     adapter.onModuleInit();
   });
 
@@ -116,6 +157,73 @@ describe('BillingGrpcAdapter (port → billing.v1.BillingService)', () => {
     await expect(
       adapter.listPayments({ tenantId: TEST_TENANT_ID, limit: 1 }),
     ).rejects.toBeInstanceOf(EntityNotFoundException);
+  });
+
+  it('slow Stripe-backed calls open billing-stripe, not the breaker ListPayments uses', async () => {
+    const checkout = counted(() => NEVER);
+    client.createCheckoutSession.mockReturnValue(checkout.call);
+    const timedOut = await Promise.allSettled(
+      Array.from({ length: BREAKER_VOLUME }, () =>
+        adapter.createCheckoutSession(checkoutRequest()),
+      ),
+    );
+    for (const result of timedOut) {
+      expect(result.status).toBe('rejected');
+      expect((result as PromiseRejectedResult).reason).toBeInstanceOf(OperationTimeoutException);
+    }
+
+    // The next checkout fails fast without reaching billing-service.
+    await expect(adapter.createCheckoutSession(checkoutRequest())).rejects.toBeInstanceOf(
+      ServiceUnavailableException,
+    );
+    expect(checkout.reached()).toBe(BREAKER_VOLUME);
+
+    const list = counted(() => of({ items: [] }));
+    client.listPayments.mockReturnValue(list.call);
+    await expect(adapter.listPayments({ tenantId: TEST_TENANT_ID, limit: 5 })).resolves.toEqual({
+      items: [],
+    });
+    expect(list.reached()).toBe(1);
+    expect(breakers.states()).toEqual({ 'billing-stripe': 'open', billing: 'closed' });
+  });
+
+  it('a failing ListPayments opens billing, not the breaker of the Stripe-backed calls', async () => {
+    const list = counted(() =>
+      throwError(() =>
+        Object.assign(new Error('14 UNAVAILABLE: connection refused'), {
+          code: status.UNAVAILABLE,
+          details: 'connection refused',
+          metadata: new Metadata(),
+        }),
+      ),
+    );
+    client.listPayments.mockReturnValue(list.call);
+    const failed = await Promise.allSettled(
+      Array.from({ length: BREAKER_VOLUME }, () =>
+        adapter.listPayments({ tenantId: TEST_TENANT_ID, limit: 5 }),
+      ),
+    );
+    expect(failed.every((result) => result.status === 'rejected')).toBe(true);
+    await expect(
+      adapter.listPayments({ tenantId: TEST_TENANT_ID, limit: 5 }),
+    ).rejects.toBeInstanceOf(ServiceUnavailableException);
+    expect(list.reached()).toBe(BREAKER_VOLUME);
+
+    const checkout = counted(() => of({ id: 'cs_1', url: 'https://x.test', paymentId: 'p' }));
+    client.createCheckoutSession.mockReturnValue(checkout.call);
+    await expect(adapter.createCheckoutSession(checkoutRequest())).resolves.toMatchObject({
+      id: 'cs_1',
+    });
+    const webhook = counted(() =>
+      of({ received: true, eventId: 'evt_1', eventType: 'x', duplicate: false }),
+    );
+    client.handleStripeWebhook.mockReturnValue(webhook.call);
+    await expect(
+      adapter.handleStripeWebhook({ payload: Buffer.from('{}'), signature: 'sig' }),
+    ).resolves.toMatchObject({ received: true });
+    expect(checkout.reached()).toBe(1);
+    expect(webhook.reached()).toBe(1);
+    expect(breakers.states()).toEqual({ billing: 'open', 'billing-stripe': 'closed' });
   });
 
   it('keeps a present session id and fills a missing amount', () => {

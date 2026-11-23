@@ -195,6 +195,44 @@ exact rows for the allowed and the forbidden case. Without step 3 the boot guard
   rethrows that as an error naming `DATABASE_MIGRATION_URL`, which must never point at the pooler.
 - Each set's pending files run in one transaction (all-or-nothing per set); a set that already ran stays applied when
   a later set fails.
+- **Bounded lock waits.** The session also sends `lock_timeout` (`DATABASE_MIGRATION_LOCK_TIMEOUT_MS`, 5 s), and a set
+  that hits it is retried; see [Lock waits](#lock-waits).
+
+### Lock waits
+
+An `ALTER TABLE` takes `ACCESS EXCLUSIVE` on its table (and on Citus on every shard). If an open transaction holds any
+lock on that table (a long report, an operator session, `pg_dump`), the `ALTER` waits, and every query that arrives
+after it queues behind the `ALTER`. Without a limit, a release job can stall all traffic to the table until the
+blocker ends, and each queued request fails at its own 15 s `statement_timeout`. So the runner bounds the wait:
+
+- **`lock_timeout` on the migration session.** `DATABASE_MIGRATION_LOCK_TIMEOUT_MS` (default `5000`; `0` = no limit) is
+  sent as a startup parameter, at boot (`DATABASE_RUN_MIGRATIONS`) and in the release job alike. A statement that waits
+  longer fails with SQLSTATE `55P03`.
+- **On Citus, the worker connections too.** The session's setting stays on the coordinator: the connections Citus opens
+  to the workers start from the role's default. So, before the migration session opens, a short preliminary
+  connection checks for the coordinator, makes the connecting role's default `lock_timeout` equal the setting
+  (`ALTER ROLE CURRENT_USER SET lock_timeout`, only when it differs; Citus propagates it to the workers) and closes:
+  a session that ran the `ALTER ROLE` would keep worker connections opened with the old value.
+  `docker/postgres/init/02-roles.sql` and the production SQL in [SECURITY.md](../../docs/SECURITY.md) give `app_owner`
+  the same default up front. It also bounds drizzle-kit and operator sessions as `app_owner`.
+- **Retry, then fail.** drizzle has rolled the set back whole, so nothing of it is recorded. The runner retries it after
+  a backoff (1 s, doubling, at most 30 s), still under the advisory lock, up to `DATABASE_MIGRATION_LOCK_RETRIES`
+  times (default 5), logging a warning per retry. Then the run fails with
+  `Migration set "<name>" (<folder>) failed: lock_timeout (<ms>ms) expired on all <n> attempts (SQLSTATE 55P03)`,
+  and the `55P03` error as `cause`. The sets before it stay applied; the ones after it are not attempted.
+- **What a `55P03` failure means.** Some transaction kept a lock on a table the set changes for the whole retry window.
+  Nothing of the set was applied, so rerunning the job is safe. Find the blocker first (`pg_stat_activity`,
+  `pg_locks`, `pg_blocking_pids()`), let it end or stop it, then rerun. Raise the timeout only for a change you know
+  waits behind short transactions; `0` brings the unbounded wait back.
+- **One lock-taking change per release.** All pending files of a set run in one transaction, so a lock the first file
+  takes is held until the last file commits. Keep each release to one `ALTER` (or one group on one table) per set,
+  and ship expand/contract steps in separate releases.
+- **Covered by tests.** `test/database.int-spec.ts` runs the `test/fixtures/lock-wait` set against a table that
+  another connection holds `ACCESS SHARE` on: it fails within seconds with `55P03`, recording nothing, and applies once
+  when the blocker commits during the backoff. The role-default step is unit-tested only, and the int container is
+  a single Citus node: that a role default reaches the worker connections, and a session `lock_timeout` does not, was
+  probed by hand on a coordinator plus one worker (`docs/superpowers/plans/2026-11-23-audit-fixes.md`, verified
+  point 6), not in a spec.
 
 ```bash
 bun run db:generate                                    # drizzle-kit generate in every domain (commit the output)
@@ -228,7 +266,8 @@ falls back to `DATABASE_URL`), `DATABASE_POOL_MAX` (20), `DATABASE_SYSTEM_POOL_M
 `DATABASE_IDLE_TIMEOUT_SEC` (30), `DATABASE_MAX_LIFETIME_SEC` (1800), `DATABASE_CONNECT_TIMEOUT_SEC` (10),
 `DATABASE_STATEMENT_TIMEOUT_MS` (15000), `DATABASE_PREPARE` (true; stays true behind PgBouncer 1.26, `false` is the
 escape hatch), `DATABASE_LOG_QUERIES` (false; params are logged only outside production), `DATABASE_RUN_MIGRATIONS`
-(false). `SERVICE_NAME` becomes the session's `application_name`. Every session also gets `TimeZone=UTC`, and
+(false), `DATABASE_MIGRATION_LOCK_TIMEOUT_MS` (5000; the migration session's `lock_timeout`, 0 = no limit) and
+`DATABASE_MIGRATION_LOCK_RETRIES` (5; [Lock waits](#lock-waits)). `SERVICE_NAME` becomes the session's `application_name`. Every session also gets `TimeZone=UTC`, and
 `idle_in_transaction_session_timeout=60s` and `statement_timeout` (direct connections as startup parameters, pooled ones
 from the role settings). The full table is in [CONFIGURATION.md](../../docs/CONFIGURATION.md#database--postgresql-18-postgresjs--drizzle).
 

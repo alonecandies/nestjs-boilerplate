@@ -183,3 +183,70 @@ describe('assemble-image file tracing', () => {
     expect(output).toContain('load check failed');
   });
 });
+
+/** Adds a one-off CLI `src/cli/<name>.ts` to the fixture app, with its compiled `dist/cli/<name>.js`. */
+function withCli(dirs: { out: string; build: string }, name: string, js: string | undefined): void {
+  write(dirs.build, { [`apps/api/src/cli/${name}.ts`]: '' });
+  if (js !== undefined) write(dirs.build, { [`apps/api/dist/cli/${name}.js`]: js });
+}
+
+describe('assemble-image one-off CLIs (src/cli/*.ts)', () => {
+  // heavy-orm and domains/orders/dist/persistence.js are pruned when only the three base
+  // entrypoints are traced (see above), so keeping them proves the CLI is an entrypoint.
+  const replayCli = "import { orm } from '@domain/orders';\nexport const cli = orm;\n";
+
+  it('traces dist/cli/<name>.js next to main, instrument and migrate', () => {
+    const dirs = fixture();
+    withCli(dirs, 'replay', replayCli);
+    const { status, output } = assemble(dirs);
+    expect(output).toContain('[assemble] traced');
+    expect(status).toBe(0);
+    const kept = (path: string) => existsSync(join(dirs.out, path));
+    expect(kept('apps/api/dist/cli/replay.js')).toBe(true);
+    expect(kept('domains/orders/dist/index.js')).toBe(true);
+    expect(kept('domains/orders/dist/persistence.js')).toBe(true);
+    expect(kept('node_modules/heavy-orm/index.js')).toBe(true);
+  });
+
+  it('ignores specs and declarations under src/cli', () => {
+    const dirs = fixture();
+    withCli(dirs, 'replay', replayCli);
+    write(dirs.build, {
+      'apps/api/src/cli/replay.spec.ts': '',
+      'apps/api/src/cli/types.d.ts': '',
+    });
+    expect(assemble(dirs).status).toBe(0);
+  });
+
+  it('fails when a src/cli/<name>.ts was not compiled to dist/cli/<name>.js', () => {
+    const dirs = fixture();
+    withCli(dirs, 'replay', undefined);
+    const { status, output } = assemble(dirs);
+    expect(status).toBe(1);
+    expect(output).toContain('@app/api: dist/cli/replay.js is missing');
+  });
+
+  it('the load check imports every CLI (run without arguments, it must only print its usage)', () => {
+    const dirs = fixture();
+    withCli(
+      dirs,
+      'replay',
+      "process.stderr.write('usage: replay <topic>\\n');\nprocess.exitCode = 2;\n",
+    );
+    const { status, output } = assemble(dirs, '--verify-load', 'true');
+    expect(output).toContain('[assemble] load check passed');
+    expect(status).toBe(0);
+  });
+
+  it('fails the load check on a CLI import the tracer cannot see', () => {
+    const dirs = fixture();
+    withCli(
+      dirs,
+      'replay',
+      "const name = ['heavy', 'orm'].join('-');\nexport const cli = await import(name);\n",
+    );
+    const { status, output } = assemble(dirs, '--verify-load', 'true');
+    expect(status).toBe(1);
+    expect(output).toContain('load check failed');
+  });
+});

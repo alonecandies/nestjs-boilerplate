@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import { LedgerPort } from '../application/ports/ledger.port.js';
 import { resolveLedgerAccount } from '../domain/ledger/ledger.accounts.js';
-import { LedgerVerificationFailedException } from '../domain/ledger/ledger.errors.js';
+import {
+  LedgerSigningKeyNotPinnedException,
+  LedgerVerificationFailedException,
+} from '../domain/ledger/ledger.errors.js';
 import {
   ledgerAccountId,
   ledgerEntryId,
@@ -260,6 +263,11 @@ export class InMemoryLedger extends LedgerPort {
   ): Promise<LedgerTrustedState> {
     if (trusted !== null) this.assertConsistent('trusted-state', trusted);
     return this.currentState();
+  }
+
+  /** The in-memory store signs nothing, so it pins no key either: always refused. */
+  override async signedState(): Promise<LedgerTrustedState> {
+    throw new LedgerSigningKeyNotPinnedException();
   }
 }
 

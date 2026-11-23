@@ -170,7 +170,12 @@ input CreateCheckoutSessionInput {
 
 Payloads go through `ZodRpcValidationPipe` (`INVALID_ARGUMENT` + issues); `@GrpcController()` maps domain
 errors to gRPC statuses and `x-error-code` trailers, and `BillingGrpcAdapter` maps them back to the same
-`DomainException`s (deadline = `GRPC_DEADLINE_MS`, circuit breaker `billing`).
+`DomainException`s (deadline = `GRPC_DEADLINE_MS`, circuit breaker `billing`). The calls that wait on Stripe,
+`CreateCheckoutSession` and `HandleStripeWebhook`, get `BILLING_GRPC_STRIPE_DEADLINE_MS` (default 30000, the
+monolith's `HTTP_HANDLER_TIMEOUT_MS`; also the channel's service-config deadline) and their own breaker,
+`billing-stripe`: slow Stripe calls neither time out at the generic deadline nor open the breaker `ListPayments`
+uses. The gateway's handler timeout still cuts the request at 30 s, as in the monolith; Stripe's own worst case
+(`STRIPE_TIMEOUT_MS` × (1 + `STRIPE_MAX_NETWORK_RETRIES`), 20 s × 3) is above both.
 
 ### Kafka (produced)
 
@@ -378,7 +383,7 @@ UUID): no tenant can list them.
 ### Ledger tables (outbox plan Task 10, ledger design §5)
 
 The receipts and bookkeeping around the immudb ledger (the entries themselves live in immudb). Every table also has
-`created_at`; no FK (`payment_id`, `run_id` and `resolves_id` are plain columns); all five have RLS enabled and forced.
+`created_at`; no FK (`payment_id`, `run_id` and `resolves_id` are plain columns); all six have RLS enabled and forced.
 T = distributed by `tenant_id` inline, right after its `CREATE TABLE`, colocated with `app.tenant_colocation`;
 L = coordinator-local, system only.
 
@@ -389,6 +394,7 @@ L = coordinator-local, system only.
 | `ledger_discrepancies` (T)       | `tenant_id`, `id`, `kind`, `source_key`, `expected jsonb`, `actual jsonb`, `detected_by`, `run_id` (nullable), `resolves_id` (nullable)                                                | `(tenant_id, id)`             | S, I / S, I                         |
 | `ledger_reconciliation_runs` (L) | `id`, `from_ts`, `to_ts`, `status`, `counts jsonb`, `finished_at` (nullable)                                                                                                           | `(id)`                        | none / S, I, U                      |
 | `ledger_trusted_state` (L)       | `database`, `tx_id int8`, `tx_hash bytea`, `verified_at`, `read_at` (nullable)                                                                                                         | `(database)`                  | none / S, I, U                      |
+| `ledger_reanchors` (L, 0001)     | `id`, `database`, `replaced_tx_id int8`, `replaced_tx_hash bytea`, `new_tx_id int8`, `new_tx_hash bytea`, `lost_from`, `operator`, `reason`; index `(database, created_at)`            | `(id)`                        | none / S, I                         |
 
 - Each tenant table has two policies `TO app_runtime`: `<table>_select USING (tenant_id = app.tenant_id() AND
 app.elevated())` and `<table>_insert WITH CHECK (tenant_id = app.tenant_id())`. A principal inserts only its own
@@ -397,7 +403,8 @@ app.elevated())` and `<table>_insert WITH CHECK (tenant_id = app.tenant_id())`. 
 NOTHING` without a conflict target: the int spec pins that it reports 1 row, then 0, for a non-elevated principal
   on Citus.
 - Neither app role may `UPDATE` or `DELETE` a tenant table: entry refs and discrepancies are append-only.
-  `PLATFORM_TENANT_ID` rows and the two local tables belong to `app_system`.
+  `PLATFORM_TENANT_ID` rows and the three local tables belong to `app_system`; the re-anchor audit is append-only
+  for it too (no `UPDATE`, no `DELETE`).
 
 ### Row-level security (B3-5/B3-6, program spec §8.2)
 
@@ -429,14 +436,15 @@ directly (no subquery, no helper or FK into identity); "–" means no policy, so
   | List payments                        | the request principal; the `billing:read-all` check is in TypeScript first, then `elevate(billing:read-all)` for the whole-tenant listing only                                                                                            |
   | Purge Stripe events (hourly cron)    | `SystemContext.run('billing.purge-stripe-events')` and `stripeEvents.deleteProcessedBefore`                                                                                                                                               |
   | Reconcile the ledger (hourly cron)   | `SystemContext.run('billing.reconcile-ledger')`: `ledgerRuns.*`, `ledgerReconciliation.{listSucceededPayments, listEntryRefs, findPaymentsByIds, appendDiscrepancies, enqueueMissingPostings}`, `ledgerTrustedState.{read, advance}` (R5) |
+  | Re-anchor the ledger (one-off CLI)   | `SystemContext.run('billing.ledger-reanchor')`: `ledgerTrustedState.{read, reanchor}`, then one reconciliation run as above                                                                                                               |
 
 - **System methods** (all `system` scope, pinned in `billing.system-methods.ts`):
   `stripeEvents.deleteProcessedBefore` and `stripeEvents.markProcessedAsPlatform`; the four shared `outbox.*`
-  methods; and the ledger's eleven (outbox plan Task 11, spec §9 items 9-11 and delta 4, plus `findPaymentsByIds` from
-  the final review):
+  methods; and the ledger's twelve (outbox plan Task 11, spec §9 items 9-11 and delta 4, plus `findPaymentsByIds` from
+  the final review and `ledgerTrustedState.reanchor` from the audit fixes, OPS-1):
   `ledgerReconciliation.{listSucceededPayments, listEntryRefs, findPaymentsByIds, appendDiscrepancies, enqueueMissingPostings}`,
-  `ledgerEntryRefs.recordAsSystem`, `ledgerAccounts.recordPlatformAccounts`, `ledgerTrustedState.{read, advance}` and
-  `ledgerRuns.{start, finish}`. Only the three `drizzle-*.system-repository.ts` files name `SystemDatabase`. Every
+  `ledgerEntryRefs.recordAsSystem`, `ledgerAccounts.recordPlatformAccounts`, `ledgerTrustedState.{read, advance, reanchor}`
+  and `ledgerRuns.{start, finish}`. Only the three `drizzle-*.system-repository.ts` files name `SystemDatabase`. Every
   process that runs the billing core needs `DATABASE_SYSTEM_URL`; without it a platform webhook fails with
   `SYSTEM_DATABASE_UNAVAILABLE` and Stripe retries.
 
@@ -444,10 +452,10 @@ directly (no subquery, no helper or FK into identity); "–" means no policy, so
 Constraint and index names are explicit snake_case (`payments_tenant_id_id_pk`). The tables and the enum live in the `billing` Postgres schema
 (`billingPgSchema`); raw SQL qualifies them (`billing.payments`). Billing owns its migration history:
 `drizzle.config.ts` generates `src/infrastructure/persistence/migrations`, bookkeeping in `billing.__drizzle_migrations`.
-Since the final squash (SH-12) the history is one `0000_init.sql`: drizzle-kit's tables, enum and indexes, hand-edited
-into the sharding design's order (each tenant table's `app.distribute_by_tenant` call right after its `CREATE TABLE`,
-then its indexes; then forced RLS, the grants and the policies); a table added later gets its own `NNNN` file in that
-order. The stacked files it replaced (`0000_init` .. `0008_ledger_trusted_state_read_at`) stay in
+Since the final squash (SH-12) the history starts with one `0000_init.sql`: drizzle-kit's tables, enum and indexes,
+hand-edited into the sharding design's order (each tenant table's `app.distribute_by_tenant` call right after its
+`CREATE TABLE`, then its indexes; then forced RLS, the grants and the policies); a table added later gets its own
+`NNNN` file in that order (`0001_ledger_reanchors.sql`, a coordinator-local table). The stacked files it replaced (`0000_init` .. `0008_ledger_trusted_state_read_at`) stay in
 `test/stacked-history/` as the fixture of `billing.squash.int-spec.ts`; a database migrated before the squash must be
 recreated ([docs/DEVELOPMENT.md](../../docs/DEVELOPMENT.md#database-migrations-postgres--drizzle)).
 `billingMigrations` applies the set after the platform set (the schema file imports only `drizzle-orm` and a
@@ -461,7 +469,7 @@ transaction would carry no RLS context.
 `stripe` namespace (`src/infrastructure/stripe/stripe.config.ts`, owned by billing; production rejects the dev placeholders, the compose fallbacks and local redirect URLs): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`
 (redirect URLs are never taken from REST clients: no open redirect), `STRIPE_MAX_NETWORK_RETRIES`,
 `STRIPE_TIMEOUT_MS`. `ledger` namespace (`src/infrastructure/ledger/ledger.config.ts`): `LEDGER_ENABLED` (false),
-`LEDGER_RECONCILE_LOOKBACK_HOURS` (72, 1-720), `LEDGER_VERIFY` (false). Gateway: `BILLING_GRPC_URL` (`billingGrpcClient` namespace, `src/infrastructure/adapters/grpc/billing-grpc-client.config.ts`), `GRPC_DEADLINE_MS` (platform `grpc`).
+`LEDGER_RECONCILE_LOOKBACK_HOURS` (72, 1-720), `LEDGER_VERIFY` (false). Gateway: `BILLING_GRPC_URL` and `BILLING_GRPC_STRIPE_DEADLINE_MS` (30000, 1000-900000) (`billingGrpcClient` namespace, `src/infrastructure/adapters/grpc/billing-grpc-client.config.ts`), `GRPC_DEADLINE_MS` (platform `grpc`).
 
 ## Tests
 
@@ -549,12 +557,13 @@ rows (another tenant's, the nil tenant's and a tenant-less principal's are refus
 `42501`; the system repository polls and marks; a row written by `insertAsPlatform` is invisible to and unchangeable
 by every runtime principal, elevated or not, and is returned by the poll.
 `infrastructure/persistence/billing.ledger.rls.int-spec.ts` (local execution off): the three
-tenant tables distributed by `tenant_id` and colocated, the two local ones not in `pg_dist_partition`; forced RLS and
-no FK on all five; exactly the contract's grants and policies. Per tenant table: a non-elevated member inserts its
+tenant tables distributed by `tenant_id` and colocated, the three local ones not in `pg_dist_partition`; forced RLS
+and no FK on all six; exactly the contract's grants and policies. Per tenant table: a non-elevated member inserts its
 own tenant's row, another tenant's or the nil tenant's is refused; it reads nothing without elevation and only its
 tenant's rows with it (never another tenant's or the platform's, which `app_system` reads); `UPDATE` and `DELETE`
 are `42501` for `app_runtime`, elevated or not, and for `app_system`. Local tables: runtime `SELECT` and `INSERT` are
-`42501`, `app_system` inserts, reads and updates. The probe for the receipts repository: `INSERT … ON CONFLICT DO
+`42501`, `app_system` inserts, reads and updates (the runs and the trusted state) or only inserts and reads
+(`ledger_reanchors`: its `UPDATE` and `DELETE` are `42501`). The probe for the receipts repository: `INSERT … ON CONFLICT DO
 NOTHING` (no target, no `RETURNING`) on `ledger_entry_refs` as a non-elevated member reports 1 row, then 0. Without
 an RLS context nothing is readable.
 `infrastructure/persistence/billing.ledger-repositories.rls.int-spec.ts` (outbox plan Task 11, local execution off):
@@ -660,7 +669,9 @@ next run verifies its whole window once), or null (`replayed`). A failed proof �
 `verification_failed` under the platform tenant (`state:<db>`), no advance, no entry verified, the run `failed`; a lost
 compare-and-set → the run `failed`, no finding; an entry that does not verify → `verification_failed` under the ref's
 tenant (`ledger_entries:<id>`), the state still advances. No row yet: the current state is taken on trust (its signature
-still checked), with a warning. In production `LEDGER_ENABLED=true` refuses to start without `LEDGER_VERIFY=true` and a
+still checked), with a warning. After a re-anchor (below), a ref posted before it whose tx id is above the re-anchored
+state's, or posted since its lost-from time, may name the lost history: it is verified like a `replayed` ref, on every
+run that lists it, whatever its tx id. In production `LEDGER_ENABLED=true` refuses to start without `LEDGER_VERIFY=true` and a
 pinned key, unless `LEDGER_ALLOW_UNVERIFIED=true`. Metrics: `ledger_reconciliation_runs_total{status}`,
 `ledger_reconciliation_last_success_timestamp_seconds`, `ledger_discrepancies_total{kind}` (new rows only),
 `ledger_verified_tx_id` and `ledger_unverified_tx_lag` (R5). Tests: one
@@ -670,6 +681,36 @@ the wrong tenant, each finding readable by its tenant's elevated principal only;
 entry healed through R4, a relay tick and the consumer, after which a run appends nothing), and
 `test/ledger-verification.int-spec.ts` (immudb `--signingKey` + Citus: real proofs, another pinned key, an unsigned
 server, a server restarted on an empty volume).
+
+**Re-anchor after an immudb restore** (audit fixes OPS-1). A restore returns immudb to an older history, so R5 fails
+for good against the stored trusted state. The one supported door is the CLI in the monolith and billing-service
+images (`src/cli/ledger-reanchor.ts` → `runLedgerReanchorCli`), runbook `docs/OPERATIONS.md` (immudb):
+`node dist/cli/ledger-reanchor.js --database <db> --lost-from <ISO time> --operator <name> --reason <text>`. It
+builds its own context (`BillingLedgerReanchorModule`, the only module that registers `ReanchorLedgerHandler`, so no
+running app can dispatch it) and sends `ReanchorLedgerCommand` inside `SystemContext.run('billing.ledger-reanchor')`.
+It runs no Postgres or immudb migrations, whatever `DATABASE_RUN_MIGRATIONS` and `IMMUDB_RUN_MIGRATIONS` say.
+In order it refuses, writing nothing: the ledger off; `--lost-from` not in the past; no pinned signing key
+(`LedgerPort.signedState`; `LEDGER_ALLOW_UNVERIFIED` does not help); a current state whose signature does not verify;
+`--database` not the store's; no stored state; a current state that still extends the stored one (dual proof:
+nothing was lost). Then `ledgerTrustedState.reanchor` inserts the audit row (`ledger_reanchors`) and compare-and-sets
+the stored state to exactly the verified one, `lost-from` as its `read_at`, in one transaction (a lost compare-and-set
+writes neither), and one `ReconcileLedgerCommand` runs over `[lost-from, now)`. Expected findings of that first run:
+R4 reports each Stripe transaction whose entry the restore lost as `missing_entry` and re-enqueues it; R5 reports its
+ref as `verification_failed` (`ledger_entries:<id>`); for a lost charge whose payment was paid in the window, R3 also
+reports its ref as `tenant_mismatch` (no entry under the ref's tenant). Once the relay and the consumer post it again
+(once: the restored immudb lacks it; the Postgres ref keeps its old tx id), the next run verifies the ref against the
+new entry and appends nothing (the findings already stored stay: they are append-only). The run's window ends at
+now, without the cron's 15-minute grace, so a payment paid in the last minutes whose posting is still in flight can
+add a `payment_without_entry`. The CLI exits 0 once the re-anchor commits, even when that run ends `failed` (a
+Stripe error in R4, or the hourly cron winning R5's compare-and-set: the CLI does not take the reconcile lock); a
+second CLI run is then refused (`nothing-lost`), so check the run's row in `ledger_reconciliation_runs`, or the next
+hourly run. R5 honours only the latest re-anchor: a ref lost in an earlier restore and not posted again can fall out of
+the lost-history rule after a second re-anchor and be skipped, so heal the previous run's `verification_failed` refs
+before re-anchoring again. Without arguments the CLI prints its usage and exits 2, reading no config (the image build's load
+check). Tests: `reanchor-ledger.handler.spec.ts`, `ledger-reanchor-cli.spec.ts`, the R5 spec and
+`test/ledger-reanchor.int-spec.ts` (Citus + two immudb servers with one `--signingKey`: the restore fails R5; the CLI
+without a key and with another key writes nothing; with the right key one audit row and the state; B re-posted once;
+a healthy ledger refused).
 
 ## Gotchas
 

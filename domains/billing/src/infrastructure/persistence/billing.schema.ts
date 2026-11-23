@@ -246,6 +246,31 @@ export const ledgerTrustedState = billingPgSchema.table(
   (t) => [primaryKey({ name: 'ledger_trusted_state_database_pk', columns: [t.database] })],
 );
 
+// citus: local (0001). The audit trail of `ledgerTrustedState.reanchor` (audit fixes OPS-1): one row
+// per re-anchor of a database's trusted state after an immudb restore, written in the same
+// transaction as the state it replaces. System only and append-only: `app_system` holds INSERT and
+// SELECT, no UPDATE or DELETE; no runtime grant, no policy.
+export const ledgerReanchors = billingPgSchema.table(
+  'ledger_reanchors',
+  {
+    id: uuid().notNull(),
+    database: text().notNull(),
+    replacedTxId: bigint({ mode: 'bigint' }).notNull(),
+    replacedTxHash: bytea().notNull(),
+    newTxId: bigint({ mode: 'bigint' }).notNull(),
+    newTxHash: bytea().notNull(),
+    lostFrom: timestamptz().notNull(),
+    operator: text().notNull(),
+    reason: text().notNull(),
+    createdAt: timestamptz().notNull().defaultNow(),
+  },
+  (t) => [
+    primaryKey({ name: 'ledger_reanchors_id_pk', columns: [t.id] }),
+    // R5 reads the latest re-anchor of its database.
+    index('ledger_reanchors_database_created_at_idx').on(t.database, t.createdAt),
+  ],
+);
+
 export type PaymentRow = typeof payments.$inferSelect;
 export type NewPaymentRow = typeof payments.$inferInsert;
 export type StripeEventRow = typeof stripeEvents.$inferSelect;
@@ -262,5 +287,6 @@ export const billingSchema = {
   ledgerDiscrepancies,
   ledgerReconciliationRuns,
   ledgerTrustedState,
+  ledgerReanchors,
 };
 export type BillingSchema = typeof billingSchema;

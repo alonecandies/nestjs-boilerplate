@@ -51,6 +51,30 @@ describe('runMigrationsCli', () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it('bounds lock waits with DATABASE_MIGRATION_LOCK_TIMEOUT_MS and DATABASE_MIGRATION_LOCK_RETRIES', async () => {
+    vi.stubEnv('DATABASE_MIGRATION_URL', 'postgres://app:app@db:5432/app');
+    vi.stubEnv('LOG_PRETTY', 'false');
+    vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.mocked(runMigrations).mockResolvedValue({ sets: [], total: 0, applied: 0 });
+
+    vi.stubEnv('DATABASE_MIGRATION_LOCK_TIMEOUT_MS', '750');
+    vi.stubEnv('DATABASE_MIGRATION_LOCK_RETRIES', '2');
+    await runMigrationsCli([orders], []);
+    expect(runMigrations).toHaveBeenLastCalledWith(
+      'postgres://app:app@db:5432/app',
+      expect.objectContaining({ lockWaitTimeoutMs: 750, lockWaitRetries: 2 }),
+    );
+
+    vi.stubEnv('DATABASE_MIGRATION_LOCK_TIMEOUT_MS', '');
+    vi.stubEnv('DATABASE_MIGRATION_LOCK_RETRIES', '');
+    await runMigrationsCli([orders], []);
+    expect(runMigrations).toHaveBeenLastCalledWith(
+      'postgres://app:app@db:5432/app',
+      expect.objectContaining({ lockWaitTimeoutMs: 5000, lockWaitRetries: 5 }),
+    );
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it('a production release job needs no DATABASE_SYSTEM_URL (it never opens the system pool)', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('DATABASE_URL', 'postgres://app_runtime:r@pgbouncer:6432/app?sslmode=verify-full');

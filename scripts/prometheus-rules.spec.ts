@@ -46,6 +46,8 @@ const METRIC_NAMES: readonly string[] = [
   'ai_requests_total',
   'ai_tokens_total',
   'ai_request_duration_seconds',
+  // Audit fixes Task 4 (`libs/transport/src/kafka/kafka-metrics.ts`).
+  'kafka_consumer_messages_total',
 ];
 
 /** PromQL words that are not series: functions, aggregations, operators, modifiers. */
@@ -94,6 +96,9 @@ const EXPECTED: Readonly<Record<string, Readonly<Record<string, 'page' | 'ticket
   },
   'docker/prometheus/rules/ai.rules.yml': {
     AiErrorRate: 'ticket',
+  },
+  'docker/prometheus/rules/platform.rules.yml': {
+    KafkaDeadLetters: 'page',
   },
 };
 
@@ -178,6 +183,27 @@ describe('the alert thresholds of the plan', () => {
     expect(rule).toMatch(/by \(model\)/);
     expect(rule).toMatch(/> 0\.1/);
     expect(waits('AiErrorRate')).toBe('10m');
+  });
+
+  it('KafkaDeadLetters: any dead-lettered message within 15 m, per service and topic', () => {
+    const rule = expr('KafkaDeadLetters');
+    expect(rule).toContain('increase(kafka_consumer_messages_total{outcome="dead_letter"}[15m])');
+    expect(rule).toMatch(/by \(service, topic\)/);
+    expect(rule).toMatch(/> 0$/);
+  });
+});
+
+describe('the Grafana overview reads the dead-letter series', () => {
+  it('one panel plots kafka_consumer_messages_total{outcome="dead_letter"}', () => {
+    const dashboard = JSON.parse(read('docker/grafana/dashboards/nestjs-overview.json')) as {
+      panels: { title?: string; targets?: { expr?: string }[] }[];
+    };
+    const panels = dashboard.panels.filter((panel) =>
+      (panel.targets ?? []).some((target) =>
+        (target.expr ?? '').includes('kafka_consumer_messages_total{outcome="dead_letter"'),
+      ),
+    );
+    expect(panels.map((panel) => panel.title)).toHaveLength(1);
   });
 });
 

@@ -1,39 +1,12 @@
-// Replays a dead-letter topic into its source topic once the cause of the failures is fixed:
+// Replays a dead-letter topic into its source topic from a checkout, once the cause of the failures
+// is fixed:
 //   bun run build   # the script runs the compiled packages (dist/), like the production image
 //   node --env-file=.env libs/transport/scripts/kafka-dlq-replay.mjs <topic> [--dry-run] [--group <id>]
-// <topic> is the SOURCE topic (`<context>.<event-name>.v<major>`); `<topic>.dlq` is read. Broker
-// settings come from the `kafka` config namespace (KAFKA_BROKERS, KAFKA_SSL, KAFKA_SASL_*), exactly
-// as the services read them. Progress is committed to the group (default `<topic>.dlq-replay`), so
-// running it again only replays what was dead-lettered since. Records keep their key and value
-// bytes, so consumers deduplicate on the envelope id as for any redelivery.
+// A thin wrapper of `runDlqReplayCli` (libs/transport/src/kafka/dlq-replay-cli.ts), the same body
+// as `node dist/cli/dlq-replay.js` in the image of every app that consumes Kafka: <topic> is the
+// SOURCE topic and `<topic>.dlq` is read; progress is committed to the group (default
+// `<topic>.dlq-replay`). Exit codes: 0 replayed, 1 skipped or failed, 2 usage.
 import 'reflect-metadata';
-import { parseArgs } from 'node:util';
-import { kafkaConfig } from '@platform/config';
-import { isEventTopic } from '@platform/contracts';
-import { Kafka } from 'kafkajs';
-import { createKafkaClientConfig, replayDeadLetters } from '../dist/index.js';
+import { runDlqReplayCli } from '../dist/index.js';
 
-const { values, positionals } = parseArgs({
-  allowPositionals: true,
-  options: {
-    'dry-run': { type: 'boolean', default: false },
-    group: { type: 'string' },
-  },
-});
-
-const [topic] = positionals;
-if (!isEventTopic(topic)) {
-  process.stderr.write(
-    'usage: kafka-dlq-replay.mjs <topic> [--dry-run] [--group <id>]\n' +
-      '  <topic>: a source topic, <context>.<event-name>.v<major> (docker/kafka/topics.txt)\n',
-  );
-  process.exit(2);
-}
-
-const kafka = new Kafka(createKafkaClientConfig(kafkaConfig.parse(), 'dlq-replay'));
-const result = await replayDeadLetters(kafka, {
-  topic,
-  dryRun: values['dry-run'],
-  ...(values.group === undefined ? {} : { groupId: values.group }),
-});
-process.exitCode = result.skipped > 0 ? 1 : 0;
+await runDlqReplayCli();

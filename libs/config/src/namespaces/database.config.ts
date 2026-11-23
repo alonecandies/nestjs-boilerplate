@@ -70,6 +70,10 @@ const databaseEnvObject = z.object({
   DATABASE_PREPARE: zBool(true),
   DATABASE_LOG_QUERIES: zBool(false),
   DATABASE_RUN_MIGRATIONS: zBool(false),
+  // The migration session's Postgres lock_timeout (0 = wait without limit) and how many times a set
+  // that hit it (55P03) is retried with backoff before the run fails (OPS-2).
+  DATABASE_MIGRATION_LOCK_TIMEOUT_MS: zInt(5_000, { min: 0 }),
+  DATABASE_MIGRATION_LOCK_RETRIES: zInt(5, { min: 0, max: 100 }),
   // Production refuses an unencrypted connection unless this explicit opt-out is set (a sidecar
   // such as the Cloud SQL Auth Proxy, or the network layer, already encrypts it).
   DATABASE_ALLOW_INSECURE: zBool(false),
@@ -174,6 +178,14 @@ const toDatabaseConfig = (env: DatabaseEnv) => ({
   prepare: env.DATABASE_PREPARE,
   logQueries: env.DATABASE_LOG_QUERIES,
   runMigrations: env.DATABASE_RUN_MIGRATIONS,
+  /**
+   * Migrations (release job and boot alike): `lock_timeout` of the migration session in
+   * MILLISECONDS, sent as a startup parameter and, on Citus, kept as the migration role's default so
+   * worker connections inherit it; 0 = no limit.
+   */
+  migrationLockTimeoutMs: env.DATABASE_MIGRATION_LOCK_TIMEOUT_MS,
+  /** Retries, with backoff and under the same advisory lock, of a set that hit the lock timeout. */
+  migrationLockRetries: env.DATABASE_MIGRATION_LOCK_RETRIES,
 });
 
 /** The app processes' schema: every production rule, DATABASE_SYSTEM_URL required. */
