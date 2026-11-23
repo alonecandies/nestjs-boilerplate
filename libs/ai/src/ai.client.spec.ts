@@ -642,6 +642,41 @@ describe('AiClient usage of a failed call (aiUsageOf)', () => {
     },
   );
 
+  it.each(KINDS)(
+    "a caller abort during the SDK retry backoff: the caller's reason carries the call billed before it (%s)",
+    async (kind) => {
+      const caller = new AbortController();
+      const reason = new Error('client gone');
+      const retryable = new APICallError({
+        message: 'upstream unavailable',
+        url: 'https://openrouter.invalid/api/v1/chat/completions',
+        requestBodyValues: {},
+        statusCode: 503,
+        isRetryable: true,
+      });
+      const model = mockScriptedModel([
+        { toolCalls: [LOOKUP], ...BILLED },
+        (): MockModelTurn => {
+          // The abort lands while the SDK waits out its first retry delay (2 s by default).
+          setTimeout(() => caller.abort(reason), 10);
+          throw retryable;
+        },
+      ]);
+      const { client } = setup(model, { maxRetries: 2 });
+
+      const error = await failureOf(kind, client, {
+        messages: ask(),
+        tools: lookupTool().tools,
+        signal: caller.signal,
+      });
+
+      expect(error).toBe(reason);
+      expect(aiUsageOf(reason)).toEqual({ inputTokens: 1_000, outputTokens: 50, costUsd: 0.01 });
+      expect(await value(metrics.requests, { outcome: 'aborted' })).toBe(1);
+      expect(await tokens()).toEqual({ input: 1_000, output: 50 });
+    },
+  );
+
   /** A lookup that settles only when its call aborts (rejecting); `onStart` runs first. */
   function slowLookup(onStart: () => void = () => undefined) {
     const cut = (signal?: AbortSignal) => new Error('lookup cut', { cause: signal?.reason });

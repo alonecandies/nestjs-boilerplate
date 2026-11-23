@@ -238,7 +238,11 @@ class AiCall<TOOLS extends ToolSet> {
       mapped = this.deadline.signal.reason;
     } else if (this.ctx.callerSignal?.aborted === true) {
       outcome = 'aborted';
-      mapped = error;
+      // The caller's reason, whatever the SDK reported (during a retry backoff it throws a fresh
+      // AbortError, not the reason): `generate` throws what `stream` rejects `usage` with. The
+      // SDK's own error stays keyed too, so a reader holding that one still finds the usage.
+      mapped = this.ctx.callerSignal.reason;
+      if (isWeakKey(error)) failedCalls.set(error, this.metered);
     } else {
       outcome = 'error';
       mapped = isDomainException(error) ? error : new AiUpstreamError({ cause: error });
@@ -298,7 +302,8 @@ const failedCalls = new WeakMap<object, UsageMeter>();
  * before it failed (OpenRouter bills each, the step that broke a tool loop included; one cut
  * mid-answer reports nothing). Pass what the call failed with: the `AiTimeoutError` or
  * `AiUpstreamError` that `generate` throws or `stream` rejects `usage` with, or the caller's abort
- * reason (also when the abort came after the call ended: then the whole call). `undefined` when no
+ * reason (also when the abort came after the call ended: then the whole call; `generate` throws that
+ * reason when the caller aborts, also during the SDK's retry backoff). `undefined` when no
  * model call ended, for a guard refusal or any other value, and for an abort reason that is not an
  * object (nothing can key it). Read live: a streamed call whose usage arrives after its error part
  * is included once the stream ended. One reason object shared by concurrent calls reads only one.
