@@ -112,3 +112,6 @@ None — this package never reads `process.env`. Values come from `@platform/con
   `INVALID_PRINCIPAL` on a malformed id, the platform tenant, or roles/staff without a tenant).
 - CLS accessors over nestjs-cls' process-wide `ClsService`: `getPrincipal`, `requirePrincipal` (401
   `PRINCIPAL_MISSING`), `setPrincipal` (needs an active context), `runWithPrincipal`. Writers: see the B2 plan, I-2.
+- `markTokenVerified` / `isTokenVerified`: marks the frozen principal this process's own access-token verification
+  wrote (`writePrincipal` in `@platform/auth`). Only a marked principal is signed into a gRPC principal assertion
+  (`@platform/transport`); one from an event envelope, gRPC metadata or `runWithPrincipal` never is.

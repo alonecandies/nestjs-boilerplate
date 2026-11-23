@@ -5,6 +5,8 @@ import { createPrincipal } from './principal.js';
 import {
   CLS_PRINCIPAL,
   getPrincipal,
+  isTokenVerified,
+  markTokenVerified,
   requirePrincipal,
   runWithPrincipal,
   setPrincipal,
@@ -68,5 +70,40 @@ describe('principal context', () => {
     const principal = createPrincipal({ userId: USER, tenantId: TENANT });
     expect(runWithPrincipal(principal, () => getPrincipal())).toBe(principal);
     expect(getPrincipal()).toBeUndefined();
+  });
+});
+
+describe('token-verified principals (the only ones a gRPC principal assertion signs)', () => {
+  it('markTokenVerified marks that object only: an equal copy and other values stay unmarked', () => {
+    const principal = createPrincipal({ userId: USER, tenantId: TENANT, roles: ['admin'] });
+    expect(isTokenVerified(principal)).toBe(false);
+    expect(markTokenVerified(principal)).toBe(principal);
+    expect(isTokenVerified(principal)).toBe(true);
+    expect(
+      isTokenVerified(createPrincipal({ userId: USER, tenantId: TENANT, roles: ['admin'] })),
+    ).toBe(false);
+    expect(isTokenVerified({ ...principal })).toBe(false);
+    expect(isTokenVerified(undefined)).toBe(false);
+    expect(isTokenVerified(USER)).toBe(false);
+  });
+
+  it('refuses to mark an object that is not a frozen principal (a mark on it would vouch for nothing)', () => {
+    const principal = createPrincipal({ userId: USER, tenantId: TENANT, roles: ['admin'] });
+    expect(() => markTokenVerified({ ...principal })).toThrow(/frozen principal/);
+    // A frozen object whose roles array is not.
+    const unfrozenRoles = Object.freeze({ ...principal, roles: [...principal.roles] });
+    expect(() => markTokenVerified(unfrozenRoles)).toThrow(/frozen principal/);
+  });
+
+  it('the principal runWithPrincipal sets is unmarked, and the outer one keeps its mark', () => {
+    const edge = markTokenVerified(createPrincipal({ userId: USER, tenantId: TENANT }));
+    cls.run(() => {
+      setPrincipal(edge);
+      const inner = runWithPrincipal(createPrincipal({ userId: USER, tenantId: TENANT }), () =>
+        getPrincipal(),
+      );
+      expect(isTokenVerified(inner)).toBe(false);
+      expect(isTokenVerified(getPrincipal())).toBe(true);
+    });
   });
 });

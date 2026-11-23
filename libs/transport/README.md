@@ -139,7 +139,10 @@ send the same headers, so the edge also signs them:
   keep that above the longest gRPC deadline (`AI_GRPC_CHAT_DEADLINE_MS`, 70 s), or a tool call late in an AI turn carries an
   expired assertion. Verifiers allow 10 s of clock skew.
 - **Signer.** `callerContextFromCls` signs at the edge: a process with `GRPC_PRINCIPAL_SIGNING_KEY` (or `_FILE`) and
-  `GRPC_PRINCIPAL_SIGNING_KEY_ID` signs exactly the caller its plain headers carry. Only the gateway gets the private key.
+  `GRPC_PRINCIPAL_SIGNING_KEY_ID` signs the principal its own access-token verification wrote (`writePrincipal` marks
+  it; `isTokenVerified` in `@platform/common`), with that principal's claims. They equal the plain headers, unless an
+  override changes the tenant, roles or staff flag, which verifiers then refuse as a `mismatch`. A principal taken from
+  an event envelope or set with `runWithPrincipal` is never signed. Only the gateway gets the private key.
 - **Forwarding.** Inside a gRPC call (ai-service's tools, any service-to-service hop) the received bytes are forwarded
   unchanged, and the process never signs, even with a key: a principal adopted from metadata is never turned into a
   signature. An override naming another user drops the assertion, as it drops the tenant and roles. Forwarding does not
@@ -157,9 +160,9 @@ send the same headers, so the edge also signs them:
   runs. A call without `x-user-id` and without an assertion stays anonymous (register, login, a signed webhook). A mesh
   peer without the edge's private key thus cannot assert a user, a tenant, roles or the staff flag. The rollout (`off`,
   keys, `warn` until the counter shows only `valid`, then `enforce`) is in `docs/SECURITY.md`.
-- **Kafka consumers.** None makes a gRPC call today. One added later must either run in a process that holds the
-  signing key (so it signs its own principal, as the edge does) or call anonymously: under `enforce` a consumer that
-  sends the envelope's actor in plain headers is refused.
+- **Kafka consumers.** None makes a gRPC call today. The envelope's actor (`actorId`, which anyone who can produce
+  to the topic writes) is never signed, not even in a process that holds the key, so a consumer added later calls
+  anonymously (a system method): under `enforce` a call with the actor in plain headers is refused.
 - **Mixed versions.** An old gateway sends no assertion (`missing`; refused under `enforce`); an old or `off` server
   ignores the header; unknown claims are ignored, so a newer edge may add some. An old ai-service drops the assertion on
   its tool calls, so the services it calls go to `enforce` only once every ai-service replica runs the new code.

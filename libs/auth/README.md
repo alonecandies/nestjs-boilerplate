@@ -35,7 +35,7 @@ JWT authentication and RBAC for HTTP, GraphQL and WebSocket handlers:
 
 ## Usage
 
-Handlers read the caller with `getPrincipal()` / `requirePrincipal()` from `@platform/common`; `JwtAuthGuard` writes it for HTTP and GraphQL over HTTP.
+Handlers read the caller with `getPrincipal()` / `requirePrincipal()` from `@platform/common`; `JwtAuthGuard` writes it for HTTP and GraphQL over HTTP. The principal it writes is marked token-verified (`markTokenVerified`): the only kind the edge signs into a gRPC principal assertion.
 
 ```ts
 // edge app (gateway / monolith)

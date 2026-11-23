@@ -1,4 +1,10 @@
-import { CLS_PRINCIPAL, isPrincipal, pickDefined } from '@platform/common';
+import {
+  CLS_PRINCIPAL,
+  isPrincipal,
+  isTokenVerified,
+  type Principal,
+  pickDefined,
+} from '@platform/common';
 import type { ClsService } from 'nestjs-cls';
 import {
   correlationIdFromCls,
@@ -31,51 +37,57 @@ export function callerContextFromCls(
     requestId: requestIdFromCls(cls),
     correlationId: correlationIdFromCls(cls),
   });
-  let principalUserId: string | undefined;
+  let principal: Principal | undefined;
   let incoming: IncomingRpcContext | undefined;
   if (cls?.isActive()) {
     // The principal written at the edge (JwtAuthGuard) or adopted from metadata (GrpcContextInterceptor)
     // travels on every hop: user, tenant, roles and staff (spec §7). An override naming ANOTHER user
     // gets none of them: a tenant and roles are only ever asserted for the user they belong to.
-    const principal = cls.get<unknown>(CLS_PRINCIPAL);
+    const current = cls.get<unknown>(CLS_PRINCIPAL);
     if (
-      isPrincipal(principal) &&
-      (overrides.userId === undefined || overrides.userId === principal.userId)
+      isPrincipal(current) &&
+      (overrides.userId === undefined || overrides.userId === current.userId)
     ) {
-      Object.assign(context, rpcCallerOf(principal));
-      principalUserId = principal.userId;
+      Object.assign(context, rpcCallerOf(current));
+      principal = current;
     }
     incoming = cls.get<IncomingRpcContext | undefined>(RPC_CLS_KEYS.CALLER);
   }
   const caller: RpcCallerContext = { ...context, ...pickDefined(overrides) };
-  if (caller.principalAssertion === undefined && principalUserId !== undefined) {
-    const assertion = principalAssertionFor(caller, principalUserId, incoming);
+  if (caller.principalAssertion === undefined && principal !== undefined) {
+    const assertion = principalAssertionFor(caller, principal, incoming);
     if (assertion !== undefined) caller.principalAssertion = assertion;
   }
   return caller;
 }
 
 /**
- * The signed assertion for the CLS principal `principalUserId`, sent as `x-principal-assertion`:
+ * The signed assertion for the CLS `principal`, sent as `x-principal-assertion`:
  * - inside a gRPC call (`incoming` set): the bytes the caller sent, unchanged, when they are for
  *   the same user. Such a process never signs: a principal adopted from metadata must not be
  *   laundered into a signature, even where a key is present;
- * - at the edge, with `GRPC_PRINCIPAL_SIGNING_KEY`: a new assertion of exactly what the plain
- *   headers will carry (`assertedCallerOf`), so the two match;
- * - otherwise (an edge without a key, an anonymous call, an override naming another user): none.
+ * - at the edge, with `GRPC_PRINCIPAL_SIGNING_KEY`, for the principal its own access-token
+ *   verification wrote (`isTokenVerified`): a new assertion of that principal's claims
+ *   (`rpcCallerOf`). They equal the plain headers, unless an override changed the tenant, roles or
+ *   staff flag: a verifier then finds a `mismatch`, so an override never widens what is vouched for;
+ * - otherwise none: an edge without a key, an anonymous call, an override naming another user, and
+ *   every principal the edge did not verify from a token. That is the actor an event envelope names
+ *   (`KafkaContextInterceptor`: anyone who can produce to Kafka writes it) and a principal set with
+ *   `runWithPrincipal`; a consumer's call with it carries the plain headers only.
  * The local `GRPC_PRINCIPAL_ASSERTION` mode plays no part: it only governs verification.
  */
 function principalAssertionFor(
   caller: RpcCallerContext,
-  principalUserId: string,
+  principal: Principal,
   incoming: IncomingRpcContext | undefined,
 ): string | undefined {
-  if (caller.userId !== principalUserId) return undefined;
+  if (caller.userId !== principal.userId) return undefined;
   if (incoming !== undefined) {
-    return incoming.userId === principalUserId ? incoming.principalAssertion : undefined;
+    return incoming.userId === principal.userId ? incoming.principalAssertion : undefined;
   }
+  if (!isTokenVerified(principal)) return undefined;
   const signingKey = principalAssertionSettings().signingKey;
-  const asserted = assertedCallerOf(caller);
+  const asserted = assertedCallerOf(rpcCallerOf(principal));
   return signingKey === undefined || asserted === undefined
     ? undefined
     : signPrincipalAssertion(asserted, signingKey);

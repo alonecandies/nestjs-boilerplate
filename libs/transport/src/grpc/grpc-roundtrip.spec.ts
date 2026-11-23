@@ -14,11 +14,13 @@ import { NestFactory } from '@nestjs/core';
 import { ClientGrpcProxy, Ctx, Payload } from '@nestjs/microservices';
 import {
   CLS_PRINCIPAL,
+  createPrincipal,
   DomainConflictException,
   DomainValidationException,
   EntityNotFoundException,
   ExternalServiceException,
   generateId,
+  markTokenVerified,
 } from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
 import { protoPath as healthProtoPath } from 'grpc-health-check';
@@ -311,7 +313,8 @@ describe('gRPC round trip (in-process server + ClientGrpc)', () => {
     const edgeMetadata = (): Metadata => {
       const cls = app.get(ClsService);
       return cls.run(() => {
-        cls.set(CLS_PRINCIPAL, asPrincipal);
+        // writePrincipal (@platform/auth) marks the principal it writes from a verified token.
+        cls.set(CLS_PRINCIPAL, markTokenVerified(createPrincipal(asPrincipal)));
         return createOutgoingMetadata(callerContextFromCls(cls));
       });
     };

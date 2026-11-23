@@ -2,8 +2,14 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { generateKeyPairSync, type KeyObject, sign } from 'node:crypto';
 import { Metadata } from '@grpc/grpc-js';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
-import { CLS_PRINCIPAL, createPrincipal, generateId } from '@platform/common';
-import { ClsService } from 'nestjs-cls';
+import {
+  CLS_PRINCIPAL,
+  createPrincipal,
+  generateId,
+  markTokenVerified,
+  runWithPrincipal,
+} from '@platform/common';
+import { ClsService, ClsServiceManager } from 'nestjs-cls';
 import { register } from 'prom-client';
 import { defer, lastValueFrom, of } from 'rxjs';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -167,7 +173,8 @@ describe('checkPrincipalAssertion (what a warn-mode server counts)', () => {
 
 describe('callerContextFromCls: the edge signs, a service forwards', () => {
   const cls = new ClsService(new AsyncLocalStorage());
-  const principal = createPrincipal({ userId, tenantId, roles: ['admin'] });
+  // What the edge's own token verification writes (`writePrincipal` in @platform/auth).
+  const principal = markTokenVerified(createPrincipal({ userId, tenantId, roles: ['admin'] }));
   const signer: PrincipalAssertionSettings = {
     mode: 'off',
     signingKey,
@@ -203,6 +210,46 @@ describe('callerContextFromCls: the edge signs, a service forwards', () => {
         'principalAssertion',
       );
       expect(callerContextFromCls(cls, { userId })).toHaveProperty('principalAssertion');
+    });
+  });
+
+  it('never signs a principal its own token verification did not write, even with a key', () => {
+    configurePrincipalAssertions(signer);
+    cls.run(() => {
+      // An event's actor (KafkaContextInterceptor) or a principal set by code: the plain headers
+      // still name the user, but nothing vouches for it.
+      cls.set(CLS_PRINCIPAL, createPrincipal({ userId, tenantId, roles: ['admin'] }));
+      const unsigned = callerContextFromCls(cls);
+      expect(unsigned).toMatchObject({ userId, tenantId, roles: ['admin'] });
+      expect(unsigned).not.toHaveProperty('principalAssertion');
+    });
+  });
+
+  it('runWithPrincipal inside an edge request signs nothing for the principal it sets', () => {
+    configurePrincipalAssertions(signer);
+    const store = ClsServiceManager.getClsService(); // the store runWithPrincipal uses
+    store.run(() => {
+      store.set(CLS_PRINCIPAL, principal);
+      expect(callerContextFromCls(store)).toHaveProperty('principalAssertion');
+      const inner = runWithPrincipal(createPrincipal({ userId, tenantId, roles: ['owner'] }), () =>
+        callerContextFromCls(store),
+      );
+      expect(inner).toMatchObject({ userId, roles: ['owner'] });
+      expect(inner).not.toHaveProperty('principalAssertion');
+    });
+  });
+
+  it.each([
+    ['tenant', { tenantId: generateId() }],
+    ['roles', { roles: ['owner'] }],
+    ['staff flag', { staff: true }],
+  ])("signs the principal's own claims: an override of the %s is a mismatch", (_label, widened) => {
+    configurePrincipalAssertions(signer);
+    cls.run(() => {
+      cls.set(CLS_PRINCIPAL, principal);
+      const metadata = createOutgoingMetadata(callerContextFromCls(cls, { userId, ...widened }));
+      expect(metadata.get(GRPC_METADATA_KEYS.PRINCIPAL_ASSERTION)).toHaveLength(1);
+      expect(checkPrincipalAssertion(readIncomingMetadata(metadata), publicKeys)).toBe('mismatch');
     });
   });
 

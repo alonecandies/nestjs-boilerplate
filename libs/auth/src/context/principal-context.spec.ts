@@ -1,5 +1,10 @@
 import type { CallHandler } from '@nestjs/common';
-import { getPrincipal, PLATFORM_TENANT_ID, UnauthenticatedException } from '@platform/common';
+import {
+  getPrincipal,
+  isTokenVerified,
+  PLATFORM_TENANT_ID,
+  UnauthenticatedException,
+} from '@platform/common';
 import { ClsServiceManager } from 'nestjs-cls';
 import { lastValueFrom, of } from 'rxjs';
 import { describe, expect, it } from 'vitest';
@@ -38,6 +43,15 @@ describe('principalOf / writePrincipal', () => {
       expect(getPrincipal()?.tenantId).toBe(moved.tenantId);
       expect(() => writePrincipal(makeAuthUser())).toThrow(UnauthenticatedException);
       expect(getPrincipal()?.userId).toBe(ada.id);
+    });
+  });
+
+  it('marks what it writes token-verified (the only principal the edge signs for gRPC)', () => {
+    inContext(() => {
+      const user = makeAuthUser({ roles: ['admin'] });
+      expect(isTokenVerified(principalOf(user))).toBe(false);
+      writePrincipal(user);
+      expect(isTokenVerified(getPrincipal())).toBe(true);
     });
   });
 

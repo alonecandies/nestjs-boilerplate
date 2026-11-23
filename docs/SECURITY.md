@@ -444,8 +444,12 @@ bytes on their own calls (ai-service's chat tools), never signing. `GRPC_PRINCIP
   `x-user-id` nor an assertion stays anonymous (register, login, the Stripe webhook). A mesh peer without the edge's
   private key cannot assert a user, a tenant, roles or the staff flag.
 
-No Kafka consumer makes a gRPC call. One added later must run in a process that holds the signing key, or call
-anonymously. The compose microservices stack and its topology smoke (`check-topology.ts`) run in `enforce`.
+The edge signs only the principal its own access-token verification wrote (`writePrincipal`), with that principal's
+claims, so an override that changes the tenant, roles or staff flag is a `mismatch`. It never signs the actor an event
+envelope names (anyone who can produce to Kafka writes `actorId`) or a principal set in code with `runWithPrincipal`,
+even in the gateway. No Kafka consumer makes a gRPC call; one added later calls anonymously (a system method), since
+under `enforce` a call with the actor in plain headers is refused. The compose microservices stack and its topology
+smoke (`check-topology.ts`) run in `enforce`.
 
 Rollout, for a running deployment (mixed versions keep working at every step):
 

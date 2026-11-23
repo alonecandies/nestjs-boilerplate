@@ -7,6 +7,9 @@ import { ClsService } from 'nestjs-cls';
 import { defer, lastValueFrom, of } from 'rxjs';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { callerContextFromCls } from '../grpc/grpc-caller-context.js';
+import { configurePrincipalAssertions } from '../grpc/grpc-principal-assertion.js';
+import { createTestPrincipalSigner } from '../testing/test-principal-signer.js';
 import { KafkaContextInterceptor } from './kafka-context.interceptor.js';
 import { type KafkaEventEmitter, KafkaProducer } from './kafka-producer.service.js';
 
@@ -101,5 +104,26 @@ describe('KafkaContextInterceptor restores the actor principal', () => {
     ['a malformed tenant', { tenantId: 'acme', actorId: userId }],
   ])('no principal for %s', async (_label, extra) => {
     await expect(seen(envelope(extra))).resolves.toBeUndefined();
+  });
+
+  it('the actor is never signed into a gRPC principal assertion, even where a key is held', async () => {
+    // Anyone who can produce to Kafka writes actorId: a consumer in the edge process (which holds
+    // the signing key) must not turn it into a principal the services accept as verified.
+    const signer = createTestPrincipalSigner();
+    configurePrincipalAssertions({
+      mode: 'off',
+      signingKey: signer.signingKey,
+      publicKeys: signer.publicKeys,
+    });
+    try {
+      const next: CallHandler = { handle: () => defer(() => of(callerContextFromCls(cls))) };
+      const caller = await lastValueFrom(
+        interceptor.intercept(kafkaContext(envelope({ tenantId, actorId: userId })), next),
+      );
+      expect(caller).toMatchObject({ userId, tenantId });
+      expect(caller).not.toHaveProperty('principalAssertion');
+    } finally {
+      configurePrincipalAssertions(undefined);
+    }
   });
 });

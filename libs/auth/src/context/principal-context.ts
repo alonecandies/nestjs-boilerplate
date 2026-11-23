@@ -1,6 +1,7 @@
 import {
   createPrincipal,
   getPrincipal,
+  markTokenVerified,
   type Principal,
   setPrincipal,
   TenancyErrorCode,
@@ -23,7 +24,9 @@ export function principalOf(user: AuthUser): Principal {
  * Edge writer of `CLS_PRINCIPAL` (I-2): only inside an active CLS context (never opens one: that
  * would hide the request id), and never over a principal of ANOTHER user: that throws (fail closed),
  * since `req.user` and the principal must name the same user. The same user may move tenant
- * (switch-tenant re-authenticates the request with the new token's tenant).
+ * (switch-tenant re-authenticates the request with the new token's tenant). The principal is
+ * marked token-verified (`markTokenVerified`): the only kind the edge signs into a gRPC principal
+ * assertion, since `user` comes from a verified access token.
  * @throws UnauthenticatedException INVALID_PRINCIPAL (another user's principal, or an invalid one)
  */
 export function writePrincipal(user: AuthUser): void {
@@ -35,5 +38,5 @@ export function writePrincipal(user: AuthUser): void {
       details: { reason: 'principal mismatch' },
     });
   }
-  setPrincipal(principalOf(user));
+  setPrincipal(markTokenVerified(principalOf(user)));
 }

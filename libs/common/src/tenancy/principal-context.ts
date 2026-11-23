@@ -41,3 +41,31 @@ export function runWithPrincipal<T>(principal: Principal, fn: () => T): T {
     return fn();
   });
 }
+
+/**
+ * The principals this process's own access-token verification wrote (`writePrincipal` in
+ * `@platform/auth`). Only such a principal is signed into a gRPC principal assertion
+ * (`@platform/transport`): one adopted from an event envelope or from gRPC metadata, or set with
+ * `runWithPrincipal`, is never marked, so the edge never vouches for it. The mark is on the object
+ * itself, so an equal copy is unmarked.
+ */
+const tokenVerified = new WeakSet<Principal>();
+
+/**
+ * Marks `principal` as written by this process's own token verification, and returns it. Only a
+ * frozen principal (`createPrincipal`) can be marked: a mark on a mutable object would vouch for
+ * whatever it later holds.
+ * @throws TypeError for an object that is not a frozen principal
+ */
+export function markTokenVerified(principal: Principal): Principal {
+  if (!Object.isFrozen(principal) || !Object.isFrozen(principal.roles)) {
+    throw new TypeError('Only a frozen principal (createPrincipal) can be marked token-verified');
+  }
+  tokenVerified.add(principal);
+  return principal;
+}
+
+/** True only for a principal `markTokenVerified` marked. */
+export function isTokenVerified(value: unknown): value is Principal {
+  return typeof value === 'object' && value !== null && tokenVerified.has(value as Principal);
+}
