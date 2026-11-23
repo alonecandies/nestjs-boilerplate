@@ -46,7 +46,9 @@ interface StreamTurn {
  * The returned stream yields each text delta, then stores the reply and yields `done`. A stream cut
  * short stores what it has, exactly once:
  * - the caller's `signal` aborts (the client disconnected), or the consumer stops reading (the
- *   upstream call is then aborted here): outcome `aborted`;
+ *   upstream call is then aborted here): outcome `aborted`, unless the call had already failed
+ *   (its deadline, an upstream error); that failure's outcome and usage then count, as in the
+ *   metrics;
  * - the call fails or times out after it started: outcome `error` / `timeout`, rethrown to the
  *   consumer.
  * With tools bound, the deltas span every model step (`AI_MAX_TOOL_STEPS` at most, the last of
@@ -106,6 +108,12 @@ export class StreamMessageHandler
     const { request, call } = turn;
     let text = '';
     let settled = false;
+    // What the call failed with (its deadline, an upstream error), for a consumer that stops
+    // reading after that: the failure, not the stop, is what the cut records.
+    let failure: { readonly error: unknown } | undefined;
+    call.usage.catch((error: unknown) => {
+      failure = { error };
+    });
     try {
       for await (const delta of call.result.textStream) {
         if (delta === '') continue;
@@ -158,10 +166,18 @@ export class StreamMessageHandler
       throw error;
     } finally {
       if (!settled) {
-        // The consumer stopped reading (`return()`): no tokens are spent for nobody.
+        // The consumer stopped reading (`return()`): no tokens are spent for nobody. Unless the
+        // call had already failed: that failure's outcome and usage then count. The outcome is
+        // read before the abort, which would make any failure look like an abort.
         settled = true;
+        const outcome = failure === undefined ? 'aborted' : outcomeOf(failure.error, turn.signal);
         turn.cancel.abort();
-        await this.storeCut(turn, text, turn.signal.reason, 'aborted');
+        await this.storeCut(
+          turn,
+          text,
+          failure === undefined ? turn.signal.reason : failure.error,
+          outcome,
+        );
       }
     }
   }

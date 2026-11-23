@@ -124,11 +124,9 @@ The usage row of a failed or cut turn holds what OpenRouter billed for it: the t
 tool loop that times out, fails upstream, is abandoned, or ends on a model that calls a tool on its last step anyway
 therefore records the steps it paid for, and `ai_tokens_total` counts the same tokens. A step cut mid-answer (a timeout
 or abort) reports no usage, so a turn cut during its first step records 0 tokens and no cost. A step the provider fails
-mid-answer counts when its usage arrives after the error, as OpenRouter's can. One known gap: a streamed turn whose
-deadline passes while its consumer holds a delta, and whose consumer then stops reading, records an `aborted` row with 0
-tokens and no cost, while the metrics count a `timeout` with the billed tokens. The SSE writer always reads to the end;
-the ai-service gRPC stream can hit it for about one event-loop turn after the deadline, and the GraphQL subscription only
-when publishing fails after it.
+mid-answer counts when its usage arrives after the error, as OpenRouter's can. A consumer that stops reading after the
+call already failed (its deadline, or an upstream error) records that failure's outcome and billed usage, as the metrics
+do.
 
 A conversation deleted while one of its turns runs ends the turn with 404 `CONVERSATION_NOT_FOUND` (streamed: the
 `error` event after the deltas). No message is stored, but the usage row is (`message_id` null), because the tokens were
