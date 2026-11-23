@@ -366,7 +366,7 @@ describe('Socket.IO gateway over real connections (monolith, E-1)', () => {
   });
 
   describe('revocation', () => {
-    it('closes the socket of a logged-out token within two sweep intervals', async () => {
+    it('closes the socket on revocation, once a logout revokes its token', async () => {
       const session = await sessionIn(U_EMAIL, tenantA);
       const socket = await connect(session.accessToken);
       const exception = nextEvent<Problem>(socket, 'exception', CLOSE_WAIT_MS);
