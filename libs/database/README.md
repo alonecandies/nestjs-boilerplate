@@ -214,9 +214,12 @@ blocker ends, and each queued request fails at its own 15 s `statement_timeout`.
   longer fails with SQLSTATE `55P03`.
 - **On Citus, the worker connections too.** The session's setting stays on the coordinator: the connections Citus opens
   to the workers start from the role's default. So, once the migration session holds the advisory lock and before
-  any set, a throwaway connection makes the connecting role's default `lock_timeout` equal the setting
-  (`ALTER ROLE CURRENT_USER SET lock_timeout`, only when it differs; Citus propagates it to the workers) and closes:
-  a session that ran the `ALTER ROLE` would keep worker connections opened with the old value. The migration session
+  any set, a throwaway connection makes the connecting role's default `lock_timeout` equal the setting, only when it
+  differs, and closes: a session that ran the `ALTER ROLE` would keep worker connections opened with the old value.
+  The default changed is the one that takes effect in the migration database: the role's per-database setting
+  (`ALTER ROLE CURRENT_USER IN DATABASE <db> SET lock_timeout`) when it has one, which wins over the role-wide one,
+  else the role-wide one (`ALTER ROLE CURRENT_USER SET lock_timeout`); Citus propagates either to the workers (the
+  per-database form for the current database only). The migration session
   has opened no worker connection by then, so the ones it opens start with that default. It happens under the lock
   because the [online steps](#online-steps) switch the same default: a runner that waits for the lock never touches
   it while another runner is inside its online window, and the online value a crashed run left is set back before
@@ -241,9 +244,11 @@ blocker ends, and each queued request fails at its own 15 s `statement_timeout`.
   another connection holds `ACCESS SHARE` on: it fails within seconds with `55P03`, recording nothing, and applies once
   when the blocker commits during the backoff. The int container is a single Citus node, whose shard connections go
   to itself: the [online steps](#online-steps) test shows there that they start from the role default, not from the
-  session's `lock_timeout`, and that a run leaves the default at this setting. On a coordinator plus one worker, that
+  session's `lock_timeout`, and that a run leaves the default at this setting, also when the role has a per-database
+  `lock_timeout` of 0 beforehand (a new connection then shows the setting). On a coordinator plus one worker, that
   a role default reaches the worker connections, and a session `lock_timeout` does not, was probed by hand
-  (`docs/superpowers/plans/2026-11-23-audit-fixes.md`, verified point 6), not in a spec.
+  (`docs/superpowers/plans/2026-11-23-audit-fixes.md`, verified point 6), not in a spec; for the per-database form it
+  is UNTESTED.
 
 ### Online steps
 
@@ -279,7 +284,8 @@ is left alone, and it ships in `dist/` like the other migration files):
   and these statements take no lock that blocks reads or writes. A concurrent build still waits for every
   transaction that writes the table, and for older snapshots, so it ends only after them.
 - **On Citus.** The shard connections start from the role's default, not from the session. So the runner sets the
-  role default to the online value on a throwaway connection before it opens the online session, and back to
+  role default that takes effect (the per-database one when the role has one, as in [Lock waits](#lock-waits)) to
+  the online value on a throwaway connection before it opens the online session, and back to
   `DATABASE_MIGRATION_LOCK_TIMEOUT_MS` on another one after that session closed, also when a step failed. A run that
   crashed in between leaves the online value; the next run sets it back as soon as it holds the lock, before its first
   set ([Lock waits](#lock-waits)). Switching the default between the two phases is tested on the single-node int container only; on a

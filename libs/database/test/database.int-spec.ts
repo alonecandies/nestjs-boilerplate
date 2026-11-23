@@ -612,6 +612,34 @@ describe('@platform/database against PostgreSQL 18', () => {
         where setdatabase = 0 and setrole = (select oid from pg_roles where rolname = current_user)`;
       expect(role?.setconfig).toContain('lock_timeout=500');
     }, 60_000);
+
+    it('on Citus, a per-database lock_timeout of the migration role (which takes precedence) ends at the configured value', async () => {
+      const url = pg.url; // database `app`: the citus extension
+      onTestFinished(async () => {
+        await admin`alter role current_user in database app reset lock_timeout`;
+        await admin`alter role current_user reset lock_timeout`;
+      });
+      await admin`alter role current_user in database app set lock_timeout = 0`;
+
+      await runMigrations(url, {
+        migrations: [platformMigrations],
+        logger: silent,
+        lockWaitTimeoutMs: 700,
+      });
+
+      // A new connection without a lock_timeout startup parameter starts from the role's settings,
+      // as the worker connections Citus opens do: the per-database one wins over the role-wide one.
+      const [effective] = await withClient(
+        url,
+        (client) => client<{ lock_timeout: string }[]>`show lock_timeout`,
+      );
+      expect(effective?.lock_timeout).toBe('700ms');
+      const [perDatabase] = await admin<{ setconfig: string[] | null }[]>`
+        select setconfig from pg_db_role_setting
+        where setdatabase = (select oid from pg_database where datname = 'app')
+          and setrole = (select oid from pg_roles where rolname = current_user)`;
+      expect(perDatabase?.setconfig).toContain('lock_timeout=700');
+    }, 60_000);
   });
 
   describe("runMigrationsCli() (the body of every app's migrate.ts)", () => {

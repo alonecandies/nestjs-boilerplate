@@ -342,31 +342,46 @@ function parseLockTimeoutMs(value: string): number | undefined {
 /**
  * On Citus the session's `lock_timeout` stays on the coordinator: the connections it opens to the
  * workers start from the role's default instead, so a lock held on a worker shard would still be
- * waited for without limit. Makes the connecting role's default (`ALTER ROLE CURRENT_USER SET`,
- * which Citus propagates to the workers) equal `timeoutMs`, only when it differs. Always run on a
- * throwaway connection, closed afterwards, because a session that ran the `ALTER ROLE` keeps the
- * worker connections it opened with the old value; and only under the advisory lock, because
- * another runner switches the same default for its online steps (`applyOnlineSteps`).
+ * waited for without limit. Makes the connecting role's default that takes effect in the current
+ * database equal `timeoutMs`, only when it differs: its per-database setting (`ALTER ROLE
+ * CURRENT_USER IN DATABASE <db> SET`) when it has a `lock_timeout` one, which takes precedence,
+ * else its role-wide one (`ALTER ROLE CURRENT_USER SET`); Citus propagates either to the workers.
+ * Always run on a throwaway connection, closed afterwards, because a session that ran the `ALTER
+ * ROLE` keeps the worker connections it opened with the old value; and only under the advisory
+ * lock, because another runner switches the same default for its online steps (`applyOnlineSteps`).
  */
 async function alignRoleLockTimeout(
   sql: Sql,
   timeoutMs: number,
   logger: LoggerService,
 ): Promise<void> {
-  const [row] = await sql<{ setconfig: string[] | null }[]>`
-    select setconfig from pg_catalog.pg_db_role_setting
-    where setdatabase = 0
-      and setrole = (select oid from pg_catalog.pg_roles where rolname = current_user)`;
+  const rows = await sql<{ per_database: boolean; database: string; setconfig: string[] | null }[]>`
+    select s.setdatabase <> 0 as per_database, format('%I', current_database()) as database,
+      s.setconfig
+    from pg_catalog.pg_db_role_setting s
+    where s.setrole = (select oid from pg_catalog.pg_roles where rolname = current_user)
+      and s.setdatabase in (
+        0, (select oid from pg_catalog.pg_database where datname = current_database()))`;
   const prefix = 'lock_timeout=';
-  const current = row?.setconfig
-    ?.filter((entry) => entry.startsWith(prefix))
-    .at(-1)
-    ?.slice(prefix.length);
+  const lockTimeoutOf = (perDatabase: boolean) =>
+    rows
+      .filter((row) => (row.per_database === true) === perDatabase)
+      .flatMap((row) => row.setconfig ?? [])
+      .filter((entry) => entry.startsWith(prefix))
+      .at(-1)
+      ?.slice(prefix.length);
+  const perDatabase = lockTimeoutOf(true);
+  const current = perDatabase ?? lockTimeoutOf(false);
   if (current !== undefined && parseLockTimeoutMs(current) === timeoutMs) return;
+  // Quoted by format('%I'); only read when a per-database row exists, which carries it.
+  const database = rows.find((row) => row.per_database === true)?.database;
+  const scope =
+    perDatabase === undefined || database === undefined ? '' : ` in database ${database}`;
   // A utility statement takes no bind parameter; timeoutMs is a checked non-negative integer.
-  await sql.unsafe(`alter role current_user set lock_timeout = ${timeoutMs}`);
+  await sql.unsafe(`alter role current_user${scope} set lock_timeout = ${timeoutMs}`);
+  const setting = scope === '' ? 'role-wide' : `per-database (${scope.trim()})`;
   logger.log(
-    `Citus: set the migration role's default lock_timeout to ${timeoutMs}ms ` +
+    `Citus: set the migration role's ${setting} default lock_timeout to ${timeoutMs}ms ` +
       `(was ${current ?? 'unset'}) so worker connections inherit it`,
   );
 }

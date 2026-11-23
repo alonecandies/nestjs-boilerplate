@@ -714,6 +714,100 @@ describe('runMigrations', () => {
       expect(sql.unsafe).toHaveBeenCalledWith('alter role current_user set lock_timeout = 0');
     });
 
+    /**
+     * One connection of a Citus run whose role has a role-wide and a per-database setting for the
+     * current database (`"App"`, as `format('%I')` quotes it): `role` holds both `lock_timeout`
+     * values (`undefined` = no entry; the per-database row also carries another setting), and each
+     * `alter role` changes the one it names.
+     */
+    const scopedRoleConnection = (
+      label: string,
+      events: string[],
+      role: { roleWide: string; perDatabase: string | undefined },
+    ) =>
+      createFakeSql((query) => {
+        if (query.includes("extname = 'citus'")) return [{ citus: true }];
+        if (query.includes('citus_is_coordinator()')) return [{ coordinator: true }];
+        if (query.includes('pg_db_role_setting')) {
+          events.push(`${label}: role default?`);
+          const perDatabase = role.perDatabase === undefined ? [] : [role.perDatabase];
+          return [
+            {
+              per_database: true,
+              database: '"App"',
+              setconfig: [
+                'citus.enable_local_execution=on',
+                ...perDatabase.map((v) => `lock_timeout=${v}`),
+              ],
+            },
+            {
+              per_database: false,
+              database: '"App"',
+              setconfig: [`lock_timeout=${role.roleWide}`],
+            },
+          ];
+        }
+        if (query.startsWith('alter role')) {
+          const value = /= (\d+)$/.exec(query)?.[1] ?? '?';
+          if (query.includes(' in database ')) role.perDatabase = value;
+          else role.roleWide = value;
+          events.push(`${label}: ${query}`);
+        }
+        if (query.includes('pg_try_advisory_lock')) return [{ locked: true }];
+        return [];
+      });
+
+    it('on Citus, aligns the per-database role setting, which takes precedence, and leaves the role-wide one alone', async () => {
+      const orders = migrationSet('orders', ['0000_init']);
+      const events: string[] = [];
+      const role = { roleWide: '5000', perDatabase: '0' as string | undefined };
+      vi.mocked(migrate).mockImplementation(async () => {
+        events.push(`migrate (effective ${role.perDatabase ?? role.roleWide})`);
+      });
+      labelledConnections(events, [
+        ['preliminary', scopedRoleConnection('preliminary', events, role)],
+        ['session', scopedRoleConnection('session', events, role)],
+        ['align', scopedRoleConnection('align', events, role)],
+      ]);
+      const logger = silentLogger();
+
+      await runMigrations(URL, { migrations: afterPlatform(orders), logger });
+
+      expect(events).toEqual([
+        'open preliminary',
+        'preliminary: closed',
+        'open session',
+        'open align',
+        'align: role default?',
+        'align: alter role current_user in database "App" set lock_timeout = 5000',
+        'align: closed',
+        'migrate (effective 5000)',
+        'migrate (effective 5000)',
+        'session: closed',
+      ]);
+      expect(role).toEqual({ roleWide: '5000', perDatabase: '5000' });
+      expect(logger.log).toHaveBeenCalledWith(
+        expect.stringMatching(/in database "App".*lock_timeout to 5000ms \(was 0\)/),
+      );
+    });
+
+    it('on Citus, aligns the role-wide setting when the per-database row has no lock_timeout', async () => {
+      const events: string[] = [];
+      const role = { roleWide: '2s', perDatabase: undefined as string | undefined };
+      labelledConnections(events, [
+        ['preliminary', scopedRoleConnection('preliminary', events, role)],
+        ['session', scopedRoleConnection('session', events, role)],
+        ['align', scopedRoleConnection('align', events, role)],
+      ]);
+
+      await runMigrations(URL, { migrations: afterPlatform(), logger: silentLogger() });
+
+      expect(events.filter((event) => event.includes('alter role'))).toEqual([
+        'align: alter role current_user set lock_timeout = 5000',
+      ]);
+      expect(role).toEqual({ roleWide: '5000', perDatabase: undefined });
+    });
+
     it('retries a set that hit lock_timeout with backoff under the same lock, and applies it', async () => {
       const orders = migrationSet('orders', ['0000_init']);
       const { wrapped } = lockTimeoutError();
@@ -1296,6 +1390,65 @@ describe('runMigrations', () => {
           'close 2',
         ]);
         expect(role.value).toBe('5000');
+      });
+
+      it('switches and restores the per-database role setting when the role has one, never the role-wide one', async () => {
+        const orders = onlineSet('orders', { '0000_a_idx.sql': INDEX_A });
+        const events: string[] = [];
+        const role = { roleWide: '7000', perDatabase: '5000' };
+        /** `citusConnection` for a role with both settings: the per-database one takes effect. */
+        const scoped = (label: string) =>
+          createFakeSql((query, values) => {
+            if (query.includes("extname = 'citus'")) return [{ citus: true }];
+            if (query.includes('citus_is_coordinator()')) return [{ coordinator: true }];
+            if (query.includes('pg_db_role_setting')) {
+              return [
+                {
+                  per_database: false,
+                  database: 'app',
+                  setconfig: [`lock_timeout=${role.roleWide}`],
+                },
+                {
+                  per_database: true,
+                  database: 'app',
+                  setconfig: [`lock_timeout=${role.perDatabase}`],
+                },
+              ];
+            }
+            if (query.startsWith('alter role')) {
+              const value = /= (\d+)$/.exec(query)?.[1] ?? '?';
+              if (query.includes(' in database ')) role.perDatabase = value;
+              else role.roleWide = value;
+              events.push(`${label}: ${query}`);
+            }
+            if (query.includes('pg_try_advisory_lock')) return [{ locked: true }];
+            if (query.includes('pg_advisory_unlock')) events.push(`${label}: unlock`);
+            if (isOnlineLookup(query, values)) return [{ exists: false }];
+            if (query.startsWith('CREATE')) {
+              events.push(`${label}: ${query} (effective ${role.perDatabase})`);
+            }
+            return [];
+          });
+        connections(
+          events,
+          ...['preliminary', 'session', 'align', 'toggle', 'online', 'restore'].map(scoped),
+        );
+
+        await runMigrations(URL, { migrations: afterPlatform(orders), logger: silentLogger() });
+
+        expect(events.filter((event) => !event.startsWith('open'))).toEqual([
+          'close 1', // preliminary
+          'close 3', // alignment under the lock: the per-database setting already equals 5000
+          'toggle: alter role current_user in database app set lock_timeout = 0',
+          'close 4',
+          `online: ${INDEX_A} (effective 0)`,
+          'close 5',
+          'restore: alter role current_user in database app set lock_timeout = 5000',
+          'close 6',
+          'session: unlock',
+          'close 2',
+        ]);
+        expect(role).toEqual({ roleWide: '7000', perDatabase: '5000' });
       });
 
       it('restores the role default when a file fails, and reports the file', async () => {
