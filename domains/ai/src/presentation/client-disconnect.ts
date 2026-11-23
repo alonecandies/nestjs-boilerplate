@@ -9,7 +9,10 @@ export class ClientDisconnectedError extends Error {
 }
 
 export interface ClientDisconnect {
-  /** Aborts (reason `ClientDisconnectedError`) when the connection closes before the response ended. */
+  /**
+   * Aborts when the client goes away before the response ended: HTTP with a
+   * `ClientDisconnectedError`, a graphql-ws socket with its own `GraphqlWsConnectionClosedError`.
+   */
   readonly signal: AbortSignal;
   /** Stops watching (call it once the response is done). */
   dispose(): void;

@@ -10,6 +10,7 @@ import type { AuthUser } from '@platform/auth';
 import { createPrincipal, PrincipalPermissions, runWithPrincipal } from '@platform/common';
 import {
   createGraphqlWsConnectionSignals,
+  DataLoaderRegistry,
   type GqlContext,
   type GqlWsConnectionContext,
   type GraphqlPubSub,
@@ -65,11 +66,14 @@ function openSocket() {
   signals.open(ctx);
   const signal = signals.signalOf(ctx);
   if (signal === undefined) throw new Error('the socket has no connection signal');
+  // `createLoaders()` rather than a `{}` literal: domain packages augment `GraphqlLoaders` with
+  // required keys (identity's `users`), which a literal fails once they share the program.
+  const loaders = new DataLoaderRegistry();
   /** The context of one operation on the socket (the request part is unused here). */
   const context = (): GqlContext => ({
     req: { id: 'ws-op', headers: {} },
     connectionSignal: signal,
-    loaders: {},
+    loaders: loaders.createLoaders(),
   });
   return { signal, context, close: () => signals.close(ctx) };
 }
