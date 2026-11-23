@@ -314,7 +314,8 @@ GraphQL pub/sub. Configure it as the compose file does:
 At boot `@platform/redis` reads `maxmemory_policy` from `INFO memory`. A policy other than `noeviction` logs one error
 line (`event: redis_eviction_policy_unsafe`, with the `policy` found) and sets the gauge `redis_eviction_policy_safe`
 to `0` (`1` when safe). The gauge is absent when the server hides the value or `INFO` fails. The check never stops a
-boot.
+boot, and it waits at most 2 s for `INFO`: past that it logs one warning (`event: redis_eviction_check_timeout`),
+leaves the gauge absent and the boot continues.
 
 ### `kafka` — integration events (kafkajs)
 

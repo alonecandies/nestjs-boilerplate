@@ -62,7 +62,8 @@ async function createMainClient(
       client.disconnect(); // stop the background reconnect loop of the failed client
       throw error;
     }
-    // A diagnostic only (OPS-5): logs and sets a gauge, never fails the boot.
+    // A diagnostic only (OPS-5): logs and sets a gauge, never fails the boot, and gives up after
+    // EVICTION_CHECK_TIMEOUT_MS so a connection dropped right after `ready` cannot stall it.
     await checkRedisEvictionPolicy(client);
   }
   return client;
