@@ -519,45 +519,69 @@ describe('runMigrations', () => {
       expect(sql.unsafe).not.toHaveBeenCalled();
     });
 
-    it('on Citus, a preliminary connection checks the coordinator and aligns the role default, then closes before the migration session opens', async () => {
-      const orders = migrationSet('orders', ['0000_init']);
-      const events: string[] = [];
-      vi.mocked(migrate).mockImplementation(async () => {
-        events.push('migrate');
-      });
-      const preliminary = createFakeSql((query) => {
+    /**
+     * One connection of a Citus run, labelled `label` in `events`: the role's default lock_timeout
+     * lives in `role.value` and changes on `alter role`; `lock` answers each advisory-lock poll.
+     */
+    const citusRoleConnection = (
+      label: string,
+      events: string[],
+      role: { value: string },
+      lock: () => boolean = () => true,
+    ) =>
+      createFakeSql((query) => {
         if (query.includes("extname = 'citus'")) return [{ citus: true }];
         if (query.includes('citus_is_coordinator()')) {
-          events.push('preliminary: coordinator?');
+          events.push(`${label}: coordinator?`);
           return [{ coordinator: true }];
         }
         if (query.includes('pg_db_role_setting')) {
-          events.push('preliminary: role default?');
-          return [{ setconfig: ['search_path=pg_catalog, public', 'lock_timeout=2s'] }];
+          events.push(`${label}: role default?`);
+          return [{ setconfig: ['search_path=pg_catalog, public', `lock_timeout=${role.value}`] }];
         }
-        if (query.startsWith('alter role')) events.push(`preliminary: ${query}`);
-        return [];
-      });
-      preliminary.end.mockImplementation(async () => {
-        events.push('preliminary: closed');
-      });
-      const session = createFakeSql((query) => {
+        if (query.startsWith('alter role')) {
+          role.value = /= (\d+)$/.exec(query)?.[1] ?? '?';
+          events.push(`${label}: ${query}`);
+        }
         if (query.includes('pg_try_advisory_lock')) {
-          events.push('session: lock');
-          return [{ locked: true }];
+          const locked = lock();
+          events.push(`${label}: ${locked ? 'lock' : 'lock busy'}`);
+          return [{ locked }];
         }
-        if (query.startsWith('set citus.')) events.push(`session: ${query}`);
+        if (query.startsWith('set citus.')) events.push(`${label}: ${query}`);
         return [];
       });
-      vi.mocked(postgres)
-        .mockImplementationOnce((() => {
-          events.push('open preliminary');
-          return preliminary;
-        }) as never)
-        .mockImplementationOnce((() => {
-          events.push('open migration session');
-          return session;
-        }) as never);
+
+    /** `postgres()` returns `fakes` in order, logging each open and close by its label. */
+    const labelledConnections = (
+      events: string[],
+      fakes: [string, ReturnType<typeof createFakeSql>][],
+    ) => {
+      let next = 0;
+      vi.mocked(postgres).mockImplementation((() => {
+        const [label, fake] = fakes[next++] ?? [];
+        if (label === undefined || fake === undefined) throw new Error('unexpected connection');
+        events.push(`open ${label}`);
+        fake.end.mockImplementation(async () => {
+          events.push(`${label}: closed`);
+        });
+        return fake;
+      }) as never);
+    };
+
+    it('on Citus, a preliminary connection checks the coordinator and closes; the role default is aligned on a throwaway connection only after the session holds the lock, before the first set', async () => {
+      const orders = migrationSet('orders', ['0000_init']);
+      const events: string[] = [];
+      const role = { value: '2s' };
+      vi.mocked(migrate).mockImplementation(async () => {
+        events.push(`migrate (role default ${role.value})`);
+      });
+      const session = citusRoleConnection('session', events, role);
+      labelledConnections(events, [
+        ['preliminary', citusRoleConnection('preliminary', events, role)],
+        ['session', session],
+        ['align', citusRoleConnection('align', events, role)],
+      ]);
       const logger = silentLogger();
 
       await runMigrations(URL, {
@@ -569,26 +593,76 @@ describe('runMigrations', () => {
       expect(events).toEqual([
         'open preliminary',
         'preliminary: coordinator?',
-        'preliminary: role default?',
-        'preliminary: alter role current_user set lock_timeout = 1500',
         'preliminary: closed',
-        'open migration session',
+        'open session',
         'session: lock',
+        'open align',
+        'align: role default?',
+        'align: alter role current_user set lock_timeout = 1500',
+        'align: closed',
         'session: set citus.enable_local_execution to on',
         "session: set citus.multi_shard_modify_mode to 'sequential'",
-        'migrate',
-        'migrate',
+        'migrate (role default 1500)',
+        'migrate (role default 1500)',
+        'session: closed',
       ]);
-      // Both connections carry the same startup parameters (the 08P01 check runs on the first).
-      expect(vi.mocked(postgres).mock.calls.map(([, options]) => options?.connection)).toEqual([
-        { application_name: 'app:migrate', statement_timeout: '0', lock_timeout: '1500' },
-        { application_name: 'app:migrate', statement_timeout: '0', lock_timeout: '1500' },
-      ]);
+      // Every connection carries the same startup parameters (the 08P01 check runs on the first).
+      expect(vi.mocked(postgres).mock.calls.map(([, options]) => options?.connection)).toEqual(
+        Array.from({ length: 3 }, () => ({
+          application_name: 'app:migrate',
+          statement_timeout: '0',
+          lock_timeout: '1500',
+        })),
+      );
       expect(session.queries.some((query) => query.includes("extname = 'citus'"))).toBe(false);
       expect(logger.log).toHaveBeenCalledWith(
         expect.stringMatching(/lock_timeout.*1500ms.*was 2s/),
       );
-      expect(session.end).toHaveBeenCalledWith({ timeout: 5 });
+    });
+
+    it('on Citus, leaves the role default alone while another runner holds the lock, and realigns the online value a crashed holder left once the lock is taken, before the first set', async () => {
+      const orders = migrationSet('orders', ['0000_init']);
+      const events: string[] = [];
+      // The holder is inside its online window when this runner starts: the default is matching
+      // before it switches; it dies there, leaving the online value (0), and its lock goes away.
+      const role = { value: '5000' };
+      let polls = 0;
+      const lock = (): boolean => {
+        polls += 1;
+        if (polls === 1) role.value = '0';
+        return polls > 2;
+      };
+      vi.mocked(migrate).mockImplementation(async () => {
+        events.push(`migrate (role default ${role.value})`);
+      });
+      labelledConnections(events, [
+        ['preliminary', citusRoleConnection('preliminary', events, role)],
+        ['session', citusRoleConnection('session', events, role, lock)],
+        ['align', citusRoleConnection('align', events, role)],
+      ]);
+
+      await runMigrations(URL, {
+        migrations: afterPlatform(orders),
+        logger: silentLogger(),
+        lockPollIntervalMs: 0,
+      });
+
+      expect(events.filter((event) => !event.includes('set citus.'))).toEqual([
+        'open preliminary',
+        'preliminary: coordinator?',
+        'preliminary: closed',
+        'open session',
+        'session: lock busy',
+        'session: lock busy',
+        'session: lock',
+        'open align',
+        'align: role default?',
+        'align: alter role current_user set lock_timeout = 5000',
+        'align: closed',
+        'migrate (role default 5000)',
+        'migrate (role default 5000)',
+        'session: closed',
+      ]);
     });
 
     it.each([
@@ -609,7 +683,7 @@ describe('runMigrations', () => {
         await runMigrations(URL, { migrations: afterPlatform(), logger: silentLogger() });
 
         expect(sql.unsafe).not.toHaveBeenCalled();
-        expect(postgres).toHaveBeenCalledTimes(2);
+        expect(postgres).toHaveBeenCalledTimes(3); // preliminary, session, alignment
       },
     );
 
@@ -974,7 +1048,7 @@ describe('runMigrations', () => {
       ],
       [
         'an unquoted name, folded to lower case like Postgres does',
-        'create index concurrently Orders_B on orders (b)',
+        'create index concurrently if not exists Orders_B on orders (b)',
         ['orders', 'orders_b'],
       ],
     ])('looks the index up by the name in the statement: %s', async (_label, text, values) => {
@@ -1036,6 +1110,7 @@ describe('runMigrations', () => {
           events,
           citusConnection('preliminary', events, role),
           citusConnection('session', events, role),
+          citusConnection('align', events, role),
           citusConnection('toggle', events, role),
           citusConnection('online', events, role),
           citusConnection('restore', events, role),
@@ -1045,13 +1120,14 @@ describe('runMigrations', () => {
         await runMigrations(URL, { migrations: afterPlatform(orders), logger });
 
         expect(events.filter((event) => !event.startsWith('open'))).toEqual([
-          'close 1', // preliminary: the role default already equals 5000
+          'close 1', // preliminary
+          'close 3', // alignment under the lock: the role default already equals 5000
           'toggle: alter role current_user set lock_timeout = 0',
-          'close 3',
-          `online: ${INDEX_A} (role default 0)`,
           'close 4',
-          'restore: alter role current_user set lock_timeout = 5000',
+          `online: ${INDEX_A} (role default 0)`,
           'close 5',
+          'restore: alter role current_user set lock_timeout = 5000',
+          'close 6',
           'session: unlock',
           'close 2',
         ]);
@@ -1067,6 +1143,7 @@ describe('runMigrations', () => {
           events,
           citusConnection('preliminary', events, role),
           citusConnection('session', events, role),
+          citusConnection('align', events, role),
           citusConnection('toggle', events, role),
           citusConnection('online', events, role, failure),
           citusConnection('restore', events, role),
@@ -1090,6 +1167,7 @@ describe('runMigrations', () => {
           events,
           citusConnection('preliminary', events, role),
           citusConnection('session', events, role),
+          citusConnection('align', events, role),
           citusConnection('online', events, role),
         );
 
@@ -1099,8 +1177,67 @@ describe('runMigrations', () => {
           onlineLockTimeoutMs: 5000,
         });
 
-        expect(postgres).toHaveBeenCalledTimes(3);
+        expect(postgres).toHaveBeenCalledTimes(4);
         expect(events.some((event) => event.includes('alter role'))).toBe(false);
+      });
+
+      /** A restore connection that cannot reach the server. */
+      const unreachable = (error: Error) =>
+        createFakeSql(() => {
+          throw error;
+        });
+
+      it('keeps the failed step as the error, and logs it, when the restore of the role default fails too', async () => {
+        const orders = onlineSet('orders', { '0000_a_idx.sql': INDEX_A });
+        const failure = new Error('canceling statement due to user request');
+        const restoreError = new Error('connection refused');
+        const events: string[] = [];
+        const role = { value: '5000' };
+        connections(
+          events,
+          citusConnection('preliminary', events, role),
+          citusConnection('session', events, role),
+          citusConnection('align', events, role),
+          citusConnection('toggle', events, role),
+          citusConnection('online', events, role, failure),
+          unreachable(restoreError),
+        );
+        const logger = silentLogger();
+
+        await expect(
+          runMigrations(URL, { migrations: afterPlatform(orders), logger }),
+        ).rejects.toMatchObject({
+          message: expect.stringContaining('online step 0000_a_idx.sql') as unknown,
+          cause: failure,
+        });
+        expect(logger.error).toHaveBeenCalledWith(
+          expect.stringMatching(/back to 5000ms after a failed online step: .*connection refused/),
+        );
+        expect(events).toContain('session: unlock');
+      });
+
+      it('fails the run with the restore error when the restore fails after the steps succeeded', async () => {
+        const orders = onlineSet('orders', { '0000_a_idx.sql': INDEX_A });
+        const restoreError = new Error('connection refused');
+        const events: string[] = [];
+        const role = { value: '5000' };
+        connections(
+          events,
+          citusConnection('preliminary', events, role),
+          citusConnection('session', events, role),
+          citusConnection('align', events, role),
+          citusConnection('toggle', events, role),
+          citusConnection('online', events, role),
+          unreachable(restoreError),
+        );
+        const logger = silentLogger();
+
+        await expect(
+          runMigrations(URL, { migrations: afterPlatform(orders), logger }),
+        ).rejects.toBe(restoreError);
+        expect(logger.error).not.toHaveBeenCalled();
+        expect(events).toContain(`online: ${INDEX_A} (role default 0)`);
+        expect(events).toContain('session: unlock');
       });
     });
 
@@ -1133,6 +1270,28 @@ describe('runMigrations', () => {
           return set;
         },
         /Migration set "orders": online step 0001_empty\.sql .* holds no statement/,
+      ],
+      [
+        'an unnamed concurrent index',
+        (set: DatabaseMigrationSet) => {
+          writeFileSync(
+            join(set.onlineFolder ?? '', '0001_b.sql'),
+            'CREATE INDEX CONCURRENTLY ON orders.orders (b);',
+          );
+          return set;
+        },
+        /Migration set "orders": online step 0001_b\.sql .* must name its index and say IF NOT EXISTS/,
+      ],
+      [
+        'a concurrent index without IF NOT EXISTS',
+        (set: DatabaseMigrationSet) => {
+          writeFileSync(
+            join(set.onlineFolder ?? '', '0001_b.sql'),
+            '/* b */ create unique index concurrently orders_b_key on orders.orders (b);',
+          );
+          return set;
+        },
+        /Migration set "orders": online step 0001_b\.sql .* must name its index and say IF NOT EXISTS/,
       ],
     ])('rejects %s before connecting', async (_label, change, message) => {
       const orders = change(onlineSet('orders', { '0000_a_idx.sql': INDEX_A }));

@@ -133,6 +133,22 @@ function readJournal(set: DatabaseMigrationSet): z.infer<typeof journalSchema> {
   return journal.data;
 }
 
+/** A Postgres identifier as written: double-quoted (kept exactly) or bare (folded to lower case). */
+const IDENTIFIER = String.raw`(?:"(?:[^"]|"")+"|[A-Za-z_][\w$]*)`;
+
+/** Any `CREATE [UNIQUE] INDEX CONCURRENTLY`, named or not. */
+const ANY_INDEX_CONCURRENTLY = /^\s*create\s+(?:unique\s+)?index\s+concurrently\b/i;
+
+/**
+ * `CREATE [UNIQUE] INDEX CONCURRENTLY IF NOT EXISTS <index> ON [ONLY] <table>`: the only form an
+ * online step may take (`readOnlineSteps`).
+ */
+const CREATE_INDEX_CONCURRENTLY = new RegExp(
+  String.raw`^\s*create\s+(?:unique\s+)?index\s+concurrently\s+if\s+not\s+exists\s+` +
+    String.raw`(${IDENTIFIER})\s+on\s+(?:only\s+)?(${IDENTIFIER}(?:\.${IDENTIFIER})?)`,
+  'i',
+);
+
 /** One file of a set's `onlineFolder`: a single statement, run outside a transaction. */
 interface OnlineStep {
   /** The file name, also its bookkeeping key (`__online_migrations.name`). */
@@ -181,9 +197,18 @@ function readOnlineSteps(set: DatabaseMigrationSet): OnlineStep[] {
       numbers.set(number, name);
       const path = join(folder, name);
       const statement = readFileSync(path, 'utf8');
-      if (withoutComments(statement).replaceAll(';', ' ').trim() === '') {
+      const code = withoutComments(statement);
+      if (code.replaceAll(';', ' ').trim() === '') {
         throw new Error(
           `Migration set "${set.name}": online step ${name} (${path}) holds no statement`,
+        );
+      }
+      if (ANY_INDEX_CONCURRENTLY.test(code) && !CREATE_INDEX_CONCURRENTLY.test(code)) {
+        throw new Error(
+          `Migration set "${set.name}": online step ${name} (${path}) must name its index and say ` +
+            'IF NOT EXISTS (CREATE INDEX CONCURRENTLY IF NOT EXISTS <name> ON <table> …): the ' +
+            'runner finds an invalid index left by a failed build by that name, and a rerun must ' +
+            'skip a built one',
         );
       }
       return { name, path, statement };
@@ -400,11 +425,11 @@ function parseLockTimeoutMs(value: string): number | undefined {
 /**
  * On Citus the session's `lock_timeout` stays on the coordinator: the connections it opens to the
  * workers start from the role's default instead, so a lock held on a worker shard would still be
- * waited for without limit. Runs on the preliminary connection, before the migration session
- * exists: it makes the connecting role's default (`ALTER ROLE CURRENT_USER SET`, which Citus
- * propagates to the workers) equal `timeoutMs`, only when it differs. That connection is then
- * closed, because a session that ran the `ALTER ROLE` keeps the worker connections it opened
- * with the old value.
+ * waited for without limit. Makes the connecting role's default (`ALTER ROLE CURRENT_USER SET`,
+ * which Citus propagates to the workers) equal `timeoutMs`, only when it differs. Always run on a
+ * throwaway connection, closed afterwards, because a session that ran the `ALTER ROLE` keeps the
+ * worker connections it opened with the old value; and only under the advisory lock, because
+ * another runner switches the same default for its online steps (`applyOnlineSteps`).
  */
 async function alignRoleLockTimeout(
   sql: Sql,
@@ -448,16 +473,6 @@ async function configureCitusSession(sql: Sql, logger: LoggerService): Promise<v
     'Citus detected: migration session uses local execution and sequential shard modification',
   );
 }
-
-/** A Postgres identifier as written: double-quoted (kept exactly) or bare (folded to lower case). */
-const IDENTIFIER = String.raw`(?:"(?:[^"]|"")+"|[A-Za-z_][\w$]*)`;
-
-/** `CREATE [UNIQUE] INDEX CONCURRENTLY [IF NOT EXISTS] <index> ON [ONLY] <table>`. */
-const CREATE_INDEX_CONCURRENTLY = new RegExp(
-  String.raw`^\s*create\s+(?:unique\s+)?index\s+concurrently\s+(?:if\s+not\s+exists\s+)?` +
-    String.raw`(${IDENTIFIER})\s+on\s+(?:only\s+)?(${IDENTIFIER}(?:\.${IDENTIFIER})?)`,
-  'i',
-);
 
 /** The name Postgres stores for an identifier as written. */
 const identifierName = (identifier: string): string =>
@@ -579,9 +594,10 @@ interface OnlineRun {
  * Runs the set's pending online steps (if any) on a second session, opened while `sql` keeps the
  * advisory lock, with the online `lock_timeout`. On Citus the shard connections start from the
  * role's default instead, so a throwaway connection first sets it to the online value, and another
- * one sets it back to the sets' value once the online session closed (whatever happened; Task 1's
- * start-of-run alignment repairs a value a crashed run left). Throwaway connections, so neither
- * session caches a shard connection opened with the other value. Nothing pending: no session.
+ * one sets it back to the sets' value once the online session closed (whatever happened; a run that
+ * crashed in between leaves the online value, which the next run's alignment under the lock
+ * repairs). Throwaway connections, so neither session caches a shard connection opened with the
+ * other value. Nothing pending: no session.
  */
 async function applyOnlineSteps(
   sql: Sql,
@@ -636,9 +652,12 @@ async function applyOnlineSteps(
  *   what PgBouncer refuses (08P01) when the URL points at the pooler;
  * - `lock_timeout` (`lockWaitTimeoutMs`, default 5 s; a string too, so 0 is sent): an `ALTER` that
  *   meets an open transaction gives up instead of queueing every query on its table behind it. On
- *   Citus a preliminary connection first checks for the coordinator and makes the role's default
- *   `lock_timeout` the same (`alignRoleLockTimeout`), then closes; the migration session then
- *   opens, and its worker connections start with that default;
+ *   Citus a preliminary connection first checks for the coordinator, then closes; once the
+ *   migration session holds the advisory lock, and before its first statement that reaches a
+ *   worker, a throwaway connection makes the role's default `lock_timeout` the same
+ *   (`alignRoleLockTimeout`), so the worker connections the session opens later start with it.
+ *   Under the lock, so a runner that waits never undoes another's online window, and the value a
+ *   crashed run's online window left is repaired before any set;
  * - a set that fails with 55P03 (lock timeout) was rolled back whole; it is retried with backoff
  *   (`lockWaitRetries`, default 5) under the same advisory lock, then fails the run naming the set
  *   and the timeout, with the 55P03 error as `cause`;
@@ -706,13 +725,12 @@ export async function runMigrations(
       },
     });
   // On plain Postgres the first connection is the migration session; on Citus it is the
-  // preliminary one (coordinator check, role default), closed before the session opens.
+  // preliminary one (coordinator and PgBouncer check), closed before the session opens.
   let sql = connect();
   let locked = false;
   try {
     const { citus } = await inspectServer(sql);
     if (citus) {
-      await alignRoleLockTimeout(sql, lockWait.timeoutMs, logger);
       await sql.end({ timeout: 5 });
       sql = connect();
     }
@@ -723,7 +741,16 @@ export async function runMigrations(
       logger,
     );
     locked = true;
-    if (citus) await configureCitusSession(sql, logger);
+    if (citus) {
+      // Under the lock: another runner's online window may have the default at its online value
+      // (or a crashed one left it there). The session has opened no worker connection yet (it has
+      // only taken the lock, which stays on the coordinator), so the ones it opens start aligned.
+      await onConnection(
+        () => connect(),
+        (conn) => alignRoleLockTimeout(conn, lockWait.timeoutMs, logger),
+      );
+      await configureCitusSession(sql, logger);
+    }
     const onlineRun: OnlineRun = {
       citus,
       setTimeoutMs: lockWait.timeoutMs,

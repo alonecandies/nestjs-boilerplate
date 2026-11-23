@@ -212,10 +212,14 @@ blocker ends, and each queued request fails at its own 15 s `statement_timeout`.
   sent as a startup parameter, at boot (`DATABASE_RUN_MIGRATIONS`) and in the release job alike. A statement that waits
   longer fails with SQLSTATE `55P03`.
 - **On Citus, the worker connections too.** The session's setting stays on the coordinator: the connections Citus opens
-  to the workers start from the role's default. So, before the migration session opens, a short preliminary
-  connection checks for the coordinator, makes the connecting role's default `lock_timeout` equal the setting
+  to the workers start from the role's default. So, once the migration session holds the advisory lock and before
+  any set, a throwaway connection makes the connecting role's default `lock_timeout` equal the setting
   (`ALTER ROLE CURRENT_USER SET lock_timeout`, only when it differs; Citus propagates it to the workers) and closes:
-  a session that ran the `ALTER ROLE` would keep worker connections opened with the old value.
+  a session that ran the `ALTER ROLE` would keep worker connections opened with the old value. The migration session
+  has opened no worker connection by then, so the ones it opens start with that default. It happens under the lock
+  because the [online steps](#online-steps) switch the same default: a runner that waits for the lock never touches
+  it while another runner is inside its online window, and the online value a crashed run left is set back before
+  the next set runs. (A short preliminary connection checks for the coordinator first, before the lock.)
   `docker/postgres/init/02-roles.sql` and the production SQL in [SECURITY.md](../../docs/SECURITY.md) give `app_owner`
   the same default up front. It also bounds drizzle-kit and operator sessions as `app_owner`.
 - **Retry, then fail.** drizzle has rolled the set back whole, so nothing of it is recorded. The runner retries it after
@@ -248,8 +252,9 @@ is left alone, and it ships in `dist/` like the other migration files):
 
 - **Files.** `NNNN_<name>.sql`, numbered like drizzle-kit's, ONE statement each, hand-written. The runner reads the
   folder before it connects: a declared folder that is missing, another file, two files with one number or a file
-  without a statement fail the run up front. A file goes to the server on the extended protocol, which refuses
-  several statements (`42601`) instead of running them as one implicit transaction.
+  without a statement fail the run up front, and so does a `CREATE INDEX CONCURRENTLY` without `IF NOT EXISTS` and
+  an explicit index name (the retry below finds a failed build by that name). A file goes to the server on the
+  extended protocol, which refuses several statements (`42601`) instead of running them as one implicit transaction.
 - **When.** Right after the set's transactional files, still under the advisory lock, each pending file runs on its
   own, outside any transaction, and is recorded in `<schema>.__online_migrations` (`name`, `applied_at`) only after it
   succeeded. The run summary counts them per set and in total (`online: { total, applied }`); the CLI's `Done:` line
@@ -262,8 +267,8 @@ is left alone, and it ships in `dist/` like the other migration files):
 - **On Citus.** The shard connections start from the role's default, not from the session. So the runner sets the
   role default to the online value on a throwaway connection before it opens the online session, and back to
   `DATABASE_MIGRATION_LOCK_TIMEOUT_MS` on another one after that session closed, also when a step failed. A run that
-  crashed in between leaves the online value; the next run's start-of-run check ([Lock waits](#lock-waits)) sets it
-  back. Switching the default between the two phases is tested on the single-node int container only; on a
+  crashed in between leaves the online value; the next run sets it back as soon as it holds the lock, before its first
+  set ([Lock waits](#lock-waits)). Switching the default between the two phases is tested on the single-node int container only; on a
   multi-node cluster it is UNTESTED.
 - **Failure and retry.** A failing file stops the run with
   `Migration set "<name>": online step <file> (<path>) failed; nothing was recorded for it, …` and the driver's error
