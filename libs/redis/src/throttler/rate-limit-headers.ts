@@ -52,15 +52,32 @@ const rank = (d: RateLimitDecision): number => {
   return index === -1 ? RATE_LIMIT_HEADER_ORDER.length : index;
 };
 
+/**
+ * The more restrictive of two decisions for one item name: a blocked one, then the lower
+ * remaining, then the larger reset. Two partitions of one policy (a public field charging
+ * `ip:<addr>`, an authenticated one charging `user:<id>`) share a name, so the header must not
+ * depend on which charge settled last. On a full tie the earlier one stays.
+ */
+function moreRestrictive(a: RateLimitDecision, b: RateLimitDecision): RateLimitDecision {
+  if (a.blocked !== b.blocked) return a.blocked ? a : b;
+  if (a.remaining !== b.remaining) return a.remaining < b.remaining ? a : b;
+  return b.resetSeconds > a.resetSeconds ? b : a;
+}
+
 const collected = new WeakMap<object, Map<string, RateLimitDecision>>();
 
-/** Adds `decision` to the response's set (both guards share it) and returns the ordered list. */
+/**
+ * Adds `decision` to the response's set (both guards share it) and returns the ordered list.
+ * A name that was already collected keeps its more restrictive decision.
+ */
 export function collectDecision(
   response: object,
   decision: RateLimitDecision,
 ): RateLimitDecision[] {
   const byName = collected.get(response) ?? new Map<string, RateLimitDecision>();
-  byName.set(policyItemName(decision), decision);
+  const name = policyItemName(decision);
+  const previous = byName.get(name);
+  byName.set(name, previous ? moreRestrictive(previous, decision) : decision);
   collected.set(response, byName);
   return [...byName.values()].sort(
     (a, b) => rank(a) - rank(b) || policyItemName(a).localeCompare(policyItemName(b)),

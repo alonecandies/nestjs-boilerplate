@@ -53,7 +53,9 @@ Conventions that apply to every HTTP response:
     per user (Socket.IO `connect_error` 429 `RATE_LIMITED` / `TOO_MANY_CONNECTIONS`; graphql-ws 4403).
 
   Responses carry `RateLimit-Policy` and `RateLimit` (draft-ietf-httpapi-ratelimit-headers-11), also on 429 next to
-  `Retry-After`, and they are exposed through CORS. Socket.IO messages are limited per message; errors come back as
+  `Retry-After`, and they are exposed through CORS. When one response charges several partitions of one
+  policy (an IP bucket and a user bucket, say), the `RateLimit` item for that name shows the most restrictive
+  decision: blocked first, then the fewest remaining, then the longest reset. Socket.IO messages are limited per message; errors come back as
   `{ ok: false, error }` acks or `exception` events. gRPC and Kafka are not throttled. When Redis is down, budgets
   fail open and credential endpoints answer 503.
 
