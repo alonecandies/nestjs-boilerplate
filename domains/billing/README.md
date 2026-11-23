@@ -170,7 +170,12 @@ input CreateCheckoutSessionInput {
 
 Payloads go through `ZodRpcValidationPipe` (`INVALID_ARGUMENT` + issues); `@GrpcController()` maps domain
 errors to gRPC statuses and `x-error-code` trailers, and `BillingGrpcAdapter` maps them back to the same
-`DomainException`s (deadline = `GRPC_DEADLINE_MS`, circuit breaker `billing`).
+`DomainException`s (deadline = `GRPC_DEADLINE_MS`, circuit breaker `billing`). The calls that wait on Stripe,
+`CreateCheckoutSession` and `HandleStripeWebhook`, get `BILLING_GRPC_STRIPE_DEADLINE_MS` (default 30000, the
+monolith's `HTTP_HANDLER_TIMEOUT_MS`; also the channel's service-config deadline) and their own breaker,
+`billing-stripe`: slow Stripe calls neither time out at the generic deadline nor open the breaker `ListPayments`
+uses. The gateway's handler timeout still cuts the request at 30 s, as in the monolith; Stripe's own worst case
+(`STRIPE_TIMEOUT_MS` × (1 + `STRIPE_MAX_NETWORK_RETRIES`), 20 s × 3) is above both.
 
 ### Kafka (produced)
 
@@ -461,7 +466,7 @@ transaction would carry no RLS context.
 `stripe` namespace (`src/infrastructure/stripe/stripe.config.ts`, owned by billing; production rejects the dev placeholders, the compose fallbacks and local redirect URLs): `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`, `STRIPE_SUCCESS_URL`, `STRIPE_CANCEL_URL`
 (redirect URLs are never taken from REST clients: no open redirect), `STRIPE_MAX_NETWORK_RETRIES`,
 `STRIPE_TIMEOUT_MS`. `ledger` namespace (`src/infrastructure/ledger/ledger.config.ts`): `LEDGER_ENABLED` (false),
-`LEDGER_RECONCILE_LOOKBACK_HOURS` (72, 1-720), `LEDGER_VERIFY` (false). Gateway: `BILLING_GRPC_URL` (`billingGrpcClient` namespace, `src/infrastructure/adapters/grpc/billing-grpc-client.config.ts`), `GRPC_DEADLINE_MS` (platform `grpc`).
+`LEDGER_RECONCILE_LOOKBACK_HOURS` (72, 1-720), `LEDGER_VERIFY` (false). Gateway: `BILLING_GRPC_URL` and `BILLING_GRPC_STRIPE_DEADLINE_MS` (30000, 1000-900000) (`billingGrpcClient` namespace, `src/infrastructure/adapters/grpc/billing-grpc-client.config.ts`), `GRPC_DEADLINE_MS` (platform `grpc`).
 
 ## Tests
 

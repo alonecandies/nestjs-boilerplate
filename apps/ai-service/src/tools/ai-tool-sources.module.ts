@@ -16,6 +16,7 @@ import {
 } from '@domain/notifications/api';
 import { NOTIFICATIONS_GRPC_PACKAGE } from '@domain/notifications-contracts';
 import { type DynamicModule, Module } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { RbacModule } from '@platform/auth';
 import { GrpcClientsModule } from '@platform/transport';
 
@@ -28,7 +29,9 @@ import { GrpcClientsModule } from '@platform/transport';
  * owners is served here. The targets (`IDENTITY_GRPC_URL`, `NOTIFICATIONS_GRPC_URL`,
  * `BILLING_GRPC_URL`) are read when `forRoot()` is called; channels connect on the first tool
  * call. `NOTIFICATIONS_RBAC` makes `notifications:read` (the inbox tool's permission) resolvable
- * from the caller's roles in this process.
+ * from the caller's roles in this process. The billing tool only lists payments, so the billing
+ * channel keeps `GRPC_DEADLINE_MS`; `billingGrpcClient` is loaded because `BillingGrpcAdapter`
+ * injects it (the Stripe-backed calls' deadline, unused here).
  */
 @Module({})
 export class AiToolSourcesModule {
@@ -49,6 +52,7 @@ export class AiToolSourcesModule {
           spec: BILLING_GRPC_PACKAGE,
           url: billingGrpcClientConfig.parse().url,
         }),
+        ConfigModule.forFeature(billingGrpcClientConfig),
         RbacModule.forFeature(NOTIFICATIONS_RBAC),
       ],
       providers: [

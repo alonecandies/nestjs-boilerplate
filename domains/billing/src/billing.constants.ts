@@ -125,6 +125,12 @@ export const CHECKOUT_WITHOUT_IDEMPOTENCY_KEY_METRIC =
 
 /** gRPC circuit-breaker / operation names (logs, metrics). */
 export const BILLING_GRPC_UPSTREAM = 'billing';
+/**
+ * The gateway's second billing breaker, for the calls that wait on Stripe (`CreateCheckoutSession`,
+ * `HandleStripeWebhook`): slow Stripe calls open it without cutting off `ListPayments`, and the
+ * reverse.
+ */
+export const BILLING_GRPC_STRIPE_UPSTREAM = 'billing-stripe';
 
 /** Header carrying Stripe's webhook signature (lower-case: Node lower-cases incoming header names). */
 export const STRIPE_SIGNATURE_HEADER = 'stripe-signature';

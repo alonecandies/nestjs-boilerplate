@@ -1,5 +1,6 @@
 import { BILLING_GRPC_PACKAGE } from '@domain/billing-contracts';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
+import { ConfigModule } from '@nestjs/config';
 import { RbacModule } from '@platform/auth';
 import { GrpcClientsModule } from '@platform/transport';
 import { BillingPort } from './application/ports/billing.port.js';
@@ -43,17 +44,25 @@ export class BillingApiModule {
 
   /**
    * Gateway: ports → `billing.v1.BillingService` over gRPC (deadline + circuit breaker). The
-   * client URL (`BILLING_GRPC_URL`) is read when `forRemote()` is called.
+   * client URL (`BILLING_GRPC_URL`) and the deadline of the Stripe-backed calls
+   * (`BILLING_GRPC_STRIPE_DEADLINE_MS`, also the channel's service-config deadline, so grpc-js does
+   * not end a checkout at `GRPC_DEADLINE_MS`) are read when `forRemote()` is called. The adapter
+   * still cuts `ListPayments` at `GRPC_DEADLINE_MS`.
    */
   static forRemote(): DynamicModule {
-    const target = {
-      spec: BILLING_GRPC_PACKAGE,
-      // Read when the module is defined: a client target cannot come from DI.
-      url: billingGrpcClientConfig.parse().url,
-    };
+    // Read when the module is defined: a client target cannot come from DI.
+    const client = billingGrpcClientConfig.parse();
+    const grpc = GrpcClientsModule.register(
+      { spec: BILLING_GRPC_PACKAGE, url: client.url },
+      { client: { deadlineMs: client.stripeDeadlineMs } },
+    );
     return {
       module: BillingApiModule,
-      imports: [GrpcClientsModule.register(target), RbacModule.forFeature(BILLING_RBAC)],
+      imports: [
+        grpc,
+        ConfigModule.forFeature(billingGrpcClientConfig),
+        RbacModule.forFeature(BILLING_RBAC),
+      ],
       ...presentation(BillingGrpcAdapter),
     };
   }
