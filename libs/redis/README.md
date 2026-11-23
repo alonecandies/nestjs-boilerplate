@@ -113,7 +113,8 @@ denylist, BullMQ queues, locks and throttle counters share it, and any eviction 
 `RedisModule` reads `maxmemory_policy` from `INFO memory` (`checkRedisEvictionPolicy`): a policy other than
 `noeviction` logs one error line (`event: redis_eviction_policy_unsafe`) and sets the gauge
 `redis_eviction_policy_safe` to `0` (`1` when safe; absent when `INFO` fails or hides the value). The check never fails
-the boot. Sizing and the alert: [SECURITY.md](../../docs/SECURITY.md#production-checklist).
+the boot and waits at most 2 s (`EVICTION_CHECK_TIMEOUT_MS`) for `INFO`: past that it logs one warning
+(`event: redis_eviction_check_timeout`), leaves the gauge absent and the boot continues. Sizing and the alert: [SECURITY.md](../../docs/SECURITY.md#production-checklist).
 
 ## Key layout
 

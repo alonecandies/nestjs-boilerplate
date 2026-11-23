@@ -72,6 +72,24 @@ describe('Kafka consumer metrics', () => {
     expect(emitter.listenerCount('consumer.end_batch_process')).toBe(1);
   });
 
+  it('InstrumentedServerKafka starts every outcome of a subscribed topic at 0 before consuming', async () => {
+    // A counter series created by its first inc() starts at 1, and increase() over a window that
+    // starts with it reads 0: KafkaDeadLetters would never page for a single poison message.
+    const topic = 'test.subscribed.v1';
+    let exportedAtRun = '';
+    vi.spyOn(ServerKafka.prototype, 'bindEvents').mockImplementation(async () => {
+      exportedAtRun = await register.metrics();
+    });
+    const server = new InstrumentedServerKafka({ consumer: { groupId: 'g2' } });
+    server.addHandler(topic, async () => undefined, true);
+    await server.bindEvents(fakeConsumer().consumer);
+    for (const outcome of ['dead_letter', 'success', 'redelivery']) {
+      expect(exportedAtRun).toContain(
+        `kafka_consumer_messages_total{topic="${topic}",outcome="${outcome}"} 0\n`,
+      );
+    }
+  });
+
   describe('through the real consumer pipeline', () => {
     const message = (topic: string) =>
       new KafkaContext([

@@ -218,6 +218,21 @@ describe('assemble-image one-off CLIs (src/cli/*.ts)', () => {
     expect(assemble(dirs).status).toBe(0);
   });
 
+  it('leaves integration and e2e specs under src/cli out of the image', () => {
+    const dirs = fixture();
+    withCli(dirs, 'x', replayCli);
+    // Even when compiled to dist/cli, a spec is not an entrypoint: tracing prunes it.
+    withCli(dirs, 'x.int-spec', 'export {};\n');
+    withCli(dirs, 'x.e2e-spec', 'export {};\n');
+    const { status, output } = assemble(dirs);
+    expect(output).toContain('[assemble] traced');
+    expect(status).toBe(0);
+    const kept = (path: string) => existsSync(join(dirs.out, path));
+    expect(kept('apps/api/dist/cli/x.js')).toBe(true);
+    expect(kept('apps/api/dist/cli/x.int-spec.js')).toBe(false);
+    expect(kept('apps/api/dist/cli/x.e2e-spec.js')).toBe(false);
+  });
+
   it('fails when a src/cli/<name>.ts was not compiled to dist/cli/<name>.js', () => {
     const dirs = fixture();
     withCli(dirs, 'replay', undefined);

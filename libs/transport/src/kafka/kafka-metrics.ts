@@ -8,6 +8,12 @@ export const KAFKA_CONSUMER_LAG = 'kafka_consumer_lag';
 /** `success`: handled; `dead_letter`: sent to `<topic>.dlq`; `redelivery`: left to kafkajs. */
 export type KafkaMessageOutcome = 'success' | 'dead_letter' | 'redelivery';
 
+const KAFKA_MESSAGE_OUTCOMES: readonly KafkaMessageOutcome[] = [
+  'success',
+  'dead_letter',
+  'redelivery',
+];
+
 /** The consumer Nest hands to `ServerKafka.bindEvents` (Nest's copy of the kafkajs typings). */
 export type KafkaConsumerLike = Parameters<ServerKafka['bindEvents']>[0];
 
@@ -34,6 +40,15 @@ const lag = () =>
 
 export function recordKafkaOutcome(topic: string, outcome: KafkaMessageOutcome): void {
   messages().inc({ topic, outcome });
+}
+
+/**
+ * Creates the `{topic, outcome}` series of a subscribed topic at 0. A series that appears with its
+ * first `inc()` starts at 1, so `increase(...[15m]) > 0` (`KafkaDeadLetters`) would read 0 for the
+ * first dead letter; started at 0, that dead letter is an increase.
+ */
+export function initKafkaTopicMetrics(topic: string): void {
+  for (const outcome of KAFKA_MESSAGE_OUTCOMES) messages().inc({ topic, outcome }, 0);
 }
 
 export function recordKafkaRetry(topic: string): void {
