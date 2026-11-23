@@ -12,8 +12,8 @@ research reports: read the named section before starting a task.
 - `docs/superpowers/plans/program-work/minors/research-id-lb.md` (ID-1 … ID-3, LB-1 … LB-3)
 - `docs/superpowers/plans/program-work/minors/security-d866cdf.md` (S1)
 
-Those paths are relative to the main checkout, `/Users/maddie/Desktop/Work/BE/nestjs-boilerplate`;
-they do not exist in a lane worktree.
+Those paths are relative to the main checkout (git-excluded, so they are not in a clone); they do
+not exist in a lane worktree.
 
 Out of scope: ID-3 (stale since `9e6e02d`), RL-X2 (not reproducible with zod 4.6.6), metering a call
 cut mid-answer (needs OpenRouter's generation stats and a key), the `notification_recipients`
