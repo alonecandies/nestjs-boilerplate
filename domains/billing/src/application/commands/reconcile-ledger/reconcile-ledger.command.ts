@@ -41,9 +41,10 @@ export interface RunEntryRefs {
  * What a check sees of its run: one object per run, the same for every check. `entryRefs` reads
  * the refs of all tenants posted in `[from − 24 h, now)` on its first call and resolves with that
  * same read on later ones (a failed read is not kept: the next call reads again). R3 calls it
- * first and filters to its own window; R4 reuses it and lists only the refs posted since its
- * `readAt`. R5 keeps its own listing. Without it (a check run on its own), R3 and R4 read their
- * own refs.
+ * first and filters to its own window; R4 reuses it and lists only the refs posted since
+ * `max(from, readAt − LEDGER_RECONCILE_GRACE_MS)` (a ref stamped before `readAt` may commit after
+ * the read passed it). R5 keeps its own listing. Without it (a check run on its own), R3 and R4
+ * read their own refs.
  */
 export interface ReconciliationContext {
   readonly runId: string;
