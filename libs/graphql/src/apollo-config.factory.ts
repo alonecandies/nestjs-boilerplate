@@ -6,7 +6,11 @@ import { createClientIpResolver } from '@platform/redis';
 import { type DocumentNode, parse } from 'graphql';
 import type { GraphqlWsAuthHandlers } from './auth/subscription-auth.js';
 import { isWsContext } from './context/gql-context.js';
-import { buildWsRequest, createGraphqlContext } from './context/graphql-context.factory.js';
+import {
+  buildWsRequest,
+  createGraphqlContext,
+  createGraphqlWsConnectionSignals,
+} from './context/graphql-context.factory.js';
 import { formatExecutionResult, formatGraphqlError } from './errors/format-graphql-error.js';
 import type { DataLoaderRegistry } from './loaders/data-loader.registry.js';
 import { GRAPHQL_SCALAR_RESOLVERS } from './scalars/index.js';
@@ -37,7 +41,8 @@ export interface ApolloConfigDeps {
  * - **Schema**: code-first, written to `GRAPHQL_SCHEMA_FILE` when set, else kept in memory
  *   (containers usually have read-only filesystems).
  * - **Subscriptions**: graphql-ws on the same path, authenticated once per connection.
- * - **Context**: a fresh set of DataLoaders per operation.
+ * - **Context**: a fresh set of DataLoaders per operation; over graphql-ws also the connection's
+ *   `connectionSignal`, aborted when its socket closes.
  * - **Errors**: `formatGraphqlError`, for HTTP results and for subscription events (graphql-ws
  *   `onNext`). Internal details are hidden in production.
  */
@@ -46,6 +51,7 @@ export function createApolloDriverConfig(deps: ApolloConfigDeps): ApolloDriverCo
   const exposeInternal = !app.isProduction;
   const formatError = formatGraphqlError({ exposeInternal });
   const clientIp = createClientIpResolver(app.trustProxy);
+  const connections = createGraphqlWsConnectionSignals();
   return {
     path: graphql.path,
     autoSchemaFile: graphql.schemaFile ?? true,
@@ -63,15 +69,21 @@ export function createApolloDriverConfig(deps: ApolloConfigDeps): ApolloDriverCo
     resolvers: { ...GRAPHQL_SCALAR_RESOLVERS },
     // Scalars that no field uses must not fail boot ("UUID defined in resolvers, but not in schema").
     resolverValidationOptions: { requireResolversToMatchSchema: 'ignore' },
-    context: createGraphqlContext(loaders, clientIp),
+    context: createGraphqlContext(loaders, clientIp, connections),
     subscriptions: {
       'graphql-ws': {
         path: graphql.path,
         connectionInitWaitTimeout: GRAPHQL_WS_INIT_TIMEOUT_MS,
         // Nest types `ctx.extra` as unknown; graphql-ws/use/ws supplies `{ socket, request }`.
-        onConnect: (ctx) => (isWsContext(ctx) ? wsAuth.onConnect(ctx) : false),
+        onConnect: (ctx) => {
+          if (!isWsContext(ctx)) return false;
+          connections.open(ctx);
+          return wsAuth.onConnect(ctx);
+        },
         onClose: (ctx) => {
-          if (isWsContext(ctx)) wsAuth.onClose(ctx);
+          if (!isWsContext(ctx)) return;
+          connections.close(ctx);
+          wsAuth.onClose(ctx);
         },
         // Apollo plugins never see graphql-ws operations: run the same complexity check and the
         // per-operation cost budget here. Returning errors rejects the subscription.

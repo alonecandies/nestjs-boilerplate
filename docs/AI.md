@@ -90,10 +90,10 @@ ai-service's `AI_REQUEST_TIMEOUT_MS`, so the model's own timeout (504 `AI_TIMEOU
   between, in its own turn and in every later one. A cut the user did not retry stays in the history, so the model can
   go on from it. Both questions and the partial reply stay stored and listed; only what the model receives changes.
 - The chat routes have no handler timeout (`@Timeout(0)`): `AI_REQUEST_TIMEOUT_MS` bounds them.
-- **Known limit:** a `streamAiMessage` turn sent over graphql-ws (a WebSocket) is bounded only by
-  `AI_REQUEST_TIMEOUT_MS`. Closing the socket does not abort the upstream call, because the mutation has no HTTP request
-  to cancel; over HTTP POST, closing the request aborts it as for the SSE route. Prefer the SSE route for streams a user
-  may abandon, and keep `AI_REQUEST_TIMEOUT_MS` and `AI_MAX_OUTPUT_TOKENS` modest.
+- A `streamAiMessage` turn stops when its client leaves, as on the SSE route: over HTTP POST when the request closes,
+  over graphql-ws (a WebSocket) when the socket closes. The upstream call is aborted, the reply so far is stored
+  `incomplete` and its usage row has the outcome `aborted`. Each graphql-ws connection has one abort signal, aborted when
+  its socket closes; stopping one operation on a socket that stays open does not abort its turn.
 
 Every response carries one of these codes when a call is refused or fails (REST problem+json, GraphQL
 `extensions.code`, gRPC `x-error-code`, the SSE `error` event):

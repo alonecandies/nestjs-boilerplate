@@ -452,6 +452,50 @@ describe('AI streaming (monolith)', () => {
       for (const other of others) expect(other.received).toEqual([]);
     });
 
+    it('closing the graphql-ws socket aborts a streamAiMessage turn; the partial reply is stored as incomplete', async () => {
+      const hanging = mockHangingModel(['partial ']);
+      model = hanging;
+      let aborted = false;
+      void hanging.aborted.then(() => {
+        aborted = true;
+      });
+      const conversationId = await createConversation(ada);
+      const trigger = aiMessageStreamTrigger(ada.tenantId, ada.user.id, conversationId);
+      const connection = await clients.connect(wsUrl, {
+        connectionParams: { authorization: `Bearer ${ada.accessToken}` },
+      });
+      const before = listeners(trigger);
+      const own = connection.subscribe<StreamEvent>({
+        query: SUBSCRIBE,
+        variables: { id: conversationId },
+      });
+      await waitUntil(() => listeners(trigger) > before);
+
+      // The mutation runs over the same socket; it never resolves while the model hangs.
+      connection.subscribe({
+        query: STREAM_MUTATION,
+        variables: { input: { conversationId, content: 'Go on' } },
+      });
+      await waitUntil(() => own.received.length > 0);
+      expect(own.received.map((r) => r.aiMessageStream.delta)).toEqual(['partial ']);
+      await connection.dispose();
+
+      // Well before AI_REQUEST_TIMEOUT_MS (60 s): the close aborted the model call.
+      await waitUntil(() => aborted);
+      const assistant = () =>
+        e2e.ai.persistence.store.messages.filter(
+          (m) => m.conversationId === conversationId && m.role === 'assistant',
+        );
+      await waitUntil(() => assistant().length > 0);
+      await wait(QUIET_MS);
+      expect(assistant().map((m) => [m.content, m.status])).toEqual([['partial ', 'incomplete']]);
+      expect(
+        e2e.ai.persistence.store.usage
+          .filter((u) => u.conversationId === conversationId)
+          .map((u) => [u.outcome, u.messageId]),
+      ).toEqual([['aborted', assistant()[0]?.id]]);
+    });
+
     it('yields nothing for a payload of another tenant published straight onto the owner’s trigger', async () => {
       const conversationId = await createConversation(ada);
       const trigger = aiMessageStreamTrigger(ada.tenantId, ada.user.id, conversationId);

@@ -146,8 +146,8 @@ outputTokens, costUsd }`, `null` on a key replay) or one `error` (an RFC 9457 pr
   resolves with the stored reply. The PubSub trigger is per `(tenant, user, conversation)` from the
   token (`aiMessageStream:<tenantId>:<userId>:<conversationId>`) and the subscription filter checks
   the payload's tenant, user and conversation again (the `notificationCreated` pattern): another user,
-  or the same user in another tenant, receives nothing. Over HTTP, closing the mutation's request
-  aborts the call like SSE; over graphql-ws the call is bounded by `AI_REQUEST_TIMEOUT_MS`.
+  or the same user in another tenant, receives nothing. Closing the mutation's request (HTTP) or its
+  socket (graphql-ws, the context's `connectionSignal`) aborts the call like SSE.
 
 ## Tools (`application/tools`)
 
