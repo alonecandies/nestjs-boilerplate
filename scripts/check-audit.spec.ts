@@ -1,12 +1,13 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 /**
  * CI-1 (audit 2026-11-23): the advisory gate fails on a high or critical production advisory
- * unless a dated entry of .github/audit-ignore.json covers it, and an expired entry fails too.
+ * unless a dated entry of .github/audit-ignore.json covers it, and an expired entry fails too, as
+ * does an entry that expires more than 90 days ahead (so each one is revisited within 90 days).
  * Every case feeds a saved report (--input) and a fixed date (--today): no network, no wall clock.
  */
 const ROOT = join(import.meta.dirname, '..');
@@ -109,6 +110,24 @@ describe('scripts/check-audit.mjs', () => {
     expect(result.output).toContain('GHSA-4992-7rv2-5pvq');
   });
 
+  it('fails on an ignore that expires more than 90 days after today, naming the entry', () => {
+    // 2026-11-24 + 91 days = 2027-02-23.
+    const result = check({ undici: [HIGH] }, { ignores: [ignore({ expires: '2027-02-23' })] });
+    expect(result.status).toBe(1);
+    expect(result.output).toContain('GHSA-4992-7rv2-5pvq');
+    expect(result.output).toContain('more than 90 days');
+    // Even with no advisory left to cover: the horizon is about the entry, not the report.
+    expect(check({}, { ignores: [ignore({ expires: '2030-01-01' })] }).status).toBe(1);
+  });
+
+  it('accepts an ignore that expires within 90 days of today', () => {
+    // 2026-11-24 + 89 days = 2027-02-21; + 90 days = 2027-02-22 (the last day accepted).
+    for (const expires of ['2027-02-21', '2027-02-22']) {
+      const result = check({ undici: [HIGH] }, { ignores: [ignore({ expires })] });
+      expect(result.status, expires).toBe(0);
+    }
+  });
+
   it('fails on a malformed ignore entry (no reason, impossible date)', () => {
     expect(check({}, { ignores: [ignore({ reason: '' })] }).output).toContain('lacks reason');
     const badDate = check({}, { ignores: [ignore({ expires: '2026-02-30' })] });
@@ -137,10 +156,16 @@ describe('scripts/check-audit.mjs', () => {
     const root = mkdtempSync(join(tmpdir(), 'check-audit-'));
     roots.push(root);
     writeFileSync(join(root, 'audit.json'), '{}');
-    // A date before any plausible expiry: this checks the file's shape, not the calendar.
+    // The earliest expiry of the file (each entry is valid through its expiry day, and every
+    // entry expires within 90 days of the day it is checked): this checks the file's shape, not
+    // the calendar.
+    const { ignores } = JSON.parse(
+      readFileSync(join(ROOT, '.github', 'audit-ignore.json'), 'utf8'),
+    ) as { ignores: { expires: string }[] };
+    const today = ignores.map((entry) => entry.expires).sort()[0] ?? TODAY;
     const result = spawnSync(
       process.execPath,
-      [SCRIPT, '--input', join(root, 'audit.json'), '--today', '2000-01-01'],
+      [SCRIPT, '--input', join(root, 'audit.json'), '--today', today],
       { encoding: 'utf8', cwd: ROOT },
     );
     expect(`${result.stdout}${result.stderr}`).toContain('no high or critical');

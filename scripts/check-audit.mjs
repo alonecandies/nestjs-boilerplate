@@ -8,7 +8,8 @@
 // `bun audit` is not used (it is 1 for a moderate advisory too): its JSON report is.
 // An ignore entry: { "id": "GHSA-xxxx-xxxx-xxxx" (or bun's numeric id), "package": "name",
 // "reason": "...", "expires": "YYYY-MM-DD" }; it covers the advisory of that id in that package
-// until the end of its expiry day (UTC).
+// until the end of its expiry day (UTC), and expires at most MAX_IGNORE_DAYS (90) days after today,
+// so no entry outlives a quarter without being revisited.
 // Exit: 0 nothing blocking, 1 a high or critical advisory, a bad ignore file or an audit error,
 // 2 usage.
 import { spawnSync } from 'node:child_process';
@@ -20,6 +21,8 @@ const ROOT = join(import.meta.dirname, '..');
 const BLOCKING = new Set(['high', 'critical']);
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const GHSA = /GHSA(?:-[0-9a-z]{4}){3}$/i;
+/** The latest expiry an ignore entry may set, in days after today. */
+const MAX_IGNORE_DAYS = 90;
 
 let args;
 try {
@@ -49,6 +52,11 @@ if (!isDate(today)) {
   console.error(`--today must be a YYYY-MM-DD date, got ${today}`);
   process.exit(2);
 }
+
+/** The last expiry date an ignore entry may set: today + MAX_IGNORE_DAYS (UTC). */
+const latestExpiry = new Date(Date.parse(`${today}T00:00:00Z`) + MAX_IGNORE_DAYS * 86_400_000)
+  .toISOString()
+  .slice(0, 10);
 
 const fail = (message) => {
   console.error(`check-audit: ${message}`);
@@ -96,7 +104,7 @@ function readReport() {
   return report;
 }
 
-/** The ignore entries, validated; any malformed or expired entry is a problem. */
+/** The ignore entries, validated; a malformed, expired or too-distant entry is a problem. */
 function readIgnores(problems) {
   const file = args.ignores ?? join(ROOT, '.github', 'audit-ignore.json');
   let parsed;
@@ -133,6 +141,12 @@ function readIgnores(problems) {
     if (entry.expires < today) {
       problems.push(
         `${at} (${entry.id} in ${entry.package}) expired on ${entry.expires}: fix the advisory, or renew the entry with a new reason`,
+      );
+      return;
+    }
+    if (entry.expires > latestExpiry) {
+      problems.push(
+        `${at} (${entry.id} in ${entry.package}) expires ${entry.expires}, more than ${MAX_IGNORE_DAYS} days after ${today}: set an expiry on or before ${latestExpiry}`,
       );
       return;
     }

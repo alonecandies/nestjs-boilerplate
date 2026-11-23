@@ -164,9 +164,10 @@ The `verify` and `integration` jobs install with `bun install --frozen-lockfile`
 
 - a **high or critical** advisory that no unexpired entry of [`.github/audit-ignore.json`](../.github/audit-ignore.json) covers;
 - an **expired** ignore entry, whether or not its advisory is still reported, so every entry is revisited;
+- an ignore entry whose `expires` is **more than 90 days** after the day of the check, so no entry can be parked for longer than a quarter;
 - a malformed entry, or a report that is not JSON (registry unreachable, no lockfile): the gate fails closed.
 
-Moderate and low advisories are listed and do not fail. An ignore entry covers one advisory in one package until the end of its expiry day (UTC):
+Moderate and low advisories are listed and do not fail. An ignore entry covers one advisory in one package until the end of its expiry day (UTC), at most 90 days ahead; renew it with a new date and reason when it runs out:
 
 ```json
 {
