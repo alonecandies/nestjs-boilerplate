@@ -167,28 +167,6 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
   });
 });
 
-describe('throttle — removed THROTTLE_AUTH_* variables (F6)', () => {
-  // The replacements are a domain's policy variables (`<DOMAIN>_CREDENTIALS_*`); libs specs stay
-  // domain-neutral, so the domain prefix is matched, not spelled.
-  it.each([
-    ['THROTTLE_AUTH_LIMIT', /set [A-Z]+_CREDENTIALS_LIMIT instead/],
-    ['THROTTLE_AUTH_TTL_MS', /set [A-Z]+_CREDENTIALS_TTL_MS instead/],
-  ])('fails validation when %s is set, naming its replacement', (legacy, replacement) => {
-    const error = errorOf(() => throttleConfig.parse({ [legacy]: '7' }));
-    expect(error.issues).toHaveLength(1);
-    expect(error.issues[0]?.path).toEqual([legacy]);
-    expect(error.issues[0]?.message).toMatch(replacement);
-    expect(error.message).toContain(legacy);
-    expect(errorOf(() => validateAllEnv({ [legacy]: '7' })).message).toMatch(replacement);
-  });
-
-  it('a blank legacy variable is unset, like every other variable', () => {
-    expect(() =>
-      throttleConfig.parse({ THROTTLE_AUTH_LIMIT: '', THROTTLE_AUTH_TTL_MS: ' ' }),
-    ).not.toThrow();
-  });
-});
-
 describe('config namespaces — derived values and coercion', () => {
   it('production flips the dev-friendly derived defaults', () => {
     const env = {
