@@ -245,6 +245,24 @@ describe('ReconcileLedgerHandler', () => {
     ]);
   });
 
+  it('reports how the run finished to onFinished: its id, status, failed checks and counts', async () => {
+    const window = { from: new Date(NOW.getTime() - 2 * HOUR), to: NOW };
+    const outcomes: unknown[] = [];
+    const run = (command: ReconcileLedgerCommand) =>
+      asSystem(() => handler.execute(command)).then(() => [...store.runs.values()].at(-1));
+
+    const succeeded = await run(new ReconcileLedgerCommand(window, (o) => outcomes.push(o)));
+    vi.spyOn(r4, 'run').mockRejectedValueOnce(new Error('stripe unavailable'));
+    balanceTransactions = [LOST_PAYOUT];
+    const failed = await run(new ReconcileLedgerCommand(window, (o) => outcomes.push(o)));
+
+    expect(outcomes).toEqual([
+      { runId: succeeded?.id, status: 'succeeded', failedChecks: [], found: {}, appended: {} },
+      { runId: failed?.id, status: 'failed', failedChecks: ['R4'], found: {}, appended: {} },
+    ]);
+    expect(failed?.status).toBe('failed');
+  });
+
   it('refuses an empty or inverted window', () => {
     const at = new Date('2026-10-01T00:00:00.000Z');
     expect(() => new ReconcileLedgerCommand({ from: at, to: at })).toThrow(RangeError);

@@ -15,8 +15,15 @@ import type { LedgerConfig } from '../../../infrastructure/ledger/ledger.config.
 import { InMemoryLedger } from '../../../testing/in-memory-ledger.js';
 import { InMemoryLedgerStore } from '../../../testing/in-memory-ledger-store.js';
 import { ReconcileLedgerCommand } from '../reconcile-ledger/reconcile-ledger.command.js';
-import { type LedgerReanchorRequest, ReanchorLedgerCommand } from './reanchor-ledger.command.js';
-import { ReanchorLedgerHandler } from './reanchor-ledger.handler.js';
+import {
+  type LedgerReanchorRequest,
+  ReanchorLedgerCommand,
+  RerunLedgerReconciliationCommand,
+} from './reanchor-ledger.command.js';
+import {
+  ReanchorLedgerHandler,
+  RerunLedgerReconciliationHandler,
+} from './reanchor-ledger.handler.js';
 
 const DB = 'in-memory';
 const NOW = new Date('2026-11-23T12:00:00.000Z');
@@ -34,11 +41,25 @@ const ENABLED: LedgerConfig = {
   allowUnverified: false,
 };
 const asSystem = <T>(fn: () => Promise<T>) => SystemContext.run('billing.ledger-reanchor', fn);
+/** How the fake reconciliation run finishes (what it reports to `onFinished`). */
+const SUCCEEDED = {
+  runId: 'run-1',
+  status: 'succeeded',
+  failedChecks: [],
+  found: {},
+  appended: {},
+};
 
 const draft = (n: number): LedgerEntryDraft => ({
   ...CHARGE_DRAFT,
   sourceKey: `stripe:txn:txn_reanchor_${n}`,
 });
+
+/** What the reconcile handler does at the end of a run: reports it, resolves with its counts. */
+const finishRun = (command: unknown, outcome: typeof SUCCEEDED | Record<string, unknown>) => {
+  (command as ReconcileLedgerCommand).onFinished?.(outcome as never);
+  return { found: outcome.found, appended: outcome.appended };
+};
 
 describe('ReanchorLedgerHandler (audit fixes OPS-1)', () => {
   let ledger: InMemoryLedger;
@@ -75,7 +96,7 @@ describe('ReanchorLedgerHandler (audit fixes OPS-1)', () => {
   beforeEach(async () => {
     vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
     store = new InMemoryLedgerStore();
-    commands = { execute: vi.fn(async () => ({ found: {}, appended: {} })) };
+    commands = { execute: vi.fn(async (command: unknown) => finishRun(command, SUCCEEDED)) };
     // The original server reached tx 3 and R5 stored that state.
     const original = new InMemoryLedger();
     for (const n of [1, 2, 3]) await original.post(draft(n));
@@ -103,7 +124,7 @@ describe('ReanchorLedgerHandler (audit fixes OPS-1)', () => {
       database: DB,
       replacedTxId: 3n,
       txId: 1n,
-      reconciliation: { found: {}, appended: {} },
+      reconciliation: SUCCEEDED,
     });
     expect(store.reanchors).toEqual([
       {
@@ -128,6 +149,28 @@ describe('ReanchorLedgerHandler (audit fixes OPS-1)', () => {
     const [[command]] = commands.execute.mock.calls as [[ReconcileLedgerCommand]];
     expect(command).toBeInstanceOf(ReconcileLedgerCommand);
     expect(command.window).toEqual({ from: LOST_FROM, to: NOW });
+  });
+
+  it('carries a failed reconciliation run: its status and failed checks (review #2)', async () => {
+    const failed = {
+      runId: 'run-2',
+      status: 'failed',
+      failedChecks: ['R4', 'R5'],
+      found: { verification_failed: 1 },
+      appended: { verification_failed: 1 },
+    };
+    commands.execute.mockImplementation(async (command: unknown) => finishRun(command, failed));
+
+    const result = await reanchor();
+
+    expect(result.reconciliation).toEqual(failed);
+    expect(store.reanchors).toHaveLength(1);
+  });
+
+  it('a reconciliation that reports no outcome is an error, after the re-anchor committed', async () => {
+    commands.execute.mockImplementation(async () => ({ found: {}, appended: {} }));
+    await expect(reanchor()).rejects.toThrow('reported no outcome');
+    expect(store.reanchors).toHaveLength(1);
   });
 
   it('stores exactly the state whose signature it verified', async () => {
@@ -238,6 +281,132 @@ describe('ReanchorLedgerHandler (audit fixes OPS-1)', () => {
       await expect(refusal(reanchor())).resolves.toBe('trusted-state-changed');
       expect(store.reanchors).toEqual([]);
       expect(commands.execute).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('RerunLedgerReconciliationHandler (--reconcile-only, review #2)', () => {
+  let ledger: InMemoryLedger;
+  let store: InMemoryLedgerStore;
+  let commands: { execute: ReturnType<typeof vi.fn> };
+
+  const rerun = (request: LedgerReanchorRequest = REQUEST, config: LedgerConfig = ENABLED) =>
+    asSystem(() =>
+      new RerunLedgerReconciliationHandler(
+        config,
+        ledger,
+        store.system,
+        commands as unknown as CommandBus,
+      ).execute(new RerunLedgerReconciliationCommand(request)),
+    );
+  const refusal = async (attempt: Promise<unknown>): Promise<string> => {
+    const error = await attempt.then(
+      () => expect.fail('the re-run went through'),
+      (failure: unknown) => failure,
+    );
+    expect(error).toBeInstanceOf(LedgerReanchorRefusedException);
+    return (error as LedgerReanchorRefusedException).refusal;
+  };
+  const stored = () => {
+    const state = store.trustedStates.get(DB);
+    return state === undefined ? undefined : { ...state, txHash: [...state.txHash] };
+  };
+
+  beforeAll(() => {
+    Logger.overrideLogger(false);
+  });
+
+  beforeEach(async () => {
+    vi.useFakeTimers({ now: NOW, toFake: ['Date'] });
+    store = new InMemoryLedgerStore();
+    commands = { execute: vi.fn(async (command: unknown) => finishRun(command, SUCCEEDED)) };
+    // The ledger was re-anchored: the stored state is the restored server's current one.
+    ledger = new InMemoryLedger();
+    for (const n of [1, 2]) await ledger.post(draft(n));
+    const current = await ledger.currentState();
+    await asSystem(() => store.system.advanceTrustedState(DB, null, current, LOST_FROM));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('reconciles [lost-from, now) again, writing no audit row and leaving the trusted state', async () => {
+    const before = stored();
+
+    const result = await rerun();
+
+    expect(result).toEqual({ database: DB, reconciliation: SUCCEEDED });
+    expect(store.reanchors).toEqual([]);
+    expect(stored()).toEqual(before);
+    expect(commands.execute).toHaveBeenCalledTimes(1);
+    const [[command]] = commands.execute.mock.calls as [[ReconcileLedgerCommand]];
+    expect(command).toBeInstanceOf(ReconcileLedgerCommand);
+    expect(command.window).toEqual({ from: LOST_FROM, to: NOW });
+  });
+
+  it('carries a failed run: its status and failed checks', async () => {
+    const failed = { ...SUCCEEDED, status: 'failed', failedChecks: ['R4'] };
+    commands.execute.mockImplementation(async (command: unknown) => finishRun(command, failed));
+    await expect(rerun()).resolves.toEqual({ database: DB, reconciliation: failed });
+  });
+
+  it('reconciles when no trusted state is stored yet (R5 stores the first one)', async () => {
+    store.trustedStates.clear();
+    await expect(rerun()).resolves.toMatchObject({ database: DB });
+    expect(commands.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('runs only inside SystemContext', async () => {
+    const handler = new RerunLedgerReconciliationHandler(
+      ENABLED,
+      ledger,
+      store.system,
+      commands as unknown as CommandBus,
+    );
+    await expect(
+      handler.execute(new RerunLedgerReconciliationCommand(REQUEST)),
+    ).rejects.toMatchObject({ code: 'SYSTEM_CONTEXT_REQUIRED' });
+    expect(commands.execute).not.toHaveBeenCalled();
+  });
+
+  describe('refuses, reconciling nothing', () => {
+    afterEach(() => {
+      expect(commands.execute).not.toHaveBeenCalled();
+      expect(store.reanchors).toEqual([]);
+    });
+
+    it('ledger-disabled', async () => {
+      await expect(refusal(rerun(REQUEST, { ...ENABLED, enabled: false }))).resolves.toBe(
+        'ledger-disabled',
+      );
+    });
+
+    it('lost-from-not-past', async () => {
+      await expect(refusal(rerun({ ...REQUEST, lostFrom: NOW }))).resolves.toBe(
+        'lost-from-not-past',
+      );
+    });
+
+    it('other-database', async () => {
+      await expect(refusal(rerun({ ...REQUEST, database: 'ledger' }))).resolves.toBe(
+        'other-database',
+      );
+    });
+
+    it('reanchor-needed: the current state does not extend the trusted one (a restore not re-anchored)', async () => {
+      // A restore to before entry 2: the stored state is ahead of the server's history.
+      const restored = new InMemoryLedger();
+      await restored.post(draft(1));
+      ledger = restored;
+      const before = stored();
+      await expect(refusal(rerun())).resolves.toBe('reanchor-needed');
+      expect(stored()).toEqual(before);
+    });
+
+    it('a transport error of the extension proof propagates', async () => {
+      vi.spyOn(ledger, 'advanceTrustedState').mockRejectedValue(new Error('immudb unavailable'));
+      await expect(rerun()).rejects.toThrow('immudb unavailable');
     });
   });
 });

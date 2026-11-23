@@ -701,13 +701,18 @@ reports its ref as `tenant_mismatch` (no entry under the ref's tenant). Once the
 (once: the restored immudb lacks it; the Postgres ref keeps its old tx id), the next run verifies the ref against the
 new entry and appends nothing (the findings already stored stay: they are append-only). The run's window ends at
 now, without the cron's 15-minute grace, so a payment paid in the last minutes whose posting is still in flight can
-add a `payment_without_entry`. The CLI exits 0 once the re-anchor commits, even when that run ends `failed` (a
-Stripe error in R4, or the hourly cron winning R5's compare-and-set: the CLI does not take the reconcile lock); a
-second CLI run is then refused (`nothing-lost`), so check the run's row in `ledger_reconciliation_runs`, or the next
-hourly run. R5 honours only the latest re-anchor: a ref lost in an earlier restore and not posted again can fall out of
+add a `payment_without_entry`. The CLI dispatches inside the hourly cron's `RECONCILE_LEDGER_LOCK` (`RedisModule` in
+its context, Redis from the app's env): it tries the lock every 5 s for up to 10 minutes, then exits 4 having written
+nothing, so its run never loses R5's compare-and-set to the cron's. The result carries the run's id, status and failed
+checks (`ReconcileLedgerCommand`'s `onFinished`; the command still resolves with the counts alone): a run that ends
+`failed` (a Stripe error in R4, say) exits 3 after the re-anchor committed, its failed checks logged. A second
+re-anchor is then refused (`nothing-lost`), so `--reconcile-only` (same flags) dispatches
+`RerunLedgerReconciliationCommand`: the same run over `[lost-from, now)` under the same lock, no audit row, refused
+(`reanchor-needed`) while the current state does not extend the trusted one. Exit codes: 0 done, 1 refused or failed
+(Redis unreachable too), 2 usage, 3 the run failed, 4 the lock stayed busy. R5 honours only the latest re-anchor: a ref lost in an earlier restore and not posted again can fall out of
 the lost-history rule after a second re-anchor and be skipped, so heal the previous run's `verification_failed` refs
-before re-anchoring again. Without arguments the CLI prints its usage and exits 2, reading no config (the image build's load
-check). Tests: `reanchor-ledger.handler.spec.ts`, `ledger-reanchor-cli.spec.ts`, the R5 spec and
+before re-anchoring again. Without arguments the CLI prints its usage and exits 2, reading no config and opening no connection (the image build's
+load check). Tests: `reanchor-ledger.handler.spec.ts`, `ledger-reanchor-cli.spec.ts`, the R5 spec and
 `test/ledger-reanchor.int-spec.ts` (Citus + two immudb servers with one `--signingKey`: the restore fails R5; the CLI
 without a key and with another key writes nothing; with the right key one audit row and the state; B re-posted once;
 a healthy ledger refused).
