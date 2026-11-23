@@ -98,11 +98,12 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
  *   both from the token it authenticated with. It never changes room: another tenant needs a new
  *   connection with that tenant's token. No message handler joins or leaves a room.
  * - Session lifetime: tokens are short-lived but sockets are not. The socket is sent an
- *   `exception` (TOKEN_EXPIRED) and disconnected when its access token expires, and every
- *   `WS_REVOCATION_SWEEP_INTERVAL_MS` (`authConfig`) this replica's `RevocationSweeper`
- *   (`socket.io`) disconnects its sockets whose token was revoked (logout or tenant switch →
- *   denylist; `exception` TOKEN_REVOKED). Clients reconnect with a fresh token, so pushes stop
- *   reaching a session that HTTP would already reject.
+ *   `exception` (TOKEN_EXPIRED) and disconnected when its access token expires. This replica's
+ *   `RevocationSweeper` (`socket.io`) disconnects its sockets whose token was revoked (logout or
+ *   tenant switch → denylist; `exception` TOKEN_REVOKED): at once on the denylist's revocation
+ *   announcement, else at the next sweep (every `WS_REVOCATION_SWEEP_INTERVAL_MS`, `authConfig`).
+ *   Clients reconnect with a fresh token, so pushes stop reaching a session that HTTP would
+ *   already reject.
  * - Messages: the global guards run per message (`JwtAuthGuard` checks `socket.data.user` is
  *   still unexpired, then RBAC), then `WsSessionGuard` (denylist, like HTTP) and per-message
  *   throttling (`WsThrottlerGuard`, Redis-backed).
@@ -246,11 +247,13 @@ export class NotificationsGateway
   }
 
   /**
-   * Disconnects this replica's sockets whose access token is on the denylist (logout, tenant
-   * switch); each replica sweeps its own sockets, so it works the same in every topology. Runs
-   * every `WS_REVOCATION_SWEEP_INTERVAL_MS`; delegates to the shared `RevocationSweeper` (one
-   * EXISTS per distinct token; a denylist error keeps every socket until the next sweep while
-   * `WsSessionGuard` still refuses its messages). Resolves the number of sockets disconnected.
+   * One sweep: disconnects this replica's sockets whose access token is on the denylist (logout,
+   * tenant switch); each replica sweeps its own sockets, so it works the same in every topology.
+   * The sweeper runs it every `WS_REVOCATION_SWEEP_INTERVAL_MS` as the fallback for a revocation
+   * announcement this replica missed (the announcement closes the sockets at once). Delegates to
+   * the shared `RevocationSweeper` (one EXISTS per distinct token; a denylist error keeps every
+   * socket until the next sweep while `WsSessionGuard` still refuses its messages). Resolves the
+   * number of sockets disconnected.
    */
   disconnectRevokedSockets(): Promise<number> {
     return this.sweeper.sweep();

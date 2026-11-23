@@ -359,7 +359,7 @@ Notes:
   files, the named methods of the pinned lists, eleven at B3; `pre-auth` ones run before a principal exists, `system` ones inside
   `SystemContext.run(reason, …)`). Co-member and cross-tenant reads are system reads that filter in their own SQL: the
   application, not the database, verifies them ([SECURITY.md](SECURITY.md#row-level-security)).
-- **WebSocket session lifetime.** A socket is disconnected (after an `exception` with `TOKEN_EXPIRED`) when its access token expires, and every `WS_REVOCATION_SWEEP_INTERVAL_MS` (30 s by default) each replica closes the sockets, on both transports, whose token was revoked (`TOKEN_REVOKED`; graphql-ws closes with 4401). A socket joins exactly one tenant room, fixed at the handshake from its token, so a tenant switch (which denylists the old token) needs a new connection.
+- **WebSocket session lifetime.** A socket is disconnected (after an `exception` with `TOKEN_EXPIRED`) when its access token expires. When its token is revoked, each replica closes its sockets that use it, on both transports (`TOKEN_REVOKED`; graphql-ws closes with 4401): at once, because the denylist announces each revoked `jti` on `{REDIS_KEY_PREFIX}:auth:revoked`, and otherwise at the next sweep (every `WS_REVOCATION_SWEEP_INTERVAL_MS`, 30 s by default) for a replica that missed the announcement. A socket joins exactly one tenant room, fixed at the handshake from its token, so a tenant switch (which denylists the old token) needs a new connection.
 
 ```mermaid
 sequenceDiagram

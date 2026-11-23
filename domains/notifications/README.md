@@ -173,15 +173,17 @@ envelope without a tenant is dead-lettered and pushes nothing. Per-message guard
 gets `TOKEN_REVOKED`, like HTTP) and `WsThrottlerGuard` (`markRead`: 30 per 10 s).
 
 Sockets do not outlive their session. When the access token expires the socket receives an
-`exception` event (`TOKEN_EXPIRED`) and is disconnected (like graphql-ws's 4401 close). Every
-`WS_REVOCATION_SWEEP_INTERVAL_MS` (auth config, default 30 s) each replica's `RevocationSweeper`
-(`@platform/auth`, named `socket.io`) disconnects its sockets whose token was put on the denylist,
-after an `exception` event (`TOKEN_REVOKED`). Logout and `POST /v1/auth/switch-tenant` both
-denylist the access token, so a switched-away token's sockets close within one interval; the
-user's other sessions keep theirs (there is no room-wide close). This works in every topology
-(logout may run in identity-service) at the cost of one auto-pipelined EXISTS per distinct token
-per sweep; if the denylist cannot answer, sockets are kept until the next sweep. A server-side
-disconnect is not retried by socket.io clients: reconnect with a fresh token.
+`exception` event (`TOKEN_EXPIRED`) and is disconnected (like graphql-ws's 4401 close). When a
+token is put on the denylist, each replica's `RevocationSweeper` (`@platform/auth`, named
+`socket.io`) disconnects its sockets that use it, after an `exception` event (`TOKEN_REVOKED`): at
+once, since the denylist announces each revoked `jti` over Redis pub/sub, and otherwise at the next
+sweep (every `WS_REVOCATION_SWEEP_INTERVAL_MS`, auth config, default 30 s) for a replica that
+missed the announcement. Logout and `POST /v1/auth/switch-tenant` both denylist the access token,
+so a switched-away token's sockets close at once; the user's other sessions keep theirs (there is
+no room-wide close). This works in every topology (logout may run in identity-service); each sweep
+costs one auto-pipelined EXISTS per distinct token, and if the denylist cannot answer, sockets are
+kept until the next sweep. A server-side disconnect is not retried by socket.io clients: reconnect
+with a fresh token.
 
 ### gRPC (`notifications.v1.NotificationsService`, service side)
 

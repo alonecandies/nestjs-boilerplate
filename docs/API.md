@@ -724,10 +724,11 @@ another tenant, connect again with that tenant's token.
 **Session lifetime.** Tokens are short-lived but sockets are not:
 
 - When the token expires, the server emits `exception` (`TOKEN_EXPIRED`) and disconnects the socket.
-- Every `WS_REVOCATION_SWEEP_INTERVAL_MS` (default 30 s), each replica disconnects its sockets whose token was revoked
-  (`exception`, `TOKEN_REVOKED`). Logout and `POST /v1/auth/switch-tenant` both revoke the access token they were
-  called with, so after a tenant switch the old token's sockets close within one interval. Sockets opened with another
-  token of the same user stay connected.
+- When the token is revoked, each replica disconnects its sockets that use it (`exception`, `TOKEN_REVOKED`) as soon
+  as the revocation is announced over Redis. Logout and `POST /v1/auth/switch-tenant` both revoke the access token
+  they were called with, so after a tenant switch the old token's sockets close at once. A replica that missed the
+  announcement closes them at its next sweep, every `WS_REVOCATION_SWEEP_INTERVAL_MS` (default 30 s). Sockets opened
+  with another token of the same user stay connected.
 
 The client must reconnect with a fresh token. Socket.IO does not reconnect on its own after a server-side disconnect.
 

@@ -53,9 +53,10 @@ export interface AppGraphqlModuleOptions {
  * It needs `AppConfigModule` and `AuthModule.forRootAsync()` (global `TokenService` /
  * `AccessTokenDenylist`) in the app. Resolvers are ordinary providers in any module.
  *
- * graphql-ws sockets are tracked by their token's `jti`; one `RevocationSweeper` (`graphql-ws`,
- * every `WS_REVOCATION_SWEEP_INTERVAL_MS`) closes those whose token was revoked (4401
- * `Access token revoked`). It starts on application bootstrap and stops on shutdown.
+ * graphql-ws sockets are tracked by their token's `jti`; one `RevocationSweeper` (`graphql-ws`)
+ * closes those whose token was revoked (4401 `Access token revoked`): at once on the denylist's
+ * revocation announcement, else at its next sweep (every `WS_REVOCATION_SWEEP_INTERVAL_MS`). It
+ * starts on application bootstrap and stops on shutdown.
  */
 @Module({})
 export class AppGraphqlModule {

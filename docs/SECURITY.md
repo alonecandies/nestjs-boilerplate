@@ -95,6 +95,10 @@ one with key id `kN`; the refresh secret uses the `JWT_REFRESH_*` variables the 
    tolerance (refresh: `JWT_REFRESH_TTL_SEC`) has passed since phase 2 finished, unset the verify
    list. A secret stops verifying on a replica as soon as it leaves that replica's list.
 
+Start a rotation only once every verifier runs a version with key sets. An older replica ignores
+the verify lists and checks only its one secret, so during phase 2 it refuses the tokens of
+whichever secret it does not hold.
+
 Introduce a key id only this way, through the verify lists first. Setting `JWT_ACCESS_KEY_ID` on
 a secret that already signs, while some verifiers do not list that id yet, makes those verifiers
 refuse the new tokens. Replicas from before key sets ignore `kid` and verify with their one secret,
@@ -435,9 +439,10 @@ bytes on their own calls (ai-service's chat tools), never signing. `GRPC_PRINCIP
 - `warn`: the assertion is verified and counted in `grpc_principal_assertions_total{outcome}` (`valid`, `missing`,
   `expired`, `invalid`, `mismatch`); every other outcome is logged; the plain metadata still decides.
 - `enforce`: the principal comes from a valid assertion's claims only. A call with `x-user-id` and no valid assertion
-  (missing, expired, signed by another key, or plain headers that differ from the claims) fails `UNAUTHENTICATED`
-  `INVALID_PRINCIPAL` before any handler runs; a call without `x-user-id` stays anonymous (register, login, the Stripe
-  webhook). A mesh peer without the edge's private key cannot assert a user, a tenant, roles or the staff flag.
+  (missing, expired, signed by another key, or plain headers that differ from the claims), or with an assertion and
+  no `x-user-id`, fails `UNAUTHENTICATED` `INVALID_PRINCIPAL` before any handler runs; a call with neither
+  `x-user-id` nor an assertion stays anonymous (register, login, the Stripe webhook). A mesh peer without the edge's
+  private key cannot assert a user, a tenant, roles or the staff flag.
 
 No Kafka consumer makes a gRPC call. One added later must run in a process that holds the signing key, or call
 anonymously. The compose microservices stack and its topology smoke (`check-topology.ts`) run in `enforce`.
@@ -1027,4 +1032,5 @@ At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) pu
   publishing) closes the socket at the next sweep, up to `WS_REVOCATION_SWEEP_INTERVAL_MS` later
   (30 s by default, at most 300 s). Until then Socket.IO messages and new graphql-ws operations are
   still refused (their guards re-check the denylist), but a running subscription keeps receiving
-  pushes.
+  pushes. A socket whose token is revoked during its own handshake (after the denylist check,
+  before the sweeper tracks it) misses the announcement the same way and closes at the next sweep.

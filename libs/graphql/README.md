@@ -77,10 +77,11 @@ SDL there; unset = in memory). `app`: `NODE_ENV` (production hides internals and
   anonymous sockets get no expiry timer and the throttler skips ws. To serve public subscriptions,
   opt out with `AppGraphqlModule.forRootAsync({ requireSubscriptionAuth: false })`: anonymous
   sockets are then accepted and each subscription's guards decide. Sockets are closed with 4401
-  `Access token expired` when the token's `exp` passes, and with 4401 `Access token revoked` by the
-  revocation sweep (every `WS_REVOCATION_SWEEP_INTERVAL_MS`, default 30 s) once their token is on
-  the denylist (logout, tenant switch). The sweep starts on application bootstrap and stops on
-  shutdown. `onConnect` also charges the per-IP handshake budget before the token is checked and takes a slot of the
+  `Access token expired` when the token's `exp` passes, and with 4401 `Access token revoked` once
+  their token is on the denylist (logout, tenant switch): at once when the revocation is announced
+  over Redis, or at the next sweep (every `WS_REVOCATION_SWEEP_INTERVAL_MS`, default 30 s) if this
+  replica missed the announcement. The sweeper starts listening and sweeping on application
+  bootstrap and stops on shutdown. `onConnect` also charges the per-IP handshake budget before the token is checked and takes a slot of the
   per-user socket cap after it (`THROTTLE_WS_*`); a refusal closes with 4403 like an authentication failure, and
   `onClose` frees the slot. The global `JwtAuthGuard` still runs per subscribe, reading the Bearer
   header synthesized from the connection params.
