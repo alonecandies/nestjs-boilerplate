@@ -2,6 +2,7 @@ import { JwtService } from '@nestjs/jwt';
 import { generateId } from '@platform/common';
 import { type AuthConfig, authConfig } from '@platform/config';
 import { JWT_ALGORITHM } from '../auth.constants.js';
+import { jwtSigningKey } from '../tokens/jwt-key-set.js';
 import type { AccessTokenSubject, IssuedAccessToken } from '../types/auth-user.js';
 import { TEST_TENANT_ID } from './test-tenant.js';
 
@@ -10,7 +11,8 @@ export interface SignTestAccessTokenOptions {
    * Signing settings. Default: the `auth` namespace of `process.env`, i.e. what `AuthModule`
    * verifies with in a test app (the development secret unless the environment overrides it).
    */
-  readonly config?: Pick<AuthConfig, 'accessSecret' | 'accessTtlSec' | 'issuer' | 'audience'>;
+  readonly config?: Pick<AuthConfig, 'accessSecret' | 'accessTtlSec' | 'issuer' | 'audience'> &
+    Partial<Pick<AuthConfig, 'accessKeyId'>>;
 }
 
 /** A test subject: the tenant defaults to `TEST_TENANT_ID`. */
@@ -19,10 +21,10 @@ export type TestAccessTokenSubject = Omit<AccessTokenSubject, 'tenantId'> & { te
 const jwt = new JwtService();
 
 /**
- * TEST-ONLY: signs an access token exactly like the production issuer (HS256, `iss`/`aud`,
- * `typ: 'access'`, uuidv7 `jti`, `iat`/`exp` from one clock read), so platform and domain specs
- * can authenticate requests without depending on the domain that issues tokens. Production code
- * never imports `@platform/auth/testing`.
+ * TEST-ONLY: signs an access token exactly like the production issuer (HS256, `kid` when the
+ * config has `accessKeyId`, `iss`/`aud`, `typ: 'access'`, uuidv7 `jti`, `iat`/`exp` from one
+ * clock read), so platform and domain specs can authenticate requests without depending on the
+ * domain that issues tokens. Production code never imports `@platform/auth/testing`.
  */
 export async function signTestAccessToken(
   claims: TestAccessTokenSubject,
@@ -45,7 +47,7 @@ export async function signTestAccessToken(
     exp,
   };
   const token = await jwt.signAsync(payload, {
-    secret: config.accessSecret,
+    ...jwtSigningKey({ signingSecret: config.accessSecret, signingKeyId: config.accessKeyId }),
     algorithm: JWT_ALGORITHM,
     issuer: config.issuer,
     audience: config.audience,

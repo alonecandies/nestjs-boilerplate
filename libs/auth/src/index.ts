@@ -48,6 +48,12 @@ export { RbacVocabularyCheck } from './rbac/rbac-vocabulary.check.js';
 export { JwtStrategy } from './strategies/jwt.strategy.js';
 export { AccessTokenDenylist } from './tokens/access-token-denylist.service.js';
 export {
+  accessKeySet,
+  type JwtKeySet,
+  jwtSigningKey,
+  resolveVerificationSecret,
+} from './tokens/jwt-key-set.js';
+export {
   type JwtVerificationSettings,
   TokenService,
   toUnauthenticated,

@@ -3,7 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, APP_INTERCEPTOR, NestFactory } from '@nestjs/core';
 import { JwtService } from '@nestjs/jwt';
 import { generateId } from '@platform/common';
-import { redisConfig } from '@platform/config';
+import { authConfig, redisConfig } from '@platform/config';
 import { REDIS_CLIENT, RedisKeyService } from '@platform/redis';
 import { InMemoryRedis } from '@platform/redis/testing';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -54,11 +54,12 @@ describe('AuthModule (DI wiring)', () => {
     await denylist.deny(issued.jti, issued.exp);
     await expect(denylist.isDenied(issued.jti)).resolves.toBe(true);
 
-    // This package only verifies: its JwtService has no signing defaults (algorithm, iss, aud), so
-    // a stray `sign()` through it can never mint an access token that TokenService accepts.
+    // This package only verifies: its JwtService has no signing defaults (key, algorithm, iss,
+    // aud), so a stray `sign()` through it can never mint an access token that TokenService
+    // accepts. Without a key it does not sign at all; with the access secret it lacks iss/aud.
     const jwt = app.get(JwtService);
     const now = Math.floor(Date.now() / 1_000);
-    const stray = await jwt.signAsync({
+    const claims = {
       sub: 'u-1',
       email: 'a@b.c',
       tid: TEST_TENANT_ID,
@@ -67,7 +68,9 @@ describe('AuthModule (DI wiring)', () => {
       jti: generateId(),
       iat: now,
       exp: now + 60,
-    });
+    };
+    await expect(jwt.signAsync(claims)).rejects.toThrow('secretOrPrivateKey must have a value');
+    const stray = await jwt.signAsync(claims, { secret: authConfig.parse().accessSecret });
     expect(jwt.decode(stray)).not.toHaveProperty('iss');
     expect(jwt.decode(stray)).not.toHaveProperty('aud');
     await expect(tokens.verifyAccessToken(stray)).rejects.toMatchObject({

@@ -385,7 +385,7 @@ or session) is generated before `BEGIN`. Both JWTs are signed before `BEGIN` too
 
 ## Configuration
 
-Identity's own namespaces, loaded by `IdentityCoreModule` (`infrastructure/security/`): `password` (`ARGON2_MEMORY_COST`, `ARGON2_TIME_COST`, `ARGON2_PARALLELISM`) and `refreshToken` (`JWT_REFRESH_SECRET`, `JWT_REFRESH_TTL_SEC`; it reads `JWT_ACCESS_SECRET` only for the production must-differ check). Also its own, for the gateway: `identityGrpcClient` (`IDENTITY_GRPC_URL`, `infrastructure/adapters/grpc/`), read by `IdentityApiModule.forRemote()`. From `@platform/config`: `auth` (`JWT_ACCESS_*`, `JWT_ISSUER`/`JWT_AUDIENCE`, `AUTH_DENYLIST_ENABLED`),
+Identity's own namespaces, loaded by `IdentityCoreModule` (`infrastructure/security/`): `password` (`ARGON2_MEMORY_COST`, `ARGON2_TIME_COST`, `ARGON2_PARALLELISM`) and `refreshToken` (`JWT_REFRESH_SECRET`, `JWT_REFRESH_KEY_ID`, `JWT_REFRESH_VERIFY_SECRETS`, `JWT_REFRESH_TTL_SEC`; it reads `JWT_ACCESS_SECRET` and `JWT_ACCESS_VERIFY_SECRETS` only for the production must-differ check). Also its own, for the gateway: `identityGrpcClient` (`IDENTITY_GRPC_URL`, `infrastructure/adapters/grpc/`), read by `IdentityApiModule.forRemote()`. From `@platform/config`: `auth` (`JWT_ACCESS_*`, `JWT_ISSUER`/`JWT_AUDIENCE`, `AUTH_DENYLIST_ENABLED`),
 `grpc` (`GRPC_DEADLINE_MS`) for the gateway, `throttle`, its own
 `identityRateLimit` (`IDENTITY_CREDENTIALS_*`, `IDENTITY_LOCKOUT_*` for `identity.credentials`), `redis` (key prefix of
 locks, denylist and cache).

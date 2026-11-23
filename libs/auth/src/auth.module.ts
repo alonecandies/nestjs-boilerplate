@@ -24,15 +24,15 @@ export interface AuthModuleSetup {
 }
 
 /**
- * Verification defaults of the `JwtService` this module registers. This package only verifies, so
- * there are no signing defaults (no `signOptions`): a stray `sign()` through this `JwtService`
- * carries no `iss`/`aud` and never passes `TokenService`. Issuers (the bounded context that owns
- * sessions, with its own `JwtModule`, and `signTestAccessToken`) pass their secret, algorithm,
- * `iss` and `aud` per call.
+ * Verification defaults of the `JwtService` this module registers. No default secret: every
+ * verification passes the key `resolveVerificationSecret` picks from the key set (SEC-1), so
+ * nothing verifies around it. This package only verifies, so there are no signing defaults either
+ * (no `signOptions`): a stray `sign()` through this `JwtService` has no key. Issuers (the bounded
+ * context that owns sessions, with its own `JwtModule`, and `signTestAccessToken`) pass their
+ * secret, key id, algorithm, `iss` and `aud` per call.
  */
 export function createJwtModuleOptions(config: AuthConfig): JwtModuleOptions {
   return {
-    secret: config.accessSecret,
     verifyOptions: {
       algorithms: [JWT_ALGORITHM],
       issuer: config.issuer,

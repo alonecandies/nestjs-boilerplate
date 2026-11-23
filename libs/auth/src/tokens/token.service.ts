@@ -5,6 +5,7 @@ import { type AuthConfig, authConfig } from '@platform/config';
 import { AuthErrorCode, JWT_ALGORITHM, JWT_CLOCK_TOLERANCE_SEC } from '../auth.constants.js';
 import { RbacRegistry } from '../rbac/rbac.registry.js';
 import type { AccessTokenClaims, AuthUser } from '../types/auth-user.js';
+import { accessKeySet, type JwtKeySet, resolveVerificationSecret } from './jwt-key-set.js';
 import { parseAccessTokenClaims, toAuthUser } from './token-claims.js';
 
 /** Verification settings every verifier (TokenService, JwtStrategy, WS handshake) must share. */
@@ -36,18 +37,23 @@ export function toUnauthenticated(error: unknown): UnauthenticatedException {
 }
 
 /**
- * Verifies access tokens locally, with no RPC per request: HS256 signature, `iss`/`aud`, `exp`
- * (5 s tolerance), then the `typ` claim. This package does not issue tokens: the bounded context
- * that owns sessions signs them with the shared `JWT_ACCESS_SECRET`, and tests sign them with
- * `signTestAccessToken` (`@platform/auth/testing`).
+ * Verifies access tokens locally, with no RPC per request: HS256 signature with the key the `kid`
+ * header selects (`resolveVerificationSecret`: the shared `JWT_ACCESS_SECRET` or a
+ * `JWT_ACCESS_VERIFY_SECRETS` key), `iss`/`aud`, `exp` (5 s tolerance), then the `typ` claim. This
+ * package does not issue tokens: the bounded context that owns sessions signs them, and tests sign
+ * them with `signTestAccessToken` (`@platform/auth/testing`).
  */
 @Injectable()
 export class TokenService {
+  private readonly keys: JwtKeySet;
+
   constructor(
     private readonly jwt: JwtService,
     @Inject(authConfig.KEY) private readonly config: AuthConfig,
     private readonly rbac: RbacRegistry,
-  ) {}
+  ) {
+    this.keys = accessKeySet(config);
+  }
 
   /** Throws `UnauthenticatedException` (`TOKEN_EXPIRED` / `INVALID_TOKEN`). Denylist NOT checked. */
   async verifyAccessToken(token: string): Promise<AccessTokenClaims> {
@@ -74,7 +80,7 @@ export class TokenService {
     }
     try {
       return await this.jwt.verifyAsync<Record<string, unknown>>(token, {
-        secret: this.config.accessSecret,
+        secret: resolveVerificationSecret(token, this.keys),
         ...this.verificationSettings,
       });
     } catch (error) {

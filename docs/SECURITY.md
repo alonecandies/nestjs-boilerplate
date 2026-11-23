@@ -48,9 +48,61 @@ Implemented in [`libs/auth`](../libs/auth/README.md) (access-token verification,
   token or the other way round.
 - Access tokens are verified **at every edge process** with no RPC: signature, `iss`/`aud`/`exp`, `typ`,
   then the Redis denylist (`JwtStrategy`, `libs/auth/src/strategies/jwt.strategy.ts`). The gateway
-  and identity-service must share `JWT_ACCESS_SECRET`.
+  and identity-service must share `JWT_ACCESS_SECRET` (or hold each other's as a verify-only key
+  while it rotates, below).
 - Roles live in the access token, so a role change takes effect at the next refresh (≤ access TTL).
   Unknown roles in a token are dropped, not rejected (rolling deploys).
+
+### Rotating the JWT secrets
+
+Each token type verifies against a key set, so either secret rotates with no 401 window and no
+forced logout:
+
+- The signing key: `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET`, with an optional key id
+  `JWT_ACCESS_KEY_ID` / `JWT_REFRESH_KEY_ID` written as the `kid` header of new tokens.
+- Verify-only keys: `JWT_ACCESS_VERIFY_SECRETS` / `JWT_REFRESH_VERIFY_SECRETS`, comma-separated
+  `kid:secret` pairs (split at the first `:`, so a secret may hold `:` but not `,`).
+
+Every verifier picks the key the same way (`resolveVerificationSecret`,
+`libs/auth/src/tokens/jwt-key-set.ts`: `JwtStrategy`, `TokenService`, identity's refresh
+verification; `TokenIssuer` and `signTestAccessToken` sign with the same key set):
+
+- a `kid` the set knows (the signing key id or a verify-only one) selects that key only;
+- any other `kid` is 401 `INVALID_TOKEN`, even when a listed key would match the signature, and
+  also on a verifier with no key ids at all: an unknown key id never falls back to trying keys;
+- a token without `kid` tries the signing key, then each verify-only key, in order.
+
+The signature, `iss`, `aud` and `exp` are then checked as before. Every listed secret passes the
+signing secret's guards: at least 32 characters in every environment; in production no
+development default (even with `ALLOW_KNOWN_LOCAL_SECRETS=true`), no publicly known value, and no
+refresh secret, signing or verify-only, equal to any access secret. Key ids are unique within a
+set. Configuration errors name an entry by its position, never by its secret or key id, and no
+key id is logged or returned in a 401.
+
+Rotate each secret in three phases, each one rolled out to every process that verifies that token
+before the next starts (access: every process that loads the `auth` namespace; refresh: the
+monolith and identity-service). Below, `O` is the current secret with key id `kO` and `N` the new
+one with key id `kN`; the refresh secret uses the `JWT_REFRESH_*` variables the same way.
+
+1. **Add the new secret as verify-only everywhere:** `JWT_ACCESS_VERIFY_SECRETS=kN:N`. Signers
+   still sign with `O`.
+2. **Switch the signer and keep the old secret as verify-only:** `JWT_ACCESS_SECRET=N`,
+   `JWT_ACCESS_KEY_ID=kN`, `JWT_ACCESS_VERIFY_SECRETS=kO:O`. Use `O`'s current key id as `kO`, or
+   any new one if `O` had none (its tokens carry no `kid` and try every key). While this rolls
+   out, replicas still in phase 1 accept `N`'s tokens by `kN`, and replicas in phase 2 accept
+   `O`'s.
+3. **Drop the old secret after the longest TTL:** once `JWT_ACCESS_TTL_SEC` plus the 5 s clock
+   tolerance (refresh: `JWT_REFRESH_TTL_SEC`) has passed since phase 2 finished, unset the verify
+   list. A secret stops verifying on a replica as soon as it leaves that replica's list.
+
+Introduce a key id only this way, through the verify lists first. Setting `JWT_ACCESS_KEY_ID` on
+a secret that already signs, while some verifiers do not list that id yet, makes those verifiers
+refuse the new tokens. Replicas from before key sets ignore `kid` and verify with their one secret,
+so they accept a `kid`-bearing token signed with it.
+
+A leaked secret is still dropped at once: sign with a fresh secret and list nothing for the leaked
+one. That has the 401 window the phases avoid (access tokens until clients refresh; for the
+refresh secret, every session is logged out). A key set does not change that.
 
 ### Refresh rotation and reuse detection
 
@@ -797,14 +849,14 @@ notifications domain and the real-Citus journeys of B3.
 
 | Guard                                                                                                                                                                                                                                                                                     | Source                                                                                                              |
 | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` must not be the dev defaults and must differ                                                                                                                                                                                                   | `libs/config/src/namespaces/auth.config.ts`, `domains/identity/src/infrastructure/security/refresh-token.config.ts` |
+| `JWT_ACCESS_SECRET` / `JWT_REFRESH_SECRET` must not be the dev defaults and must differ; the same for each `JWT_*_VERIFY_SECRETS` entry (the access and refresh sets are disjoint)                                                                                                        | `libs/config/src/namespaces/auth.config.ts`, `domains/identity/src/infrastructure/security/refresh-token.config.ts` |
 | publicly known values (compose fallbacks, placeholders, RustFS keys) rejected for the JWT secrets, Stripe key and webhook secret, and S3 keys, unless `ALLOW_KNOWN_LOCAL_SECRETS=true`                                                                                                    | `auth`, `refreshToken`, `stripe`, `storage` namespaces                                                              |
 | TLS to every dependency unless its explicit opt-out is set: Postgres `sslmode` (`DATABASE_ALLOW_INSECURE`), `rediss://` + password (`REDIS_ALLOW_INSECURE`), `KAFKA_SSL` (`KAFKA_ALLOW_INSECURE`), Cassandra TLS (`CASSANDRA_ALLOW_INSECURE`), mandatory STARTTLS (`SMTP_ALLOW_INSECURE`) | `database`, `redis`, `kafka`, `cassandra`, `mail` namespaces                                                        |
 | no local endpoints or senders: S3/GCS emulators (`STORAGE_ALLOW_INSECURE`), the Mailpit default and an example.com sender (`SMTP_ALLOW_INSECURE`), localhost Checkout redirects (`STRIPE_ALLOW_LOCAL_REDIRECTS`), Cassandra SimpleStrategy (`CASSANDRA_ALLOW_SIMPLE_STRATEGY`)            | `storage`, `mail`, `stripe`, `cassandra` namespaces                                                                 |
 | `CORS_ORIGINS` must not contain `*`                                                                                                                                                                                                                                                       | `app.config.ts`                                                                                                     |
 | `STRIPE_SECRET_KEY` / `STRIPE_WEBHOOK_SECRET` must not be the dev placeholders (forged webhooks)                                                                                                                                                                                          | `stripe.config.ts`                                                                                                  |
 | with `AI_ENABLED=true`: `OPENROUTER_API_KEY` required (all environments), not a known placeholder, and `OPENROUTER_BASE_URL` https on a non-loopback host                                                                                                                                 | `ai.config.ts`                                                                                                      |
-| JWT secrets ≥ 32 characters (all environments)                                                                                                                                                                                                                                            | `auth.config.ts`, `refresh-token.config.ts`                                                                         |
+| JWT secrets ≥ 32 characters (all environments, verify-only entries included)                                                                                                                                                                                                              | `auth.config.ts`, `refresh-token.config.ts`                                                                         |
 | `TRUST_PROXY=true` rejected                                                                                                                                                                                                                                                               | `app.config.ts`                                                                                                     |
 | plaintext gRPC refused unless `GRPC_ALLOW_INSECURE=true`; TLS cert/key/CA must be consistent                                                                                                                                                                                              | `grpc.config.ts`                                                                                                    |
 | `DOCS_ENABLED`, `GRAPHQL_SANDBOX`, `GRAPHQL_INTROSPECTION`, `GRPC_REFLECTION` default to off                                                                                                                                                                                              | `app`, `graphql`, `grpc` namespaces                                                                                 |

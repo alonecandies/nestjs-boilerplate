@@ -25,6 +25,8 @@ describe('refreshToken config namespace', () => {
     expect(refreshTokenConfig.parse({})).toEqual({
       refreshSecret: DEV_JWT_REFRESH_SECRET,
       refreshTtlSec: 604_800,
+      refreshKeyId: undefined,
+      refreshVerifyKeys: [],
     } satisfies RefreshTokenConfig);
     expect(refreshTokenConfig.KEY).toBe('CONFIGURATION(refreshToken)');
     expectTypeOf<RefreshTokenConfig['refreshSecret']>().toEqualTypeOf<string>();
@@ -111,5 +113,81 @@ describe('refreshToken production guards match the platform ones', () => {
       }),
     );
     expect(error.message).toContain('must differ');
+  });
+});
+
+describe('refreshToken key rotation settings (SEC-1)', () => {
+  const ACCESS = 'a-strong-access-secret-of-at-least-32-chars-0001';
+  const OLD = 'a-strong-refresh-secret-of-at-least-32-chars-0001';
+  const NEW = 'a-strong-refresh-secret-of-at-least-32-chars-0002';
+  const PROD = {
+    NODE_ENV: 'production',
+    JWT_ACCESS_SECRET: ACCESS,
+    JWT_REFRESH_SECRET: NEW,
+  } as const;
+
+  it('reads the refresh key id and the verify-only kid:secret list', () => {
+    expect(
+      refreshTokenConfig.parse({
+        ...PROD,
+        JWT_REFRESH_KEY_ID: 'r2',
+        JWT_REFRESH_VERIFY_SECRETS: `r1:${OLD}`,
+      }),
+    ).toEqual({
+      refreshSecret: NEW,
+      refreshTtlSec: 604_800,
+      refreshKeyId: 'r2',
+      refreshVerifyKeys: [{ kid: 'r1', secret: OLD }],
+    } satisfies RefreshTokenConfig);
+  });
+
+  it('refuses a short verify-only secret and a malformed entry in every environment', () => {
+    const short = errorOf(() =>
+      refreshTokenConfig.parse({ JWT_REFRESH_VERIFY_SECRETS: 'r1:short' }),
+    );
+    expect(short.message).toContain('→ at JWT_REFRESH_VERIFY_SECRETS');
+    const malformed = errorOf(() => refreshTokenConfig.parse({ JWT_REFRESH_VERIFY_SECRETS: OLD }));
+    expect(malformed.message).toContain('entry 1');
+    expect(malformed.message).not.toContain(OLD);
+  });
+
+  it.each([DEV_JWT_REFRESH_SECRET, DEV_JWT_ACCESS_SECRET])(
+    'refuses a development default inside the verify list in production, even with the opt-out',
+    (devDefault) => {
+      const error = errorOf(() =>
+        refreshTokenConfig.parse({
+          ...PROD,
+          ALLOW_KNOWN_LOCAL_SECRETS: 'true',
+          JWT_REFRESH_VERIFY_SECRETS: `r1:${devDefault}`,
+        }),
+      );
+      expect(error.message).toContain('→ at JWT_REFRESH_VERIFY_SECRETS');
+      expect(error.message).not.toContain(devDefault);
+    },
+  );
+
+  it('refuses a publicly known value inside the verify list in production', () => {
+    const known = 'compose-local-refresh-secret-not-for-production-0002';
+    const error = errorOf(() =>
+      refreshTokenConfig.parse({ ...PROD, JWT_REFRESH_VERIFY_SECRETS: `r1:${known}` }),
+    );
+    expect(error.message).toContain('is a publicly known value');
+    expect(error.message).not.toContain(known);
+  });
+
+  it('keeps the access and refresh sets disjoint in production, verify-only keys included', () => {
+    const cases = [
+      // A verify-only refresh secret equal to the access signing secret.
+      { JWT_REFRESH_VERIFY_SECRETS: `r1:${ACCESS}` },
+      // The refresh signing secret equal to a verify-only access secret.
+      { JWT_ACCESS_VERIFY_SECRETS: `a1:${NEW}` },
+      // A verify-only secret in both lists.
+      { JWT_ACCESS_VERIFY_SECRETS: `a1:${OLD}`, JWT_REFRESH_VERIFY_SECRETS: `r1:${OLD}` },
+    ];
+    for (const extra of cases) {
+      const error = errorOf(() => refreshTokenConfig.parse({ ...PROD, ...extra }));
+      expect(error.message, JSON.stringify(Object.keys(extra))).toContain('must differ');
+      for (const secret of [ACCESS, OLD, NEW]) expect(error.message).not.toContain(secret);
+    }
   });
 });
