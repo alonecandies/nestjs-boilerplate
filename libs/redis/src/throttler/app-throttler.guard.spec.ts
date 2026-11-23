@@ -118,7 +118,7 @@ async function createGuard(options: Partial<Exclude<ThrottlerModuleOptions, unkn
   ]);
   Reflect.set(guard, 'policies', registry);
   await guard.onModuleInit();
-  return { guard, increment };
+  return { guard, increment, registry };
 }
 
 const http = (handler: () => void, req: Record<string, unknown> = { headers: {}, ip: '1.2.3.4' }) =>
@@ -224,6 +224,21 @@ describe('AppThrottlerGuard', () => {
       [rateLimitKey('tenant', 'chat.send', 'tenant:t-1'), 30_000, 5, 30_000, 'tenant'],
       [rateLimitKey('route', 'chat.send', 'user:u-3'), 60_000, 2, 60_000, 'route'],
       [rateLimitKey('tenant', 'chat.send', 'tenant:t-2'), 30_000, 5, 30_000, 'tenant'],
+    ]);
+  });
+
+  it('resolves a route policy once for its member and tenant buckets', async () => {
+    const { guard, increment, registry } = await createGuard({
+      throttlers: [{ name: THROTTLER.ROUTE, ttl: 60_000, limit: 100 }],
+    });
+    const require = vi.spyOn(registry, 'require');
+    await guard.canActivate(
+      http(Controller.prototype.send, { headers: {}, user: { id: 'u-1', tenantId: 't-1' } }),
+    );
+    expect(require).toHaveBeenCalledTimes(1);
+    expect(increment.mock.calls.map(([key]) => key)).toEqual([
+      rateLimitKey('route', 'chat.send', 'user:u-1'),
+      rateLimitKey('tenant', 'chat.send', 'tenant:t-1'),
     ]);
   });
 
