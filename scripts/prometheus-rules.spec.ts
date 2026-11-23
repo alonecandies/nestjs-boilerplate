@@ -276,7 +276,7 @@ describe('docs/SECURITY.md: System-method lists after this plan', () => {
   const quoted = (source: string): string[] =>
     [...source.matchAll(/defineSystemMethod\(\s*'([A-Za-z.]+)'/g)].map((match) => match[1] ?? '');
 
-  it('names every outbox method of the code and the eleven ledger methods of billing', () => {
+  it('names every outbox method of the code and the twelve ledger methods of billing', () => {
     expect(from).toBeGreaterThan(-1);
     const outbox = quoted(read('libs/outbox/src/outbox-system-methods.ts'));
     expect(outbox).toHaveLength(4);
@@ -284,15 +284,15 @@ describe('docs/SECURITY.md: System-method lists after this plan', () => {
     const billing = quoted(
       read('domains/billing/src/infrastructure/persistence/billing.system-methods.ts'),
     );
-    expect(billing.filter((name) => name.startsWith('ledger'))).toHaveLength(11);
+    expect(billing.filter((name) => name.startsWith('ledger'))).toHaveLength(12);
   });
 
-  it('states the pinned totals: identity 13, billing 16', () => {
+  it('states the pinned totals: identity 13, billing 18', () => {
     const count = (domain: string, shared: number): number =>
       quoted(read(`domains/${domain}/src/infrastructure/persistence/${domain}.system-methods.ts`))
         .length + shared;
     expect(count('identity', 3)).toBe(13);
-    expect(count('billing', 4)).toBe(17);
-    expect(text).toContain('Identity pins 13 methods and billing 17');
+    expect(count('billing', 4)).toBe(18);
+    expect(text).toContain('Identity pins 13 methods and billing 18');
   });
 });
