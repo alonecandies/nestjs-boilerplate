@@ -62,7 +62,11 @@ jobs:
           key: tools-${{ runner.os }}-${{ hashFiles('bun.lock') }}-${{ github.sha }}
           restore-keys: tools-${{ runner.os }}-${{ hashFiles('bun.lock') }}-
 
+      # Type-aware eslint and tsc over the whole monorepo outgrow Node's default heap (~4 GB on this
+      # runner): eslint died at ~4.06 GB (exit 134) on every master push since 2026-11-20.
       - name: Check (biome ci, eslint, prettier, tsc)
+        env:
+          NODE_OPTIONS: --max-old-space-size=8192
         run: bun run check
 
       - name: Unit + e2e tests
