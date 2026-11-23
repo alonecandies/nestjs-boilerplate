@@ -106,6 +106,15 @@ These variables come from the `redis`, `cache` and `throttle` namespaces of `@pl
 
 `SERVICE_NAME` from app config is used as the connection name when it is available.
 
+## Server requirements
+
+The Redis behind `REDIS_URL` must run with `maxmemory-policy noeviction` and AOF (`appendonly yes`): the access-token
+denylist, BullMQ queues, locks and throttle counters share it, and any eviction drops one of them silently. At boot
+`RedisModule` reads `maxmemory_policy` from `INFO memory` (`checkRedisEvictionPolicy`): a policy other than
+`noeviction` logs one error line (`event: redis_eviction_policy_unsafe`) and sets the gauge
+`redis_eviction_policy_safe` to `0` (`1` when safe; absent when `INFO` fails or hides the value). The check never fails
+the boot. Sizing and the alert: [SECURITY.md](../../docs/SECURITY.md#production-checklist).
+
 ## Key layout
 
 - `{prefix}:auth:denylist:{jti}`

@@ -62,3 +62,69 @@ describe('config-ref-pre-ledger-wiring: nothing says the ledger or the outbox is
     expect(read('.env.example')).not.toContain('not loaded by any app yet');
   });
 });
+
+describe('OPS-5: the production Redis requirements are documented', () => {
+  it('the production checklist states noeviction, AOF and the memory alert', () => {
+    const checklist = flat(read('docs/SECURITY.md'));
+    expect(checklist).toMatch(/- \[ \] Redis[^[]*`maxmemory-policy noeviction`[^[]*AOF[^[]*alert/);
+  });
+
+  it.each([
+    'docs/CONFIGURATION.md',
+    'docs/OBSERVABILITY.md',
+    'docs/DOCKER.md',
+    'libs/redis/README.md',
+  ])('%s names the eviction gauge or policy', (file) => {
+    expect(read(file)).toMatch(/noeviction|redis_eviction_policy_safe/);
+  });
+
+  it('the redis namespace explains why the policy matters', () => {
+    const redis = flat(
+      section(
+        read('docs/CONFIGURATION.md'),
+        '### `redis` — cache, locks, throttling, BullMQ, socket.io adapter, GraphQL pub/sub',
+      ),
+    );
+    expect(redis).toContain('noeviction');
+    expect(redis).toContain('appendonly');
+    expect(redis).toContain('denylist');
+    expect(redis).toContain('redis_eviction_policy_safe');
+  });
+});
+
+describe('obs-app-metrics-sentence-stale: the metrics catalogue matches the code', () => {
+  it('no doc says there are no app-level Redis or database metrics', () => {
+    for (const file of ['docs/OBSERVABILITY.md', 'README.md', 'docs/ARCHITECTURE.md']) {
+      expect(flat(read(file)), file).not.toContain('no app-level Redis or database metrics');
+    }
+  });
+
+  it('the catalogue has a row for every db_* series the code registers', () => {
+    const catalogue = read('docs/OBSERVABILITY.md');
+    const sources = [
+      'libs/database/src/drizzle/pool-usage.ts',
+      'libs/database/src/system/system-database.ts',
+      'libs/database/src/rls/rls-elevation.service.ts',
+    ];
+    const registered = sources.flatMap((file) =>
+      [...read(file).matchAll(/= '(db_[a-z_]+)'/g)].map((match) => match[1] as string),
+    );
+    expect(registered.length).toBeGreaterThanOrEqual(5);
+    for (const name of registered) expect(catalogue, name).toContain(`| \`${name}\``);
+  });
+
+  it('the db_pool rows mention the system pool and its size variable', () => {
+    const rows = flat(
+      read('docs/OBSERVABILITY.md')
+        .split('\n')
+        .filter((line) => line.startsWith('| `db_pool_'))
+        .join('\n'),
+    );
+    expect(rows).toContain('pool="system"');
+    expect(rows).toContain('DATABASE_SYSTEM_POOL_MAX');
+  });
+
+  it('the catalogue has a row for redis_eviction_policy_safe', () => {
+    expect(read('docs/OBSERVABILITY.md')).toContain('| `redis_eviction_policy_safe`');
+  });
+});

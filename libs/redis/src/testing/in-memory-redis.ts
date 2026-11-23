@@ -21,6 +21,11 @@ export interface InMemoryRedisOptions {
   /** Clock used for expirations (inject a fake to test TTL logic deterministically). */
   now?: () => number;
   connectionName?: string;
+  /**
+   * The `maxmemory_policy` that `INFO memory` reports. Default `noeviction`; `null` leaves the line
+   * out, as a managed Redis that hides its configuration does.
+   */
+  maxmemoryPolicy?: string | null;
 }
 
 /**
@@ -84,12 +89,15 @@ export class InMemoryRedis extends EventEmitter {
   /** Every command name received, in order (handy for "was Redis called?" assertions). */
   readonly calls: string[] = [];
   private readonly now: () => number;
+  private readonly maxmemoryPolicy: string | null;
   private state: SharedState = { store: new Map(), clients: new Set() };
   private readonly channels = new Set<string>();
 
   constructor(options: InMemoryRedisOptions = {}) {
     super();
     this.now = options.now ?? Date.now;
+    this.maxmemoryPolicy =
+      options.maxmemoryPolicy === undefined ? 'noeviction' : options.maxmemoryPolicy;
     this.options =
       options.connectionName === undefined ? {} : { connectionName: options.connectionName };
     this.state.clients.add(this);
@@ -104,6 +112,7 @@ export class InMemoryRedis extends EventEmitter {
     const connectionName = overrides.connectionName ?? this.options.connectionName;
     const copy = new InMemoryRedis({
       now: this.now,
+      maxmemoryPolicy: this.maxmemoryPolicy,
       ...(connectionName === undefined ? {} : { connectionName }),
     });
     copy.state.clients.delete(copy);
@@ -275,6 +284,18 @@ export class InMemoryRedis extends EventEmitter {
 
   async ping(): Promise<'PONG'> {
     return this.run('ping', () => 'PONG' as const);
+  }
+
+  /** One fixed `# Memory` report whatever the section: `used_memory` and `maxmemory_policy`. */
+  async info(_section?: string): Promise<string> {
+    return this.run('info', () =>
+      [
+        '# Memory',
+        'used_memory:1048576',
+        ...(this.maxmemoryPolicy === null ? [] : [`maxmemory_policy:${this.maxmemoryPolicy}`]),
+        '',
+      ].join('\r\n'),
+    );
   }
 
   async publish(channel: string, message: string): Promise<number> {

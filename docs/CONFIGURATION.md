@@ -295,6 +295,24 @@ only with `LEDGER_ENABLED=true` (no other app reads `IMMUDB_*`)
 | `REDIS_CONNECT_TIMEOUT_MS`      | `10000`                  |                                                                                                                                                                                                                                  |
 | `REDIS_ALLOW_INSECURE`          | `false`                  | Production requires a lowercase `rediss://` URL with a password or ACL user and no `tls=` parameter (checked the way ioredis reads it) unless this is `true` (the network layer secures Redis). The local compose stack sets it. |
 
+**Server requirements (production).** One Redis behind `REDIS_URL` holds the cache, the access-token denylist
+(`{REDIS_KEY_PREFIX}:auth:denylist:*`), BullMQ queues, distributed locks, throttle counters and the socket.io and
+GraphQL pub/sub. Configure it as the compose file does:
+
+- `maxmemory-policy noeviction`. Any other policy can drop a denylist entry (a logged-out token works again), a queued
+  job, a lock or a throttle counter once memory runs out; with `noeviction` a full Redis refuses writes instead, which
+  the apps report as errors you can alert on. A cache-only instance for another purpose may use `allkeys-lfu`; this one
+  may not.
+- AOF: `appendonly yes` with `appendfsync everysec` (and a periodic `save`), so a restart loses at most about a second
+  of writes rather than every queue and denylist entry.
+- Size: set `maxmemory` to the working set plus at least 50% headroom, and alert when `used_memory / maxmemory`
+  stays above 80% (the `redis-exporter` metrics `redis_memory_used_bytes` and `redis_memory_max_bytes`).
+
+At boot `@platform/redis` reads `maxmemory_policy` from `INFO memory`. A policy other than `noeviction` logs one error
+line (`event: redis_eviction_policy_unsafe`, with the `policy` found) and sets the gauge `redis_eviction_policy_safe`
+to `0` (`1` when safe). The gauge is absent when the server hides the value or `INFO` fails. The check never stops a
+boot.
+
 ### `kafka` — integration events (kafkajs)
 
 [`kafka.config.ts`](../libs/config/src/namespaces/kafka.config.ts) · every app (the gateway only

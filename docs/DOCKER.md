@@ -569,7 +569,7 @@ Memory limits are caps (sum > 4 GB on purpose); measured RSS once idle:
 | cassandra                                    | 1.5 GB                   | 1.05 GB                  | `MAX_HEAP_SIZE=512M` (`CASSANDRA_HEAP`), `MaxDirectMemorySize=256M` |
 | kafka                                        | 768 MB                   | 300–420 MB               | `-Xmx384m`; CLI tools (healthcheck/init) run with a 96–128 MB heap  |
 | postgres                                     | 512 MB                   | 40 MB                    | `shared_buffers=128MB`, `jit=off`, `pg_stat_statements`             |
-| rustfs / redis / mailpit / gcs               | 256 / 256 / 128 / 128 MB | 55–90 / 15 / 17 / 12 MB  | Redis `maxmemory 192mb noeviction` (BullMQ)                         |
+| rustfs / redis / mailpit / gcs               | 256 / 256 / 128 / 128 MB | 55–90 / 15 / 17 / 12 MB  | Redis `maxmemory 192mb noeviction` (BullMQ), AOF on                 |
 | monolith                                     | 768 MB                   | 230 MB                   | heap cap 512 MB                                                     |
 | gateway · identity · notifications · billing | 512 · 448 · 448 · 448 MB | 180 · 130 · 160 · 120 MB | heap caps 384/320 MB                                                |
 | jaeger · prometheus · grafana · exporters    | 512 · 384 · 256 · 64 MB  | —                        | `observability`; Jaeger keeps traces in memory                      |
@@ -629,7 +629,10 @@ least 8 GiB.
 1. **PG18 volume path**: mount `/var/lib/postgresql` (PGDATA is `/var/lib/postgresql/18/docker`). The old
    `/var/lib/postgresql/data` silently lands in an anonymous volume.
 2. `pg_isready` over the unix socket reports ready during initdb; the healthcheck uses `-h 127.0.0.1`.
-3. `redis-cli ping` exits 0 on error replies: the healthcheck greps `PONG`. **BullMQ needs `noeviction`.**
+3. `redis-cli ping` exits 0 on error replies: the healthcheck greps `PONG`. **BullMQ needs `noeviction`**, and so do the
+   token denylist, locks and throttle counters that share the instance: the apps log an error at boot and set
+   `redis_eviction_policy_safe` to `0` when it is anything else. Production Redis needs `noeviction` and AOF too
+   ([SECURITY.md](SECURITY.md#production-checklist), [CONFIGURATION.md](CONFIGURATION.md#redis--cache-locks-throttling-bullmq-socketio-adapter-graphql-pubsub)).
 4. Cassandra 5 = G1: set `MAX_HEAP_SIZE` only (`HEAP_NEWSIZE` is CMS-only). The DC name (`CASSANDRA_DC`) must equal
    the apps' `CASSANDRA_LOCAL_DC` or the driver ignores the node. cassandra-driver 4.10 speaks protocol v4.
 5. Single-node Kafka needs RF=1 on **every** internal topic (else "group coordinator not available"). The CLI inherits

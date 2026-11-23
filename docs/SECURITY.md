@@ -869,6 +869,12 @@ At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) pu
       password or ACL user, `KAFKA_SSL` + SASL, `CASSANDRA_SSL` with `CASSANDRA_TLS_CA_PATH` and
       `CASSANDRA_REPLICATION_DATACENTERS`, SMTP with STARTTLS (`SMTP_REQUIRE_TLS`); S3/GCS credentials
       scoped to the bucket (`GCS_KEY_FILE` must be a `service_account` key, or use workload identity).
+- [ ] Redis (the one behind `REDIS_URL`) runs with `maxmemory-policy noeviction`, AOF on (`appendonly yes`,
+      `appendfsync everysec`) and memory sized for the working set with at least 50% headroom, plus an alert when
+      `used_memory / maxmemory` stays above 80% and when `redis_eviction_policy_safe` is `0`. The token denylist,
+      BullMQ queues, locks and throttle counters share it: an evicting policy silently un-revokes logged-out tokens,
+      loses jobs and frees locks, and a restart without AOF forgets all of them
+      ([CONFIGURATION.md](CONFIGURATION.md#redis--cache-locks-throttling-bullmq-socketio-adapter-graphql-pubsub)).
 - [ ] immudb runs with `--signingKey` (private key in the secret store, never the compose development key), apps pin the
       public key, `LEDGER_VERIFY=true` ([immudb state signing key](#immudb-state-signing-key)).
 - [ ] Database roles created from the production SQL in [Database roles](#database-roles), with
