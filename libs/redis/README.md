@@ -98,7 +98,7 @@ These variables come from the `redis`, `cache` and `throttle` namespaces of `@pl
 - `CACHE_L1_MAX_ITEMS`: default 5000.
 - `THROTTLE_TTL_MS` and `THROTTLE_LIMIT`: default 60000 and 300.
 - `THROTTLE_IP_TTL_MS` and `THROTTLE_IP_LIMIT`: default 60000 and 600.
-- `THROTTLE_REDIS_TIMEOUT_MS`: default 250.
+- `THROTTLE_REDIS_TIMEOUT_MS`: default 250. Also bounds `ConnectionCaps` slot commands: an acquire that times out fails open, a release that times out logs a throttled warning.
 - `THROTTLE_TENANT_TTL_MS` and `THROTTLE_TENANT_LIMIT`: default 60000 and 3000.
 - `THROTTLE_GRAPHQL_TTL_MS` and `THROTTLE_GRAPHQL_COST_LIMIT`: default 60000 and 20000.
 - `THROTTLE_WS_HANDSHAKE_LIMIT` and `THROTTLE_WS_HANDSHAKE_TTL_MS`: default 30 and 60000.

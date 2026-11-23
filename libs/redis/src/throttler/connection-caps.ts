@@ -1,7 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { generateId } from '@platform/common';
+import { generateId, withTimeout } from '@platform/common';
 import { type ThrottleConfig, throttleConfig } from '@platform/config';
 import type { Redis } from 'ioredis';
+import { throttle } from 'lodash-es';
 import { hashTag } from '../keys/key.util.js';
 import { RedisKeyService } from '../keys/redis-key.service.js';
 import { REDIS_CLIENT } from '../redis.constants.js';
@@ -29,10 +30,22 @@ export type SocketSlot =
  */
 const TOKEN_EXPIRY_GRACE_MS = 60_000;
 
+/** At most one `connection caps bypassed` warning per this interval, like the throttler storage. */
+const WARN_INTERVAL_MS = 10_000;
+
 /** Socket.IO and graphql-ws connection caps (spec §11). Both fail open when Redis is unusable. */
 @Injectable()
 export class ConnectionCaps {
   private readonly logger = new Logger(ConnectionCaps.name);
+  private readonly warn = throttle(
+    (error: unknown): void => {
+      this.logger.warn(
+        `connection caps bypassed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    },
+    WARN_INTERVAL_MS,
+    { trailing: false },
+  );
 
   constructor(
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
@@ -74,19 +87,22 @@ export class ConnectionCaps {
    * - Each slot lives until its deadline, max(now + `THROTTLE_WS_SOCKET_TTL_MS`, token expiry +
    *   60 s), unless released first. A slot that is never released (crashed replica, lost
    *   release) frees itself then, and a live socket never outlives its slot.
-   * - Fails open (admitted) when Redis is unusable. The slot may still have been counted (the
-   *   reply was lost), so the caller releases every admitted slot all the same.
+   * - Fails open (admitted) when Redis is unusable, or gives no reply within
+   *   `THROTTLE_REDIS_TIMEOUT_MS`. The slot may still have been counted (the reply was lost), so
+   *   the caller releases every admitted slot all the same.
    */
   async acquireSocket(userId: string, tokenExpSec: number): Promise<SocketSlot> {
     const id = generateId();
     if (this.redis.status !== 'ready') return { admitted: true, id };
     try {
-      const admitted = await this.redis.appConnSlot(
-        this.slotKey(userId),
-        id,
-        this.limits.wsSocketsPerUser,
-        this.limits.wsSocketTtlMs,
-        Math.floor(tokenExpSec * 1_000) + TOKEN_EXPIRY_GRACE_MS,
+      const admitted = await this.bounded(
+        this.redis.appConnSlot(
+          this.slotKey(userId),
+          id,
+          this.limits.wsSocketsPerUser,
+          this.limits.wsSocketTtlMs,
+          Math.floor(tokenExpSec * 1_000) + TOKEN_EXPIRY_GRACE_MS,
+        ),
       );
       return admitted === 1 ? { admitted: true, id } : { admitted: false };
     } catch (error) {
@@ -98,11 +114,12 @@ export class ConnectionCaps {
   /**
    * Frees the slot `acquireSocket` admitted with `slotId`. Idempotent: a resent, late or
    * duplicate release removes only that slot, and a slot that was never counted frees nothing. A
-   * release that fails leaves the slot until its deadline.
+   * release that fails or gets no reply within `THROTTLE_REDIS_TIMEOUT_MS` (never retried) leaves
+   * the slot until its deadline, and logs a throttled warning.
    */
   async releaseSocket(userId: string, slotId: string): Promise<void> {
     try {
-      await this.redis.zrem(this.slotKey(userId), slotId);
+      await this.bounded(this.redis.zrem(this.slotKey(userId), slotId));
     } catch (error) {
       this.warn(error);
     }
@@ -113,9 +130,12 @@ export class ConnectionCaps {
     return this.keys.key('wsslot', hashTag(userId));
   }
 
-  private warn(error: unknown): void {
-    this.logger.warn(
-      `connection caps bypassed: ${error instanceof Error ? error.message : String(error)}`,
-    );
+  /**
+   * Bounds a slot command by `THROTTLE_REDIS_TIMEOUT_MS`: the client has no command timeout, and a
+   * connection that reports `ready` but never answers would hold the handshake open.
+   */
+  private bounded<T>(command: Promise<T>): Promise<T> {
+    const ms = this.limits.redisTimeoutMs;
+    return withTimeout(command, ms, `no reply within ${ms} ms`);
   }
 }

@@ -1,6 +1,7 @@
+import { Logger } from '@nestjs/common';
 import { redisConfig, throttleConfig } from '@platform/config';
 import type { Redis } from 'ioredis';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { hashTag } from '../keys/key.util.js';
 import { RedisKeyService } from '../keys/redis-key.service.js';
 import { InMemoryRedis } from '../testing/in-memory-redis.js';
@@ -149,6 +150,58 @@ describe('ConnectionCaps', () => {
       throw new Error('timeout');
     });
     expect(await caps.acquireSocket('u-1', tokenExp())).toEqual(ADMITTED);
+  });
+
+  describe('on a Redis that is ready but never answers (RL-5)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('acquire and release settle within THROTTLE_REDIS_TIMEOUT_MS on a stalled Redis', async () => {
+      vi.useFakeTimers();
+      const { redis, caps } = setup({
+        THROTTLE_REDIS_TIMEOUT_MS: '50',
+        THROTTLE_WS_SOCKETS_PER_USER: '1',
+      });
+      const never = (): Promise<never> => new Promise(() => undefined);
+      Reflect.set(redis, CONN_COUNT_COMMAND, never);
+      Reflect.set(redis, 'zrem', never);
+      expect(redis.status).toBe('ready');
+
+      let acquired: SocketSlot | undefined;
+      let released = false;
+      void caps.acquireSocket('u-1', tokenExp()).then((slot) => {
+        acquired = slot;
+      });
+      void caps.releaseSocket('u-1', 'some-slot').then(() => {
+        released = true;
+      });
+
+      await vi.advanceTimersByTimeAsync(49);
+      expect(acquired).toBeUndefined();
+      expect(released).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(1);
+      // The acquire fails open, with an id the caller releases at close.
+      expect(acquired).toEqual(ADMITTED);
+      expect(released).toBe(true);
+    });
+
+    it('logs one warning per interval for a burst of timed-out releases', async () => {
+      vi.useFakeTimers();
+      const { redis, caps } = setup({ THROTTLE_REDIS_TIMEOUT_MS: '50' });
+      Reflect.set(redis, 'zrem', () => new Promise(() => undefined));
+      const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      try {
+        const releases = [1, 2, 3].map((n) => caps.releaseSocket('u-1', `slot-${n}`));
+        await vi.advanceTimersByTimeAsync(50);
+        await Promise.all(releases);
+        expect(warn).toHaveBeenCalledTimes(1);
+        expect(String(warn.mock.calls[0]?.[0])).toContain('connection caps bypassed');
+      } finally {
+        warn.mockRestore();
+      }
+    });
   });
 });
 
