@@ -117,7 +117,10 @@ delta, then stores the reply and yields `done`.
 - **SSE** (`POST …/messages/stream`): events `delta` `{ text }` in order, then exactly one `done`
   `{ message, replayed, usage }` (`message` is REST `AiMessage`; `usage` `{ inputTokens,
 outputTokens, costUsd }`, `null` on a key replay) or one `error` (an RFC 9457 problem document,
-  e.g. 502 `AI_UPSTREAM_ERROR`, 504 `AI_TIMEOUT`). The controller takes the reply over from Fastify
+  e.g. 502 `AI_UPSTREAM_ERROR`, 504 `AI_TIMEOUT`; its `type` uses the app's `problemTypeBaseUrl`
+  like a REST problem, read once at start-up with `ModuleRef.get(EXCEPTIONS_FILTER_OPTIONS,
+{ strict: false })` because a feature module cannot inject the root module's option token). The
+  controller takes the reply over from Fastify
   (`@Res()` + `hijack()`), keeps the headers already set (request id, `RateLimit*`, CORS) and adds
   `Cache-Control: no-cache, no-transform` and `X-Accel-Buffering: no`.
 - **Cancellation.** The response's `close` before it finished (`abortOnDisconnect`; the request's

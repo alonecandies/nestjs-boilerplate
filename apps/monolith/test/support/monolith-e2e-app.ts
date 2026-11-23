@@ -47,6 +47,7 @@ import { AiModelProvider } from '@platform/ai';
 import { MockAiModelProvider, mockTextModel } from '@platform/ai/testing';
 import { buildFastifyOptions, configureHttpApp, setupApiDocs } from '@platform/bootstrap';
 import { CASSANDRA_CLIENT } from '@platform/cassandra';
+import { EXCEPTIONS_FILTER_OPTIONS } from '@platform/common';
 import { appConfig } from '@platform/config';
 import { DRIZZLE, RlsElevation } from '@platform/database';
 import { GRAPHQL_PUB_SUB } from '@platform/graphql';
@@ -143,6 +144,12 @@ export interface MonolithE2eOptions {
    * OpenRouter; the routes still answer 503 unless the spec sets `AI_ENABLED=true`.
    */
   aiModel?: ConstructorParameters<typeof MockAiModelProvider>[0];
+  /**
+   * `problemTypeBaseUrl` of the app's problem options, as `provideCommonEnhancers*` would derive it
+   * (the value of `EXCEPTIONS_FILTER_OPTIONS`; `exposeInternal` stays `!isProduction`). Default:
+   * the app's own, which sets none.
+   */
+  problemTypeBaseUrl?: string;
 }
 
 /** What the default mock model answers. */
@@ -244,6 +251,12 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
     .overrideProvider(AiModelProvider)
     .useValue(ai.models);
 
+  if (options.problemTypeBaseUrl !== undefined) {
+    builder.overrideProvider(EXCEPTIONS_FILTER_OPTIONS).useValue({
+      exposeInternal: !config.isProduction,
+      typeBaseUrl: options.problemTypeBaseUrl,
+    });
+  }
   if (options.immudb !== undefined) {
     builder.overrideProvider(ImmudbClient).useValue(options.immudb);
   }

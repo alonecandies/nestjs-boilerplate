@@ -6,6 +6,7 @@ import {
   HttpCode,
   HttpStatus,
   Logger,
+  type OnModuleInit,
   Param,
   Post,
   Query,
@@ -15,6 +16,7 @@ import {
   StandardSchemaSerializerInterceptor,
   UseInterceptors,
 } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import {
   ApiBadRequestResponse,
   ApiBearerAuth,
@@ -36,7 +38,13 @@ import {
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
-import { type RequestLike, Timeout, toProblemDetails } from '@platform/common';
+import {
+  EXCEPTIONS_FILTER_OPTIONS,
+  type ExceptionsFilterOptions,
+  type RequestLike,
+  Timeout,
+  toProblemDetails,
+} from '@platform/common';
 import { RateLimit } from '@platform/redis';
 import { AI_LIMITS } from '../../ai.constants.js';
 import { AiPermission } from '../../ai.permissions.js';
@@ -71,7 +79,8 @@ import { IdempotencyKey } from './idempotency-key.decorator.js';
  * `/v1/ai/conversations`: the caller's own conversations and the chat turn (plain or streamed as
  * Server-Sent Events). Depends only on `AiPort`; tenant and user always come from the verified
  * token. Every route needs `ai:chat` (members and above); sending a message (either way) also
- * charges the `ai.chat` policy.
+ * charges the `ai.chat` policy. The SSE `error` event builds its problem `type` from the app's
+ * `problemTypeBaseUrl`, like the REST problem of the same app.
  */
 @ApiTags('ai')
 @ApiBearerAuth()
@@ -80,10 +89,28 @@ import { IdempotencyKey } from './idempotency-key.decorator.js';
 @Controller({ path: 'ai/conversations', version: '1' })
 @RequirePermissions(AiPermission.Chat)
 @UseInterceptors(StandardSchemaSerializerInterceptor)
-export class AiController {
+export class AiController implements OnModuleInit {
   private readonly logger = new Logger(AiController.name);
+  /** The app's problem options; `undefined` when the app registers none (the default base URL). */
+  private typeBaseUrl: string | undefined;
 
-  constructor(private readonly ai: AiPort) {}
+  constructor(
+    private readonly ai: AiPort,
+    private readonly moduleRef: ModuleRef,
+  ) {}
+
+  onModuleInit(): void {
+    // `provideCommonEnhancers*` registers the options in the root module. A plain
+    // `@Optional() @Inject(EXCEPTIONS_FILTER_OPTIONS)` in this feature module would resolve to
+    // `undefined` and silently ignore them, so look the token up across modules instead.
+    try {
+      this.typeBaseUrl = this.moduleRef.get<ExceptionsFilterOptions>(EXCEPTIONS_FILTER_OPTIONS, {
+        strict: false,
+      }).typeBaseUrl;
+    } catch {
+      // No enhancers registered (a bare test module): keep the default base URL.
+    }
+  }
 
   @Post()
   @ApiOperation({ summary: 'Start a conversation' })
@@ -311,6 +338,7 @@ export class AiController {
       requestId: request.id,
       instance: query === -1 ? url : url.slice(0, query),
       exposeInternal: false,
+      typeBaseUrl: this.typeBaseUrl,
     });
     const line = `AI stream failed after the headers: status=${problem.status} code=${problem.code}`;
     if (problem.status >= 500) this.logger.warn(line);
