@@ -4,7 +4,10 @@ import { isNumber, isString } from 'lodash-es';
 import { CONN_COUNT_COMMAND } from '../throttler/conn-count.command.js';
 import { THROTTLE_COMMAND, type ThrottleReply } from '../throttler/throttle.command.js';
 
-type Entry = { value: string; expiresAt: number | undefined };
+/** A sorted set: member → score. */
+type SortedSet = Map<string, number>;
+type Entry = { value: string | SortedSet; expiresAt: number | undefined };
+type StringEntry = Entry & { value: string };
 type ScriptImplementation = (redis: InMemoryRedis, keys: string[], args: string[]) => unknown;
 
 interface SharedState {
@@ -48,30 +51,29 @@ function throttleScriptModel(redis: InMemoryRedis, keys: string[], args: string[
 }
 
 /** JS model of `CONN_COUNT_SCRIPT` (conn-count.command.ts), statement by statement. */
-function connCountModel(redis: InMemoryRedis, keys: string[], args: string[]): [number, number] {
+function connSlotModel(redis: InMemoryRedis, keys: string[], args: string[]): number {
   const [key = ''] = keys;
-  const [delta = 0, cap = 0, ttl = 0] = args.map(Number);
-  let n = Number(redis.getSync(key) ?? 0) + delta;
-  if (n < 0) n = 0;
-  redis.setSync(key, String(n));
-  redis.pexpireSync(key, ttl);
-  if (delta > 0 && n > cap) {
-    redis.setSync(key, String(n - delta));
-    redis.pexpireSync(key, ttl);
-    return [n - delta, 0];
-  }
-  return [n, 1];
+  const [slotId = '', cap = '0', ttl = '0', tokenDeadline = '0'] = args;
+  const now = redis.timeSync();
+  redis.zremrangebyscoreSync(key, -Infinity, now);
+  if (redis.zscoreSync(key, slotId) !== null) return 1;
+  if (redis.zcardSync(key) >= Number(cap)) return 0;
+  redis.zaddSync(key, Math.max(now + Number(ttl), Number(tokenDeadline)), slotId);
+  const [latest] = redis.zrangeWithScoresSync(key, -1, -1);
+  if (latest) redis.pexpireatSync(key, latest[1]);
+  return 1;
 }
 
 const EMULATED_SCRIPTS = new Map<string, ScriptImplementation>([
   [THROTTLE_COMMAND, throttleScriptModel],
-  [CONN_COUNT_COMMAND, connCountModel],
+  [CONN_COUNT_COMMAND, connSlotModel],
 ]);
 
 /**
  * Minimal in-memory stand-in for an ioredis client, for unit/e2e tests that must run without
- * Redis: strings with PX/EX expiry, counters, pub/sub between `duplicate()`d clients, and the Lua
- * commands this package defines (emulated in JS). Anything else is intentionally missing — call
+ * Redis: strings with PX/EX expiry, counters, the sorted-set commands of the connection-slot
+ * script, pub/sub between `duplicate()`d clients, and the Lua commands this package defines
+ * (emulated in JS). Anything else is intentionally missing — call
  * sites that need more should use a real Redis (`*.int-spec.ts`).
  *
  * `asRedis()` returns it typed as `Redis` for injection (`{ provide: REDIS_CLIENT, useValue }`).
@@ -125,7 +127,7 @@ export class InMemoryRedis extends EventEmitter {
 
   delSync(...keys: string[]): number {
     let removed = 0;
-    for (const key of keys) if (this.live(key) && this.state.store.delete(key)) removed++;
+    for (const key of keys) if (this.entry(key) && this.state.store.delete(key)) removed++;
     return removed;
   }
 
@@ -139,16 +141,70 @@ export class InMemoryRedis extends EventEmitter {
 
   /** Redis semantics: -2 missing, -1 no expiry, else remaining ms. */
   pttlSync(key: string): number {
-    const entry = this.live(key);
+    const entry = this.entry(key);
     if (!entry) return -2;
     return entry.expiresAt === undefined ? -1 : entry.expiresAt - this.now();
   }
 
   pexpireSync(key: string, ms: number): 0 | 1 {
-    const entry = this.live(key);
+    return this.pexpireatSync(key, this.now() + ms);
+  }
+
+  pexpireatSync(key: string, atMs: number): 0 | 1 {
+    const entry = this.entry(key);
     if (!entry) return 0;
-    entry.expiresAt = this.now() + ms;
+    entry.expiresAt = atMs;
     return 1;
+  }
+
+  /** The server clock in ms (Lua `TIME`): the injected `now`. */
+  timeSync(): number {
+    return this.now();
+  }
+
+  zaddSync(key: string, score: number, member: string): 0 | 1 {
+    const set = this.sortedSet(key, true);
+    const added = set.has(member) ? 0 : 1;
+    set.set(member, score);
+    return added;
+  }
+
+  zremSync(key: string, ...members: string[]): number {
+    const set = this.sortedSet(key);
+    if (!set) return 0;
+    const removed = members.filter((member) => set.delete(member)).length;
+    this.dropIfEmpty(key, set);
+    return removed;
+  }
+
+  zscoreSync(key: string, member: string): number | null {
+    return this.sortedSet(key)?.get(member) ?? null;
+  }
+
+  zcardSync(key: string): number {
+    return this.sortedSet(key)?.size ?? 0;
+  }
+
+  /** Inclusive bounds, like `ZREMRANGEBYSCORE key min max`. */
+  zremrangebyscoreSync(key: string, min: number, max: number): number {
+    const set = this.sortedSet(key);
+    if (!set) return 0;
+    let removed = 0;
+    for (const [member, score] of set) {
+      if (score >= min && score <= max && set.delete(member)) removed++;
+    }
+    this.dropIfEmpty(key, set);
+    return removed;
+  }
+
+  /** `ZRANGE key start stop WITHSCORES` (ascending by score, then member; negative indexes). */
+  zrangeWithScoresSync(key: string, start: number, stop: number): [string, number][] {
+    const sorted = [...(this.sortedSet(key) ?? new Map<string, number>())].sort(
+      ([a, x], [b, y]) => x - y || (a < b ? -1 : a > b ? 1 : 0),
+    );
+    const from = start < 0 ? Math.max(0, sorted.length + start) : start;
+    const to = stop < 0 ? sorted.length + stop : stop;
+    return sorted.slice(from, to + 1);
   }
 
   // ---- ioredis-compatible async API --------------------------------------------------------
@@ -175,7 +231,7 @@ export class InMemoryRedis extends EventEmitter {
           mode = token === 'NX' ? 'NX' : 'XX';
         }
       }
-      const exists = this.live(key) !== undefined;
+      const exists = this.entry(key) !== undefined;
       if ((mode === 'NX' && exists) || (mode === 'XX' && !exists)) return null;
       this.setSync(key, String(value), pxMs);
       return 'OK';
@@ -191,7 +247,7 @@ export class InMemoryRedis extends EventEmitter {
   }
 
   async exists(...keys: string[]): Promise<number> {
-    return this.run('exists', () => keys.filter((key) => this.live(key) !== undefined).length);
+    return this.run('exists', () => keys.filter((key) => this.entry(key) !== undefined).length);
   }
 
   async incr(key: string): Promise<number> {
@@ -211,6 +267,10 @@ export class InMemoryRedis extends EventEmitter {
 
   async pexpire(key: string, ms: number): Promise<number> {
     return this.run('pexpire', () => this.pexpireSync(key, ms));
+  }
+
+  async zrem(key: string, ...members: string[]): Promise<number> {
+    return this.run('zrem', () => this.zremSync(key, ...members));
   }
 
   async ping(): Promise<'PONG'> {
@@ -301,13 +361,40 @@ export class InMemoryRedis extends EventEmitter {
     }
   }
 
-  private live(key: string): Entry | undefined {
+  /** The key's entry of any type, or `undefined` when missing or expired. */
+  private entry(key: string): Entry | undefined {
     const entry = this.state.store.get(key);
     if (!entry) return undefined;
     if (isNumber(entry.expiresAt) && entry.expiresAt <= this.now()) {
       this.state.store.delete(key);
       return undefined;
     }
-    return isString(entry.value) ? entry : undefined;
+    return entry;
+  }
+
+  /** The key's entry when it holds a string. */
+  private live(key: string): StringEntry | undefined {
+    const entry = this.entry(key);
+    return entry && isString(entry.value) ? (entry as StringEntry) : undefined;
+  }
+
+  /** The key's sorted set; `create` adds an empty one (no expiry) when the key is missing. */
+  private sortedSet(key: string, create: true): SortedSet;
+  private sortedSet(key: string, create?: false): SortedSet | undefined;
+  private sortedSet(key: string, create = false): SortedSet | undefined {
+    const entry = this.entry(key);
+    if (entry && isString(entry.value)) {
+      throw new Error('WRONGTYPE Operation against a key holding the wrong kind of value');
+    }
+    if (entry) return entry.value as SortedSet;
+    if (!create) return undefined;
+    const set: SortedSet = new Map();
+    this.state.store.set(key, { value: set, expiresAt: undefined });
+    return set;
+  }
+
+  /** Redis deletes a sorted set when its last member goes. */
+  private dropIfEmpty(key: string, set: SortedSet): void {
+    if (set.size === 0) this.state.store.delete(key);
   }
 }

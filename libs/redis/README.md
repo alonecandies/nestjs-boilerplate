@@ -37,7 +37,7 @@ The ioredis 6 infrastructure every service shares:
 | `RateLimitPolicyRegistry`                                                                                                        | service             | `register`, `get`, `require`, `names`; unknown policy names fail at boot.                                                                                                                                                                                                                                                  |
 | `SkipThrottle`                                                                                                                   | re-export           | From `@nestjs/throttler`; prefer `SkipRateLimit`/`RateLimit`, which know every throttler name. `Throttle` is not re-exported: a `@Throttle()` override (also from a direct import) fails boot.                                                                                                                             |
 | `RateLimitCharger`                                                                                                               | service             | `charge(bucket, weight?)`: one weighted charge outside the guards (GraphQL cost, graphql-ws, handshakes); returns the record and the `RateLimitDecision`. `trackerFor(principal, ip)` builds `user:`/`ip:` trackers.                                                                                                       |
-| `ConnectionCaps`, `TOO_MANY_CONNECTIONS`                                                                                         | service             | `admitHandshake(ip)` (per-IP `ws-handshake` budget), `acquireSocket(userId)` → `SocketSlot` `{ admitted, held }` / `releaseSocket(userId)` (per-user concurrent sockets, Lua counter with a safety TTL; release only a `held` slot). Both fail open without Redis (admitted, not held).                                    |
+| `ConnectionCaps`, `TOO_MANY_CONNECTIONS`                                                                                         | service             | `admitHandshake(ip)` (per-IP `ws-handshake` budget), `acquireSocket(userId, tokenExp)` → `SocketSlot` `{ admitted, id }` / `releaseSocket(userId, id)` (per-user sockets: one Lua sorted-set slot each, kept until max(TTL, token expiry + 60 s); release every admitted slot by id). Both fail open without Redis.        |
 | `RedisThrottlerStorage`, `THROTTLE_SCRIPT`, `THROTTLE_COMMAND`                                                                   | storage             | One `EVALSHA` per request: fixed window plus a block key.                                                                                                                                                                                                                                                                  |
 | `AppQueueModule.forRootAsync({ prefix?, defaultJobOptions? })`, `createQueueOptions`, `DEFAULT_JOB_OPTIONS`                      | module              | BullMQ 6 root config: `maxRetriesPerRequest: null`, prefix `bull`, 5 attempts with exponential backoff, bounded retention.                                                                                                                                                                                                 |
 | `RedisIoAdapter`, `createRedisIoAdapter(app, opts?)`, `DEFAULT_IO_SERVER_OPTIONS`                                                | socket.io           | Fans broadcasts out through Redis pub/sub. Websocket-only transport by default.                                                                                                                                                                                                                                            |
@@ -98,7 +98,7 @@ These variables come from the `redis`, `cache` and `throttle` namespaces of `@pl
 - `CACHE_L1_MAX_ITEMS`: default 5000.
 - `THROTTLE_TTL_MS` and `THROTTLE_LIMIT`: default 60000 and 300.
 - `THROTTLE_IP_TTL_MS` and `THROTTLE_IP_LIMIT`: default 60000 and 600.
-- `THROTTLE_REDIS_TIMEOUT_MS`: default 250.
+- `THROTTLE_REDIS_TIMEOUT_MS`: default 250. Also bounds `ConnectionCaps` slot commands: an acquire that times out fails open, a release that times out logs a throttled warning.
 - `THROTTLE_TENANT_TTL_MS` and `THROTTLE_TENANT_LIMIT`: default 60000 and 3000.
 - `THROTTLE_GRAPHQL_TTL_MS` and `THROTTLE_GRAPHQL_COST_LIMIT`: default 60000 and 20000.
 - `THROTTLE_WS_HANDSHAKE_LIMIT` and `THROTTLE_WS_HANDSHAKE_TTL_MS`: default 30 and 60000.
@@ -111,7 +111,7 @@ These variables come from the `redis`, `cache` and `throttle` namespaces of `@pl
 - `{prefix}:auth:denylist:{jti}`
 - `{prefix}:lock:{resource}`
 - `{prefix}:throttle:{name:sha256}:hits|block`
-- `{prefix}:wsconn:{userId}` (concurrent sockets of one user; only `ConnectionCaps` writes it)
+- `{prefix}:wsslot:{userId}` (a sorted set of the user's socket slots; only `ConnectionCaps` writes it)
 - `{prefix}:cache:{key}`; tenant-scoped data `{prefix}:cache:{scope}:{tenantId}:{part}…` (build `{key}` with
   `tenantCacheKey`, never by hand: a tenant-scoped value under a key without the tenant can be served to another
   tenant)

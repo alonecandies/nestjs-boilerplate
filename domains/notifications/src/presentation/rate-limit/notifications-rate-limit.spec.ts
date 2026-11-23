@@ -1,8 +1,11 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { RATE_LIMIT_POLICY_KEY } from '@platform/redis';
 import { describe, expect, it } from 'vitest';
 import { NotificationsResolver } from '../graphql/notifications.resolver.js';
 import { NotificationsController } from '../http/notifications.controller.js';
-import { NotificationsGateway } from './notifications.gateway.js';
+import { NotificationsGateway } from '../ws/notifications.gateway.js';
 import { notificationsRateLimitConfig } from './notifications-rate-limit.config.js';
 import {
   NOTIFICATIONS_RATE_LIMITS,
@@ -31,5 +34,20 @@ describe('notifications rate-limit policies', () => {
         NOTIFICATIONS_RATE_LIMITS.MARK_READ,
       );
     }
+  });
+
+  it('keeps the policy out of presentation/ws: http and graphql sources never import from ../ws/', () => {
+    const presentation = join(dirname(fileURLToPath(import.meta.url)), '..');
+    const offenders: string[] = [];
+    for (const dir of ['http', 'graphql']) {
+      const root = join(presentation, dir);
+      for (const file of readdirSync(root, { recursive: true, encoding: 'utf8' })) {
+        if (!file.endsWith('.ts')) continue;
+        if (/from\s+['"]\.\.\/ws\//.test(readFileSync(join(root, file), 'utf8'))) {
+          offenders.push(`${dir}/${file}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

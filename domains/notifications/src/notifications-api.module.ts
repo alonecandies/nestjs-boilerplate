@@ -12,8 +12,8 @@ import { NOTIFICATIONS_RBAC } from './notifications.permissions.js';
 import { NotificationsResolver } from './presentation/graphql/notifications.resolver.js';
 import { NotificationsController } from './presentation/http/notifications.controller.js';
 import { NotificationPushConsumer } from './presentation/messaging/notification-push.consumer.js';
+import { NotificationsRateLimitModule } from './presentation/rate-limit/notifications-rate-limit.js';
 import { NotificationsGateway } from './presentation/ws/notifications.gateway.js';
-import { NotificationsRateLimitModule } from './presentation/ws/notifications-rate-limit.js';
 
 /** Identical in both topologies — they only ever see `NotificationsPort`. */
 const CONTROLLERS: Type[] = [NotificationsController, NotificationPushConsumer];

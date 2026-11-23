@@ -27,7 +27,7 @@ import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
 import { RateLimit } from '@platform/redis';
 import { NotificationsPort } from '../../application/ports/notifications.port.js';
 import { NotificationsPermission } from '../../notifications.permissions.js';
-import { NOTIFICATIONS_RATE_LIMITS } from '../ws/notifications-rate-limit.js';
+import { NOTIFICATIONS_RATE_LIMITS } from '../rate-limit/notifications-rate-limit.js';
 import {
   type ListNotificationsQueryParams,
   listNotificationsQuerySchema,

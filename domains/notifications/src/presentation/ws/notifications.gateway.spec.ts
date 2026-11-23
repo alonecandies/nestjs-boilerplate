@@ -367,10 +367,13 @@ describe('NotificationsGateway', () => {
   });
 });
 
-const HELD = { admitted: true, held: true };
-const REFUSED = { admitted: false, held: false };
-/** Admitted while Redis was unusable: no slot was counted, so none may be released. */
-const FAILED_OPEN = { admitted: true, held: false };
+const SLOT = { admitted: true, id: 'slot-1' };
+const REFUSED = { admitted: false };
+/**
+ * Admitted while Redis was unusable: to the caller it looks like any admitted slot. Its reply may
+ * have been lost after Redis counted it, so it is released all the same.
+ */
+const FAILED_OPEN = { admitted: true, id: 'slot-open' };
 
 const capsSocket = () => ({
   data: {} as Record<string, unknown>,
@@ -382,9 +385,10 @@ const capsSocket = () => ({
 });
 
 describe('NotificationsGateway connection caps', () => {
+  const exp = Math.floor(Date.now() / 1000) + 60;
   const tokens = {
-    verifyAccessToken: vi.fn(async () => ({ jti: 'j', exp: Math.floor(Date.now() / 1000) + 60 })),
-    toAuthUser: vi.fn(() => ({ id: 'u-1', exp: Math.floor(Date.now() / 1000) + 60 })),
+    verifyAccessToken: vi.fn(async () => ({ jti: 'j', exp })),
+    toAuthUser: vi.fn(() => ({ id: 'u-1', exp })),
   };
   const denylist = { isDenied: vi.fn(async () => false) };
   const gatewayWith = (caps: unknown) =>
@@ -416,20 +420,24 @@ describe('NotificationsGateway connection caps', () => {
     };
     const error = await gatewayWith(caps).authenticate(capsSocket() as never);
     expect(error?.data).toMatchObject({ status: 429, code: 'TOO_MANY_CONNECTIONS' });
+    expect(caps.releaseSocket).not.toHaveBeenCalled();
   });
 
-  it('accepts under the caps and releases the slot once, on disconnect', async () => {
+  it('accepts under the caps and releases the same slot once, on disconnect', async () => {
     const caps = {
       admitHandshake: vi.fn(async () => ({ ok: true as const })),
-      acquireSocket: vi.fn(async () => HELD),
+      acquireSocket: vi.fn(async () => SLOT),
       releaseSocket: vi.fn(async () => undefined),
     };
     const gateway = gatewayWith(caps);
     const socket = capsSocket();
     await expect(gateway.authenticate(socket as never)).resolves.toBeUndefined();
-    expect(caps.acquireSocket).toHaveBeenCalledWith('u-1');
+    // The slot's deadline follows the token's expiry.
+    expect(caps.acquireSocket).toHaveBeenCalledWith('u-1', exp);
     gateway.handleDisconnect(socket as never);
-    expect(caps.releaseSocket).toHaveBeenCalledWith('u-1');
+    gateway.handleDisconnect(socket as never);
+    expect(caps.releaseSocket).toHaveBeenCalledTimes(1);
+    expect(caps.releaseSocket).toHaveBeenCalledWith('u-1', SLOT.id);
   });
 
   it('releases the slot at once when the client drops while the slot is taken (no disconnect event)', async () => {
@@ -439,7 +447,7 @@ describe('NotificationsGateway connection caps', () => {
       acquireSocket: vi.fn(async () => {
         // The client goes away mid-handshake: socket.io drops the socket without connect/disconnect.
         socket.conn.readyState = 'closed';
-        return HELD;
+        return SLOT;
       }),
       releaseSocket: vi.fn(async () => undefined),
     };
@@ -447,14 +455,14 @@ describe('NotificationsGateway connection caps', () => {
     await expect(gateway.authenticate(socket as never)).resolves.toBeInstanceOf(Error);
     expect(caps.acquireSocket).toHaveBeenCalledTimes(1);
     expect(caps.releaseSocket).toHaveBeenCalledTimes(1);
-    expect(caps.releaseSocket).toHaveBeenCalledWith('u-1');
-    expect(socket.data['capAcquired']).not.toBe(true);
+    expect(caps.releaseSocket).toHaveBeenCalledWith('u-1', SLOT.id);
+    expect(socket.data['capSlot']).toBeUndefined();
     // Even if a disconnect were delivered later, the slot is not released twice.
     gateway.handleDisconnect(socket as never);
     expect(caps.releaseSocket).toHaveBeenCalledTimes(1);
   });
 
-  it('does not release a slot admitted while Redis was down (nothing was counted, F2)', async () => {
+  it('releases a slot admitted while Redis was unusable, by its id (a lost reply may have counted it)', async () => {
     const caps = {
       admitHandshake: vi.fn(async () => ({ ok: true as const })),
       acquireSocket: vi.fn(async () => FAILED_OPEN),
@@ -464,10 +472,11 @@ describe('NotificationsGateway connection caps', () => {
     const socket = capsSocket();
     await expect(gateway.authenticate(socket as never)).resolves.toBeUndefined();
     gateway.handleDisconnect(socket as never);
-    expect(caps.releaseSocket).not.toHaveBeenCalled();
+    expect(caps.releaseSocket).toHaveBeenCalledTimes(1);
+    expect(caps.releaseSocket).toHaveBeenCalledWith('u-1', FAILED_OPEN.id);
   });
 
-  it('does not release a failed-open slot when the client drops during the handshake', async () => {
+  it('releases a failed-open slot when the client drops during the handshake', async () => {
     const socket = capsSocket();
     const caps = {
       admitHandshake: vi.fn(async () => ({ ok: true as const })),
@@ -478,7 +487,34 @@ describe('NotificationsGateway connection caps', () => {
       releaseSocket: vi.fn(async () => undefined),
     };
     await expect(gatewayWith(caps).authenticate(socket as never)).resolves.toBeInstanceOf(Error);
+    expect(caps.releaseSocket).toHaveBeenCalledTimes(1);
+    expect(caps.releaseSocket).toHaveBeenCalledWith('u-1', FAILED_OPEN.id);
+  });
+
+  it('takes no slot for a socket that closed while its token was verified', async () => {
+    const socket = capsSocket();
+    const verify = vi.fn(async () => {
+      // The client goes away while the token is being verified.
+      socket.conn.readyState = 'closed';
+      return { jti: 'j', exp };
+    });
+    const caps = {
+      admitHandshake: vi.fn(async () => ({ ok: true as const })),
+      acquireSocket: vi.fn(async () => SLOT),
+      releaseSocket: vi.fn(async () => undefined),
+    };
+    const gateway = new NotificationsGateway(
+      { ...tokens, verifyAccessToken: verify } as never,
+      denylist as never,
+      {} as never,
+      authWithSweepInterval(30_000),
+      caps as never,
+    );
+    await expect(gateway.authenticate(socket as never)).resolves.toBeInstanceOf(Error);
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(caps.acquireSocket).not.toHaveBeenCalled();
     expect(caps.releaseSocket).not.toHaveBeenCalled();
+    expect(socket.data['capSlot']).toBeUndefined();
   });
 
   it('does not release a slot for a socket that never acquired one', () => {

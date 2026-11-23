@@ -1,6 +1,8 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
+import { generateId, withTimeout } from '@platform/common';
 import { type ThrottleConfig, throttleConfig } from '@platform/config';
 import type { Redis } from 'ioredis';
+import { throttle } from 'lodash-es';
 import { hashTag } from '../keys/key.util.js';
 import { RedisKeyService } from '../keys/redis-key.service.js';
 import { REDIS_CLIENT } from '../redis.constants.js';
@@ -13,21 +15,37 @@ export const TOO_MANY_CONNECTIONS = 'TOO_MANY_CONNECTIONS';
 
 export type HandshakeVerdict = { ok: true } | { ok: false; retryAfterSeconds: number };
 
-/** Outcome of `ConnectionCaps.acquireSocket`; release the slot only when `held`. */
-export interface SocketSlot {
-  /** The socket may open (under the cap, or Redis unusable). */
-  readonly admitted: boolean;
-  /** A slot was counted for it, to be freed with `releaseSocket` when the socket ends. */
-  readonly held: boolean;
-}
+/**
+ * Outcome of `ConnectionCaps.acquireSocket`. An admitted socket (under the cap, or Redis
+ * unusable) carries its slot `id`, generated per acquire: pass it to `releaseSocket` when the
+ * socket ends, whether or not Redis counted the slot.
+ */
+export type SocketSlot =
+  | { readonly admitted: true; readonly id: string }
+  | { readonly admitted: false };
 
-/** Admitted without counting a slot (Redis unusable). */
-const FAILED_OPEN: SocketSlot = Object.freeze({ admitted: true, held: false });
+/**
+ * Added to the token's expiry in a slot's deadline, for clock skew between replicas and Redis.
+ * Both transports close a socket when its token expires, so its slot outlives it.
+ */
+const TOKEN_EXPIRY_GRACE_MS = 60_000;
+
+/** At most one `connection caps bypassed` warning per this interval, like the throttler storage. */
+const WARN_INTERVAL_MS = 10_000;
 
 /** Socket.IO and graphql-ws connection caps (spec §11). Both fail open when Redis is unusable. */
 @Injectable()
 export class ConnectionCaps {
   private readonly logger = new Logger(ConnectionCaps.name);
+  private readonly warn = throttle(
+    (error: unknown): void => {
+      this.logger.warn(
+        `connection caps bypassed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    },
+    WARN_INTERVAL_MS,
+    { trailing: false },
+  );
 
   constructor(
     @Inject(REDIS_CLIENT) private readonly redis: Redis,
@@ -63,52 +81,61 @@ export class ConnectionCaps {
   }
 
   /**
-   * Takes one of the user's `THROTTLE_WS_SOCKETS_PER_USER` socket slots. `admitted: false` when the
-   * user already holds them all. `held` says whether a slot was actually counted: a slot admitted
-   * because Redis is unusable (fail open) is not, and its caller must never `releaseSocket` it, or
-   * the release would free another socket's slot.
+   * Takes one of the user's `THROTTLE_WS_SOCKETS_PER_USER` socket slots for a socket whose access
+   * token expires at `tokenExpSec` (epoch seconds, the token's `exp`). `admitted: false` when the
+   * user already holds them all.
+   * - Each slot lives until its deadline, max(now + `THROTTLE_WS_SOCKET_TTL_MS`, token expiry +
+   *   60 s), unless released first. A slot that is never released (crashed replica, lost
+   *   release) frees itself then, and a live socket never outlives its slot.
+   * - Fails open (admitted) when Redis is unusable, or gives no reply within
+   *   `THROTTLE_REDIS_TIMEOUT_MS`. The slot may still have been counted (the reply was lost), so
+   *   the caller releases every admitted slot all the same.
    */
-  async acquireSocket(userId: string): Promise<SocketSlot> {
-    if (this.redis.status !== 'ready') return FAILED_OPEN;
+  async acquireSocket(userId: string, tokenExpSec: number): Promise<SocketSlot> {
+    const id = generateId();
+    if (this.redis.status !== 'ready') return { admitted: true, id };
     try {
-      const [, admitted] = await this.redis.appConnCount(
-        this.slotKey(userId),
-        1,
-        this.limits.wsSocketsPerUser,
-        this.limits.wsSocketTtlMs,
+      const admitted = await this.bounded(
+        this.redis.appConnSlot(
+          this.slotKey(userId),
+          id,
+          this.limits.wsSocketsPerUser,
+          this.limits.wsSocketTtlMs,
+          Math.floor(tokenExpSec * 1_000) + TOKEN_EXPIRY_GRACE_MS,
+        ),
       );
-      return admitted === 1 ? { admitted: true, held: true } : { admitted: false, held: false };
+      return admitted === 1 ? { admitted: true, id } : { admitted: false };
     } catch (error) {
       this.warn(error);
-      return FAILED_OPEN;
+      return { admitted: true, id };
     }
   }
 
   /**
-   * Frees a slot that `acquireSocket` reported `held`. Skipped while Redis is unusable; the
-   * counter's safety TTL (`THROTTLE_WS_SOCKET_TTL_MS`) bounds that leak.
+   * Frees the slot `acquireSocket` admitted with `slotId`. Idempotent: a resent, late or
+   * duplicate release removes only that slot, and a slot that was never counted frees nothing. A
+   * release that fails or gets no reply within `THROTTLE_REDIS_TIMEOUT_MS` (never retried) leaves
+   * the slot until its deadline, and logs a throttled warning.
    */
-  async releaseSocket(userId: string): Promise<void> {
-    if (this.redis.status !== 'ready') return;
+  async releaseSocket(userId: string, slotId: string): Promise<void> {
     try {
-      await this.redis.appConnCount(
-        this.slotKey(userId),
-        -1,
-        this.limits.wsSocketsPerUser,
-        this.limits.wsSocketTtlMs,
-      );
+      await this.bounded(this.redis.zrem(this.slotKey(userId), slotId));
     } catch (error) {
       this.warn(error);
     }
   }
 
+  /** One sorted set per user (a new key name: the old `wsconn` counter expires on its own). */
   private slotKey(userId: string): string {
-    return this.keys.key('wsconn', hashTag(userId));
+    return this.keys.key('wsslot', hashTag(userId));
   }
 
-  private warn(error: unknown): void {
-    this.logger.warn(
-      `connection caps bypassed: ${error instanceof Error ? error.message : String(error)}`,
-    );
+  /**
+   * Bounds a slot command by `THROTTLE_REDIS_TIMEOUT_MS`: the client has no command timeout, and a
+   * connection that reports `ready` but never answers would hold the handshake open.
+   */
+  private bounded<T>(command: Promise<T>): Promise<T> {
+    const ms = this.limits.redisTimeoutMs;
+    return withTimeout(command, ms, `no reply within ${ms} ms`);
   }
 }

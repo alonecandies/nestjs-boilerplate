@@ -11,7 +11,7 @@ import {
 } from '../../notifications.constants.js';
 import { NotificationsPermission } from '../../notifications.permissions.js';
 import { toNotificationView } from '../notification-view.js';
-import { NOTIFICATIONS_RATE_LIMITS } from '../ws/notifications-rate-limit.js';
+import { NOTIFICATIONS_RATE_LIMITS } from '../rate-limit/notifications-rate-limit.js';
 import { ListNotificationsArgs } from './list-notifications.args.js';
 import { MarkNotificationReadInput } from './mark-notification-read.input.js';
 import { NotificationConnectionModel, NotificationModel } from './notification.model.js';

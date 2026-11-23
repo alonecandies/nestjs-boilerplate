@@ -76,8 +76,8 @@ export interface GraphqlWsAuthOptions {
   sweeper?: RevocationSweeper;
   /**
    * Connection caps (spec §11): handshakes per client IP, checked before the token is verified,
-   * and concurrent sockets per user, taken after it and freed in `onClose`. Both fail open when
-   * Redis is unusable. Without it, connections are uncapped.
+   * and concurrent sockets per user, a slot taken after it and released in `onClose` by its id.
+   * Both fail open when Redis is unusable. Without it, connections are uncapped.
    */
   caps?: Pick<ConnectionCaps, 'admitHandshake' | 'acquireSocket' | 'releaseSocket'>;
   /** Client IP of the upgrade request (follows `TRUST_PROXY`). Default: the socket address. */
@@ -104,7 +104,7 @@ export interface GraphqlWsAuthHandlers {
  *   `Access token revoked`) by the sweep after that token is revoked; `onClose` untracks it.
  * - With `options.caps`, a connection over the per-IP handshake budget or the per-user socket cap
  *   returns `false` too, so to the client a cap refusal looks the same as an auth refusal (4403).
- *   `onClose` releases the user's slot.
+ *   `onClose` releases the socket's slot by its id.
  */
 export function createGraphqlWsAuthHandlers(
   authenticate: SubscriptionAuthenticator,
@@ -113,8 +113,8 @@ export function createGraphqlWsAuthHandlers(
   const logger = new Logger('GraphqlWsAuth');
   const expiryTimers = new WeakMap<GqlWsExtra, NodeJS.Timeout>();
   const untrackers = new WeakMap<GqlWsExtra, () => void>();
-  /** The user whose socket slot (`caps.acquireSocket`) this connection holds. */
-  const acquired = new WeakMap<GqlWsExtra, string>();
+  /** The user and slot id of the socket slot (`caps.acquireSocket`) this connection holds. */
+  const acquired = new WeakMap<GqlWsExtra, { userId: string; slotId: string }>();
   const resolveIp: ClientIpResolver = options.clientIp ?? ((r) => r?.socket?.remoteAddress);
   // graphql-ws calls onClose even when the socket closes while onConnect is still verifying.
   const closed = new WeakSet<GqlWsExtra>();
@@ -152,15 +152,16 @@ export function createGraphqlWsAuthHandlers(
         const user = await authenticate(token);
         if (closed.has(ctx.extra)) return false;
         if (options.caps !== undefined) {
-          const slot = await options.caps.acquireSocket(user.id);
+          const slot = await options.caps.acquireSocket(user.id, user.exp);
           if (!slot.admitted) return false;
           if (closed.has(ctx.extra)) {
             // Closed while acquiring: onClose already ran and could not see the slot.
-            if (slot.held) void options.caps.releaseSocket(user.id);
+            void options.caps.releaseSocket(user.id, slot.id);
             return false;
           }
-          // A slot admitted while Redis was unusable was never counted: nothing to release.
-          if (slot.held) acquired.set(ctx.extra, user.id);
+          // Released at close even when admitted while Redis was unusable: its reply may have
+          // been lost after the slot was counted, and releasing a slot never counted frees nothing.
+          acquired.set(ctx.extra, { userId: user.id, slotId: slot.id });
         }
         ctx.extra.user = user;
         scheduleExpiry(ctx.extra, user.exp);
@@ -180,9 +181,9 @@ export function createGraphqlWsAuthHandlers(
       const timer = expiryTimers.get(ctx.extra);
       if (timer !== undefined) clearTimeout(timer);
       expiryTimers.delete(ctx.extra);
-      const userId = acquired.get(ctx.extra);
+      const slot = acquired.get(ctx.extra);
       acquired.delete(ctx.extra);
-      if (userId !== undefined) void options.caps?.releaseSocket(userId);
+      if (slot !== undefined) void options.caps?.releaseSocket(slot.userId, slot.slotId);
     },
   };
 }
