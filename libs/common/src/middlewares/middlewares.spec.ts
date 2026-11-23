@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { PROBLEM_JSON_CONTENT_TYPE } from '../constants/headers.constants.js';
 import { isUuidV7 } from '../utils/id.util.js';
 import { CorrelationIdMiddleware } from './correlation-id.middleware.js';
-import { MaintenanceModeMiddleware } from './maintenance-mode.middleware.js';
+import {
+  isMaintenanceEnabled,
+  MaintenanceModeMiddleware,
+  maintenanceProblem,
+} from './maintenance-mode.middleware.js';
 import type { RawRequest } from './raw-http.types.js';
 
 function rawRequest(
@@ -53,6 +57,23 @@ describe('CorrelationIdMiddleware', () => {
     expect(isUuidV7(requestId)).toBe(true);
     expect(headers.get('x-correlation-id')).toBe(requestId);
     expect(req.id).toBe(requestId);
+  });
+});
+
+describe('maintenance helpers (the WebSocket entry points)', () => {
+  it('isMaintenanceEnabled reads a boolean or a function; unset is off', () => {
+    expect(isMaintenanceEnabled(undefined)).toBe(false);
+    expect(isMaintenanceEnabled(false)).toBe(false);
+    expect(isMaintenanceEnabled(true)).toBe(true);
+    expect(isMaintenanceEnabled(() => true)).toBe(true);
+  });
+
+  it('maintenanceProblem is the 503 SERVICE_UNAVAILABLE document the middleware sends', () => {
+    expect(maintenanceProblem()).toMatchObject({
+      status: 503,
+      code: 'SERVICE_UNAVAILABLE',
+      detail: 'The service is undergoing maintenance. Please retry later.',
+    });
   });
 });
 

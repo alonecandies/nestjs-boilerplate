@@ -63,7 +63,7 @@ defaults for the local docker-compose infra in `libs/config` (see the root READM
 | `CASSANDRA_RUN_MIGRATIONS` | `true`           | apply the CQL migrations at boot (LWT-claimed)                                    |
 | `CLUSTER_WORKERS`          | `1`              | node:cluster workers (`0` = per core)                                             |
 | `DOCS_ENABLED`             | not in prod      | `/docs`, `/openapi.json`, `/openapi.yaml`                                         |
-| `MAINTENANCE_MODE`         | `false`          | every route except `/health*` and `/metrics` answers 503 + `Retry-After`          |
+| `MAINTENANCE_MODE`         | `false`          | every route and socket but `/health*` and `/metrics` answers 503 + `Retry-After`  |
 
 The Kafka topics (and their `.dlq`) must exist — auto-creation is off: `identity.user-registered.v1`,
 `identity.membership-created.v1`, `identity.membership-removed.v1`, `billing.payment-succeeded.v1`,

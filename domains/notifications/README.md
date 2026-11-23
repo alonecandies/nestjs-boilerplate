@@ -161,7 +161,8 @@ Connect with `io('<host>/notifications', { auth: { token: '<access jwt>' } })` (
 | c → s     | `ping`                   | → `pong` event `{ ts }`                                                                                           |
 
 The handshake is authenticated by a namespace middleware (`authenticateSocket`, including the
-denylist) before the connection is accepted, so no message can race authentication. Each socket
+denylist) before the connection is accepted, so no message can race authentication. With
+`MAINTENANCE_MODE=true` it refuses first, with the 503 problem (`SERVICE_UNAVAILABLE`). Each socket
 joins exactly one room, `t:{tenantId}:u:{userId}` (`tenantUserRoom`), both from the token it
 authenticated with, and never changes room: another tenant needs a new connection with that
 tenant's token. `NotificationPushConsumer` takes the tenant from the envelope

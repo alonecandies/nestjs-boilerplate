@@ -64,7 +64,9 @@ Conventions that apply to every HTTP response:
 - **Metrics port**: `/metrics` is served on its own listener, `METRICS_PORT` (9464; host dev 9464-9467), never on the
   API port (which answers 404 for it). Keep that port cluster-internal; `METRICS_BEARER_TOKEN` adds defence in depth.
 - **Maintenance**: with `MAINTENANCE_MODE=true` every request except `/health*` and `/metrics` gets 503 problem+json
-  with `Retry-After`.
+  with `Retry-After`. WebSockets are refused too: a Socket.IO handshake fails with `connect_error` whose `data` is the
+  503 problem (`SERVICE_UNAVAILABLE`), a graphql-ws connection is closed (4403), and a subscription on a connection
+  opened earlier is answered with a `SERVICE_UNAVAILABLE` error.
 
 ## API documentation pages
 
