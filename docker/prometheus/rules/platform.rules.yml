@@ -1,5 +1,8 @@
-# Platform alerts (audit fixes Task 4). The series come from @platform/transport
-# (libs/transport/src/kafka/kafka-metrics.ts); Prometheus adds `service` from the scrape target.
+# Platform alerts (audit fixes Tasks 4 and 21). The series come from @platform/transport (Kafka in
+# libs/transport/src/kafka/kafka-metrics.ts, gRPC in libs/transport/src/grpc/grpc-metrics.ts),
+# @platform/redis (rate_limit_fail_open_total, redis_eviction_policy_safe), @platform/database
+# (db_pool_operations_waiting), @platform/observability (http_request_duration_seconds) and
+# @platform/mailer (mail_jobs_total); Prometheus adds `service` from the scrape target.
 # severity: page = wake someone; ticket = look at it in working hours.
 groups:
   - name: platform
@@ -41,9 +44,11 @@ groups:
             service's logs (a dependency that is down, or the DLQ publish failing) and at the
             consumer's lag.
 
-      # Lag above 1000 messages that also grew over the last 15 minutes: the consumer falls behind
-      # (slow handler, stuck partition, too few replicas). An idle partition holds its last value, so
-      # a high but flat lag does not fire.
+      # Lag above 1000 messages that also grew over the last 15 minutes: a consumer that progresses
+      # too slowly (slow handler, too few replicas). kafka_consumer_lag is set only at the end of a
+      # batch (END_BATCH_PROCESS), so an idle partition and a hung handler both freeze it and a high
+      # but flat lag does not fire: this rule cannot see a hung consumer. Detecting one needs a
+      # broker-side lag source (for example kafka-exporter's kafka_consumergroup_lag), a follow-up.
       - alert: KafkaConsumerLagGrowing
         expr: >-
           kafka_consumer_lag > 1000
@@ -58,20 +63,30 @@ groups:
             behind for group {{ $labels.group }} and the lag grew over 15 minutes. Check the handler's
             latency, kafka_consumer_messages_total{outcome="redelivery"} and the replica count.
 
-      # A gRPC client circuit breaker has failed fast for 5 minutes: the upstream is down or too slow
-      # and every call to it is refused (CIRCUIT_OPEN), a 503 at the gateway.
+      # A gRPC client circuit breaker has not been closed for 5 minutes while its service refuses calls
+      # (CIRCUIT_OPEN, a 503 at the gateway): the upstream is down or too slow. Against a hung upstream
+      # the breaker cycles open (5 s) and half_open (the probe waits out GRPC_DEADLINE_MS), so the rule
+      # reads "not closed" rather than "open". An idle breaker stays half_open until its next call
+      # (opossum), so refused calls in the last 2 minutes are required too. Limits: the refusal
+      # counter has no `upstream` label, so the join is per service (an idle half_open breaker fires
+      # alongside a refusing one of the same service); traffic too sparse to be refused (every call
+      # is the probe and ends DEADLINE_EXCEEDED) does not fire here but shows in the 5xx ratio.
       - alert: GrpcCircuitBreakerOpen
         expr: >-
           max by (service, upstream)
-          (grpc_client_circuit_breaker_state{state="open"}) == 1
+          (grpc_client_circuit_breaker_state{state!="closed"}) == 1
+          and on (service)
+          sum by (service) (rate(grpc_client_handled_total{grpc_code="CIRCUIT_OPEN"}[2m])) > 0
         for: 5m
         labels:
           severity: page
         annotations:
-          summary: "{{ $labels.service }}: circuit breaker to {{ $labels.upstream }} is open"
+          summary: "{{ $labels.service }}: circuit breaker to {{ $labels.upstream }} refuses calls"
           description: >-
-            Calls from {{ $labels.service }} to {{ $labels.upstream }} have been refused for 5 minutes.
-            Check that service's health and logs, and grpc_client_handled_total{grpc_code="CIRCUIT_OPEN"}.
+            The circuit breaker from {{ $labels.service }} to {{ $labels.upstream }} has not been closed
+            for 5 minutes and {{ $labels.service }} keeps refusing calls (CIRCUIT_OPEN). Check that
+            upstream's health, latency and logs, and grpc_client_handled_total{grpc_code="CIRCUIT_OPEN"}
+            by grpc_service.
 
       # A rate-limit budget let requests through unmetered because Redis was down or slow
       # (THROTTLE_REDIS_TIMEOUT_MS). Abuse protection is off for that throttler until Redis recovers.

@@ -36,7 +36,8 @@ const SAFE_CACHE_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
 /**
  * The `cache` label of one `getOrSet`: the caller's name, else the key's prefix before the first
  * `:`, each only when it is short and made of `[a-z0-9_-]`; anything else (a raw uuid, an id, free
- * text) is `other`. A key never reaches a label, which keeps the series count bounded.
+ * text) is `other`. A key never reaches a label, which keeps the series count bounded only if callers
+ * pass names and key prefixes from a small fixed set: never derive one from a tenant, user or id.
  */
 export function cacheMetricName(key: string, name?: string): string {
   if (name !== undefined && SAFE_CACHE_NAME.test(name)) return name;

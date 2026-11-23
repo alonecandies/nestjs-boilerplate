@@ -335,8 +335,9 @@ paged and capped.
   `notifications.notification-created.v1` last, after the inbox row and the mail, and a failed
   publish fails their event: the consumer retries it in process, then dead-letters it
   (`KafkaDeadLetters` pages; replay with `dlq-replay`). The redelivery rewrites the same row,
-  enqueues the same mail job (a no-op) and publishes again. The trade-off: a persistent publish
-  failure dead-letters an event whose row and mail were already written.
+  enqueues the same mail job (a no-op for 24 h, while BullMQ keeps the deduplicated job) and
+  publishes again. The trade-off: a persistent publish failure dead-letters an event whose row
+  and mail were already written, and replaying it after 24 h sends the mail again.
 - `executePage` can return a page state at the exact end of a partition. The next page is then
   empty with a `null` state, so clients must treat that as the end.
 - Recipients are only known after a `membership-created` event for that `(tenant, user)`. A receipt
