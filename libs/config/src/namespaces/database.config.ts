@@ -74,6 +74,9 @@ const databaseEnvObject = z.object({
   // that hit it (55P03) is retried with backoff before the run fails (OPS-2).
   DATABASE_MIGRATION_LOCK_TIMEOUT_MS: zInt(5_000, { min: 0 }),
   DATABASE_MIGRATION_LOCK_RETRIES: zInt(5, { min: 0, max: 100 }),
+  // The lock_timeout of the session that runs a set's online steps (CREATE INDEX CONCURRENTLY…):
+  // 0 = wait, since a lock timeout cancels a concurrent build and leaves an invalid index (OPS-2).
+  DATABASE_MIGRATION_ONLINE_LOCK_TIMEOUT_MS: zInt(0, { min: 0 }),
   // Production refuses an unencrypted connection unless this explicit opt-out is set (a sidecar
   // such as the Cloud SQL Auth Proxy, or the network layer, already encrypts it).
   DATABASE_ALLOW_INSECURE: zBool(false),
@@ -186,6 +189,12 @@ const toDatabaseConfig = (env: DatabaseEnv) => ({
   migrationLockTimeoutMs: env.DATABASE_MIGRATION_LOCK_TIMEOUT_MS,
   /** Retries, with backoff and under the same advisory lock, of a set that hit the lock timeout. */
   migrationLockRetries: env.DATABASE_MIGRATION_LOCK_RETRIES,
+  /**
+   * `lock_timeout` in MILLISECONDS of the separate session that runs the sets' online steps; on
+   * Citus also the role default while they run. 0 (default) = wait: these statements take no lock
+   * that blocks traffic, and a timeout would cancel a concurrent build half-way.
+   */
+  migrationOnlineLockTimeoutMs: env.DATABASE_MIGRATION_ONLINE_LOCK_TIMEOUT_MS,
 });
 
 /** The app processes' schema: every production rule, DATABASE_SYSTEM_URL required. */

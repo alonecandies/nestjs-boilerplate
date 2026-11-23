@@ -502,7 +502,8 @@ only the query, decides which rows a request sees (program spec section 8, B3). 
 - **Forced RLS on every domain table.** `ENABLE` and `FORCE ROW LEVEL SECURITY`, so the owner `app_owner` is filtered
   too and holds no policy (two `TO app_owner` policies on `identity.users` for `staff:grant` are the one exception).
   A table with no policy for a role denies everything. Only each set's bookkeeping table
-  (`<schema>.__drizzle_migrations`) and `app.tenant_colocation` carry no RLS, and no app role has any privilege on them.
+  (`<schema>.__drizzle_migrations`, and `<schema>.__online_migrations` for a set with online steps) and
+  `app.tenant_colocation` carry no RLS, and no app role has any privilege on them.
 - **Explicit grants, deny by default.** No default table privileges: a new table is unreachable until its own
   migration grants it. Function execution is revoked from `PUBLIC` the same way.
 - **Policies are row-local.** A policy uses only the row's own columns and the three session helpers `app.user_id()`,

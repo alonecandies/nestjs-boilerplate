@@ -22,6 +22,15 @@ export interface DatabaseMigrationSet {
   /** Schema of the bookkeeping table `<migrationsSchema>.<migrationsTable>`, never shared. */
   readonly migrationsSchema: string;
   readonly migrationsTable: string;
+  /**
+   * Online steps (OPS-2): a folder of numbered `NNNN_<name>.sql` files, ONE statement each, for what
+   * a transaction cannot run (`CREATE INDEX CONCURRENTLY`, `ALTER TABLE … VALIDATE CONSTRAINT`).
+   * After the set's transactional files, each pending file runs on its own, outside a transaction,
+   * and is recorded in `<migrationsSchema>.__online_migrations` once it succeeded; make it
+   * re-runnable (`IF NOT EXISTS`). Convention: `join(import.meta.dirname, 'migrations', 'online')`
+   * (drizzle reads only the files its journal lists, so the subfolder is left alone).
+   */
+  readonly onlineFolder?: string;
 }
 
 export interface DatabaseModuleOptions<TSchema extends DrizzleSchema = DrizzleSchema> {

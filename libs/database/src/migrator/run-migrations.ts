@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { Logger, type LoggerService } from '@nestjs/common';
 import { retry, sleep } from '@platform/common';
@@ -9,7 +9,7 @@ import postgres, { type Sql } from 'postgres';
 import { z } from 'zod';
 import type { DatabaseMigrationSet } from '../database.types.js';
 import { assertMigrationSets } from './migration-sets.js';
-import { MIGRATIONS_ADVISORY_LOCK_ID } from './migrations.constants.js';
+import { MIGRATIONS_ADVISORY_LOCK_ID, ONLINE_MIGRATIONS_TABLE } from './migrations.constants.js';
 
 export interface RunMigrationsOptions {
   /**
@@ -37,6 +37,18 @@ export interface RunMigrationsOptions {
   lockWaitRetries?: number;
   /** Backoff before the first such retry; it doubles per retry, up to 30 s. Default 1 s. */
   lockWaitRetryDelayMs?: number;
+  /**
+   * `lock_timeout` in ms of the separate session that runs the sets' online steps
+   * (`DATABASE_MIGRATION_ONLINE_LOCK_TIMEOUT_MS`); on Citus also the role default while they run.
+   * Default 0 = wait: a lock timeout cancels a concurrent index build and leaves an invalid index.
+   */
+  onlineLockTimeoutMs?: number;
+}
+
+/** Online steps of a set or a run: files listed, and files applied by THIS run. */
+export interface OnlineStepsSummary {
+  total: number;
+  applied: number;
 }
 
 export interface MigrationSetSummary {
@@ -46,14 +58,17 @@ export interface MigrationSetSummary {
   total: number;
   /** Applied by THIS run — 0 when the set was already current (e.g. another replica won). */
   applied: number;
+  /** The set's online steps (`onlineFolder`); `{ total: 0, applied: 0 }` without any. */
+  online: OnlineStepsSummary;
 }
 
 export interface MigrationRunSummary {
   /** One entry per set, in the order they were applied. */
   sets: MigrationSetSummary[];
-  /** Sums over `sets`. */
+  /** Sums over `sets`: `total` and `applied` count transactional files, `online` online steps. */
   total: number;
   applied: number;
+  online: OnlineStepsSummary;
 }
 
 const DEFAULT_LOCK_TIMEOUT_MS = 5 * 60_000;
@@ -116,6 +131,63 @@ function readJournal(set: DatabaseMigrationSet): z.infer<typeof journalSchema> {
     );
   }
   return journal.data;
+}
+
+/** One file of a set's `onlineFolder`: a single statement, run outside a transaction. */
+interface OnlineStep {
+  /** The file name, also its bookkeeping key (`__online_migrations.name`). */
+  name: string;
+  path: string;
+  statement: string;
+}
+
+/** `NNNN_<name>.sql`: the number orders the files, as drizzle-kit numbers its own. */
+const ONLINE_STEP_FILE = /^(\d{4})_[\w-]+\.sql$/;
+
+/** SQL text without its comments: enough to see whether a file holds a statement, and which. */
+const withoutComments = (text: string): string =>
+  text.replaceAll(/\/\*[\s\S]*?\*\//g, ' ').replaceAll(/--[^\n]*/g, ' ');
+
+/**
+ * The set's online steps in file order, read before connecting like the journal: a declared folder
+ * that is missing, a file that is not `NNNN_<name>.sql`, two files with one number or a file with
+ * no statement fail the run up front. One statement per file is enforced by the server (the file
+ * is sent on the extended protocol, which refuses several commands).
+ */
+function readOnlineSteps(set: DatabaseMigrationSet): OnlineStep[] {
+  const folder = set.onlineFolder;
+  if (folder === undefined) return [];
+  if (!existsSync(folder) || !statSync(folder).isDirectory()) {
+    throw new Error(
+      `Migration set "${set.name}" declares online steps in ${folder}, which does not exist`,
+    );
+  }
+  const numbers = new Map<string, string>();
+  return readdirSync(folder)
+    .toSorted()
+    .map((name) => {
+      const number = ONLINE_STEP_FILE.exec(name)?.[1];
+      if (number === undefined) {
+        throw new Error(
+          `Migration set "${set.name}": online folder ${folder} holds "${name}"; only NNNN_<name>.sql files, one statement each, belong there`,
+        );
+      }
+      const other = numbers.get(number);
+      if (other !== undefined) {
+        throw new Error(
+          `Migration set "${set.name}": online steps "${other}" and "${name}" share the number ${number}`,
+        );
+      }
+      numbers.set(number, name);
+      const path = join(folder, name);
+      const statement = readFileSync(path, 'utf8');
+      if (withoutComments(statement).replaceAll(';', ' ').trim() === '') {
+        throw new Error(
+          `Migration set "${set.name}": online step ${name} (${path}) holds no statement`,
+        );
+      }
+      return { name, path, statement };
+    });
 }
 
 /**
@@ -200,7 +272,7 @@ async function applySet(
       ? `${set.name}: applied ${applied} migration(s); ${total} in total`
       : `${set.name}: schema is up to date (${total} migrations)`,
   );
-  return { name: set.name, folder: set.folder, total, applied };
+  return { name: set.name, folder: set.folder, total, applied, online: { total: 0, applied: 0 } };
 }
 
 /**
@@ -265,6 +337,10 @@ const summarize = (sets: MigrationSetSummary[]): MigrationRunSummary => ({
   sets,
   total: sumBy(sets, 'total'),
   applied: sumBy(sets, 'applied'),
+  online: {
+    total: sumBy(sets, (set) => set.online.total),
+    applied: sumBy(sets, (set) => set.online.applied),
+  },
 });
 
 /** SQLSTATE protocol_violation: how PgBouncer refuses a startup parameter it does not ignore. */
@@ -373,6 +449,178 @@ async function configureCitusSession(sql: Sql, logger: LoggerService): Promise<v
   );
 }
 
+/** A Postgres identifier as written: double-quoted (kept exactly) or bare (folded to lower case). */
+const IDENTIFIER = String.raw`(?:"(?:[^"]|"")+"|[A-Za-z_][\w$]*)`;
+
+/** `CREATE [UNIQUE] INDEX CONCURRENTLY [IF NOT EXISTS] <index> ON [ONLY] <table>`. */
+const CREATE_INDEX_CONCURRENTLY = new RegExp(
+  String.raw`^\s*create\s+(?:unique\s+)?index\s+concurrently\s+(?:if\s+not\s+exists\s+)?` +
+    String.raw`(${IDENTIFIER})\s+on\s+(?:only\s+)?(${IDENTIFIER}(?:\.${IDENTIFIER})?)`,
+  'i',
+);
+
+/** The name Postgres stores for an identifier as written. */
+const identifierName = (identifier: string): string =>
+  identifier.startsWith('"')
+    ? identifier.slice(1, -1).replaceAll('""', '"')
+    : identifier.toLowerCase();
+
+/**
+ * Online steps go over the extended protocol: the server then refuses a file that holds several
+ * statements (42601), where the simple protocol would run them as one implicit transaction, in
+ * which `CREATE INDEX CONCURRENTLY` fails. (postgres.js picks the simple protocol for an `unsafe`
+ * call without parameters unless told otherwise.)
+ */
+const EXTENDED_PROTOCOL = { prepare: false, simple: false };
+
+/** Runs `fn` on a connection of its own, closed afterwards. */
+async function onConnection<T>(open: () => Sql, fn: (sql: Sql) => Promise<T>): Promise<T> {
+  const sql = open();
+  try {
+    return await fn(sql);
+  } finally {
+    await sql.end({ timeout: 5 });
+  }
+}
+
+/** The set's online steps not yet recorded in `<schema>.__online_migrations` (all before it exists). */
+async function pendingOnlineSteps(
+  sql: Sql,
+  set: DatabaseMigrationSet,
+  steps: readonly OnlineStep[],
+): Promise<OnlineStep[]> {
+  if (steps.length === 0) return [];
+  const [table] = await sql<{ exists: boolean }[]>`
+    select to_regclass(format('%I.%I', ${set.migrationsSchema}::text, ${ONLINE_MIGRATIONS_TABLE}::text))
+      is not null as exists`;
+  if (table?.exists !== true) return [...steps];
+  const rows = await sql<{ name: string }[]>`
+    select name from ${sql(set.migrationsSchema)}.${sql(ONLINE_MIGRATIONS_TABLE)}`;
+  const recorded = new Set(rows.map((row) => row.name));
+  return steps.filter((step) => !recorded.has(step.name));
+}
+
+/**
+ * A failed `CREATE INDEX CONCURRENTLY` leaves an INVALID index behind, which `IF NOT EXISTS` would
+ * then skip: the file would be recorded without a usable index. So before a file runs, an invalid
+ * index with the name ITS statement builds, on ITS table, is dropped (`DROP INDEX CONCURRENTLY`,
+ * which Citus propagates to the shards). Only that one: an invalid index elsewhere may be another
+ * session's build in progress. A statement that builds no index looks nothing up.
+ */
+async function dropInvalidIndexOf(
+  online: Sql,
+  set: DatabaseMigrationSet,
+  step: OnlineStep,
+  logger: LoggerService,
+): Promise<void> {
+  const [, index, table] = CREATE_INDEX_CONCURRENTLY.exec(withoutComments(step.statement)) ?? [];
+  if (index === undefined || table === undefined) return;
+  const [row] = await online<{ index: string }[]>`
+    select format('%I.%I', n.nspname, c.relname) as index
+    from pg_catalog.pg_index i
+    join pg_catalog.pg_class c on c.oid = i.indexrelid
+    join pg_catalog.pg_namespace n on n.oid = c.relnamespace
+    where i.indrelid = to_regclass(${table}) and c.relname = ${identifierName(index)}
+      and not i.indisvalid`;
+  if (row === undefined) return;
+  logger.warn(
+    `${set.name}: ${step.name} left the invalid index ${row.index} (an earlier run failed or was ` +
+      'interrupted); dropping it before running the step again',
+  );
+  // A utility statement takes no bind parameter; the name comes back quoted by format('%I').
+  await online.unsafe(`drop index concurrently if exists ${row.index}`);
+}
+
+/**
+ * Runs `steps` in order on the online session, outside any transaction: each one after dropping
+ * an invalid index it left before, and recorded only after it succeeded. A failure stops the run
+ * naming the set and the file (the driver's error as `cause`); that file has no row, so the next
+ * run retries it.
+ */
+async function runOnlineSteps(
+  online: Sql,
+  set: DatabaseMigrationSet,
+  steps: readonly OnlineStep[],
+  logger: LoggerService,
+): Promise<void> {
+  const [schema, table] = [online(set.migrationsSchema), online(ONLINE_MIGRATIONS_TABLE)];
+  await online`
+    create table if not exists ${schema}.${table} (
+      name text primary key,
+      applied_at timestamptz not null default now()
+    )`;
+  for (const step of steps) {
+    try {
+      await dropInvalidIndexOf(online, set, step, logger);
+      await online.unsafe(step.statement, [], EXTENDED_PROTOCOL);
+      await online`insert into ${schema}.${table} (name) values (${step.name}) on conflict do nothing`;
+    } catch (error) {
+      throw new Error(
+        `Migration set "${set.name}": online step ${step.name} (${step.path}) failed; nothing was ` +
+          'recorded for it, so the next run retries it (libs/database/README.md, "Online steps")',
+        { cause: error },
+      );
+    }
+    logger.log(`${set.name}: applied online step ${step.name}`);
+  }
+}
+
+/** What the online steps of every set share within one run. */
+interface OnlineRun {
+  citus: boolean;
+  /** The sets' `lock_timeout`, which the role default goes back to on Citus. */
+  setTimeoutMs: number;
+  onlineTimeoutMs: number;
+  connect: (lockTimeoutMs: number, purpose: string) => Sql;
+  logger: LoggerService;
+}
+
+/**
+ * Runs the set's pending online steps (if any) on a second session, opened while `sql` keeps the
+ * advisory lock, with the online `lock_timeout`. On Citus the shard connections start from the
+ * role's default instead, so a throwaway connection first sets it to the online value, and another
+ * one sets it back to the sets' value once the online session closed (whatever happened; Task 1's
+ * start-of-run alignment repairs a value a crashed run left). Throwaway connections, so neither
+ * session caches a shard connection opened with the other value. Nothing pending: no session.
+ */
+async function applyOnlineSteps(
+  sql: Sql,
+  set: DatabaseMigrationSet,
+  steps: readonly OnlineStep[],
+  run: OnlineRun,
+): Promise<OnlineStepsSummary> {
+  const pending = await pendingOnlineSteps(sql, set, steps);
+  if (pending.length === 0) return { total: steps.length, applied: 0 };
+  const { logger } = run;
+  const switchRole = run.citus && run.onlineTimeoutMs !== run.setTimeoutMs;
+  const setRoleDefault = (timeoutMs: number): Promise<void> =>
+    onConnection(
+      () => run.connect(run.setTimeoutMs, 'migrate'),
+      (conn) => alignRoleLockTimeout(conn, timeoutMs, logger),
+    );
+  if (switchRole) await setRoleDefault(run.onlineTimeoutMs);
+  let failed = true;
+  try {
+    await onConnection(
+      () => run.connect(run.onlineTimeoutMs, 'migrate-online'),
+      (online) => runOnlineSteps(online, set, pending, logger),
+    );
+    failed = false;
+  } finally {
+    if (switchRole) {
+      await setRoleDefault(run.setTimeoutMs).catch((error: unknown) => {
+        if (!failed) throw error;
+        // Keep the step's error; the next run's alignment restores the default.
+        logger.error(
+          `Could not set the migration role's default lock_timeout back to ${run.setTimeoutMs}ms ` +
+            `after a failed online step: ${String(error)}`,
+        );
+      });
+    }
+  }
+  return { total: steps.length, applied: pending.length };
+}
+
 /**
  * Applies the pending drizzle-kit migrations of several sets, in order, safely under concurrency:
  * - the sets must start with the platform set, each with its own bookkeeping table and journal
@@ -399,15 +647,20 @@ async function configureCitusSession(sql: Sql, logger: LoggerService): Promise<v
  *   or enum, distribute tables and add their foreign keys in one transaction;
  * - each set writes its own bookkeeping table: drizzle applies only files newer than the LAST row
  *   of that table, so a shared table would skip the files of the set with older timestamps;
- * - drizzle runs a set's pending migrations in one transaction (all-or-nothing per set), so
- *   `CREATE INDEX CONCURRENTLY` cannot be used; a set that already ran stays applied when a later
- *   set fails;
+ * - drizzle runs a set's pending migrations in one transaction (all-or-nothing per set); a set
+ *   that already ran stays applied when a later set fails;
+ * - a set's online steps (`onlineFolder`: `CREATE INDEX CONCURRENTLY`, `VALIDATE CONSTRAINT`, one
+ *   statement per file) run after its transactional files, still under the advisory lock, on a
+ *   second session with `onlineLockTimeoutMs` (default 0, wait: a lock timeout would cancel a
+ *   concurrent build), each recorded in `<schema>.__online_migrations` once it succeeded
+ *   (`applyOnlineSteps`); a failing one stops the run naming it, unrecorded;
  * - a failing set stops the run (the sets after it are not attempted) with an error that names it
  *   and carries the driver's error as `cause`.
  *
  * Every journal is read before connecting: a missing one, or a malformed one (an entry without a
  * string `tag`, a positive integer `when` or a boolean `breakpoints`, or a `when` that does not
- * grow) fails the run up front, naming the set or the entry.
+ * grow) fails the run up front, naming the set or the entry. So is every online folder
+ * (`readOnlineSteps`).
  */
 export async function runMigrations(
   url: string,
@@ -415,7 +668,11 @@ export async function runMigrations(
 ): Promise<MigrationRunSummary> {
   const logger = options.logger ?? new Logger('DatabaseMigrations');
   assertMigrationSets(options.migrations);
-  const plan = options.migrations.map((set) => ({ set, total: readJournalSize(set) }));
+  const plan = options.migrations.map((set) => ({
+    set,
+    total: readJournalSize(set),
+    onlineSteps: readOnlineSteps(set),
+  }));
   const lockWait: LockWaitPolicy = {
     timeoutMs: options.lockWaitTimeoutMs ?? DEFAULT_LOCK_WAIT_TIMEOUT_MS,
     retries: options.lockWaitRetries ?? DEFAULT_LOCK_WAIT_RETRIES,
@@ -426,8 +683,14 @@ export async function runMigrations(
       throw new Error(`runMigrations: lock wait ${name} must be a non-negative integer (${value})`);
     }
   }
+  const onlineTimeoutMs = options.onlineLockTimeoutMs ?? 0;
+  if (!Number.isSafeInteger(onlineTimeoutMs) || onlineTimeoutMs < 0) {
+    throw new Error(
+      `runMigrations: onlineLockTimeoutMs must be a non-negative integer (${onlineTimeoutMs})`,
+    );
+  }
 
-  const connect = (): Sql =>
+  const connect = (lockTimeoutMs = lockWait.timeoutMs, purpose = 'migrate'): Sql =>
     postgres(url, {
       max: 1,
       max_lifetime: null,
@@ -436,10 +699,10 @@ export async function runMigrations(
         logger.debug?.(notice['message'] ?? 'notice');
       },
       connection: {
-        application_name: `${options.applicationName ?? 'app'}:migrate`,
+        application_name: `${options.applicationName ?? 'app'}:${purpose}`,
         // Strings: postgres.js drops falsy startup values, so a number 0 would never be sent.
         statement_timeout: '0' as unknown as number,
-        lock_timeout: String(lockWait.timeoutMs) as unknown as number,
+        lock_timeout: String(lockTimeoutMs) as unknown as number,
       },
     });
   // On plain Postgres the first connection is the migration session; on Citus it is the
@@ -461,9 +724,18 @@ export async function runMigrations(
     );
     locked = true;
     if (citus) await configureCitusSession(sql, logger);
+    const onlineRun: OnlineRun = {
+      citus,
+      setTimeoutMs: lockWait.timeoutMs,
+      onlineTimeoutMs,
+      connect,
+      logger,
+    };
     const results: MigrationSetSummary[] = [];
-    for (const { set, total } of plan) {
-      results.push(await applySetWithRetries(sql, set, total, lockWait, logger));
+    for (const { set, total, onlineSteps } of plan) {
+      const applied = await applySetWithRetries(sql, set, total, lockWait, logger);
+      const online = await applyOnlineSteps(sql, set, onlineSteps, onlineRun);
+      results.push({ ...applied, online });
     }
     return summarize(results);
   } finally {

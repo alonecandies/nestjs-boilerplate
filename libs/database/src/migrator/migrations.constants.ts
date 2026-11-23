@@ -2,6 +2,12 @@
 export const MIGRATIONS_TABLE = '__drizzle_migrations';
 
 /**
+ * Bookkeeping of a set's online steps (`DatabaseMigrationSet.onlineFolder`), one row per applied
+ * file, in the set's schema: `<schema>.__online_migrations (name, applied_at)`.
+ */
+export const ONLINE_MIGRATIONS_TABLE = '__online_migrations';
+
+/**
  * App-wide constant key for `pg_advisory_lock(bigint)`: drizzle's `migrate()` takes no lock, so
  * concurrent replicas booting with DATABASE_RUN_MIGRATIONS=true would race without it. One key for
  * every set, so different services that share a database migrate one after the other.

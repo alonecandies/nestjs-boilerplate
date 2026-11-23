@@ -1,5 +1,6 @@
 import type { DatabaseMigrationSet } from '../database.types.js';
 import { platformMigrations } from '../platform/platform.migrations.js';
+import { ONLINE_MIGRATIONS_TABLE } from './migrations.constants.js';
 
 /** The platform set itself, not a set that only shares its name. */
 const isPlatformSet = (set: DatabaseMigrationSet): boolean =>
@@ -13,7 +14,8 @@ const isPlatformSet = (set: DatabaseMigrationSet): boolean =>
  * set comes first (the domain sets call its helpers and rely on its grants), no set is listed twice,
  * and no two sets share a bookkeeping table: drizzle's migrator compares file timestamps only with
  * the newest row of the table it writes to, so the set with older timestamps would be skipped
- * silently. `withPlatformMigrations` and `runMigrations` both call it.
+ * silently. Nor do two sets with online steps share a schema (and so its `__online_migrations`).
+ * `withPlatformMigrations` and `runMigrations` both call it.
  */
 export function assertMigrationSets(sets: readonly DatabaseMigrationSet[]): void {
   const [first] = sets;
@@ -44,6 +46,18 @@ export function assertMigrationSets(sets: readonly DatabaseMigrationSet[]): void
       );
     }
     tableOwners.set(table, set.name);
+  }
+  const onlineOwners = new Map<string, string>();
+  for (const set of sets) {
+    if (set.onlineFolder === undefined) continue;
+    const owner = onlineOwners.get(set.migrationsSchema);
+    if (owner !== undefined) {
+      throw new Error(
+        `Migration sets "${owner}" and "${set.name}" both have online steps in schema ${set.migrationsSchema}: ` +
+          `they would share ${set.migrationsSchema}.${ONLINE_MIGRATIONS_TABLE}; give one of them its own schema`,
+      );
+    }
+    onlineOwners.set(set.migrationsSchema, set.name);
   }
 }
 

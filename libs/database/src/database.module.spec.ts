@@ -41,7 +41,12 @@ import { defineSystemMethod } from './system/system-method.js';
 
 vi.mock('postgres', () => ({ default: vi.fn() }));
 vi.mock('./migrator/run-migrations.js', () => ({
-  runMigrations: vi.fn(async () => ({ sets: [], total: 0, applied: 0 })),
+  runMigrations: vi.fn(async () => ({
+    sets: [],
+    total: 0,
+    applied: 0,
+    online: { total: 0, applied: 0 },
+  })),
 }));
 // HealthContributor is an abstract marker class; mocking the barrel keeps this unit test free of
 // observability's module graph (pino, prom-client, OpenTelemetry). DatabaseModule registers the
@@ -215,6 +220,8 @@ describe('DatabaseModule', () => {
           // Bounded lock waits at boot too, as in the release job (OPS-2 defaults).
           lockWaitTimeoutMs: 5000,
           lockWaitRetries: 5,
+          // Online steps wait without limit by default (DATABASE_MIGRATION_ONLINE_LOCK_TIMEOUT_MS).
+          onlineLockTimeoutMs: 0,
         }),
       );
       const [migrateOrder] = vi.mocked(runMigrations).mock.invocationCallOrder;

@@ -106,6 +106,24 @@ describe('inspectDatabase', () => {
     }
   });
 
+  it("treats a set's online bookkeeping table as internal when the set has online steps", async () => {
+    const runtime = connection(GOOD_RUNTIME);
+    const online = { ...parcels, onlineFolder: '/migrations/parcels/online' };
+    await inspectDatabase({ runtime, system: null, sets: [platformMigrations, online] });
+    const calls = runtime.unsafe.mock.calls;
+    const params = (kind: Kind): unknown[] | undefined =>
+      calls.find(([query]) => kindOf(query) === kind)?.[1];
+    expect(params('rls')).toEqual([
+      ['app', 'parcels'],
+      ['app', 'app', 'parcels', 'parcels'],
+      ['__drizzle_migrations', 'tenant_colocation', '__drizzle_migrations', '__online_migrations'],
+    ]);
+    expect(params('privilege')).toEqual([
+      ['app', 'app', 'parcels', 'parcels'],
+      ['__drizzle_migrations', 'tenant_colocation', '__drizzle_migrations', '__online_migrations'],
+    ]);
+  });
+
   describe('each single bad answer gives exactly its finding', () => {
     it.each<[string, Answers, Answers | null, string, RegExp]>([
       [
