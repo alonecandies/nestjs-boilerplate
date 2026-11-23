@@ -7,7 +7,11 @@ import {
   UnauthenticatedException,
 } from '@platform/common';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { makeAuthTokens, makeUserRecord } from '../../../../test/fixtures.js';
+import {
+  makeAuthTokens,
+  makeUserRecord,
+  passThroughTransaction,
+} from '../../../../test/fixtures.js';
 import { mockOf } from '../../../../test/mocks.js';
 import { principalLog } from '../../../../test/principal-log.js';
 import {
@@ -58,21 +62,35 @@ describe('RefreshSessionHandler', () => {
   });
   const tokens = makeAuthTokens();
   const log: string[] = [];
+  // `[call, ran inside transactions.run]`, in call order, for the three read-phase repositories.
+  const reads: [string, boolean][] = [];
+  let insideRun = 0;
 
   let tokenIssuer: ReturnType<typeof mockOf<TokenIssuer>>;
   let users: ReturnType<typeof mockOf<UsersRepository>>;
   let sessions: ReturnType<typeof mockOf<SessionsRepository>>;
   let memberships: ReturnType<typeof mockOf<MembershipsRepository>>;
   let sessionTokens: ReturnType<typeof mockOf<SessionTokensService>>;
+  let transactions: ReturnType<typeof passThroughTransaction>;
   let principals: ReturnType<typeof principalLog>;
   let handler: RefreshSessionHandler;
 
   beforeEach(() => {
     log.length = 0;
+    reads.length = 0;
+    insideRun = 0;
     tokenIssuer = mockOf<TokenIssuer>({ verifyRefreshToken: async () => claims });
-    users = mockOf<UsersRepository>({ findById: async () => user });
+    users = mockOf<UsersRepository>({
+      findById: async () => {
+        reads.push(['users.findById', insideRun > 0]);
+        return user;
+      },
+    });
     sessions = mockOf<SessionsRepository>({
-      findById: async () => storedSession(),
+      findById: async () => {
+        reads.push(['sessions.findById', insideRun > 0]);
+        return storedSession();
+      },
       revokeForRotation: async () => {
         log.push('revoke-for-rotation');
         return true;
@@ -87,25 +105,48 @@ describe('RefreshSessionHandler', () => {
       },
     });
     memberships = mockOf<MembershipsRepository>({
-      find: async () => ({
-        tenantId: TENANT,
-        userId: user.id,
-        roles: ['admin'],
-        lastActiveAt: null,
-        createdAt: new Date(),
-      }),
+      find: async () => {
+        reads.push(['memberships.find', insideRun > 0]);
+        return {
+          tenantId: TENANT,
+          userId: user.id,
+          roles: ['admin'],
+          lastActiveAt: null,
+          createdAt: new Date(),
+        };
+      },
     });
     // The real service: ONE unit of work as the session's principal, `before` first (its spec).
     sessionTokens = mockOf<SessionTokensService>({
       openIf: (input: OpenSessionInput, before: () => Promise<boolean>) =>
         runWithPrincipal(sessionPrincipal(input), async () => {
           log.push('begin');
+          reads.push(['rotation.begin', insideRun > 0]);
           const opened = await before();
           if (opened) log.push('open-successor');
           log.push('commit');
           return opened ? tokens : null;
         }),
     });
+    // Counts the runs and tells the mocks whether a call happens while one is open.
+    const base = passThroughTransaction();
+    transactions = {
+      ...base,
+      run: async <T>(work: () => Promise<T>): Promise<T> => {
+        insideRun += 1;
+        try {
+          return await base.run(work);
+        } finally {
+          insideRun -= 1;
+        }
+      },
+      get runs() {
+        return base.runs;
+      },
+      get principals() {
+        return base.principals;
+      },
+    };
     principals = principalLog();
     handler = new RefreshSessionHandler(
       tokenIssuer,
@@ -113,6 +154,7 @@ describe('RefreshSessionHandler', () => {
       principals.track('sessions', sessions),
       principals.track('sessionTokens', sessionTokens),
       principals.track('memberships', memberships),
+      transactions,
     );
   });
 
@@ -138,6 +180,20 @@ describe('RefreshSessionHandler', () => {
       replacedById: input?.sessionId,
       now: expect.any(Date),
     });
+  });
+
+  it('runs the three reads in ONE transaction as { sub, null }, before the rotation', async () => {
+    await handler.execute(command);
+    expect(transactions.runs).toBe(1);
+    expect(transactions.principals.map((p) => [p?.userId, p?.tenantId])).toEqual([[user.id, null]]);
+    expect(reads).toEqual([
+      ['users.findById', true],
+      ['sessions.findById', true],
+      ['memberships.find', true],
+      // The rotation is its own unit of work (the principal changes), outside the read transaction.
+      ['rotation.begin', false],
+      ['memberships.find', false],
+    ]);
   });
 
   it('reads as { sub, null }, rotates as { sub, session.tenantId, roles } (flow table)', async () => {

@@ -1,3 +1,5 @@
+import { setFlagsFromString } from 'node:v8';
+import { runInNewContext } from 'node:vm';
 import { HttpStatus, Logger } from '@nestjs/common';
 import { trace } from '@opentelemetry/api';
 import type { AiConfig } from '@platform/config';
@@ -305,17 +307,30 @@ describe('AiClient.stream', () => {
   it('settles usage when the SDK ends the stream on its abort path', async () => {
     const model = mockHangingModel(['partial ']);
     // A signal aborted without an 'abort' event reaching the client's listener: only the
-    // SDK's onAbort path can settle usage.
+    // SDK's onAbort path can settle usage. The client's listener is the first one registered
+    // on the signal the SDK hands the model (the others sit on the caller's and the deadline's).
     const controller = new AbortController();
     const { client } = setup(model);
+    const registered: { target: AbortSignal; listener: unknown }[] = [];
+    const original = AbortSignal.prototype.addEventListener;
     const addEventListener = vi
       .spyOn(AbortSignal.prototype, 'addEventListener')
-      .mockImplementationOnce(() => undefined);
+      .mockImplementation(function (this: AbortSignal, ...args: Parameters<typeof original>) {
+        if (args[0] === 'abort') registered.push({ target: this, listener: args[1] });
+        original.apply(this, args);
+      });
 
     const call = client.stream({ messages: ask(), signal: controller.signal });
     addEventListener.mockRestore();
     const iterator = call.result.textStream[Symbol.asyncIterator]();
     expect((await iterator.next()).value).toBe('partial ');
+    const modelSignal = model.doStreamCalls[0]?.abortSignal;
+    const clientListener = registered.find(({ target }) => target === modelSignal);
+    expect(clientListener).toBeDefined();
+    modelSignal?.removeEventListener(
+      'abort',
+      clientListener?.listener as Parameters<AbortSignal['removeEventListener']>[1],
+    );
     controller.abort();
     await iterator.next().catch(() => undefined);
 
@@ -350,7 +365,56 @@ describe('AiClient.stream', () => {
     await expect(call.usage).rejects.toBeInstanceOf(AiUpstreamError);
     expect(await value(metrics.requests, { outcome: 'error' })).toBe(1);
   });
+
+  it.each([
+    ['a plain', () => new AbortController().signal],
+    [
+      'the handler-shaped composite',
+      () => AbortSignal.any([new AbortController().signal, new AbortController().signal]),
+    ],
+  ])(
+    'stream: a finished call with %s caller signal can be garbage-collected',
+    async (_shape, callerSignal) => {
+      // Each call gets its own model: a shared mock records every call's options, signal included.
+      const client = new AiClient(
+        aiTestConfig(),
+        new MockAiModelProvider(() => mockStreamModel(['a'])),
+        metrics,
+      );
+      const finished = async (): Promise<WeakRef<Promise<AiUsage>>> => {
+        const call = client.stream({ messages: ask(), signal: callerSignal() });
+        expect(await read(call.result.textStream)).toEqual(['a']);
+        await call.usage;
+        return new WeakRef(call.usage);
+      };
+      const refs: WeakRef<Promise<AiUsage>>[] = [];
+      for (let i = 0; i < 20; i += 1) refs.push(await finished());
+
+      // Full GCs across macrotasks: a composite signal is freed by a GC, Node's
+      // FinalizationRegistry cleanup, then another GC. Deref only in a later task than the
+      // last gc(): a deref in the same task as a gc() keeps its target alive for that task.
+      const gc = exposedGc();
+      for (let round = 0; round < 6; round += 1) {
+        gc();
+        await sleep(20);
+      }
+      await sleep(20);
+
+      expect(refs.filter((ref) => ref.deref() !== undefined)).toHaveLength(0);
+    },
+  );
 });
+
+/** The V8 `gc()`, without a vitest config change (`--expose-gc` set at runtime). */
+function exposedGc(): () => void {
+  setFlagsFromString('--expose-gc');
+  return runInNewContext('gc') as () => void;
+}
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 describe('AiClient tool steps', () => {
   const STEP_USAGE = { inputTokens: 3, outputTokens: 2 };
@@ -564,6 +628,41 @@ describe('AiClient usage of a failed call (aiUsageOf)', () => {
         },
       ]);
       const { client } = setup(model);
+
+      const error = await failureOf(kind, client, {
+        messages: ask(),
+        tools: lookupTool().tools,
+        signal: caller.signal,
+      });
+
+      expect(error).toBe(reason);
+      expect(aiUsageOf(reason)).toEqual({ inputTokens: 1_000, outputTokens: 50, costUsd: 0.01 });
+      expect(await value(metrics.requests, { outcome: 'aborted' })).toBe(1);
+      expect(await tokens()).toEqual({ input: 1_000, output: 50 });
+    },
+  );
+
+  it.each(KINDS)(
+    "a caller abort during the SDK retry backoff: the caller's reason carries the call billed before it (%s)",
+    async (kind) => {
+      const caller = new AbortController();
+      const reason = new Error('client gone');
+      const retryable = new APICallError({
+        message: 'upstream unavailable',
+        url: 'https://openrouter.invalid/api/v1/chat/completions',
+        requestBodyValues: {},
+        statusCode: 503,
+        isRetryable: true,
+      });
+      const model = mockScriptedModel([
+        { toolCalls: [LOOKUP], ...BILLED },
+        (): MockModelTurn => {
+          // The abort lands while the SDK waits out its first retry delay (2 s by default).
+          setTimeout(() => caller.abort(reason), 10);
+          throw retryable;
+        },
+      ]);
+      const { client } = setup(model, { maxRetries: 2 });
 
       const error = await failureOf(kind, client, {
         messages: ask(),

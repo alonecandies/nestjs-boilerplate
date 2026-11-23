@@ -22,7 +22,12 @@ export interface AiCallInput<TOOLS extends ToolSet = ToolSet> {
   readonly tools?: TOOLS;
   /** Capped by `AI_MAX_OUTPUT_TOKENS` (also the default). */
   readonly maxOutputTokens?: number;
-  /** The caller's cancellation (a client that disconnected): aborts the upstream call. */
+  /**
+   * The caller's cancellation (a client that disconnected): aborts the upstream call. Pass a
+   * per-request signal: the call keeps a listener on it for the signal's lifetime (an abort after
+   * the call ended still reaches it), so one long-lived signal shared by many calls would
+   * accumulate one listener per call.
+   */
   readonly signal?: AbortSignal;
 }
 

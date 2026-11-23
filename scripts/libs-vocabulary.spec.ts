@@ -49,12 +49,24 @@ const DOMAIN_WORD = new RegExp(
 const splitCamelCase = (line: string): string => line.replace(/([a-z0-9])([A-Z])/g, '$1 $2');
 const namesDomain = (line: string): boolean => DOMAIN_WORD.test(splitCamelCase(line));
 
+const posixPath = (path: string): string => relative(ROOT, path).split(sep).join('/');
+
 function* testFiles(dir: string): Generator<string> {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (SKIPPED_DIRS.has(entry.name)) continue;
     const path = join(dir, entry.name);
     if (entry.isDirectory()) yield* testFiles(path);
-    else if (TEST_FILE.test(relative(ROOT, path).split(sep).join('/'))) yield path;
+    else if (TEST_FILE.test(posixPath(path))) yield path;
+  }
+}
+
+/** Non-test `.ts` sources: what ships, as opposed to specs and fixtures. */
+function* sourceFiles(dir: string): Generator<string> {
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    if (SKIPPED_DIRS.has(entry.name)) continue;
+    const path = join(dir, entry.name);
+    if (entry.isDirectory()) yield* sourceFiles(path);
+    else if (path.endsWith('.ts') && !TEST_FILE.test(posixPath(path))) yield path;
   }
 }
 
@@ -91,6 +103,22 @@ describe('libs vocabulary: libs/ names no domain, specs and fixtures included', 
         .forEach((line, index) => {
           if (!line.includes(ALLOW_MARKER) && namesDomain(line)) {
             hits.push(`${path}:${index + 1}: ${line.trim()}`);
+          }
+        });
+    }
+    expect(hits).toEqual([]);
+  });
+
+  it('libs/config sources name no domain either (a removed variable is checked by its domain)', () => {
+    const files = [...sourceFiles(join(LIBS, 'config', 'src'))];
+    expect(files.length).toBeGreaterThan(10);
+    const hits: string[] = [];
+    for (const file of files) {
+      readFileSync(file, 'utf8')
+        .split('\n')
+        .forEach((line, index) => {
+          if (!line.includes(ALLOW_MARKER) && namesDomain(line)) {
+            hits.push(`${posixPath(file)}:${index + 1}: ${line.trim()}`);
           }
         });
     }

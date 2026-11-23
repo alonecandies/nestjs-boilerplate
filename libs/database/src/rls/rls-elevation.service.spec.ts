@@ -359,5 +359,80 @@ describe('RlsElevation', () => {
         'commit',
       ]);
     });
+
+    it('elevates again after a savepoint that elevated rolls back (ID-1: the flag is restored)', async () => {
+      const { sql, txHost, elevation, inTransaction } = setup();
+      const rollback = new Error('rollback the savepoint');
+      await inTransaction(admin, async () => {
+        await expect(
+          txHost.withTransaction(Propagation.Nested, async () => {
+            await elevation.elevate('orders:read');
+            throw rollback;
+          }),
+        ).rejects.toBe(rollback);
+        await elevation.justified('membership-activity', () =>
+          txHost.tx.execute(drizzleSql`select 2`),
+        );
+        await txHost.tx.execute(drizzleSql`select 3`);
+      });
+      expect(sql.queries).toEqual([
+        'begin',
+        CONTEXT,
+        'savepoint',
+        ON,
+        'rollback to savepoint',
+        ON,
+        'select 2',
+        OFF,
+        'select 3',
+        'commit',
+      ]);
+    });
+
+    it('keeps the flag when the savepoint resolves, or when it was on before the savepoint', async () => {
+      const resolved = setup();
+      await resolved.inTransaction(admin, async () => {
+        await resolved.txHost.withTransaction(Propagation.Nested, () =>
+          resolved.elevation.elevate('orders:read'),
+        );
+        await resolved.elevation.justified('membership-activity', () =>
+          resolved.txHost.tx.execute(drizzleSql`select 2`),
+        );
+      });
+      expect(resolved.sql.queries).toEqual([
+        'begin',
+        CONTEXT,
+        'savepoint',
+        ON,
+        'release savepoint',
+        'select 2',
+        'commit',
+      ]);
+
+      const before = setup();
+      const rollback = new Error('rollback the savepoint');
+      await before.inTransaction(admin, async () => {
+        await before.elevation.elevate('orders:read');
+        await expect(
+          before.txHost.withTransaction(Propagation.Nested, async () => {
+            await before.elevation.elevate('orders:read');
+            throw rollback;
+          }),
+        ).rejects.toBe(rollback);
+        await before.elevation.justified('membership-activity', () =>
+          before.txHost.tx.execute(drizzleSql`select 2`),
+        );
+      });
+      expect(before.sql.queries).toEqual([
+        'begin',
+        CONTEXT,
+        ON,
+        'savepoint',
+        ON,
+        'rollback to savepoint',
+        'select 2',
+        'commit',
+      ]);
+    });
   });
 });

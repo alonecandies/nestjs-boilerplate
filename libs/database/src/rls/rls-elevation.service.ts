@@ -56,6 +56,20 @@ const stateOf = (context: RlsContextInput): ElevationState => {
   return state;
 };
 
+/**
+ * @internal The savepoint guard of `DrizzlePostgresTransactionalAdapter` (ID-1): call it before a
+ * savepoint opens; call what it returns when the savepoint rolled back. `ROLLBACK TO SAVEPOINT`
+ * reverts an `elevate()` made inside it, so the transaction's `permanent` flag goes back to its
+ * value from before the savepoint. It only ever lowers the flag, so it cannot fail open.
+ */
+export function rememberElevationBeforeSavepoint(context: RlsContextInput): () => void {
+  if (states.get(context)?.permanent === true) return () => undefined;
+  return () => {
+    const state = states.get(context);
+    if (state !== undefined) state.permanent = false;
+  };
+}
+
 const denied = (message: string): PermissionDeniedException =>
   new PermissionDeniedException(message, { code: ELEVATION_DENIED });
 

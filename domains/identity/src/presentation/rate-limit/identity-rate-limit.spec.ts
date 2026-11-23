@@ -1,9 +1,20 @@
+import { EnvValidationError, validateAllEnv } from '@platform/config';
 import { RATE_LIMIT_POLICY_KEY } from '@platform/redis';
 import { describe, expect, it } from 'vitest';
 import { AuthResolver } from '../graphql/auth.resolver.js';
 import { AuthController } from '../http/auth.controller.js';
 import { identityRateLimitConfig } from './identity-rate-limit.config.js';
 import { IDENTITY_RATE_LIMITS, identityRateLimitPolicies } from './identity-rate-limit.js';
+
+const errorOf = (fn: () => unknown): EnvValidationError => {
+  try {
+    fn();
+  } catch (error) {
+    if (error instanceof EnvValidationError) return error;
+    throw error;
+  }
+  throw new Error('expected an EnvValidationError');
+};
 
 describe('identity rate-limit policies', () => {
   it('declares identity.credentials from IDENTITY_* env with lockout', () => {
@@ -41,5 +52,29 @@ describe('identity rate-limit policies', () => {
         IDENTITY_RATE_LIMITS.CREDENTIALS,
       );
     }
+  });
+
+  // THROTTLE_AUTH_* moved to IDENTITY_CREDENTIALS_* (F6); setting a removed name must not be ignored.
+  it.each([
+    ['THROTTLE_AUTH_LIMIT', /set IDENTITY_CREDENTIALS_LIMIT instead/],
+    ['THROTTLE_AUTH_TTL_MS', /set IDENTITY_CREDENTIALS_TTL_MS instead/],
+  ])(
+    'fails validation when the removed %s is set, naming its replacement',
+    (legacy, replacement) => {
+      const error = errorOf(() => identityRateLimitConfig.parse({ [legacy]: '7' }));
+      expect(error.issues).toHaveLength(1);
+      expect(error.issues[0]?.path).toEqual([legacy]);
+      expect(error.issues[0]?.message).toMatch(replacement);
+      expect(error.message).toContain(legacy);
+      expect(
+        errorOf(() => validateAllEnv({ [legacy]: '7' }, [identityRateLimitConfig])).message,
+      ).toMatch(replacement);
+    },
+  );
+
+  it('a blank removed variable is unset, like every other variable', () => {
+    expect(() =>
+      identityRateLimitConfig.parse({ THROTTLE_AUTH_LIMIT: '', THROTTLE_AUTH_TTL_MS: ' ' }),
+    ).not.toThrow();
   });
 });

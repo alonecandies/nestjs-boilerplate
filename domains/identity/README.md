@@ -136,7 +136,8 @@ in-process `EventBus` after the commit.
   the platform `auth` namespace that every verifier shares) and the refresh JWT (7 d, its own
   secret from identity's `refreshToken` namespace, `jti` = session id), and verifies refresh
   tokens. The `sessions` row stores `sha256(refreshToken)` only.
-- **Refresh rotation**: verify the JWT (no DB access for garbage) → one transaction:
+- **Refresh rotation**: verify the JWT (no DB access for garbage) → one read transaction (user, session, membership) → one
+  rotation transaction:
   `UPDATE identity.sessions SET revoked_at, replaced_by_id WHERE id AND user_id AND refresh_token_hash AND
 revoked_at IS NULL AND expires_at > now RETURNING id` (compare-and-set: concurrent refreshes of
   one token cannot both win) + insert the successor. If nothing matched: a genuine token whose

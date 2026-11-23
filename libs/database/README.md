@@ -255,7 +255,8 @@ from the role settings). The full table is in [CONFIGURATION.md](../../docs/CONF
   reaching every shard of a distributed fixture, `WITH CHECK` on a foreign insert, concurrent principals alternating over
   a small pool, `RLS_NO_PRINCIPAL`, each with `DATABASE_PREPARE` true and false), `test/rls-elevation.int-spec.ts`
   (`elevate` widening the same transaction's read but never to another tenant, `justified` for its callback only, the
-  next transaction on the connection not elevated, a refused elevation sending nothing), `test/system-database.int-spec.ts`
+  next transaction on the connection not elevated, a refused elevation sending nothing, a savepoint that elevated and
+  rolled back leaving own rows on every shard and a later `justified` elevating again), `test/system-database.int-spec.ts`
   (the system pool reading every row where the runtime handle reads none, a `system` method refused outside
   `SystemContext`, a system write surviving a runtime rollback, the pool cap), `test/boot-guard.int-spec.ts` (each check refusing in
   `enforce` and leaving no backend behind) and `test/sharding.int-spec.ts` (coordinator plus one worker: the context
