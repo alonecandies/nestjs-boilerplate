@@ -7,8 +7,16 @@ import type { AppCacheService } from '@platform/redis';
 export class InMemoryAppCache implements Pick<AppCacheService, 'getOrSet' | 'get' | 'set' | 'del'> {
   readonly store = new Map<string, string>();
   readonly loads: string[] = [];
+  /** The cache name each `getOrSet` call passed (`undefined` when none). */
+  readonly names: Array<string | undefined> = [];
 
-  async getOrSet<T>(key: string, loader: () => Promise<T>): Promise<T> {
+  async getOrSet<T>(
+    key: string,
+    loader: () => Promise<T>,
+    _ttlMs?: number,
+    cacheName?: string,
+  ): Promise<T> {
+    this.names.push(cacheName);
     const hit = this.store.get(key);
     if (hit !== undefined) return JSON.parse(hit) as T;
     this.loads.push(key);

@@ -58,6 +58,8 @@ export const USERS_LOADER = 'users';
 /** Read-through cache of `GET /v1/users/:id` (blueprint §3.16): key `user:{id}`, 30 s. */
 export const USER_CACHE_TTL_MS = 30_000;
 export const userCacheKey = (id: string): string => `user:${id}`;
+/** The `cache` label of the user read cache in `cache_requests_total`. */
+export const USER_CACHE_NAME = 'user';
 
 /** Hourly purge of expired sessions, on one replica only (`@WithLock`). */
 export const PURGE_SESSIONS_LOCK = 'identity:purge-sessions';

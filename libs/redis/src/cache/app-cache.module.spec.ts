@@ -3,7 +3,7 @@ import type { Keyv } from 'keyv';
 import { describe, expect, it } from 'vitest';
 import { AppCacheModule, createCacheOptions } from './app-cache.module.js';
 import { BoundedTtlKeyv } from './bounded-ttl-keyv.js';
-import { AppCacheService } from './cache.service.js';
+import { AppCacheService, CACHE_REQUESTS_TOTAL } from './cache.service.js';
 
 describe('createCacheOptions', () => {
   it('builds [L1 (capped LRU), L2 (Redis, namespaced)] with the L2 default TTL', async () => {
@@ -32,5 +32,11 @@ describe('AppCacheModule', () => {
     const dynamic = AppCacheModule.forRootAsync({ crossInstanceInvalidation: false });
     expect(dynamic.global).toBe(true);
     expect(dynamic.exports).toEqual([AppCacheService]);
+  });
+
+  it('registers the cache_requests_total counter AppCacheService injects', () => {
+    const dynamic = AppCacheModule.forRootAsync();
+    const tokens = (dynamic.providers ?? []).map((p) => (typeof p === 'function' ? p : p.provide));
+    expect(tokens).toContain(`PROM_METRIC_${CACHE_REQUESTS_TOTAL.toUpperCase()}`);
   });
 });

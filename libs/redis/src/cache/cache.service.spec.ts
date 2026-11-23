@@ -1,11 +1,17 @@
 import { redisConfig } from '@platform/config';
 import { type Cache, createCache } from 'cache-manager';
 import { Keyv } from 'keyv';
+import { Counter, Registry } from 'prom-client';
 import { describe, expect, it, vi } from 'vitest';
 import { RedisKeyService } from '../keys/redis-key.service.js';
 import { InMemoryRedis } from '../testing/in-memory-redis.js';
 import { createL1Store } from './bounded-ttl-keyv.js';
-import { AppCacheService, parseInvalidationMessage } from './cache.service.js';
+import {
+  AppCacheService,
+  CACHE_REQUESTS_TOTAL,
+  cacheMetricName,
+  parseInvalidationMessage,
+} from './cache.service.js';
 
 const keys = new RedisKeyService(redisConfig.parse({ REDIS_KEY_PREFIX: 'svc' }));
 const flush = async (): Promise<void> => {
@@ -18,11 +24,32 @@ function replica(l2: Keyv, bus: InMemoryRedis, crossInstanceInvalidation = true)
   const cache: Cache = createCache({ stores: [l1, l2], ttl: 30_000 });
   const redis = bus.duplicate();
   const subscriber = bus.duplicate();
-  const service = new AppCacheService(cache, redis.asRedis(), subscriber.asRedis(), keys, {
-    crossInstanceInvalidation,
+  const registry = new Registry();
+  const requests = new Counter({
+    name: CACHE_REQUESTS_TOTAL,
+    help: 'test',
+    labelNames: ['cache', 'outcome'],
+    registers: [registry],
   });
+  const service = new AppCacheService(
+    cache,
+    redis.asRedis(),
+    subscriber.asRedis(),
+    keys,
+    { crossInstanceInvalidation },
+    requests,
+  );
   service.onModuleInit();
-  return { service, l1, redis, subscriber };
+  /** The value of one `cache_requests_total` series (0 when absent). */
+  const count = async (cacheName: string, outcome: 'hit' | 'miss'): Promise<number> => {
+    const { values } = await requests.get();
+    return (
+      values.find((v) => v.labels.cache === cacheName && v.labels.outcome === outcome)?.value ?? 0
+    );
+  };
+  const series = async (): Promise<string[]> =>
+    (await requests.get()).values.map((v) => [v.labels.cache, v.labels.outcome].join('/'));
+  return { service, l1, redis, subscriber, count, series };
 }
 
 async function cluster() {
@@ -34,7 +61,69 @@ async function cluster() {
   return { a, b, l2 };
 }
 
+describe('cacheMetricName', () => {
+  it('uses the passed name, else the key prefix before the first colon, else other', () => {
+    expect(cacheMetricName('user:123', 'users')).toBe('users');
+    expect(cacheMetricName('user:123')).toBe('user');
+    expect(cacheMetricName('files:7b1c:meta')).toBe('files');
+  });
+
+  it('never labels with a raw key', () => {
+    expect(cacheMetricName('0b2f6c1e-5c53-4e9c-9d3a-6a7e2f1f8f10')).toBe('other');
+    expect(cacheMetricName('a'.repeat(40))).toBe('other');
+    expect(cacheMetricName('User:1')).toBe('other');
+    expect(cacheMetricName(':abc')).toBe('other');
+    expect(cacheMetricName('9lives:1')).toBe('other');
+    // an unsafe passed name is ignored: the label falls back to the key's own safe prefix, else other
+    expect(cacheMetricName('user:1', 'raw key/with spaces')).toBe('user');
+    expect(cacheMetricName('0b2f6c1e-5c53-4e9c-9d3a-6a7e2f1f8f10', 'Raw Key')).toBe('other');
+    expect(cacheMetricName('user:1', '')).toBe('user');
+  });
+});
+
 describe('AppCacheService', () => {
+  it('counts one miss, then one hit, under the passed cache name', async () => {
+    const { a } = await cluster();
+    const loader = vi.fn(async () => ({ id: 'u1' }));
+    await a.service.getOrSet('user:u1', loader, 30_000, 'users');
+    expect(await a.count('users', 'miss')).toBe(1);
+    expect(await a.count('users', 'hit')).toBe(0);
+    await a.service.getOrSet('user:u1', loader, 30_000, 'users');
+    expect(await a.count('users', 'miss')).toBe(1);
+    expect(await a.count('users', 'hit')).toBe(1);
+    expect(await a.series()).toEqual(['users/miss', 'users/hit']);
+  });
+
+  it('counts a call that coalesced onto another call loader as a hit', async () => {
+    const { a } = await cluster();
+    const loader = vi.fn(async () => 'v');
+    await Promise.all([
+      a.service.getOrSet('user:u1', loader),
+      a.service.getOrSet('user:u1', loader),
+    ]);
+    expect(await a.count('user', 'miss')).toBe(1);
+    expect(await a.count('user', 'hit')).toBe(1);
+  });
+
+  it('counts a raw uuid key under other, never under the key', async () => {
+    const { a } = await cluster();
+    const key = '0b2f6c1e-5c53-4e9c-9d3a-6a7e2f1f8f10';
+    await a.service.getOrSet(key, async () => 1);
+    await a.service.getOrSet(key, async () => 1);
+    expect(await a.series()).toEqual(['other/miss', 'other/hit']);
+  });
+
+  it('counts a miss when the loader fails and rethrows', async () => {
+    const { a } = await cluster();
+    await expect(
+      a.service.getOrSet('user:u1', async () => {
+        throw new Error('boom');
+      }),
+    ).rejects.toThrow('boom');
+    expect(await a.count('user', 'miss')).toBe(1);
+    expect(await a.count('user', 'hit')).toBe(0);
+  });
+
   it('getOrSet reads through and coalesces concurrent misses', async () => {
     const { a } = await cluster();
     const loader = vi.fn(async () => ({ id: 'u1' }));

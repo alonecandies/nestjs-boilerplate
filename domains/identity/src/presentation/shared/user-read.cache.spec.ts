@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { makeUser } from '../../../test/fixtures.js';
 import { InMemoryAppCache } from '../../../test/in-memory-app-cache.js';
 import type { UsersPort } from '../../application/ports/users.port.js';
-import { userCacheKey } from '../../identity.constants.js';
+import { USER_CACHE_NAME, userCacheKey } from '../../identity.constants.js';
 import { UserReadCache } from './user-read.cache.js';
 
 /** A `UsersPort` that knows memberships: a scoped read outside the tenant is a 404. */
@@ -64,6 +64,14 @@ describe('UserReadCache', () => {
 
       expect(port.calls).toEqual([{ id: member.id }]);
       expect([...cache.store.keys()]).toEqual([userCacheKey(member.id)]);
+    });
+
+    it('names its cache in cache_requests_total', async () => {
+      const { cache, reads, member } = setup();
+
+      await reads.getUser(member.id);
+
+      expect(cache.names).toEqual([USER_CACHE_NAME]);
     });
 
     it('revives the dates of a JSON-cached profile', async () => {
