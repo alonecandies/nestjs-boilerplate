@@ -96,8 +96,9 @@ because the rest counts as uncovered: read the package's own lines in the report
 (the coverage gate, [RELEASING.md](RELEASING.md#coverage-gate)) and
 `bun run test:int` in a separate `integration` job. That job has Docker for testcontainers and a `redis`
 service container with `REDIS_URL=redis://localhost:6379`. Before the specs run, the job pulls every image they
-start (`node scripts/int-images.mjs` prints the list from the image constants: Citus, Cassandra, Kafka, immudb,
-RustFS, fake-gcs-server and Redis), so no `beforeAll` spends its hook timeout on a download.
+start (`node scripts/int-images.mjs` prints the list: the testcontainers Ryuk reaper every fork starts first,
+then the image constants: Citus, Cassandra, Kafka, immudb, RustFS, fake-gcs-server and Redis), so no `beforeAll`
+spends its hook timeout on a download.
 
 ## Writing tests
 

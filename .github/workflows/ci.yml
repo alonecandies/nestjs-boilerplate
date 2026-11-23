@@ -182,8 +182,9 @@ jobs:
         run: bun install --frozen-lockfile
 
       # Every int project starts its own containers, several at once: pull each image once first
-      # (the list comes from the image constants next to the code that starts them,
-      # scripts/int-images.mjs), so no beforeAll spends its hook timeout on a download.
+      # (the list comes from the image constants next to the code that starts them, plus the
+      # testcontainers Ryuk reaper; scripts/int-images.mjs), so no beforeAll spends its hook timeout
+      # on a download.
       - name: Pull the images of the int specs
         run: |
           images=$(node scripts/int-images.mjs)

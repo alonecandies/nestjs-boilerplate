@@ -89,8 +89,8 @@ describe('.github/workflows/ci.yml and the Dockerfile (CI-1)', () => {
     expect(schedule?.[0]?.cron).toMatch(/^\S+ \S+ \* \* [0-6]$/);
     const advisories = job('advisories');
     expect(advisories.if).toBe("github.event_name == 'schedule'");
-    // Its own concurrency group: a group keeps one pending run, so a scheduled run queued in the
-    // master group would cancel a pending push run.
+    // Its own concurrency group: a group keeps one pending run, so a scheduled run sharing the
+    // master ref's group could replace a pending manual run there (push runs have per-SHA groups).
     expect(CI.concurrency.group).toContain("github.event_name == 'schedule'");
     expect(
       advisories.steps.some((step) => step.run?.includes('node scripts/check-audit.mjs')),
