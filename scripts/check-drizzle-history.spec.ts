@@ -68,7 +68,14 @@ describe('bun run db:check', () => {
   });
 
   it('runs drizzle-kit check in every Postgres domain and passes on the committed histories', () => {
-    const result = spawnSync('bun', ['run', 'db:check'], { cwd: ROOT, encoding: 'utf8' });
+    // Colours off for the child: with FORCE_COLOR set (vitest passes it on in CI), drizzle-kit's
+    // spinner redraws its frames into the pipe and repeats "Everything's fine" a varying number of
+    // times (13 in CI, 15 locally).
+    const result = spawnSync('bun', ['run', 'db:check'], {
+      cwd: ROOT,
+      encoding: 'utf8',
+      env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+    });
     const output = `${result.stdout}${result.stderr}`;
     expect(result.status, output).toBe(0);
     expect(output.match(/Everything's fine/g)?.length).toBe(POSTGRES_DOMAINS.length);
