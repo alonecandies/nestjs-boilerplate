@@ -16,6 +16,7 @@ import { postingOwnerOf } from '../../../ledger/ledger-posting-request.js';
 import { draftFromBalanceTransaction } from '../../../ledger/posting-rules.js';
 import { StripeOwnerResolver } from '../../../ledger/stripe-owner-resolver.js';
 import type { LedgerEntryRef } from '../../../repositories/ledger-receipts.repository.js';
+import type { ReconciliationContext } from '../reconcile-ledger.command.js';
 import { R4_REF_PAGE_SIZE, R4StripeCheck } from './r4-stripe.js';
 
 const TENANT_B = '0192f0c1-0000-7000-8000-000000000002';
@@ -94,7 +95,7 @@ describe('R4StripeCheck (reconciliation R4: Stripe balance transactions against 
   let stripe: FakeStripe;
   let check: R4StripeCheck;
 
-  const run = (context = ctx) => asSystem(() => check.run(context));
+  const run = (context: ReconciliationContext = ctx) => asSystem(() => check.run(context));
   const append = (rows: readonly LedgerDiscrepancyInput[]) =>
     asSystem(() => store.system.appendDiscrepancies(rows));
   const records = () => store.outbox.records;
@@ -360,6 +361,23 @@ describe('R4StripeCheck (reconciliation R4: Stripe balance transactions against 
     stripe.pages = [[txn]];
 
     await expect(run()).resolves.toEqual([]);
+    expect(records()).toEqual([]);
+  });
+
+  it("uses the run's shared refs and lists only the top-up from their read time until now", async () => {
+    const shared = bt('txn_shared');
+    const sharedRef = await post(shared);
+    const late = bt('txn_posted_after_the_shared_read');
+    await post(late, { postedAt: new Date(NOW.getTime() - 30_000) });
+    stripe.pages = [[shared, late]];
+    const readAt = new Date(NOW.getTime() - 60_000);
+    const listRefs = vi.spyOn(store.system, 'listEntryRefs');
+    const entryRefs = vi.fn(async () => ({ readAt, rows: [sharedRef] }));
+
+    await expect(run({ ...ctx, entryRefs })).resolves.toEqual([]);
+
+    expect(entryRefs).toHaveBeenCalledTimes(1);
+    expect(listRefs).toHaveBeenCalledExactlyOnceWith(readAt, NOW, null, R4_REF_PAGE_SIZE);
     expect(records()).toEqual([]);
   });
 

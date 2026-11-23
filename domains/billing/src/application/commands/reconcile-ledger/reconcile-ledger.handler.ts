@@ -13,9 +13,10 @@ import {
   type LedgerRunCounts,
   LedgerSystemRepository,
 } from '../../repositories/ledger.system-repository.js';
+import { memoizedEntryRefs } from './checks/entry-refs.js';
 import { R1InvariantCheck } from './checks/r1-invariant.js';
 import { R2MutationCheck } from './checks/r2-mutation.js';
-import { R3PaymentsCheck } from './checks/r3-payments.js';
+import { R3_PAGE_SIZE, R3_PAYMENT_LOOKBEHIND_MS, R3PaymentsCheck } from './checks/r3-payments.js';
 import { R4StripeCheck } from './checks/r4-stripe.js';
 import { R5VerificationCheck } from './checks/r5-verification.js';
 import {
@@ -23,6 +24,7 @@ import {
   ReconcileLedgerCommand,
   type ReconciliationCheck,
   ReconciliationCheckFailure,
+  type ReconciliationContext,
 } from './reconcile-ledger.command.js';
 
 const HOUR_MS = 3_600_000;
@@ -35,9 +37,10 @@ export function defaultReconcileWindow(now: Date, lookbackHours: number): Ledger
 
 /**
  * One reconciliation run (ledger design §4; outbox plan Tasks 15-17): `startRun` → every registered
- * check in order (R1, R2, R3, R4, and R5 while `LEDGER_VERIFY=true`), each check's findings
- * appended with `appendDiscrepancies` (one call per kind, so the new rows are known per kind) →
- * `finishRun`. Findings are only appended, never corrected; their ids are deterministic, so a rerun
+ * check in order (R1, R2, R3, R4, and R5 while `LEDGER_VERIFY=true`) with one context per run
+ * (its `entryRefs` reads the refs from 24 h before the window once, for R3 and R4), each check's
+ * findings appended with `appendDiscrepancies` (one call per kind, so the new rows are known per
+ * kind) → `finishRun`. Findings are only appended, never corrected; their ids are deterministic, so a rerun
  * or an overlapping window adds no row. A check that throws (or whose findings cannot be stored) is
  * logged, the remaining checks still run, rows already appended stay, and the run finishes
  * `failed`; a `ReconciliationCheckFailure`'s findings are appended before that. `found` counts findings per kind, `appended` the new rows among them; the metrics
@@ -72,6 +75,15 @@ export class ReconcileLedgerHandler implements ICommandHandler<ReconcileLedgerCo
       command.window ?? defaultReconcileWindow(new Date(), this.config.reconcileLookbackHours);
     const runId = generateId();
     await this.system.startRun({ id: runId, ...window });
+    const ctx: ReconciliationContext = {
+      runId,
+      ...window,
+      entryRefs: memoizedEntryRefs(
+        this.system,
+        new Date(window.from.getTime() - R3_PAYMENT_LOOKBEHIND_MS),
+        R3_PAGE_SIZE,
+      ),
+    };
 
     const found: Partial<Record<LedgerDiscrepancyKind, number>> = {};
     const appended: Partial<Record<LedgerDiscrepancyKind, number>> = {};
@@ -86,7 +98,7 @@ export class ReconcileLedgerHandler implements ICommandHandler<ReconcileLedgerCo
     };
     for (const check of this.checks) {
       try {
-        await append(await check.run({ runId, ...window }));
+        await append(await check.run(ctx));
       } catch (error) {
         failedChecks.push(check.name);
         this.logger.error({ err: error, runId, check: check.name }, 'Reconciliation check failed');

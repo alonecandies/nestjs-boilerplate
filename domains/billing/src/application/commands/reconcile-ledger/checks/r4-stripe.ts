@@ -32,7 +32,7 @@ import { LedgerPort } from '../../../ports/ledger.port.js';
 import { LedgerSystemRepository } from '../../../repositories/ledger.system-repository.js';
 import type { LedgerEntryRef } from '../../../repositories/ledger-receipts.repository.js';
 import type { ReconciliationCheck, ReconciliationContext } from '../reconcile-ledger.command.js';
-import { keysetPages } from './keyset-pages.js';
+import { listAllEntryRefs, memoizedEntryRefs } from './entry-refs.js';
 
 /** Page size of the ref list. */
 export const R4_REF_PAGE_SIZE = 500;
@@ -70,10 +70,14 @@ function movement(entry: LedgerEntry, account: string, currency: string): bigint
 /**
  * R4, Stripe's balance transactions against the ledger (ledger design §4; outbox plan Task 16):
  * the self-healing path for a lost webhook, a `fee_unavailable` posting and a ledger enabled late.
- * Reads every page (`R4_REF_PAGE_SIZE`) of `listEntryRefs(from, now)` over all tenants into a map
- * by entry id, so the lookup does not depend on the owner Stripe's metadata names today and sees
- * entries posted during the grace period; then every balance transaction Stripe lists with
- * `created` in `[from, to)` (a transaction that moves nothing posts nothing and is skipped). Per
+ * Takes the refs of all tenants posted until now, when R4 starts, into a map by entry id: the
+ * run's shared read (`ctx.entryRefs`, refs since `from − 24 h`) plus every page
+ * (`R4_REF_PAGE_SIZE`) of `listEntryRefs` from that read's `readAt` until now (its own read from
+ * `from` when the context has none). The shared rows reach 24 h before `from`: a ref there whose
+ * entry id is a transaction's own is that transaction's entry. So the lookup does not depend on the
+ * owner Stripe's metadata names today and sees entries posted during the grace period; then every
+ * balance transaction Stripe lists with `created` in `[from, to)` (a transaction that moves
+ * nothing posts nothing and is skipped). Per
  * transaction, entry id `ledgerEntryId('stripe:txn:' + id)`:
  * - no ref, or no ref whose entry `LedgerPort.getEntry(ref.tenantId, entryId)` returns →
  *   `missing_entry` (source key `stripe:txn:<id>`) and one `billing.ledger-posting.v1` record
@@ -106,7 +110,7 @@ export class R4StripeCheck implements ReconciliationCheck {
   ) {}
 
   async run(ctx: ReconciliationContext): Promise<readonly LedgerDiscrepancyInput[]> {
-    const refs = await this.refsByEntry(ctx.from, new Date());
+    const refs = await this.refsByEntry(ctx);
     const found: Finding[] = [];
     for await (const txn of this.stripe.listBalanceTransactions({ from: ctx.from, to: ctx.to })) {
       if (txn.amount === 0 && txn.fee === 0) continue;
@@ -123,19 +127,23 @@ export class R4StripeCheck implements ReconciliationCheck {
     return found.map((row) => ({ ...row, detectedBy: this.name, runId: ctx.runId }));
   }
 
-  /** Every ref posted in `[from, to)`, all tenants, by entry id. */
-  private async refsByEntry(from: Date, to: Date): Promise<Map<string, LedgerEntryRef[]>> {
+  /**
+   * Every ref posted until now (R4's start), all tenants, by entry id: the run's shared read, then
+   * the refs posted since its `readAt` (none to list when the read started after now).
+   */
+  private async refsByEntry(ctx: ReconciliationContext): Promise<Map<string, LedgerEntryRef[]>> {
+    const now = new Date();
+    const read = ctx.entryRefs ?? memoizedEntryRefs(this.system, ctx.from, R4_REF_PAGE_SIZE);
+    const shared = await read();
+    const topUp =
+      shared.readAt.getTime() < now.getTime()
+        ? await listAllEntryRefs(this.system, shared.readAt, now, R4_REF_PAGE_SIZE)
+        : [];
     const byEntry = new Map<string, LedgerEntryRef[]>();
-    for await (const page of keysetPages(
-      R4_REF_PAGE_SIZE,
-      (last: LedgerEntryRef) => ({ tenantId: last.tenantId, id: last.entryId }),
-      (after) => this.system.listEntryRefs(from, to, after, R4_REF_PAGE_SIZE),
-    )) {
-      for (const ref of page) {
-        const refs = byEntry.get(ref.entryId);
-        if (refs === undefined) byEntry.set(ref.entryId, [ref]);
-        else refs.push(ref);
-      }
+    for (const ref of [...shared.rows, ...topUp]) {
+      const refs = byEntry.get(ref.entryId);
+      if (refs === undefined) byEntry.set(ref.entryId, [ref]);
+      else refs.push(ref);
     }
     return byEntry;
   }
