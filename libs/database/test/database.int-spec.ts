@@ -393,6 +393,41 @@ describe('@platform/database against PostgreSQL 18', () => {
       expect(await recorded(url)).toEqual(['0000_gizmos_name_idx.sql']);
     });
 
+    it('waits for a writer although the set timeout is 500 ms: the online session has its own lock_timeout (0)', async () => {
+      const url = await createDatabase('online_waits');
+      await runMigrations(url, {
+        migrations: [platformMigrations, gizmosTablesMigrations],
+        logger: silent,
+      });
+      // A transaction that wrote to gizmos, open for 3 s: a concurrent build waits for it, which
+      // the sets' 500 ms lock_timeout would cut short (55P03, and an invalid index left behind).
+      const writer = postgres(url, { max: 1, onnotice: noop });
+      const conn = await writer.reserve();
+      await conn`begin`;
+      await conn`
+        insert into gizmos.gizmos (tenant_id, id, name, code) values (${TENANT}, 1, 'held', 'h')`;
+      const released = (async () => {
+        await sleep(3_000);
+        await conn`commit`;
+        conn.release();
+      })();
+      onTestFinished(async () => {
+        await released.catch(noop);
+        await writer.end({ timeout: 5 });
+      });
+
+      const started = Date.now();
+      const summary = await runMigrations(url, {
+        migrations: [platformMigrations, gizmosMigrations],
+        logger: silent,
+        lockWaitTimeoutMs: 500,
+      });
+
+      expect(summary.online).toEqual({ total: 1, applied: 1 });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(2_000);
+      expect(await indexValid(url, 'gizmos_name_idx')).toBe(true);
+    }, 30_000);
+
     it('a failing file records nothing and fails the run naming it; the next run drops the invalid index it left and retries it', async () => {
       const url = await createDatabase('online_retry');
       await runMigrations(url, {

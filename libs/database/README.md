@@ -120,8 +120,9 @@ Three roles come from one script, `docker/postgres/init/02-roles.sql` (compose r
   filtered (it has no policy and sees no row). The boot guard refuses a domain table without both.
 - **Grants are explicit and deny by default.** No default table privileges: a table is unreachable until its own
   migration grants it to `app_runtime` and, for a system method, to `app_system`. The bookkeeping tables
-  (`<schema>.__drizzle_migrations`, and `<schema>.__online_migrations` of a set with online steps) carry no RLS and
-  no grant; the boot guard treats both as internal.
+  (`<schema>.__drizzle_migrations`, and `<schema>.__online_migrations` for online steps) carry no RLS and no grant;
+  the boot guard treats both as internal, the online one in every set's schema (the table outlives an `onlineFolder`
+  across a rollback or a removed folder).
 - **Migrations change schema only; backfills run as `app_system`.** A migration runs as `app_owner`, which `FORCE` makes
   blind to every row: a data `UPDATE` there would touch nothing, silently. A backfill is a separate step on the system
   pool, in a named system method.
@@ -273,10 +274,11 @@ is left alone, and it ships in `dist/` like the other migration files):
   table, and logs a warning. Only that one: an invalid index elsewhere may be another session's build in progress.
 - **Covered by tests.** `test/database.int-spec.ts` with the `test/fixtures/gizmos` set: one file applied once and
   recorded, then 0 on the next run; a unique index over duplicate rows that fails, records nothing, leaves an invalid
-  index, and is dropped and built valid by the next run; a two-statement file refused; and on the Citus database the
-  index built on all four shards of the distributed table while another transaction holds a lock on one shard for
-  3 s, with the sets' timeout at 500 ms, and the role default back at 500 ms afterwards. Without the role switch that
-  case fails with `55P03` from a shard connection.
+  index, and is dropped and built valid by the next run; a two-statement file refused; a build that waits 3 s for a
+  transaction that wrote the table, with the sets' timeout at 500 ms (with that timeout it fails with `55P03`); and on
+  the Citus database the index built on all four shards of the distributed table while another transaction holds a
+  lock on one shard for 3 s, with the sets' timeout at 500 ms, and the role default back at 500 ms afterwards. Without
+  the role switch that case fails with `55P03` from a shard connection.
 
 ```bash
 bun run db:generate                                    # drizzle-kit generate in every domain (commit the output)
