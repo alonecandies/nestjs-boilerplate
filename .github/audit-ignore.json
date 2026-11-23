@@ -1,4 +1,4 @@
 {
-  "$comment": "High or critical production advisories the advisory gate (scripts/check-audit.mjs) tolerates until they expire. One entry per advisory: { \"id\": \"GHSA-xxxx-xxxx-xxxx\", \"package\": \"name\", \"reason\": \"why it cannot be fixed yet (no fixed version, or the fix needs a major the repo cannot take)\", \"expires\": \"YYYY-MM-DD\" }. An expired entry fails the gate, so each one is revisited. Empty since the 2026-11-24 upgrades: bun audit --production --audit-level=high lists nothing.",
+  "$comment": "High or critical production advisories the advisory gate (scripts/check-audit.mjs) tolerates until they expire. One entry per advisory: { \"id\": \"GHSA-xxxx-xxxx-xxxx\", \"package\": \"name\", \"reason\": \"why it cannot be fixed yet (no fixed version, or the fix needs a major the repo cannot take)\", \"expires\": \"YYYY-MM-DD\" }. An expired entry fails the gate, and so does an entry whose expires is more than 90 days after the day of the check, so each one is revisited at least every 90 days. Empty since the 2026-11-24 upgrades: bun audit --production --audit-level=high lists nothing.",
   "ignores": []
 }

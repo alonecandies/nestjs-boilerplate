@@ -25,7 +25,7 @@ interface Job {
 }
 interface Workflow {
   on: Record<string, unknown>;
-  concurrency: { group: string };
+  concurrency: { group: string; 'cancel-in-progress': string };
   jobs: Record<string, Job>;
 }
 
@@ -47,6 +47,7 @@ const stepText = (step: Step): string =>
   [step.if ?? '', ...Object.values(step.env ?? {}), step.run ?? ''].join('\n');
 
 const TRIVY_V0_36_0 = 'aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25';
+const TRIVY_VERSION = 'v0.76.2';
 
 describe('.github/workflows/ci.yml and the Dockerfile (CI-1)', () => {
   it('pins every action to a 40-character commit SHA with its tag in a comment', () => {
@@ -102,6 +103,19 @@ describe('.github/workflows/ci.yml and the Dockerfile (CI-1)', () => {
     }
   });
 
+  it('never supersedes a push run: each push has its own concurrency group', () => {
+    // A group keeps one pending run, and a push run checks only its own github.event.before
+    // range (commitlint, buf breaking): a superseded push run would leave its range unchecked.
+    const group = CI.concurrency.group;
+    expect(group).toContain("github.event_name == 'push'");
+    expect(group).toMatch(/format\('\{0\}-\{1\}', github\.ref, github\.sha\)/);
+    expect(group).toContain("github.event_name == 'schedule'");
+    expect(String(CI.concurrency['cancel-in-progress'])).toBe(
+      // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression is the test data.
+      "${{ github.event_name == 'pull_request' }}",
+    );
+  });
+
   it('runs the unit and e2e tests with coverage in the verify job, once', () => {
     stepRunning('verify', 'bun run test:cov');
     const plain = job('verify').steps.filter((step) => /bun run test\s*$/m.test(step.run ?? ''));
@@ -127,6 +141,11 @@ describe('.github/workflows/ci.yml and the Dockerfile (CI-1)', () => {
       severity: 'HIGH,CRITICAL',
       'ignore-unfixed': 'true',
       'exit-code': '1',
+      // The OS-package vulnerability scanner alone: the default also runs the secret scanner,
+      // which flags the development Stripe key placeholder baked into the billing images.
+      scanners: 'vuln',
+      // The Trivy binary the action installs, pinned (the action's own default moves with it).
+      version: TRIVY_VERSION,
     });
   });
 
@@ -187,6 +206,17 @@ describe('the docs describe the gates (CI-1)', () => {
       expect(releasing, text).toContain(text);
     }
     expect(releasing).not.toContain('(PRs only)');
+    // A pending push run is never replaced (per-SHA group), and the doc must not promise more.
+    expect(releasing).not.toContain('Pushes to `master` are never cancelled');
+    expect(releasing).toContain('ci-<ref>-<sha>');
+  });
+
+  it('docs/RELEASING.md runs the image scan locally like CI: pinned Trivy, a tarball, no socket', () => {
+    expect(releasing).toMatch(/aquasec\/trivy:0\.76\.2@sha256:[0-9a-f]{64}/);
+    expect(releasing).toContain(`version: ${TRIVY_VERSION}`);
+    expect(releasing).toContain('--scanners vuln');
+    expect(releasing).toContain('--input');
+    expect(releasing).not.toContain('/var/run/docker.sock');
   });
 
   it('docs/TESTING.md gives the coverage thresholds', () => {

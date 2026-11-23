@@ -346,7 +346,7 @@ describe('graphql-ws over real connections (monolith, E-2)', () => {
   });
 
   describe('sweep', () => {
-    it('closes 4401 `Access token revoked` within two sweep intervals of a logout', async () => {
+    it('closes 4401 `Access token revoked` on revocation, once a logout revokes the token', async () => {
       const session = await sessionIn(U_EMAIL, tenantA);
       const connection = await connect(session.accessToken);
 

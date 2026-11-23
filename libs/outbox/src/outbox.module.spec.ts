@@ -138,12 +138,18 @@ describe('OutboxModule.forFeature', () => {
   it('starts each relay on bootstrap when enabled and a system pool is configured', async () => {
     vi.stubEnv('OUTBOX_RELAY_ENABLED', 'true');
     vi.stubEnv('DATABASE_SYSTEM_URL', 'postgres://app_system:s@127.0.0.1:1/app');
-    await boot();
+    const context = await boot();
     await vi.waitFor(() =>
       expect([...lock.resources].sort()).toEqual(
         expect.arrayContaining(['outbox-relay:fx', 'outbox-relay:fy']),
       ),
     );
+    // Positive control for the absence check below: a started relay holds its loop in `running`,
+    // so a rename of that private field fails here instead of passing that check vacuously.
+    for (const feature of ['fx', 'fy']) {
+      const relay = context.get(outboxRelayToken(feature), { strict: false });
+      expect(Reflect.get(relay, 'running'), feature).toBeInstanceOf(Promise);
+    }
   });
 
   it('starts no relay without a system pool', async () => {

@@ -145,7 +145,7 @@ Related root scripts: `bun run build:affected` (`lerna run build --since origin/
 
 ## CI pipeline
 
-[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on pushes to `master`, on pull requests and on manual dispatch (`workflow_dispatch`). A new push to a pull request cancels the run already in progress for it. Pushes to `master` are never cancelled. A weekly schedule (Mondays 05:17 UTC) runs the `advisories` job alone; every other job is skipped on a scheduled run.
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on pushes to `master`, on pull requests and on manual dispatch (`workflow_dispatch`). A new push to a pull request cancels the run already in progress for it. A push to `master` is never cancelled or replaced: each push has its own concurrency group (`ci-<ref>-<sha>`, from `github.ref` and `github.sha`), because a group keeps only one pending run and a push run checks only its own `github.event.before` range (commitlint, buf breaking), so a replaced pending run would leave its range unchecked. A weekly schedule (Mondays 05:17 UTC) runs the `advisories` job alone; every other job is skipped on a scheduled run.
 
 The `verify` and `integration` jobs install with `bun install --frozen-lockfile` (Bun 1.4.3) on Node from `.nvmrc`, with `HUSKY=0` and the Nx daemon and Cloud off. The Bun download cache and the Nx/ESLint caches are kept between runs.
 
@@ -164,9 +164,10 @@ The `verify` and `integration` jobs install with `bun install --frozen-lockfile`
 
 - a **high or critical** advisory that no unexpired entry of [`.github/audit-ignore.json`](../.github/audit-ignore.json) covers;
 - an **expired** ignore entry, whether or not its advisory is still reported, so every entry is revisited;
+- an ignore entry whose `expires` is **more than 90 days** after the day of the check, so no entry can be parked for longer than a quarter;
 - a malformed entry, or a report that is not JSON (registry unreachable, no lockfile): the gate fails closed.
 
-Moderate and low advisories are listed and do not fail. An ignore entry covers one advisory in one package until the end of its expiry day (UTC):
+Moderate and low advisories are listed and do not fail. An ignore entry covers one advisory in one package until the end of its expiry day (UTC), at most 90 days ahead; renew it with a new date and reason when it runs out:
 
 ```json
 {
@@ -181,12 +182,17 @@ Moderate and low advisories are listed and do not fail. An ignore entry covers o
 
 ### Image gate
 
-The `image` job scans each built image with [`aquasecurity/trivy-action`](https://github.com/aquasecurity/trivy-action) v0.36.0, pinned to commit `ed142fd0673e97e23eac54620cfb913e5ce36c25`, with `vuln-type: os`, `severity: HIGH,CRITICAL`, `ignore-unfixed: true` and `exit-code: 1`. A fixable high or critical vulnerability in the image's OS packages fails the job. The npm packages belong to the advisory gate. The fix is usually a newer base image: bump the digest (below). To run the same scan locally on a built image:
+The `image` job scans each built image with [`aquasecurity/trivy-action`](https://github.com/aquasecurity/trivy-action) v0.36.0, pinned to commit `ed142fd0673e97e23eac54620cfb913e5ce36c25`, with `scanners: vuln`, `vuln-type: os`, `severity: HIGH,CRITICAL`, `ignore-unfixed: true`, `exit-code: 1` and `version: v0.76.2` (the Trivy binary it installs; the action's own default is v0.70.0). A fixable high or critical vulnerability in the image's OS packages fails the job. `scanners: vuln` keeps Trivy's secret scanner out: it would flag the development Stripe key placeholder in the `billing-service` and `monolith` images. The npm packages belong to the advisory gate. The fix is usually a newer base image: bump the digest (below). To run the same scan locally on a built image, with the same Trivy (pinned by digest) reading a `docker save` tarball, so the Docker socket is not mounted:
 
 ```bash
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy image \
-  --pkg-types os --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 boilerplate/gateway:local
+docker save boilerplate/gateway:local -o gateway.tar
+docker run --rm -v "$PWD/gateway.tar:/scan/image.tar:ro" \
+  aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb \
+  image --input /scan/image.tar --scanners vuln --pkg-types os --severity HIGH,CRITICAL \
+  --ignore-unfixed --exit-code 1
 ```
+
+When CI moves to another Trivy version, change `version:` in `ci.yml` and this image tag and digest together (`docker buildx imagetools inspect aquasec/trivy:<version>` prints the index digest).
 
 ### Coverage gate
 

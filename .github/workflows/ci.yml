@@ -17,10 +17,12 @@ on:
   schedule:
     - cron: "17 5 * * 1"
 
-# The weekly run has its own group: a group keeps one pending run, so a scheduled run queued behind
-# a master push would otherwise cancel the push run waiting next to it.
+# A group keeps one pending run and drops the older one. Each push has its own group (ref + SHA):
+# a push run checks only its own github.event.before range (commitlint, buf breaking), so a
+# superseded pending push run would leave its range unchecked. The weekly run has its own group,
+# and a pull request's new push cancels its running run.
 concurrency:
-  group: ci-${{ github.event_name == 'schedule' && 'schedule' || github.ref }}
+  group: ci-${{ github.event_name == 'schedule' && 'schedule' || github.event_name == 'push' && format('{0}-{1}', github.ref, github.sha) || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
@@ -223,6 +225,9 @@ jobs:
       # Fixable HIGH and CRITICAL vulnerabilities in the image's OS packages fail the job (npm
       # dependencies are gated by scripts/check-audit.mjs in verify). An unfixed one cannot be acted
       # on and is skipped; a fixed one is resolved by bumping DISTROLESS_IMAGE (docs/RELEASING.md).
+      # The vulnerability scanner alone: Trivy's default adds the secret scanner, which flags the
+      # development Stripe key placeholder in the billing images. version pins the Trivy binary
+      # the action installs (its own default is v0.70.0).
       - name: Scan ${{ matrix.app }} (OS packages, fixable HIGH and CRITICAL)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -231,6 +236,8 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
+          scanners: vuln
+          version: v0.76.2
 
       # The runtime Node comes from the pinned distroless digest, not from NODE_VERSION.
       - name: Inspect image
