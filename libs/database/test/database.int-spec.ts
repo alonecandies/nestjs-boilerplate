@@ -11,7 +11,7 @@ import { and, eq, sql } from 'drizzle-orm';
 import { noop, sumBy } from 'lodash-es';
 import { ClsModule } from 'nestjs-cls';
 import postgres, { type Sql } from 'postgres';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from 'vitest';
 import {
   DatabaseHealthIndicator,
   type DatabaseMigrationSet,
@@ -27,7 +27,11 @@ import {
   platformMigrations,
   runMigrations,
 } from '../src/index.js';
-import { gadgetsMigrations, widgetsMigrations } from './fixtures/fixture-sets.js';
+import {
+  gadgetsMigrations,
+  lockWaitMigrations,
+  widgetsMigrations,
+} from './fixtures/fixture-sets.js';
 import { type NewWidget, type Widget, widgets } from './fixtures/widgets.schema.js';
 
 /*
@@ -213,6 +217,111 @@ describe('@platform/database against PostgreSQL 18', () => {
         runMigrations(url, { migrations: [platformMigrations, mixed], logger: silent }),
       ).resolves.toMatchObject({ total: 4, applied: 0 });
     });
+  });
+
+  describe('runMigrations() lock waits (OPS-2)', () => {
+    /** The base sets, then the one whose ALTER needs ACCESS EXCLUSIVE on widgets. */
+    const withLockWait = [platformMigrations, widgetsMigrations, lockWaitMigrations];
+
+    /** A database at widgets' tip, so only lockWaitMigrations is pending. */
+    const widgetsDatabase = async (name: string): Promise<string> => {
+      const url = await createDatabase(name);
+      await runMigrations(url, {
+        migrations: [platformMigrations, widgetsMigrations],
+        logger: silent,
+      });
+      return url;
+    };
+
+    /**
+     * A second connection holding ACCESS SHARE on widgets inside an open transaction (what a
+     * reporting query or pg_dump does). `commit` ends it; it is also committed when the test ends,
+     * even on a timeout, so an ALTER still queued behind it can finish before afterAll.
+     */
+    const holdAccessShare = async (url: string) => {
+      const client = postgres(url, { max: 1, onnotice: noop });
+      const conn = await client.reserve();
+      await conn`begin`;
+      await conn`select 1 from widgets limit 1`;
+      let open = true;
+      const commit = async (): Promise<void> => {
+        if (!open) return;
+        open = false;
+        await conn`commit`;
+        conn.release();
+      };
+      onTestFinished(async () => {
+        await commit().catch(noop);
+        await client.end({ timeout: 5 });
+      });
+      return { commit };
+    };
+
+    const hasNoteColumn = async (url: string): Promise<boolean> => {
+      const client = postgres(url, { max: 1, onnotice: noop });
+      try {
+        const [row] = await client<{ present: boolean }[]>`
+          select exists (
+            select 1 from information_schema.columns
+            where table_name = 'widgets' and column_name = 'note'
+          ) as present`;
+        return row?.present === true;
+      } finally {
+        await client.end();
+      }
+    };
+
+    it('gives up on a set blocked by an open transaction within seconds: names the set, 55P03 as cause, no row', async () => {
+      const url = await widgetsDatabase('lock_wait_gives_up');
+      await holdAccessShare(url);
+
+      const started = Date.now();
+      const error: unknown = await runMigrations(url, {
+        migrations: withLockWait,
+        logger: silent,
+        lockWaitTimeoutMs: 500,
+        lockWaitRetries: 1,
+        lockWaitRetryDelayMs: 200,
+      }).catch((caught: unknown) => caught);
+
+      expect(Date.now() - started).toBeLessThan(5_000);
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(
+        /^Migration set "lock-wait" .* failed: lock_timeout \(500ms\) expired on all 2 attempts/,
+      );
+      expect((error as Error).cause).toMatchObject({ code: '55P03' });
+      expect(await migrationRows(url, lockWaitMigrations)).toBe(0);
+      expect(await hasNoteColumn(url)).toBe(false);
+    }, 20_000);
+
+    it('retries after a lock timeout and applies the set once when the blocker commits during the backoff', async () => {
+      const url = await widgetsDatabase('lock_wait_retries');
+      const blocker = await holdAccessShare(url);
+      const warnings: string[] = [];
+
+      const summary = await runMigrations(url, {
+        migrations: withLockWait,
+        logger: {
+          ...silent,
+          warn: (message: unknown) => {
+            warnings.push(String(message));
+            // The first attempt timed out: end the blocking transaction during the backoff.
+            void blocker.commit();
+          },
+        },
+        lockWaitTimeoutMs: 500,
+        lockWaitRetries: 1,
+        lockWaitRetryDelayMs: 1_000,
+      });
+
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toMatch(
+        /^lock-wait: lock_timeout \(500ms\) expired \(55P03\); retry 1 of 1/,
+      );
+      expect(summary.sets.at(-1)).toMatchObject({ name: 'lock-wait', applied: 1 });
+      expect(await migrationRows(url, lockWaitMigrations)).toBe(1);
+      expect(await hasNoteColumn(url)).toBe(true);
+    }, 20_000);
   });
 
   describe("runMigrationsCli() (the body of every app's migrate.ts)", () => {

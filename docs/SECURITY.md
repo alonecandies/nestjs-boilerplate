@@ -412,17 +412,24 @@ password lookup). Compose runs both once on an empty volume; `startRlsTestPostgr
 (`@platform/testing/postgres`) runs them in every spec that asserts isolation. Both are idempotent.
 Dev passwords equal the role names and appear only in those files and the test helper.
 
-| Role             | Attributes                                                             | Used by                                                            | Server settings (`ALTER ROLE … SET`)                                                                                                                 |
-| ---------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `app_owner`      | `LOGIN NOSUPERUSER NOCREATEROLE NOBYPASSRLS`, `CREATE` on the database | migrations, drizzle-kit, operator CLIs (direct to the coordinator) | `search_path = pg_catalog, public` only (the migrator sets Citus' sequential mode itself)                                                            |
-| `app_runtime`    | `LOGIN NOSUPERUSER NOBYPASSRLS`                                        | every request (through PgBouncer)                                  | `search_path = pg_catalog, public`, `citus.propagate_set_commands = 'local'`, `statement_timeout = 15s`, `idle_in_transaction_session_timeout = 60s` |
-| `app_system`     | `LOGIN NOSUPERUSER BYPASSRLS`                                          | the named system methods only (through PgBouncer, pool of 5)       | same as `app_runtime`                                                                                                                                |
-| `pgbouncer_auth` | `LOGIN NOSUPERUSER`                                                    | PgBouncer's `auth_user`                                            | `search_path = pg_catalog`                                                                                                                           |
+| Role             | Attributes                                                             | Used by                                                            | Server settings (`ALTER ROLE … SET`)                                                                                                                                             |
+| ---------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `app_owner`      | `LOGIN NOSUPERUSER NOCREATEROLE NOBYPASSRLS`, `CREATE` on the database | migrations, drizzle-kit, operator CLIs (direct to the coordinator) | `search_path = pg_catalog, public`, `lock_timeout = 5s` (the migrator sets Citus' sequential mode itself and keeps `lock_timeout` equal to `DATABASE_MIGRATION_LOCK_TIMEOUT_MS`) |
+| `app_runtime`    | `LOGIN NOSUPERUSER NOBYPASSRLS`                                        | every request (through PgBouncer)                                  | `search_path = pg_catalog, public`, `citus.propagate_set_commands = 'local'`, `statement_timeout = 15s`, `idle_in_transaction_session_timeout = 60s`                             |
+| `app_system`     | `LOGIN NOSUPERUSER BYPASSRLS`                                          | the named system methods only (through PgBouncer, pool of 5)       | same as `app_runtime`                                                                                                                                                            |
+| `pgbouncer_auth` | `LOGIN NOSUPERUSER`                                                    | PgBouncer's `auth_user`                                            | `search_path = pg_catalog`                                                                                                                                                       |
 
 - **Why the settings live on the roles.** PgBouncer rejects both timeouts as startup parameters, so the
   server applies them per role. `citus.propagate_set_commands = 'local'` makes Citus prepend the
   transaction's `SET LOCAL` RLS context to every remote `BEGIN`; without it, every query that reaches a
   shard over a connection fails with `app.user_id is not set` (closed, but in every request).
+- **`app_owner`'s `lock_timeout`.** A migration `ALTER` that meets an open transaction must give up,
+  not queue every query on the table behind it. The migrator sends `lock_timeout` as a startup
+  parameter, which on Citus reaches the coordinator only; the worker connections start from the role
+  default. The migrator sets that default to `DATABASE_MIGRATION_LOCK_TIMEOUT_MS` when it differs
+  (`ALTER ROLE CURRENT_USER`, propagated to the workers), so the line below only sets it up front.
+  It also bounds drizzle-kit and operator sessions as `app_owner`: set `lock_timeout` in the session
+  for a deliberate long wait.
 - **Explicit `search_path`.** Each role has its own, so nothing resolves through a schema that happens to
   share a role's name (`"$user"`). Application SQL is schema-qualified.
 - **Only `app_owner` creates schemas.** `PUBLIC` never gets `CREATE` on the database; `app_owner` owns
@@ -447,6 +454,7 @@ GRANT CONNECT, CREATE ON DATABASE <database> TO app_owner;
 GRANT CONNECT ON DATABASE <database> TO app_runtime, app_system;
 
 ALTER ROLE app_owner   SET search_path = pg_catalog, public;
+ALTER ROLE app_owner   SET lock_timeout = '5s';
 ALTER ROLE app_runtime SET search_path = pg_catalog, public;
 ALTER ROLE app_system  SET search_path = pg_catalog, public;
 ALTER ROLE app_runtime SET citus.propagate_set_commands = 'local';

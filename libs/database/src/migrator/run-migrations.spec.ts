@@ -457,7 +457,11 @@ describe('runMigrations', () => {
       expect.objectContaining({
         max: 1,
         max_lifetime: null,
-        connection: { application_name: 'svc:migrate', statement_timeout: '0' },
+        connection: {
+          application_name: 'svc:migrate',
+          statement_timeout: '0',
+          lock_timeout: '5000',
+        },
       }),
     );
     expect(lockValues.length).toBeGreaterThan(1);
@@ -466,5 +470,273 @@ describe('runMigrations', () => {
     expect(migrate).not.toHaveBeenCalled();
     expect(sql.queries.some((q) => q.includes('pg_advisory_unlock'))).toBe(false);
     expect(sql.end).toHaveBeenCalledWith({ timeout: 5 });
+  });
+
+  describe('lock waits (OPS-2)', () => {
+    /** What drizzle throws when a statement hits lock_timeout: its query error around the driver's. */
+    const lockTimeoutError = () => {
+      const driver = Object.assign(new Error('canceling statement due to lock timeout'), {
+        code: '55P03',
+      });
+      return { driver, wrapped: new Error('Failed query: alter table ...', { cause: driver }) };
+    };
+
+    it.each([
+      ['5000 by default', {}, '5000'],
+      ['the configured value', { lockWaitTimeoutMs: 500 }, '500'],
+      // A string: postgres.js drops falsy startup values, so 0 must be '0' to override a role default.
+      ['0 (disabled) as the string "0"', { lockWaitTimeoutMs: 0 }, '0'],
+    ])('sends lock_timeout as a startup parameter: %s', async (_label, options, expected) => {
+      const sql = createFakeSql((query) =>
+        query.includes('pg_try_advisory_lock') ? [{ locked: true }] : [],
+      );
+      vi.mocked(postgres).mockReturnValue(sql as never);
+
+      await runMigrations(URL, { migrations: afterPlatform(), logger: silentLogger(), ...options });
+
+      expect(postgres).toHaveBeenCalledTimes(1); // plain Postgres: no preliminary connection
+      expect(postgres).toHaveBeenCalledWith(
+        URL,
+        expect.objectContaining({
+          connection: expect.objectContaining({
+            statement_timeout: '0',
+            lock_timeout: expected,
+          }) as unknown,
+        }),
+      );
+      expect(sql.queries.some((query) => query.includes('pg_db_role_setting'))).toBe(false);
+      expect(sql.unsafe).not.toHaveBeenCalled();
+    });
+
+    it('on Citus, a preliminary connection checks the coordinator and aligns the role default, then closes before the migration session opens', async () => {
+      const orders = migrationSet('orders', ['0000_init']);
+      const events: string[] = [];
+      vi.mocked(migrate).mockImplementation(async () => {
+        events.push('migrate');
+      });
+      const preliminary = createFakeSql((query) => {
+        if (query.includes("extname = 'citus'")) return [{ citus: true }];
+        if (query.includes('citus_is_coordinator()')) {
+          events.push('preliminary: coordinator?');
+          return [{ coordinator: true }];
+        }
+        if (query.includes('pg_db_role_setting')) {
+          events.push('preliminary: role default?');
+          return [{ setconfig: ['search_path=pg_catalog, public', 'lock_timeout=2s'] }];
+        }
+        if (query.startsWith('alter role')) events.push(`preliminary: ${query}`);
+        return [];
+      });
+      preliminary.end.mockImplementation(async () => {
+        events.push('preliminary: closed');
+      });
+      const session = createFakeSql((query) => {
+        if (query.includes('pg_try_advisory_lock')) {
+          events.push('session: lock');
+          return [{ locked: true }];
+        }
+        if (query.startsWith('set citus.')) events.push(`session: ${query}`);
+        return [];
+      });
+      vi.mocked(postgres)
+        .mockImplementationOnce((() => {
+          events.push('open preliminary');
+          return preliminary;
+        }) as never)
+        .mockImplementationOnce((() => {
+          events.push('open migration session');
+          return session;
+        }) as never);
+      const logger = silentLogger();
+
+      await runMigrations(URL, {
+        migrations: afterPlatform(orders),
+        logger,
+        lockWaitTimeoutMs: 1500,
+      });
+
+      expect(events).toEqual([
+        'open preliminary',
+        'preliminary: coordinator?',
+        'preliminary: role default?',
+        'preliminary: alter role current_user set lock_timeout = 1500',
+        'preliminary: closed',
+        'open migration session',
+        'session: lock',
+        'session: set citus.enable_local_execution to on',
+        "session: set citus.multi_shard_modify_mode to 'sequential'",
+        'migrate',
+        'migrate',
+      ]);
+      // Both connections carry the same startup parameters (the 08P01 check runs on the first).
+      expect(vi.mocked(postgres).mock.calls.map(([, options]) => options?.connection)).toEqual([
+        { application_name: 'app:migrate', statement_timeout: '0', lock_timeout: '1500' },
+        { application_name: 'app:migrate', statement_timeout: '0', lock_timeout: '1500' },
+      ]);
+      expect(session.queries.some((query) => query.includes("extname = 'citus'"))).toBe(false);
+      expect(logger.log).toHaveBeenCalledWith(
+        expect.stringMatching(/lock_timeout.*1500ms.*was 2s/),
+      );
+      expect(session.end).toHaveBeenCalledWith({ timeout: 5 });
+    });
+
+    it.each([
+      ['in milliseconds', 'lock_timeout=5000'],
+      ['in seconds', 'lock_timeout=5s'],
+    ])(
+      'on Citus, leaves a role default that already equals the timeout (%s) alone',
+      async (_label, stored) => {
+        const sql = createFakeSql((query) => {
+          if (query.includes("extname = 'citus'")) return [{ citus: true }];
+          if (query.includes('citus_is_coordinator()')) return [{ coordinator: true }];
+          if (query.includes('pg_db_role_setting')) return [{ setconfig: [stored] }];
+          if (query.includes('pg_try_advisory_lock')) return [{ locked: true }];
+          return [];
+        });
+        vi.mocked(postgres).mockReturnValue(sql as never);
+
+        await runMigrations(URL, { migrations: afterPlatform(), logger: silentLogger() });
+
+        expect(sql.unsafe).not.toHaveBeenCalled();
+        expect(postgres).toHaveBeenCalledTimes(2);
+      },
+    );
+
+    it('on Citus, sets a missing role default, also to 0 when the timeout is disabled', async () => {
+      const sql = createFakeSql((query) => {
+        if (query.includes("extname = 'citus'")) return [{ citus: true }];
+        if (query.includes('citus_is_coordinator()')) return [{ coordinator: true }];
+        if (query.includes('pg_try_advisory_lock')) return [{ locked: true }];
+        return []; // no pg_db_role_setting row for the role
+      });
+      vi.mocked(postgres).mockReturnValue(sql as never);
+
+      await runMigrations(URL, {
+        migrations: afterPlatform(),
+        logger: silentLogger(),
+        lockWaitTimeoutMs: 0,
+      });
+
+      expect(sql.unsafe).toHaveBeenCalledTimes(1);
+      expect(sql.unsafe).toHaveBeenCalledWith('alter role current_user set lock_timeout = 0');
+    });
+
+    it('retries a set that hit lock_timeout with backoff under the same lock, and applies it', async () => {
+      const orders = migrationSet('orders', ['0000_init']);
+      const { wrapped } = lockTimeoutError();
+      const events: string[] = [];
+      let ordersAttempts = 0;
+      vi.mocked(migrate).mockImplementation(async (_db, config) => {
+        events.push(`migrate ${config.migrationsSchema ?? ''}`);
+        if (config.migrationsSchema === 'orders' && ++ordersAttempts < 3) throw wrapped;
+      });
+      const sql = createFakeSql((query) => {
+        if (query.includes('pg_try_advisory_lock')) {
+          events.push('lock');
+          return [{ locked: true }];
+        }
+        if (query.includes('pg_advisory_unlock')) events.push('unlock');
+        if (query.includes('to_regclass')) return [{ exists: true }];
+        if (query.startsWith('select count(*)')) return [{ count: ordersAttempts >= 3 ? 1 : 0 }];
+        return [];
+      });
+      vi.mocked(postgres).mockReturnValue(sql as never);
+      const logger = silentLogger();
+
+      const summary = await runMigrations(URL, {
+        migrations: afterPlatform(orders),
+        logger,
+        lockWaitTimeoutMs: 500,
+        lockWaitRetries: 2,
+        lockWaitRetryDelayMs: 1,
+      });
+
+      expect(events).toEqual([
+        'lock',
+        'migrate app',
+        'migrate orders',
+        'migrate orders',
+        'migrate orders',
+        'unlock',
+      ]);
+      expect(summary.sets.at(-1)).toEqual({
+        name: 'orders',
+        folder: orders.folder,
+        total: 1,
+        applied: 1,
+      });
+      expect(logger.warn).toHaveBeenCalledTimes(2);
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        1,
+        expect.stringMatching(
+          /^orders: lock_timeout \(500ms\) expired \(55P03\); retry 1 of 2 in 1ms/,
+        ),
+      );
+      expect(logger.warn).toHaveBeenNthCalledWith(
+        2,
+        expect.stringMatching(
+          /^orders: lock_timeout \(500ms\) expired \(55P03\); retry 2 of 2 in 2ms/,
+        ),
+      );
+    });
+
+    it('gives up after the last retry naming the set and the lock timeout, with the 55P03 error as cause', async () => {
+      const orders = migrationSet('orders', ['0000_init']);
+      const audit = migrationSet('audit', ['0000_init']);
+      const { driver, wrapped } = lockTimeoutError();
+      const events: string[] = [];
+      vi.mocked(migrate).mockImplementation(async (_db, config) => {
+        events.push(`migrate ${config.migrationsSchema ?? ''}`);
+        if (config.migrationsSchema === 'orders') throw wrapped;
+      });
+      const sql = createFakeSql((query) => {
+        if (query.includes('pg_try_advisory_lock')) return [{ locked: true }];
+        if (query.includes('pg_advisory_unlock')) events.push('unlock');
+        return [];
+      });
+      vi.mocked(postgres).mockReturnValue(sql as never);
+
+      const error = await runMigrations(URL, {
+        migrations: afterPlatform(orders, audit),
+        logger: silentLogger(),
+        lockWaitTimeoutMs: 500,
+        lockWaitRetries: 1,
+        lockWaitRetryDelayMs: 1,
+      }).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error).toMatchObject({
+        message: expect.stringMatching(
+          /^Migration set "orders" \(.*\) failed: lock_timeout \(500ms\) expired on all 2 attempts \(SQLSTATE 55P03\)/,
+        ) as unknown,
+        cause: driver,
+      });
+      expect(events).toEqual(['migrate app', 'migrate orders', 'migrate orders', 'unlock']);
+      expect(sql.end).toHaveBeenCalledWith({ timeout: 5 });
+    });
+
+    it('never retries a failure other than 55P03', async () => {
+      const orders = migrationSet('orders', ['0000_init']);
+      const failure = Object.assign(new Error('deadlock detected'), { code: '40P01' });
+      vi.mocked(migrate).mockImplementation(async (_db, config) => {
+        if (config.migrationsSchema === 'orders') throw failure;
+      });
+      const sql = createFakeSql((query) =>
+        query.includes('pg_try_advisory_lock') ? [{ locked: true }] : [],
+      );
+      vi.mocked(postgres).mockReturnValue(sql as never);
+
+      await expect(
+        runMigrations(URL, {
+          migrations: afterPlatform(orders),
+          logger: silentLogger(),
+          lockWaitRetryDelayMs: 1,
+        }),
+      ).rejects.toMatchObject({
+        message: `Migration set "orders" (${orders.folder}) failed`,
+        cause: failure,
+      });
+      expect(migrate).toHaveBeenCalledTimes(2); // platform once, orders once
+    });
   });
 });
