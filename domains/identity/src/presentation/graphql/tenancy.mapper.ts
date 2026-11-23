@@ -38,11 +38,12 @@ export function toActiveTenantModel(
   };
 }
 
+/** `""` and `[]` = withheld (ARCH-4, no `users:read`) → `null`; a complete member passes through. */
 export const toMemberModel = (m: Member): MemberModel => ({
   userId: m.userId,
-  email: m.email,
+  email: m.email === '' ? null : m.email,
   displayName: m.displayName,
-  roles: normalizeTenantRoles(m.roles),
+  roles: m.roles.length === 0 ? null : normalizeTenantRoles(m.roles),
   joinedAt: m.joinedAt ?? new Date(0),
 });
 

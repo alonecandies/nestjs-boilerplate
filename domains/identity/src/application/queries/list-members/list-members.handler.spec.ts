@@ -1,6 +1,8 @@
+import { createTestRbacRegistry } from '@platform/auth/testing';
 import { createPrincipal, generateId, runWithPrincipal, type TenantRole } from '@platform/common';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { UserAggregate } from '../../../domain/user.aggregate.js';
+import { IDENTITY_RBAC } from '../../../identity.permissions.js';
 import { createInMemoryIdentityPersistence } from '../../../testing/in-memory-identity.js';
 import { ListMembersHandler } from './list-members.handler.js';
 import { ListMembersQuery } from './list-members.query.js';
@@ -27,13 +29,13 @@ describe('ListMembersHandler', () => {
   const as = (
     userId: string,
     query: ListMembersQuery,
-    opts: { tenant?: string; staff?: boolean } = {},
+    opts: { tenant?: string; staff?: boolean; tokenRoles?: TenantRole[] } = {},
   ) =>
     runWithPrincipal(
       createPrincipal({
         userId,
         tenantId: opts.tenant ?? tenantId,
-        roles: opts.staff ? ['admin'] : ['member'],
+        roles: opts.tokenRoles ?? (opts.staff ? ['admin'] : ['member']),
         staff: opts.staff ?? false,
       }),
       () => handler.execute(query),
@@ -45,7 +47,62 @@ describe('ListMembersHandler', () => {
     await member(ids[0] as string, ['owner']);
     await member(ids[1] as string, ['admin']);
     await member(ids[2] as string, ['member']);
-    handler = new ListMembersHandler(p.memberships, p.membershipsSystem);
+    handler = new ListMembersHandler(
+      p.memberships,
+      p.membershipsSystem,
+      createTestRbacRegistry(IDENTITY_RBAC),
+    );
+  });
+
+  const byId = <T extends { userId: string }>(items: T[]) =>
+    new Map(items.map((m) => [m.userId, m]));
+  const complete = (userId: string, roles: TenantRole[]) => ({
+    userId,
+    email: `${userId}@example.com`,
+    displayName: `user ${userId.slice(-4)}`,
+    roles,
+  });
+  const withheld = (userId: string) => ({
+    userId,
+    email: '',
+    displayName: `user ${userId.slice(-4)}`,
+    roles: [],
+  });
+
+  it('a member without users:read gets co-members without email and roles, and their own row complete', async () => {
+    const page = byId((await as(ids[2] as string, new ListMembersQuery(tenantId, 0))).items);
+    expect(page.get(ids[2] as string)).toMatchObject(complete(ids[2] as string, ['member']));
+    expect(page.get(ids[0] as string)).toEqual(expect.objectContaining(withheld(ids[0] as string)));
+    expect(page.get(ids[1] as string)).toEqual(expect.objectContaining(withheld(ids[1] as string)));
+    expect(page.get(ids[0] as string)?.joinedAt).toBeInstanceOf(Date);
+  });
+
+  it.each([
+    ['admin', 1],
+    ['owner', 0],
+  ])('an %s (users:read) gets every field of every member', async (_role, index) => {
+    const page = byId((await as(ids[index] as string, new ListMembersQuery(tenantId, 0))).items);
+    expect(page.get(ids[0] as string)).toMatchObject(complete(ids[0] as string, ['owner']));
+    expect(page.get(ids[1] as string)).toMatchObject(complete(ids[1] as string, ['admin']));
+    expect(page.get(ids[2] as string)).toMatchObject(complete(ids[2] as string, ['member']));
+  });
+
+  it('the membership row decides, not the token: a token saying admin over a member row is a member', async () => {
+    const page = byId(
+      (await as(ids[2] as string, new ListMembersQuery(tenantId, 0), { tokenRoles: ['admin'] }))
+        .items,
+    );
+    expect(page.get(ids[0] as string)).toEqual(expect.objectContaining(withheld(ids[0] as string)));
+    expect(page.get(ids[2] as string)).toMatchObject(complete(ids[2] as string, ['member']));
+  });
+
+  it('a demoted admin loses the directory before their token expires', async () => {
+    await p.memberships.updateRoles(tenantId, ids[1] as string, ['member']);
+    const page = byId(
+      (await as(ids[1] as string, new ListMembersQuery(tenantId, 0), { tokenRoles: ['admin'] }))
+        .items,
+    );
+    expect(page.get(ids[0] as string)).toEqual(expect.objectContaining(withheld(ids[0] as string)));
   });
 
   it('pages newest user id first via nextCursor', async () => {
@@ -81,5 +138,9 @@ describe('ListMembersHandler', () => {
     const staff = generateId();
     const page = await as(staff, new ListMembersQuery(tenantId, 0), { staff: true });
     expect(page.items).toHaveLength(3);
+    // A staff switch-in acts with its token's admin role (no membership): the full directory.
+    expect(byId(page.items).get(ids[2] as string)).toMatchObject(
+      complete(ids[2] as string, ['member']),
+    );
   });
 });

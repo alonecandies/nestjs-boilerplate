@@ -7,14 +7,20 @@ export class MemberModel {
   @Field(() => ID)
   userId: string;
 
-  @Field()
-  email: string;
+  @Field(() => String, {
+    nullable: true,
+    description: 'null for a co-member unless the caller holds users:read',
+  })
+  email: string | null;
 
   @Field()
   displayName: string;
 
-  @Field(() => [TenantRoleEnum])
-  roles: TenantRole[];
+  @Field(() => [TenantRoleEnum], {
+    nullable: true,
+    description: 'null for a co-member unless the caller holds users:read',
+  })
+  roles: TenantRole[] | null;
 
   @Field(() => GraphQLISODateTime)
   joinedAt: Date;

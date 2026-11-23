@@ -37,7 +37,7 @@ export { SwitchTenantCommand } from './application/commands/switch-tenant/switch
 export { UpdateMemberRolesCommand } from './application/commands/update-member-roles/update-member-roles.command.js';
 export { UpdateMemberRolesHandler } from './application/commands/update-member-roles/update-member-roles.handler.js';
 export { toInvitationContract } from './application/mappers/invitation.mapper.js';
-export { toMemberContract } from './application/mappers/member.mapper.js';
+export { memberForViewer, toMemberContract } from './application/mappers/member.mapper.js';
 export {
   normalizeTenantName,
   toMyTenantContract,

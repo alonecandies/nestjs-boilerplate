@@ -92,12 +92,34 @@ describe('tenancy journeys (monolith, B2-28)', () => {
       url: '/v1/tenant/members',
       headers: auth(inAda.accessToken),
     });
+    // ARCH-4: a member (no users:read) sees co-members' names, not their emails or roles.
+    expect(members.statusCode, members.body).toBe(200);
+    type Listed = { userId: string; email: string | null; displayName: string; roles: unknown };
+    const listed = new Map(members.json<{ items: Listed[] }>().items.map((m) => [m.userId, m]));
+    expect(listed.get(ada.user.id)).toMatchObject({
+      email: null,
+      displayName: 'ada.invite',
+      roles: null,
+    });
+    expect(listed.get(bob.user.id)).toMatchObject({
+      email: 'bob.invite@example.com',
+      displayName: 'bob.invite',
+      roles: ['member'],
+    });
+    const asOwner = await e2e.app.inject({
+      method: 'GET',
+      url: '/v1/tenant/members',
+      headers: auth(ada.accessToken),
+    });
     expect(
-      members
-        .json<{ items: { email: string }[] }>()
-        .items.map((m) => m.email)
+      asOwner
+        .json<{ items: Listed[] }>()
+        .items.map((m) => [m.email, m.roles])
         .sort(),
-    ).toEqual(['ada.invite@example.com', 'bob.invite@example.com']);
+    ).toEqual([
+      ['ada.invite@example.com', ['owner']],
+      ['bob.invite@example.com', ['member']],
+    ]);
     const forbidden = await e2e.app.inject({
       method: 'POST',
       url: '/v1/tenant/invitations',
