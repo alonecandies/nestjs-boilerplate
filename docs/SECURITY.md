@@ -158,7 +158,7 @@ them at verification. Grants are cumulative: owner ⊇ admin ⊇ member (✓ = e
 
 | Domain        | Permission            | `member` | `admin` | `owner` | Used by                                                                                                                         |
 | ------------- | --------------------- | :------: | :-----: | :-----: | ------------------------------------------------------------------------------------------------------------------------------- |
-| identity      | `users:read`          |          |    ✓    |    ✓    | `GET /v1/users`, another user's `GET /v1/users/:id`, `users`                                                                    |
+| identity      | `users:read`          |          |    ✓    |    ✓    | `GET /v1/users`, another user's `GET /v1/users/:id`, `users`; co-members' email and roles in the member list                    |
 | identity      | `members:manage`      |          |    ✓    |    ✓    | `PATCH`/`DELETE /v1/tenant/members/:userId`, `POST /v1/tenant/invitations`, `updateMemberRoles`, `removeMember`, `inviteMember` |
 | identity      | `tenant:manage`       |          |         |    ✓    | `PATCH /v1/tenant`, `renameTenant`                                                                                              |
 | billing       | `billing:checkout`    |    ✓     |    ✓    |    ✓    | `POST /v1/billing/checkout-sessions`, `createCheckoutSession`                                                                   |
@@ -176,6 +176,7 @@ Ownership rules that are **not** permissions, enforced by the handlers:
 - Files are scoped to the key prefix `tenants/{tenantId}/users/{userId}/`, the tenant taken from the token; the tenant prefix is checked first (another tenant's key and a legacy `users/…` key are 403 for everyone, `files:manage` included), and access is checked before existence (403 before 404) so keys of other users and tenants cannot be probed.
 - Notifications, payments and AI conversations always use the user id and tenant from the token, never from the request; another user's conversation is 404 `CONVERSATION_NOT_FOUND`.
 - Owner rank: only an owner can grant, revoke, invite or remove the `owner` role, and a tenant always keeps one owner (`LAST_OWNER`); both are checked in the handlers, in every transport.
+- Member directory ("names open, PII gated"): every current member (and staff) lists the active tenant's members (`GET /v1/tenant/members`, `tenantMembers`, `ListMembers`) with user id, display name and join date. Co-members' `email` and `roles` are returned only when the caller holds `users:read`, derived in `ListMembersHandler` from the caller's membership row (a staff switch-in: its token's roles), never from the forwarded roles; otherwise gRPC sends `""` and `[]` and REST and GraphQL return `null`. The caller's own row is always complete.
 
 ### Platform staff switch-in
 

@@ -88,6 +88,21 @@ describe('gateway tenancy fakes', () => {
     );
   });
 
+  it('lists co-members without email and roles unless the caller holds users:read (ARCH-4)', async () => {
+    const members = new FakeMembersPort(state);
+    identity.addMembership(tenantId, bob, ['member']);
+    const list = (userId: string, roles: ('owner' | 'admin' | 'member')[] = ['admin']) =>
+      runWithPrincipal(createPrincipal({ userId, tenantId, roles }), () =>
+        members.listMembers({ tenantId, limit: 0 }),
+      );
+    // Bob is a member; his token claims admin, but the membership decides.
+    const asBob = new Map((await list(bob)).items.map((m) => [m.userId, m]));
+    expect(asBob.get(ada)).toMatchObject({ email: '', roles: [], displayName: 'ada@example.com' });
+    expect(asBob.get(bob)).toMatchObject({ email: 'bob@example.com', roles: ['member'] });
+    const asAda = new Map((await list(ada, ['owner'])).items.map((m) => [m.userId, m]));
+    expect(asAda.get(bob)).toMatchObject({ email: 'bob@example.com', roles: ['member'] });
+  });
+
   it('protects the last owner', async () => {
     const members = new FakeMembersPort(state);
     await expect(

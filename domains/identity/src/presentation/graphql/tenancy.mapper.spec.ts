@@ -47,4 +47,16 @@ describe('tenancy GraphQL mapper', () => {
       joinedAt,
     });
   });
+
+  it('maps a withheld member (ARCH-4: "" and [] on the wire) to null email and roles', () => {
+    const joinedAt = new Date(1_000);
+    expect(
+      toMemberModel({ userId: 'u', email: '', displayName: 'A', roles: [], joinedAt }),
+    ).toEqual({ userId: 'u', email: null, displayName: 'A', roles: null, joinedAt });
+  });
+
+  it('mixed versions: a complete member from an old identity-service passes through unchanged', () => {
+    const member = { userId: 'u', email: 'a@b.io', displayName: 'A', roles: ['owner'] };
+    expect(toMemberModel(member)).toMatchObject({ email: 'a@b.io', roles: ['owner'] });
+  });
 });

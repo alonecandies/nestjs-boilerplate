@@ -15,6 +15,7 @@ import type {
   Tenant,
   UpdateMemberRolesRequest,
 } from '@domain/identity-contracts';
+import { RbacRegistry } from '@platform/auth';
 import {
   EntityNotFoundException,
   generateId,
@@ -23,7 +24,13 @@ import {
   satisfiesTenantRole,
   type TenantRole,
 } from '@platform/common';
-import { InvitationsPort, MembersPort, TenantsPort } from '../api/index.js';
+import {
+  IDENTITY_RBAC,
+  IdentityPermission,
+  InvitationsPort,
+  MembersPort,
+  TenantsPort,
+} from '../api/index.js';
 import {
   assertCanAssignRoles,
   assertCanRemove,
@@ -33,10 +40,15 @@ import {
   InvitationInvalidException,
   LastOwnerException,
   MembershipAlreadyExistsException,
+  memberForViewer,
   parseTenantRoles,
   TenantAccessDeniedException,
 } from '../index.js';
 import type { FakeIdentityState } from './fake-identity-ports.js';
+
+/** Identity's vocabulary, as identity-service's registry holds it (users:read for the directory). */
+const IDENTITY_REGISTRY = new RbacRegistry();
+IDENTITY_REGISTRY.register(IDENTITY_RBAC);
 
 export interface FakeInvitation {
   id: string;
@@ -155,7 +167,18 @@ export class FakeMembersPort extends MembersPort {
     super();
   }
 
+  /**
+   * As `ListMembersHandler`: co-members' emails and roles only for a caller whose membership (a
+   * staff switch-in: its token) grants `users:read`; the caller's own row stays complete.
+   */
   async listMembers({ tenantId }: ListMembersRequest): Promise<MemberPage> {
+    const viewer = getPrincipal();
+    if (viewer === undefined || viewer.tenantId !== tenantId) {
+      throw new TenantAccessDeniedException();
+    }
+    const directory = IDENTITY_REGISTRY.resolve(
+      this.state.actorRoles(tenantId, viewer.userId),
+    ).includes(IdentityPermission.UsersRead);
     const ids = this.state.identity.memberships
       .filter((m) => m.tenantId === tenantId)
       .map((m) => m.userId);
@@ -163,7 +186,9 @@ export class FakeMembersPort extends MembersPort {
       items: ids
         .sort()
         .reverse()
-        .map((userId) => this.state.member(tenantId, userId)),
+        .map((userId) =>
+          memberForViewer(this.state.member(tenantId, userId), viewer.userId, directory),
+        ),
     };
   }
 

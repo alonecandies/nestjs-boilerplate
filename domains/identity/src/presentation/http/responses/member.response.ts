@@ -2,19 +2,38 @@ import type { Member, MemberPage } from '@domain/identity-contracts';
 import { ApiProperty } from '@nestjs/swagger';
 import { normalizeTenantRoles, TENANT_ROLES, type TenantRole } from '@platform/common';
 
+/**
+ * A tenant member. `email` and `roles` are `null` for a co-member when the caller lacks
+ * `users:read` (ARCH-4; identity-service sends them as `""` and `[]`); the caller's own row and a
+ * `users:read` caller's rows are complete. A complete member (any identity-service version)
+ * passes through unchanged.
+ */
 export class MemberResponse {
   @ApiProperty({ format: 'uuid' }) userId: string;
-  @ApiProperty() email: string;
+  @ApiProperty({
+    type: String,
+    nullable: true,
+    description: 'null for a co-member unless the caller holds users:read',
+  })
+  email: string | null;
   @ApiProperty() displayName: string;
-  @ApiProperty({ enum: TENANT_ROLES, enumName: 'TenantRole', isArray: true }) roles: TenantRole[];
+  @ApiProperty({
+    enum: TENANT_ROLES,
+    enumName: 'TenantRole',
+    isArray: true,
+    nullable: true,
+    description: 'null for a co-member unless the caller holds users:read',
+  })
+  roles: TenantRole[] | null;
   @ApiProperty({ type: String, format: 'date-time', nullable: true }) joinedAt: string | null;
 
   static from(member: Member): MemberResponse {
     return Object.assign(new MemberResponse(), {
       userId: member.userId,
-      email: member.email,
+      // Withheld on the wire as the proto3 defaults; a real member always has a role.
+      email: member.email === '' ? null : member.email,
       displayName: member.displayName,
-      roles: normalizeTenantRoles(member.roles),
+      roles: member.roles.length === 0 ? null : normalizeTenantRoles(member.roles),
       joinedAt: member.joinedAt?.toISOString() ?? null,
     });
   }

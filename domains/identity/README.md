@@ -242,6 +242,15 @@ the ports, so both topologies behave the same. Endpoints: `GET`/`POST /v1/tenant
   and cannot accept an invitation or leave.
 - Only an owner can grant, revoke, invite or remove `owner` (`OWNER_RANK_REQUIRED`); roles are a non-empty, unique set
   (`INVALID_ROLES`).
+- The member list ("names open, PII gated"): any current member (or staff) lists the tenant's members with user id,
+  display name and join date. Other members' `email` and `roles` are returned only when the caller holds
+  `users:read`, which `ListMembersHandler` derives from the caller's membership row (a staff switch-in: its token's
+  roles), never from the forwarded roles, so both topologies and every transport apply it. The caller's own row is
+  always complete. A withheld member is `email: ""` and `roles: []` on the wire (the proto is unchanged, and a real
+  member always has a role) and `null` in REST and GraphQL. `UpdateMemberRoles` (`members:manage`) returns the full
+  member. Rollout: roll identity-service before the gateway. An old gateway shows a withheld member as `""` and `[]`
+  (its non-null GraphQL fields accept them); the new gateway passes a complete member from an old identity-service
+  through unchanged, so until identity-service rolls every member still sees every field.
 - A tenant keeps at least one owner (`LAST_OWNER`): role changes, removals and departures run under a per-tenant lock,
   so two owners demoting each other at once cannot both succeed.
 - An invitation is 32 random bytes (only the sha256 is stored), valid 7 days, single use. The mail job carries the raw
@@ -256,7 +265,8 @@ the ports, so both topologies behave the same. Endpoints: `GET`/`POST /v1/tenant
 `INVALID_ROLES` (422), `MEMBERSHIP_REVOKED` (401), `STAFF_ONLY` and `STAFF_TOKEN_NOT_ALLOWED` (403).
 
 **Testing.** `FakeTenancyState`, `FakeTenantsPort`, `FakeMembersPort` and `FakeInvitationsPort` (from
-`@domain/identity/testing`) stand behind the gateway; `tenancy.repositories.int-spec.ts` covers the repositories, the
+`@domain/identity/testing`) stand behind the gateway (`FakeMembersPort.listMembers` withholds emails and roles as the
+handler does); `tenancy.repositories.int-spec.ts` covers the repositories, the
 last-owner concurrency and the invitation accept against Citus.
 
 ## Events

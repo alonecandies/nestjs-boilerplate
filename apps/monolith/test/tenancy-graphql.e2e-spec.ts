@@ -131,6 +131,37 @@ describe('tenancy GraphQL (monolith, B2-16)', () => {
     });
   });
 
+  it('tenantMembers as a member (no users:read): co-members without email and roles, own row complete', async () => {
+    const login = await e2e.app.inject({
+      method: 'POST',
+      url: '/v1/auth/login',
+      payload: { email: 'bob.gql@example.com', password: PASSWORD, tenantId: ada.tenantId },
+    });
+    expect(login.statusCode, login.body).toBe(200);
+    const page = await gql<{
+      tenantMembers: {
+        items: {
+          userId: string;
+          email: string | null;
+          displayName: string;
+          roles: string[] | null;
+        }[];
+      };
+    }>(
+      '{ tenantMembers(limit: 10) { items { userId email displayName roles joinedAt } } }',
+      undefined,
+      login.json<Tokens>().accessToken,
+    );
+    expect(page.errors).toBeUndefined();
+    const byId = new Map(page.data?.tenantMembers.items.map((m) => [m.userId, m]));
+    expect(byId.get(ada.user.id)).toMatchObject({ email: null, displayName: 'Ada', roles: null });
+    expect(byId.get(bob.user.id)).toMatchObject({
+      email: 'bob.gql@example.com',
+      displayName: 'Bob',
+      roles: ['MEMBER'],
+    });
+  });
+
   it('tenantMembers lists both; updateMemberRoles promotes Bob; the last owner cannot demote herself', async () => {
     const page = await gql<{ tenantMembers: { items: { email: string; roles: string[] }[] } }>(
       '{ tenantMembers(limit: 10) { items { email roles } nextCursor } }',

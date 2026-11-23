@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createGatewayE2eApp, type GatewayE2e } from './support/gateway-e2e-app.js';
+import { graphql } from './support/http.js';
 
 await vi.hoisted(async () => {
   const { GATEWAY_E2E_ENV } = await import('./support/e2e-env.js');
@@ -85,12 +86,55 @@ describe('tenancy journeys (gateway, B2-28)', () => {
       url: '/v1/tenant/members',
       headers: auth(inAda.accessToken),
     });
+    // ARCH-4: a member (no users:read) sees co-members' names, not their emails or roles.
+    expect(members.statusCode, members.body).toBe(200);
+    type Listed = { userId: string; email: string | null; displayName: string; roles: unknown };
+    const listed = new Map(members.json<{ items: Listed[] }>().items.map((m) => [m.userId, m]));
+    expect(listed.get(ada.user.id)).toMatchObject({
+      email: null,
+      displayName: 'ada.invite',
+      roles: null,
+    });
+    expect(listed.get(bob.user.id)).toMatchObject({
+      email: 'bob.invite@example.com',
+      displayName: 'bob.invite',
+      roles: ['member'],
+    });
+    const asOwner = await e2e.app.inject({
+      method: 'GET',
+      url: '/v1/tenant/members',
+      headers: auth(ada.accessToken),
+    });
     expect(
-      members
-        .json<{ items: { email: string }[] }>()
-        .items.map((m) => m.email)
+      asOwner
+        .json<{ items: Listed[] }>()
+        .items.map((m) => [m.email, m.roles])
         .sort(),
-    ).toEqual(['ada.invite@example.com', 'bob.invite@example.com']);
+    ).toEqual([
+      ['ada.invite@example.com', ['owner']],
+      ['bob.invite@example.com', ['member']],
+    ]);
+    const gql = await e2e.app.inject(
+      graphql(
+        '{ tenantMembers(limit: 10) { items { userId email displayName roles } } }',
+        undefined,
+        auth(inAda.accessToken),
+      ),
+    );
+    expect(gql.statusCode, gql.body).toBe(200);
+    const result = gql.json<{ data: { tenantMembers: { items: Listed[] } }; errors?: unknown }>();
+    expect(result.errors).toBeUndefined();
+    expect(result.data.tenantMembers.items).toEqual(
+      expect.arrayContaining([
+        { userId: ada.user.id, email: null, displayName: 'ada.invite', roles: null },
+        {
+          userId: bob.user.id,
+          email: 'bob.invite@example.com',
+          displayName: 'bob.invite',
+          roles: ['MEMBER'],
+        },
+      ]),
+    );
     const forbidden = await e2e.app.inject({
       method: 'POST',
       url: '/v1/tenant/invitations',
