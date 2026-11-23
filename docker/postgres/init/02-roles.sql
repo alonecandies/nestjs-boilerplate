@@ -55,6 +55,12 @@ ALTER ROLE app_system SET citus.propagate_set_commands = 'local';
 ALTER ROLE app_system SET statement_timeout = '15s';
 ALTER ROLE app_system SET idle_in_transaction_session_timeout = '60s';
 
+-- app_owner's lock_timeout (OPS-2): the migrator sends DATABASE_MIGRATION_LOCK_TIMEOUT_MS (5000 by
+-- default) as a startup parameter, but on Citus that reaches the coordinator only; the connections
+-- it opens to the workers start from this role default. The migrator keeps it equal to its setting
+-- (ALTER ROLE CURRENT_USER, only when it differs); this is the same default, set up front.
+ALTER ROLE app_owner SET lock_timeout = '5s';
+
 -- pg_trgm as the superuser (01-extensions.sql does it in compose, but Testcontainers never runs that
 -- file): the platform set's CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public is then a no-op
 -- for app_owner, which has no CREATE on schema public.

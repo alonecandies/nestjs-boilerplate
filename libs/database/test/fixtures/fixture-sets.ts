@@ -55,3 +55,15 @@ export const shardingMigrations: DatabaseMigrationSet = {
   migrationsSchema: 'sharding',
   migrationsTable: MIGRATIONS_TABLE,
 };
+
+/**
+ * The lock-wait fixture (OPS-2): one hand-written file that alters the widgets table (so it runs
+ * after widgetsMigrations), with its own bookkeeping table. An open transaction that read widgets
+ * blocks its ALTER, which is what the migration session's lock_timeout must cut short.
+ */
+export const lockWaitMigrations: DatabaseMigrationSet = {
+  name: 'lock-wait',
+  folder: join(import.meta.dirname, 'lock-wait', 'migrations'),
+  migrationsSchema: 'lock_wait',
+  migrationsTable: MIGRATIONS_TABLE,
+};

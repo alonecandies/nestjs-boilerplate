@@ -18,7 +18,8 @@ import { runMigrations } from './run-migrations.js';
  * No Nest application: config is parsed with the same zod schemas the apps use, so a bad
  * DATABASE_URL fails with the same message. Applies `platformMigrations`, then `migrations` in
  * order, under the migrations advisory lock, over DATABASE_MIGRATION_URL only (the owner role,
- * direct to the coordinator): without it the job exits 1 before connecting.
+ * direct to the coordinator): without it the job exits 1 before connecting. Lock waits are bounded
+ * by DATABASE_MIGRATION_LOCK_TIMEOUT_MS, with DATABASE_MIGRATION_LOCK_RETRIES retries per set.
  *
  * Takes no flags: an unknown one (such as the removed `--migrations-folder`) fails instead of being
  * ignored. Sets `process.exitCode` (0 = schema current, 1 = failure) instead of exiting, so the last
@@ -36,14 +37,15 @@ export async function runMigrationsCli(
     if (observabilityConfig.parse().logPretty) logger = createMigrateCliLogger(true);
     const sets = withPlatformMigrations(migrations);
     // The app's database rules, minus the system pool this job never opens (no DATABASE_SYSTEM_URL).
-    const url = requireMigrationUrl(
-      parseEnv(databaseConfig.namespace, databaseMigrationEnvSchema, process.env),
-    );
+    const cfg = parseEnv(databaseConfig.namespace, databaseMigrationEnvSchema, process.env);
+    const url = requireMigrationUrl(cfg);
     const { serviceName } = appConfig.parse();
     const summary = await runMigrations(url, {
       migrations: sets,
       logger,
       applicationName: serviceName,
+      lockWaitTimeoutMs: cfg.migrationLockTimeoutMs,
+      lockWaitRetries: cfg.migrationLockRetries,
     });
     const names = summary.sets.map((set) => set.name).join(', ');
     logger.log(`Done: ${summary.applied} applied, ${summary.total} total (${names})`);
