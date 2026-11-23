@@ -1,7 +1,7 @@
 # CI: quality gate (lint + typecheck + tests + build + generated-artefact drift + commitlint), the
-# integration tests against real Postgres/Redis, one production image per app (built, not pushed),
-# a boot check of the docker compose infra stack, and a smoke test that boots both app topologies
-# from those images.
+# integration tests against real Citus, Cassandra, Kafka, immudb, object storage and Redis, one
+# production image per app (built, not pushed), a boot check of the docker compose infra stack, and
+# a smoke test that boots both app topologies from those images.
 name: CI
 
 on:
@@ -111,12 +111,13 @@ jobs:
           node scripts/docker/check-kafka-topics.mjs
 
   integration:
-    name: Integration tests (real Postgres + Redis)
+    name: Integration tests (Citus, Cassandra, Kafka, immudb, object storage, Redis)
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     # *.int-spec.ts only run with INTEGRATION=1 (`bun run test:int` = every '<pkg>:int' project).
-    # Postgres comes from testcontainers (@platform/testing/postgres: citusdata/citus:14.2.0, single
-    # node, amd64 like the runner); the Redis specs use REDIS_URL, served by this service container.
+    # The specs start their own containers through testcontainers (Citus, Cassandra, Kafka, immudb,
+    # RustFS, fake-gcs-server; amd64 like the runner). The Redis specs use REDIS_URL, served by this
+    # service container.
     services:
       redis:
         image: redis:8.10.2-alpine3.23
@@ -146,10 +147,13 @@ jobs:
       - name: Install (frozen lockfile)
         run: bun install --frozen-lockfile
 
-      # Every Postgres int project starts its own container in parallel: pull the image once first,
-      # so no beforeAll spends its 180 s hook timeout on the download.
-      - name: Pull the Citus image of the Postgres int specs
-        run: docker pull citusdata/citus:14.2.0
+      # Every int project starts its own containers, several at once: pull each image once first
+      # (the list comes from the image constants next to the code that starts them,
+      # scripts/int-images.mjs), so no beforeAll spends its hook timeout on a download.
+      - name: Pull the images of the int specs
+        run: |
+          images=$(node scripts/int-images.mjs)
+          echo "$images" | xargs -P 4 -n 1 docker pull
 
       - name: Integration tests (INTEGRATION=1, testcontainers + service containers)
         run: bun run test:int

@@ -26,6 +26,10 @@ import { identityMigrations } from './identity.migrations.js';
  * equal: tables, columns, constraints, indexes, policies, grants, enums, triggers and the Citus
  * distribution (kind, distribution column, colocation group, shard ranges). Only the journal's
  * first entry of the current folder is applied, so later migrations never change what this proves.
+ * DOC-1: a database already at the stacked tip is upgraded in place. The stacked history goes to one
+ * database, then the current set to the same database: the baseline is skipped (it keeps the stacked
+ * tip's journal timestamp), no file applies, and the catalog is unchanged. Only a database stopped
+ * part-way is refused.
  * Opt-in (needs Docker): INTEGRATION=1 bunx vitest run --project identity:int squash
  */
 
@@ -75,6 +79,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     let baseline: string | undefined;
     const applied: Record<'stacked' | 'squashed', number> = { stacked: -1, squashed: -1 };
     const catalogs: Partial<Record<'stacked' | 'squashed', SchemaCatalog>> = {};
+    let upgrade: { applied: number; catalog: SchemaCatalog } | undefined;
 
     /** Applies the platform set and `folder` as identity's set, then reads the catalog. */
     const build = async (
@@ -113,6 +118,9 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       applied.squashed = fresh.applied;
       catalogs.stacked = old.catalog;
       catalogs.squashed = fresh.catalog;
+      // DOC-1: the database at the stacked tip, then the current set, through the same runner. The
+      // stacked catalog above was read before this run, so it stays the reference.
+      upgrade = await build(stacked, identityMigrations.folder);
     });
 
     afterAll(async () => {
@@ -172,6 +180,29 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       'distribution',
     ] as const)('has the same %s', (part) => {
       expect(catalogs.squashed?.[part]).toEqual(catalogs.stacked?.[part]);
+    });
+
+    it('upgrades a database at the stacked tip in place: skips 0000_init, applies no file', () => {
+      const [, ...afterBaseline] = readJournal(identityMigrations.folder).entries;
+      expect(afterBaseline).toEqual([]);
+      expect(upgrade?.applied).toBe(0);
+    });
+
+    it.each([
+      'schemas',
+      'relations',
+      'columns',
+      'constraints',
+      'indexes',
+      'policies',
+      'tableGrants',
+      'columnGrants',
+      'enums',
+      'functions',
+      'triggers',
+      'distribution',
+    ] as const)('keeps the %s unchanged by the upgrade', (part) => {
+      expect(upgrade?.catalog[part]).toEqual(catalogs.stacked?.[part]);
     });
   },
 );

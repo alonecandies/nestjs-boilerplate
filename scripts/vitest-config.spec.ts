@@ -1,9 +1,12 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { Logger } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
+import { TEST_CASSANDRA_STARTUP_TIMEOUT_MS } from '@platform/testing/cassandra';
+import { testPostgresStartupTimeoutMs } from '@platform/testing/postgres';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import config, {
+  INT_HOOK_MARGIN_MS,
   intHookTimeoutMs,
   SETUP_FILES,
   scriptsProject,
@@ -36,12 +39,38 @@ describe('vitest.config.ts', () => {
     });
   });
 
-  it("keeps int projects' hook timeout a minute above the container startup wait", () => {
-    expect(intHookTimeoutMs({})).toBe(180_000);
-    expect(intHookTimeoutMs({ TEST_POSTGRES_STARTUP_TIMEOUT_MS: '60000' })).toBe(180_000);
+  it("keeps int projects' hook timeout a minute above the largest container start budget", () => {
+    // The fixed budgets are 180 s (Cassandra, Kafka); the Postgres one follows the env variable.
+    expect(intHookTimeoutMs({})).toBe(240_000);
+    expect(intHookTimeoutMs({ TEST_POSTGRES_STARTUP_TIMEOUT_MS: '60000' })).toBe(240_000);
     expect(intHookTimeoutMs({ TEST_POSTGRES_STARTUP_TIMEOUT_MS: '360000' })).toBe(420_000);
     // An invalid value fails in startTestPostgres itself; here it just keeps the default.
-    expect(intHookTimeoutMs({ TEST_POSTGRES_STARTUP_TIMEOUT_MS: 'abc' })).toBe(180_000);
+    expect(intHookTimeoutMs({ TEST_POSTGRES_STARTUP_TIMEOUT_MS: 'abc' })).toBe(240_000);
+  });
+
+  it('keeps the hook timeout above every container start budget a spec or helper sets (CI-2)', () => {
+    const budgets: number[] = [TEST_CASSANDRA_STARTUP_TIMEOUT_MS, testPostgresStartupTimeoutMs({})];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (['node_modules', 'dist', 'coverage', 'generated'].includes(entry.name)) continue;
+        const path = join(dir, entry.name);
+        if (entry.isDirectory()) walk(path);
+        else if (entry.name.endsWith('.ts') && !entry.name.endsWith('.spec.ts')) {
+          for (const match of readFileSync(path, 'utf8').matchAll(
+            /withStartupTimeout\(\s*([\d_]+)\s*\)/g,
+          )) {
+            budgets.push(Number((match[1] ?? '').replaceAll('_', '')));
+          }
+        }
+      }
+    };
+    for (const dir of ['apps', 'domains', 'libs']) walk(join(ROOT, dir));
+    // Cassandra, Postgres and at least the Kafka spec's literal.
+    expect(budgets.length).toBeGreaterThan(2);
+    // Above 180 s plus the margin, so a beforeAll that waits out its container still fails
+    // on the container's own message, not on a hook timeout.
+    expect(intHookTimeoutMs({})).toBeGreaterThanOrEqual(Math.max(...budgets) + INT_HOOK_MARGIN_MS);
+    expect(intHookTimeoutMs({})).toBeGreaterThanOrEqual(180_000 + INT_HOOK_MARGIN_MS);
   });
 
   it('names a lib that shares a domain folder name platform-<name>, and leaves the others alone', () => {

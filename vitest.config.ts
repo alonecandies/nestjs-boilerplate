@@ -15,13 +15,24 @@ export const UNIT_TEST_TIMEOUT_MS = 15_000;
 export const UNIT_HOOK_TIMEOUT_MS = 30_000;
 
 /**
- * Int specs start a Citus container in `beforeAll`, which may take up to
- * `TEST_POSTGRES_STARTUP_TIMEOUT_MS` (default 120 s, see @platform/testing/postgres), so the hook
- * timeout stays a minute above it. An invalid value keeps the default here; startTestPostgres refuses it.
+ * Int specs start their containers in `beforeAll`: Citus may take up to
+ * `TEST_POSTGRES_STARTUP_TIMEOUT_MS` (default 120 s, see @platform/testing/postgres), Cassandra and
+ * Kafka wait up to 180 s (`TEST_CASSANDRA_STARTUP_TIMEOUT_MS`, `withStartupTimeout` in
+ * outbox-kafka-delivery.int-spec.ts). The hook timeout is the largest of those budgets plus a minute,
+ * so a container that never becomes healthy fails with its own message and not as a hook timeout.
+ * scripts/vitest-config.spec.ts scans the specs and helpers for every budget they set. An invalid
+ * env value keeps the default here; startTestPostgres refuses it.
  */
+export const FIXED_CONTAINER_START_BUDGET_MS = 180_000;
+export const INT_HOOK_MARGIN_MS = 60_000;
 export function intHookTimeoutMs(env: NodeJS.ProcessEnv = process.env): number {
   const startup = Number(env.TEST_POSTGRES_STARTUP_TIMEOUT_MS);
-  return Math.max(180_000, (Number.isInteger(startup) && startup > 0 ? startup : 0) + 60_000);
+  return (
+    Math.max(
+      FIXED_CONTAINER_START_BUDGET_MS,
+      Number.isInteger(startup) && startup > 0 ? startup : 0,
+    ) + INT_HOOK_MARGIN_MS
+  );
 }
 
 /** reflect-metadata first (decorator metadata), then the repo setup (silent Nest logger). */

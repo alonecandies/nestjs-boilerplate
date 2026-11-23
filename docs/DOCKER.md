@@ -617,9 +617,11 @@ Runs on pushes to `master` and on pull requests. Test layout and the integration
   Prettier, tsc), `bun run test`, `bun run build`, generated-artefact drift (`proto:gen` + `buf lint` + `db:generate` + `db:check`,
   then a clean `git diff`/`git status` of `domains/*/contracts/src/generated` and `domains/*/src/infrastructure/persistence/migrations`),
   commitlint over the PR's commits and `buf breaking` against the PR base (pull requests only), then the config drift checks (`.env.example`, Kafka topics).
-- **integration**: `bun run test:int` (`INTEGRATION=1`, every `<package>:int` project): Postgres from testcontainers,
-  Redis from a job service container (`REDIS_URL=redis://localhost:6379`).
-- **image** (matrix of the 5 apps): `docker buildx` of the `runtime` target, not pushed, GitHub Actions cache per app.
+- **integration**: `bun run test:int` (`INTEGRATION=1`, every `<package>:int` project). The specs start their own
+  stores with testcontainers: Citus (Postgres), Cassandra, Kafka, immudb, RustFS and fake-gcs-server. Redis comes from a
+  job service container (`REDIS_URL=redis://localhost:6379`). A step first pulls every image the specs start
+  (`node scripts/int-images.mjs` lists them from the image constants), so no hook timeout is spent on a download.
+- **image** (matrix of the 6 apps): `docker buildx` of the `runtime` target, not pushed, GitHub Actions cache per app.
 - **topology** (matrix `monolith`, `microservices`; needs `image`): loads the images the `image` job saved as
   artifacts and runs `node scripts/docker/check-topology.ts up <topology>` (see below).
 - **compose**: `scripts/docker/validate-compose.sh` (`docker compose config` for every profile combination + one `api`
@@ -719,4 +721,4 @@ to anyone else. `/docs` + `/openapi.*` are on the API port: route only `/v1`, `/
 
 None open for Docker. The earlier ones have landed: the gateway imports each domain through `@domain/<x>/api` and its
 image is traced ([Images](#images-dockerfile)), `/metrics` has its own listener on `METRICS_PORT`, and the CI
-`integration` job runs every `*:int` project, billing's Citus and notifications' Cassandra specs included.
+`integration` job runs every `*:int` project, billing's Citus and immudb specs and notifications' Cassandra specs included.
