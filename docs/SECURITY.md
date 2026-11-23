@@ -1026,9 +1026,11 @@ At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) pu
 - Under `GRPC_PRINCIPAL_ASSERTION=off` (the default) and `warn`, internal gRPC trusts unsigned principal metadata: a mesh
   peer that reaches a service's port can assert any user, tenant, roles or staff flag. Only `enforce` closes this
   ([rollout](#signed-principal-assertion)); anonymous calls stay possible in every mode.
-- `notifications.notification-created.v1` is published directly (the notifications context has no Postgres
-  store to hold an outbox row): a crash between the inbox write and the publish loses the push. The events of
-  identity and billing go through the transactional outbox and are delivered at least once.
+- `notifications.notification-created.v1` has no outbox (the notifications context has no Postgres store). The
+  welcome and receipt handlers publish it last, and a failed publish fails their event, which is retried and then
+  dead-lettered, so a persistent broker failure dead-letters an event whose inbox row and mail were already written
+  (`KafkaDeadLetters` pages). The events of identity and billing go through the transactional outbox. All of them
+  are delivered at least once.
 - A row the broker always refuses blocks its outbox until an operator acts (a batch stops at the first failed
   publish; `OutboxBacklogStuck` pages), so a poison row delays that outbox's later events, not loses them.
 - WebSocket revocation is instant only while the revocation message arrives. A replica that missed

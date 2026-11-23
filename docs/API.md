@@ -930,8 +930,9 @@ events of one user land on the same partition and are consumed in order.
 
 Identity and billing never publish from a request path: each event is a row of `identity.outbox` or `billing.outbox`,
 written in the transaction that changes the state, and the leader relay of that outbox publishes it to Kafka afterwards,
-at least once, in `created_at` order. `notifications.notification-created.v1` is the exception (the notifications
-context has no Postgres store): it is published directly after the inbox row was written.
+at least once, in `created_at` order. `notifications.notification-created.v1` has no outbox (the notifications
+context has no Postgres store): the welcome and receipt handlers publish it last, after the inbox row and the mail, and
+a failed publish fails their event, so the consumer retries it and then dead-letters it. It is also at least once.
 
 The three identity topics are tenant-scoped. Their envelope `tenantId` is the tenant the event is about, set explicitly
 by the producer and never taken from the caller's principal: the new account's personal workspace for
@@ -994,6 +995,8 @@ The envelope fields:
 - `version`: the topic's major version.
 - `source`: the producer's `SERVICE_NAME`.
 - `correlationId`: optional. It comes from the originating request.
+- `traceparent` and `tracestate`: optional W3C trace context of the span that built the event,
+  absent without one. Outbox events are relayed under it, so consumers join the request's trace.
 - `tenantId`: optional UUID of the tenant the event belongs to; the nil UUID marks a platform event. Tenant-scoped contracts must set it when produced; consumers accept envelopes without it.
 - `actorId`: optional UUID of the user who caused the event, or `null` for system work. `tenantId` and `actorId` default to the producer's CLS principal, and consumers run as `{ userId: actorId, tenantId }` when both are usable.
 
@@ -1016,7 +1019,8 @@ flowchart LR
 - **Transactional outbox.** The events of identity and billing are rows of `<schema>.outbox`, committed with the state
   they report and published by one leader relay per outbox (`outbox_*` metrics, alerts in
   [OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts)). A crash or a broker outage delays an event until the relay
-  can publish it; it does not lose it. Only `notifications.notification-created.v1` is published without an outbox.
+  can publish it; it does not lose it. `notifications.notification-created.v1` has no outbox: a failed publish fails
+  the identity or billing event that created the notification, which is retried and then dead-lettered.
 - **At least once.** The relay may publish a row twice (a crash between the broker's acknowledgement and the mark), so
   consumers are idempotent: notification ids are derived deterministically, the mail has its own idempotency key, push
   dedupe uses `SET NX`, and a ledger posting's entry id derives from the Stripe transaction id. Redeliveries and replays

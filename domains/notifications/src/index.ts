@@ -2,7 +2,7 @@
  * @domain/notifications — the notifications bounded context.
  * - `@domain/notifications/api` (re-exported here): `NotificationsApiModule.forLocal()` /
  *   `.forRemote()`, `NotificationsPort`, adapters, REST / GraphQL / WebSocket / push presentation.
- * - This root entry adds `NotificationsCoreModule` (CQRS, saga, Cassandra, digest cron),
+ * - This root entry adds `NotificationsCoreModule` (CQRS, Cassandra, digest cron),
  *   `NotificationsGrpcModule`, `NotificationsMessagingModule` (identity/billing Kafka consumers),
  *   `notificationsCassandraMigrations`, commands/queries, mail and domain types.
  * - The monolith imports `NotificationsCoreModule` next to `NotificationsApiModule.forLocal()`.

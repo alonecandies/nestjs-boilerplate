@@ -4,8 +4,10 @@ import { CommandBus, CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { formatMoney, MailService } from '@platform/mailer';
 import { toUpper } from 'lodash-es';
 import { defineNotificationsMail } from '../../mail/notifications-mail.js';
+import { toNotificationProps } from '../../mappers/notification.mapper.js';
 import { NotificationRecipientsRepository } from '../../ports/notification-recipients.repository.js';
 import { CreateNotificationCommand } from '../create-notification/create-notification.command.js';
+import { PublishNotificationCreatedCommand } from '../publish-notification-created/publish-notification-created.command.js';
 import { SendPaymentReceiptCommand } from './send-payment-receipt.command.js';
 
 export const RECEIPT_NOTIFICATION_TITLE = 'Payment received';
@@ -64,6 +66,11 @@ export class SendPaymentReceiptHandler implements ICommandHandler<SendPaymentRec
         `No mail recipient for user ${userId} in tenant ${tenantId}: receipt ${paymentId} not mailed`,
       );
     }
+    // The push goes last: a failed publish rejects, and the redelivered event finds the row and
+    // the mail already there (same id, same mail job id) and publishes again.
+    await this.commandBus.execute(
+      new PublishNotificationCreatedCommand(toNotificationProps(notification)),
+    );
     return notification;
   }
 }

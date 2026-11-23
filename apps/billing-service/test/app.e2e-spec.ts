@@ -47,7 +47,7 @@ import Stripe from 'stripe';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule, createAppModule } from '../src/app.module.js';
 import { createFakePostgres, type ExecutedQuery, type FakeRow } from './support/fake-postgres.js';
-import { freePort } from './support/free-port.js';
+import { withBoundGrpcPort } from './support/free-port.js';
 import { RecordingKafkaServer } from './support/recording-kafka.server.js';
 import { startServiceTestApp } from './support/service-test-app.js';
 
@@ -139,11 +139,12 @@ const lastStatement = (): ExecutedQuery | undefined =>
   );
 
 /** The service's environment: nothing may reach real infrastructure (unreachable ports everywhere). */
-function serviceEnv(grpcUrl: string): Record<string, string> {
+function serviceEnv(): Record<string, string> {
   return {
     LOG_LEVEL: 'silent',
     SERVICE_NAME: 'billing-service',
-    GRPC_URL: grpcUrl,
+    // Port 0: the server binds an OS-chosen port, read back after it started.
+    GRPC_URL: '127.0.0.1:0',
     GRPC_DEADLINE_MS: '3000',
     STRIPE_SECRET_KEY: 'sk_test_billing_service_e2e',
     STRIPE_WEBHOOK_SECRET: WEBHOOK_SECRET,
@@ -230,18 +231,21 @@ describe('billing-service (real AppModule, fakes at the network edges)', () => {
     grpcCall(source, { timeoutMs: 3_000, operation, breaker: breakers.get('billing') });
 
   beforeAll(async () => {
-    const grpcUrl = `127.0.0.1:${await freePort()}`;
     // The default LEDGER_ENABLED (false): no immudb, no Kafka consumer.
-    for (const [name, value] of Object.entries(serviceEnv(grpcUrl))) vi.stubEnv(name, value);
+    for (const [name, value] of Object.entries(serviceEnv())) vi.stubEnv(name, value);
     // Installed before the app boots: the relay decides whether to start on bootstrap.
     const lockAttempts = vi.spyOn(DistributedLockService.prototype, 'using');
     const logLines = vi.spyOn(Logger.prototype, 'log');
 
     const builder = withEdgeFakes(Test.createTestingModule({ imports: [AppModule] }), systemEvents);
-    app = await startServiceTestApp(builder, {
-      grpc: [BILLING_GRPC_PACKAGE],
-      onKafkaConsumer: (options) => kafkaConsumers.push(options),
-    });
+    const started = await withBoundGrpcPort(() =>
+      startServiceTestApp(builder, {
+        grpc: [BILLING_GRPC_PACKAGE],
+        onKafkaConsumer: (options) => kafkaConsumers.push(options),
+      }),
+    );
+    app = started.value;
+    const grpcUrl = `127.0.0.1:${started.port}`;
     // Kept here: the config restores every spy before each test (restoreMocks).
     relayBoot.lockResources = lockAttempts.mock.calls.map(([resource]) => resource);
     relayBoot.logLines = logLines.mock.calls.filter(
@@ -524,9 +528,8 @@ describe('billing-service with LEDGER_ENABLED=true (immudb, the ledger-posting c
   const immudb = new RecordingImmudbClient();
 
   beforeAll(async () => {
-    const grpcUrl = `127.0.0.1:${await freePort()}`;
     const env = {
-      ...serviceEnv(grpcUrl),
+      ...serviceEnv(),
       LEDGER_ENABLED: 'true',
       // The session pool behind the readiness check: nothing listens there.
       IMMUDB_ADDRESS: '127.0.0.1:1',
@@ -539,11 +542,15 @@ describe('billing-service with LEDGER_ENABLED=true (immudb, the ledger-posting c
     )
       .overrideProvider(ImmudbClient)
       .useValue(immudb);
-    app = await startServiceTestApp(builder, {
-      grpc: [BILLING_GRPC_PACKAGE],
-      kafka,
-      onKafkaConsumer: (options) => kafkaConsumers.push(options),
-    });
+    const started = await withBoundGrpcPort(() =>
+      startServiceTestApp(builder, {
+        grpc: [BILLING_GRPC_PACKAGE],
+        kafka,
+        onKafkaConsumer: (options) => kafkaConsumers.push(options),
+      }),
+    );
+    app = started.value;
+    const grpcUrl = `127.0.0.1:${started.port}`;
     client = new ClientGrpcProxy(
       createGrpcClientOptions(grpcConfig.parse(), { spec: BILLING_GRPC_PACKAGE, url: grpcUrl })
         .options,

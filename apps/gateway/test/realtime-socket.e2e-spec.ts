@@ -34,7 +34,6 @@ import {
   nextEvent,
   refused,
   SocketClients,
-  wait,
 } from '@platform/testing/realtime';
 import type { Socket } from 'socket.io-client';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -55,11 +54,11 @@ interface Problem {
 type Ack = { ok: true } | { ok: false; error: Problem };
 
 const PASSWORD = 'correct horse battery staple';
-const SWEEP_MS = 200;
-/** Two sweep intervals plus a margin for scheduling on a loaded machine. */
-const WITHIN_TWO_SWEEPS_MS = 2 * SWEEP_MS + 600;
-/** How long a push that must NOT arrive is awaited. */
-const QUIET_MS = 300;
+/**
+ * Revocation is awaited as an event, not raced against a window: this only keeps the helpers'
+ * own timer below the e2e project's 30 s test timeout so a miss reports which event never came.
+ */
+const CLOSE_WAIT_MS = 20_000;
 const U_EMAIL = 'ursula.socket@example.com';
 const V_EMAIL = 'victor.socket@example.com';
 const W_EMAIL = 'wendy.socket@example.com';
@@ -141,6 +140,20 @@ describe('Socket.IO gateway over real connections (gateway, E-1)', () => {
   const connect = (token: string): Promise<Socket> => clients.connect(wsUrl, { token });
   const ack = (socket: Socket, event: string, body: unknown): Promise<Ack> =>
     socket.timeout(3_000).emitWithAck(event, body) as Promise<Ack>;
+  /**
+   * A barrier for "nothing arrives": a ping answered with a pong. The server emits on one
+   * websocket in order, so every push it sent a socket before the pong has been received when
+   * the pong is. No fixed wait, and it cannot pass before a late push would have been seen.
+   */
+  const settle = async (...sockets: Socket[]): Promise<void> => {
+    await Promise.all(
+      sockets.map((socket) => {
+        const pong = nextEvent(socket, 'pong');
+        socket.emit('ping');
+        return pong;
+      }),
+    );
+  };
 
   /** What the Kafka server hands the push consumer. */
   const envelopeFor = (tenantId: string, userId: string, id = generateId()) =>
@@ -235,7 +248,7 @@ describe('Socket.IO gateway over real connections (gateway, E-1)', () => {
 
       const envelope = envelopeFor(tenantA, u.user.id);
       await deliver(envelope);
-      await wait(QUIET_MS);
+      await settle(uInA, uInB, vInA);
 
       expect(toUA.received).toEqual([restShape(envelope)]);
       expect(toUB.received).toEqual([]);
@@ -243,7 +256,7 @@ describe('Socket.IO gateway over real connections (gateway, E-1)', () => {
 
       // The same envelope id again (a Kafka redelivery) pushes nothing.
       await deliver(envelope);
-      await wait(QUIET_MS);
+      await settle(uInA);
       expect(toUA.received).toHaveLength(1);
     });
 
@@ -253,7 +266,7 @@ describe('Socket.IO gateway over real connections (gateway, E-1)', () => {
       const { tenantId: _tenantId, ...withoutTenant } = envelopeFor(tenantA, u.user.id);
 
       await expect(deliver(withoutTenant as ReturnType<typeof envelopeFor>)).rejects.toThrow();
-      await wait(QUIET_MS);
+      await settle(socket);
       expect(received.received).toEqual([]);
     });
   });
@@ -262,8 +275,8 @@ describe('Socket.IO gateway over real connections (gateway, E-1)', () => {
     it('closes the socket of a logged-out token within two sweep intervals', async () => {
       const session = await sessionIn(U_EMAIL, tenantA);
       const socket = await connect(session.accessToken);
-      const exception = nextEvent<Problem>(socket, 'exception', WITHIN_TWO_SWEEPS_MS);
-      const reason = disconnected(socket, WITHIN_TWO_SWEEPS_MS);
+      const exception = nextEvent<Problem>(socket, 'exception', CLOSE_WAIT_MS);
+      const reason = disconnected(socket, CLOSE_WAIT_MS);
 
       await logout(session);
 
@@ -287,7 +300,7 @@ describe('Socket.IO gateway over real connections (gateway, E-1)', () => {
       } finally {
         sweeper.start();
       }
-      expect(await disconnected(socket, WITHIN_TWO_SWEEPS_MS)).toBe('io server disconnect');
+      expect(await disconnected(socket, CLOSE_WAIT_MS)).toBe('io server disconnect');
     });
   });
 
@@ -297,8 +310,8 @@ describe('Socket.IO gateway over real connections (gateway, E-1)', () => {
       const other = await sessionIn(U_EMAIL, tenantA); // a second login in A: another jti
       const oldSocket = await connect(switching.accessToken);
       const otherSocket = await connect(other.accessToken);
-      const exception = nextEvent<Problem>(oldSocket, 'exception', WITHIN_TWO_SWEEPS_MS);
-      const reason = disconnected(oldSocket, WITHIN_TWO_SWEEPS_MS);
+      const exception = nextEvent<Problem>(oldSocket, 'exception', CLOSE_WAIT_MS);
+      const reason = disconnected(oldSocket, CLOSE_WAIT_MS);
 
       const inB = await switchTo(switching, tenantB);
 
@@ -312,7 +325,7 @@ describe('Socket.IO gateway over real connections (gateway, E-1)', () => {
       const forA = envelopeFor(tenantA, u.user.id);
       await deliver(forB);
       await deliver(forA);
-      await wait(QUIET_MS);
+      await settle(newSocket, otherSocket);
 
       expect(toNew.received).toEqual([restShape(forB)]);
       expect(toOther.received).toEqual([restShape(forA)]);

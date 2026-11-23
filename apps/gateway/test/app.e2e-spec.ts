@@ -393,13 +393,13 @@ describe('gateway (real AppModule, remote ports, fake upstream services)', () =>
     });
 
     it('billing-service down → 503 problem+json within the gRPC deadline, no internals leaked', async () => {
-      const startedAt = performance.now();
+      // No stopwatch: the client deadline (GRPC_DEADLINE_MS) bounds the call, the e2e project's
+      // test timeout bounds the test, and a deadline expiry would answer 504, not this 503.
       const response = await inject({
         method: 'GET',
         url: '/v1/billing/payments',
         headers: bearer(tokens.accessToken),
       });
-      expect(performance.now() - startedAt).toBeLessThan(5_000);
       const problem = expectProblem(response, 503, 'SERVICE_UNAVAILABLE');
       expect(JSON.stringify(problem)).not.toMatch(/127\.0\.0\.1|ECONNREFUSED/);
     });

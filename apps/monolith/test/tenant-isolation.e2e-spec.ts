@@ -16,7 +16,11 @@ await vi.hoisted(async () => {
 });
 
 import { PaymentStatus, payments } from '@domain/billing';
-import { CreateNotificationCommand } from '@domain/notifications';
+import {
+  CreateNotificationCommand,
+  PublishNotificationCreatedCommand,
+  toNotificationProps,
+} from '@domain/notifications';
 import { CommandBus } from '@nestjs/cqrs';
 import { generateId } from '@platform/common';
 import { getTableColumns } from 'drizzle-orm';
@@ -193,10 +197,16 @@ describe('tenant isolation (monolith, B4-7)', () => {
 
   it('notifications: each (tenant, user) inbox holds only its own, over REST and GraphQL', async () => {
     const commandBus = e2e.app.get(CommandBus);
-    const create = (tenantId: string, userId: string, title: string) =>
-      commandBus.execute(
+    // Creates a notification and publishes its push, as the welcome and receipt handlers do.
+    const create = async (tenantId: string, userId: string, title: string) => {
+      const notification = await commandBus.execute(
         new CreateNotificationCommand({ tenantId, userId, type: 'system', title, body: title }),
       );
+      await commandBus.execute(
+        new PublishNotificationCreatedCommand(toNotificationProps(notification)),
+      );
+      return notification;
+    };
     const n1 = await create(tenantA, u.user.id, 'n1');
     const n2 = await create(tenantB, u.user.id, 'n2');
     const n3 = await create(tenantA, v.user.id, 'n3');

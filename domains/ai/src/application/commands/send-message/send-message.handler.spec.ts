@@ -400,13 +400,19 @@ describe('SendMessageHandler', () => {
     });
     const slow = mockTextModel('late');
     const original = slow.doGenerate.bind(slow);
+    // The explicit ordering gate: the delete below runs only once the model call is in flight.
+    let entered!: () => void;
+    const inFlight = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
     slow.doGenerate = async (options) => {
+      entered();
       await gate;
       return original(options);
     };
     const { send, calls } = setup(slow);
     const pending = send().catch((e: unknown) => e);
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await inFlight;
     await as(ADA, () => db.conversations.delete(TENANT, conversation.id));
     release();
     expect(await pending).toMatchObject({

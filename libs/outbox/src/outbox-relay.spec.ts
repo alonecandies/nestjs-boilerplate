@@ -1,9 +1,12 @@
+import { context, propagation, type Span, type SpanContext, trace } from '@opentelemetry/api';
+import { node } from '@opentelemetry/sdk-node';
 import { createPrincipal, generateId, runWithPrincipal, SystemContext } from '@platform/common';
 import type { OutboxConfig } from '@platform/config';
 import type { EventEnvelope } from '@platform/contracts';
 import type { LockResult } from '@platform/redis';
+import type { KafkaOutgoingRecord } from '@platform/transport';
 import { FakeKafkaProducer } from '@platform/transport/testing';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FX_OUTBOX, ORDER_PLACED_EVENT, orderPlaced } from '../test/outbox-fixture.js';
 import {
   OUTBOX_PURGE_INTERVAL_MS,
@@ -473,6 +476,91 @@ describe('OutboxRelay', () => {
       stop.abort();
       await vi.advanceTimersByTimeAsync(0);
       await expect(term).resolves.toBe('stopped');
+    });
+  });
+
+  describe('trace context (ARCH-5)', () => {
+    const exporter = new node.InMemorySpanExporter();
+    const provider = new node.NodeTracerProvider({
+      spanProcessors: [new node.SimpleSpanProcessor(exporter)],
+    });
+    const tracer = () => trace.getTracer('outbox-relay.spec');
+
+    /** Records the span context active when the record is handed to the broker client. */
+    class TracingFakeKafkaProducer extends FakeKafkaProducer {
+      readonly activeAtDispatch: (SpanContext | undefined)[] = [];
+
+      protected override dispatch<TPayload>(
+        topic: string,
+        record: KafkaOutgoingRecord<TPayload>,
+      ): Promise<void> {
+        this.activeAtDispatch.push(trace.getSpanContext(context.active()));
+        return super.dispatch(topic, record);
+      }
+    }
+
+    let tracing: TracingFakeKafkaProducer;
+
+    beforeAll(() => {
+      // Registers the AsyncLocalStorage context manager too: without one `context.with` is a no-op.
+      provider.register();
+    });
+
+    beforeEach(() => {
+      tracing = new TracingFakeKafkaProducer({ source: 'fx-service' });
+      kafka = tracing;
+      outbox = new InMemoryOutbox(FX_OUTBOX, { kafka, now: () => new Date(clock) });
+    });
+
+    afterEach(() => {
+      exporter.reset();
+    });
+
+    afterAll(async () => {
+      await provider.shutdown();
+      trace.disable();
+      context.disable();
+      propagation.disable();
+    });
+
+    it('a row enqueued inside a request span is relayed, from a tick without one, under that trace', async () => {
+      const { ids, request } = await tracer().startActiveSpan(
+        'POST /v1/orders',
+        async (span: Span) => {
+          const seeded = await seed(1);
+          span.end();
+          return { ids: seeded, request: span.spanContext() };
+        },
+      );
+      const stored = outbox.records[0];
+      expect(stored?.envelope.traceparent).toBe(`00-${request.traceId}-${request.spanId}-01`);
+
+      expect(trace.getActiveSpan()).toBeUndefined();
+      const result = await relayWith().tick(new AbortController().signal);
+
+      expect(result).toEqual({ polled: 1, published: 1, failed: false });
+      expect(kafkaIds()).toEqual(ids);
+      expect(tracing.activeAtDispatch[0]?.traceId).toBe(request.traceId);
+      expect(tracing.activeAtDispatch[0]?.spanId).toBe(request.spanId);
+      // The stored envelope still goes out unchanged.
+      expect(kafka.records[0]?.value).toEqual(stored?.envelope);
+    });
+
+    it('mixed versions: a row without the fields is relayed as before, under no trace', async () => {
+      const ids = await seed(2);
+      for (const row of outbox.records) {
+        expect(row.envelope).not.toHaveProperty('traceparent');
+        expect(row.envelope).not.toHaveProperty('tracestate');
+      }
+
+      const result = await relayWith().tick(new AbortController().signal);
+
+      expect(result).toEqual({ polled: 2, published: 2, failed: false });
+      expect(kafkaIds()).toEqual(ids);
+      expect(kafka.records.map((record) => record.value)).toEqual(
+        outbox.records.map((row) => row.envelope),
+      );
+      expect(tracing.activeAtDispatch).toEqual([undefined, undefined]);
     });
   });
 

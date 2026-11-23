@@ -23,6 +23,14 @@ table, migration, policy and a thin system repository.
 a stored envelope unchanged (generic envelope schema and `type === topic` checked, headers rebuilt
 from the envelope, nothing read from CLS).
 
+**Trace context.** The row needs no trace column: `KafkaProducer.createRecord`, which builds every
+stored envelope, adds the W3C `traceparent` and `tracestate` of the active span to the envelope
+(absent without one, so an untraced envelope is unchanged). `publishStored` sends under that
+context, so the kafkajs produce span of the relay's tick is a child of the request that wrote the
+row, and the instrumentation injects it into the record headers for the consumers. Rows written
+before this change, and envelopes with a malformed `traceparent`, go out as before, under no
+trace.
+
 ## Declaring an outbox table
 
 drizzle-kit loads schema files without workspace resolution, so each domain declares the table by

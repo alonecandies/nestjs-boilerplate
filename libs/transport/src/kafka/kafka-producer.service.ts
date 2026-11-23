@@ -15,6 +15,7 @@ import {
   eventEnvelopeSchema,
   KAFKA_HEADERS,
 } from '@platform/contracts';
+import { captureTraceCarrier, runWithTraceCarrier } from '@platform/observability';
 import { ClsService } from 'nestjs-cls';
 import { lastValueFrom, type Observable } from 'rxjs';
 import { z } from 'zod';
@@ -100,7 +101,8 @@ function headersOf(envelope: EventEnvelope<unknown>): Record<string, string> {
  * Publishes integration events as validated `EventEnvelope`s. Every method takes the event's
  * contract (exported by the producing domain's contracts package), never a topic name:
  * - `id` uuidv7 (time-ordered; consumers dedupe on it), `type` = topic, `version` = the topic's
- *   major, `occurredAt`, `source` = this service, `correlationId` from the options or nestjs-cls.
+ *   major, `occurredAt`, `source` = this service, `correlationId` from the options or nestjs-cls,
+ *   and `traceparent`/`tracestate` from the active span (absent without one).
  * - The envelope is validated against the contract's zod schema BEFORE it leaves the process, so
  *   an invalid payload fails in the producer instead of filling every consumer's dead-letter topic.
  * - Headers `x-event-type` and `x-correlation-id` let tools route and trace without parsing JSON.
@@ -167,6 +169,7 @@ export class KafkaProducer implements OnApplicationBootstrap {
         occurredAt: options.occurredAt,
         tenantId: options.tenantId ?? fromCls?.tenantId ?? undefined,
         actorId: 'actorId' in options ? options.actorId : fromCls?.userId,
+        ...captureTraceCarrier(),
       });
     } catch (error) {
       if (error instanceof z.core.$ZodError) {
@@ -200,8 +203,10 @@ export class KafkaProducer implements OnApplicationBootstrap {
   /**
    * Sends an envelope that was built and validated when it was stored (the outbox relay): checks
    * the generic envelope schema and `envelope.type === topic`, rebuilds the two headers from the
-   * envelope, reads nothing from CLS and changes no field (the object is sent as given). Resolves
-   * once the broker acknowledged the record.
+   * envelope, reads nothing from CLS and changes no field (the object is sent as given). The send
+   * runs under the envelope's `traceparent`/`tracestate` when they are valid (else under the
+   * current context), so the produce span and the consumers continue the trace of the request
+   * that stored the event. Resolves once the broker acknowledged the record.
    * @throws InvalidEventException a malformed envelope or one of another topic (nothing is sent)
    * @throws ExternalServiceException `PUBLISH_FAILED` when the broker fails
    */
@@ -219,7 +224,11 @@ export class KafkaProducer implements OnApplicationBootstrap {
         { path: ['type'], message: `Expected "${topic}"`, code: 'invalid_value' },
       ]);
     }
-    await this.send(topic, { key, value: envelope, headers: headersOf(envelope) });
+    // Under the stored trace context: the kafkajs instrumentation parents its produce span on it
+    // and injects it into the record headers, so the consumers join the writer's trace.
+    await runWithTraceCarrier(envelope, () =>
+      this.send(topic, { key, value: envelope, headers: headersOf(envelope) }),
+    );
   }
 
   /** Dispatches a record and maps a broker failure to `ExternalServiceException`. */

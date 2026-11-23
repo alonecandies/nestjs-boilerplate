@@ -15,6 +15,12 @@ const envelopeShape = {
   tenantId: z.uuid().optional(),
   /** The user who caused the event; null for system work. */
   actorId: z.uuid().nullable().optional(),
+  /**
+   * W3C trace context of the span that built the event. Plain optional strings: a malformed value
+   * must never refuse an event (consumers and the outbox relay ignore what they cannot parse).
+   */
+  traceparent: z.string().optional(),
+  tracestate: z.string().optional(),
 };
 
 /** zod schema type of an envelope wrapping payload schema `T`. */
@@ -48,5 +54,13 @@ export interface EventEnvelope<T> {
   tenantId?: string | undefined;
   /** User who caused the event; `null` for system work. Consumers act as `{ userId: actorId, tenantId }`. */
   actorId?: string | null | undefined;
+  /**
+   * W3C `traceparent` of the span active when the event was built; absent without one. The outbox
+   * relay sends the stored event under it, so the consumers join the trace of the request that
+   * wrote the event. Older consumers strip it (unknown keys are stripped).
+   */
+  traceparent?: string | undefined;
+  /** W3C `tracestate` of that span, when it has one. */
+  tracestate?: string | undefined;
   payload: T;
 }

@@ -109,12 +109,14 @@ describe('KafkaHealthIndicator', () => {
       kafkaConfig.parse({ KAFKA_BROKERS: '127.0.0.1:1', KAFKA_CONNECTION_TIMEOUT_MS: '500' }),
       new HealthIndicatorService(),
     );
-    const startedAt = performance.now();
-    await expect(indicator.check()).resolves.toMatchObject({ kafka: { status: 'down' } });
-    expect(performance.now() - startedAt).toBeLessThan(2_000); // not the 2.5 s check timeout
-    const shutdownAt = performance.now();
-    await indicator.onApplicationShutdown();
-    expect(performance.now() - shutdownAt).toBeLessThan(2_500);
+    // No stopwatch: the refusal is told apart from the check timeout by its message, and a
+    // stalled shutdown by the admin client still being held (it is discarded on a failed check,
+    // so shutdown has nothing to await). A hang beyond the test timeout fails either way.
+    const result = await indicator.check();
+    expect(result).toMatchObject({ kafka: { status: 'down' } });
+    expect(JSON.stringify(result)).not.toMatch(/timeout|timed out/i); // not the 2.5 s check timeout
+    expect(Reflect.get(indicator, 'admin')).toBeUndefined();
+    await expect(indicator.onApplicationShutdown()).resolves.toBeUndefined();
   });
 
   it('has the readiness key "kafka"', () => {

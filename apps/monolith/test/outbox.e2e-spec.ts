@@ -171,8 +171,9 @@ describe('transactional outbox (monolith): request → outbox → relay → Kafk
   it('a REST registration reaches Kafka only after a relay tick, once, with the tenant in the envelope', async () => {
     const ada = await register('ada.outbox@example.com', 'Ada');
 
-    // The request path wrote the rows and published nothing.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // The request path wrote the rows and published nothing: the producer has no record, and the
+    // rows below are still unpublished (and the tick after them publishes exactly those two), so
+    // no wait is needed to prove it.
     expect(e2e.kafka.records.filter(ofUser(ada.user.id))).toEqual([]);
     expect(
       e2e.outbox.identity.unpublished().map((row) => [row.topic, row.tenantId, row.key]),
@@ -257,7 +258,6 @@ describe('transactional outbox (monolith): request → outbox → relay → Kafk
     const first = await post();
     expect(first.statusCode, first.body).toBe(200);
     expect(first.json()).toMatchObject({ duplicate: false });
-    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(e2e.kafka.envelopes(PAYMENT_SUCCEEDED_EVENT)).toEqual([]);
     expect(e2e.outbox.billing.unpublished().map((row) => [row.topic, row.tenantId])).toEqual([
       [PAYMENT_SUCCEEDED_EVENT.topic, carol.tenantId],

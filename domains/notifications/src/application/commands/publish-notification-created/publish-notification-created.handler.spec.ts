@@ -1,4 +1,5 @@
 import { NOTIFICATION_CREATED_EVENT } from '@domain/notifications-contracts';
+import { isRetriableKafkaHandlerError } from '@platform/transport';
 import { FakeKafkaProducer } from '@platform/transport/testing';
 import { describe, expect, it, vi } from 'vitest';
 import { makeNotificationProps } from '../../../../test/support/fixtures.js';
@@ -11,11 +12,10 @@ describe('PublishNotificationCreatedHandler', () => {
     const publish = vi.spyOn(kafka, 'publish');
     const notification = makeNotificationProps({ type: 'welcome' });
 
-    const published = await new PublishNotificationCreatedHandler(kafka).execute(
+    await new PublishNotificationCreatedHandler(kafka).execute(
       new PublishNotificationCreatedCommand(notification),
     );
 
-    expect(published).toBe(true);
     // The inbox tenant is an explicit publish option, never the CLS default.
     expect(publish.mock.calls[0]?.[2]).toMatchObject({ tenantId: notification.tenantId });
     const [record] = kafka.published(NOTIFICATION_CREATED_EVENT);
@@ -38,15 +38,24 @@ describe('PublishNotificationCreatedHandler', () => {
     });
   });
 
-  it('never throws into the bus: a broker failure resolves false', async () => {
+  it('rejects on a broker failure, so the event that created the notification is redelivered', async () => {
     const kafka = new FakeKafkaProducer({ source: 'notifications-test' });
     kafka.failNextWith(new Error('broker down'));
 
-    await expect(
-      new PublishNotificationCreatedHandler(kafka).execute(
-        new PublishNotificationCreatedCommand(makeNotificationProps()),
-      ),
-    ).resolves.toBe(false);
+    const failure = await new PublishNotificationCreatedHandler(kafka)
+      .execute(new PublishNotificationCreatedCommand(makeNotificationProps()))
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toBe(
+      `Failed to publish "${NOTIFICATION_CREATED_EVENT.topic}" event`,
+    );
+    expect((failure as Error).cause).toEqual(new Error('broker down'));
+    // A broker failure is worth retrying: the consumer retries in process, then dead-letters.
+    expect(isRetriableKafkaHandlerError(failure)).toBe(true);
     expect(kafka.records).toHaveLength(0);
   });
 });

@@ -122,7 +122,7 @@ RustFS, fake-gcs-server and Redis), so no `beforeAll` spends its hook timeout on
 | `FakeTenancyState`, `FakeTenantsPort`, `FakeMembersPort`, `FakeInvitationsPort`                                    | `@domain/identity/testing`                                      | The tenants, members and invitations behind the gateway's ports: one shared state, roles and last-owner rules, invitation tokens. They do not cross-check the principal (`requireTenantActor`) or the staff rule: assert those in monolith specs                                                                                  |
 | `FakeNotificationsPort`                                                                                            | `@domain/notifications/testing`                                 | A fake notifications-service inbox behind the gateway's `NotificationsPort`                                                                                                                                                                                                                                                       |
 | `graphql(query, variables?, headers?)`, `bearer(token)`, `expectProblem(res, status, code?)`, `multipartFile(...)` | `apps/{gateway,monolith}/test/support/http.ts`                  | `inject()` options for `POST /graphql`, an `Authorization` header, an RFC 9457 problem assertion (it also checks that `requestId` matches the header), and a multipart upload body                                                                                                                                                |
-| `startServiceTestApp(builder, { grpc, kafka? })`, `freePort()`                                                     | `apps/<service>/test/support/`                                  | Boots a service like `main.ts` does (HTTP wiring, gRPC server on a real loopback port, optional in-process Kafka consumer)                                                                                                                                                                                                        |
+| `startServiceTestApp(builder, { grpc, kafka? })`, `withBoundGrpcPort()`                                            | `apps/<service>/test/support/`                                  | Boots a service like `main.ts` does (HTTP wiring, gRPC server on a real loopback port, optional in-process Kafka consumer)                                                                                                                                                                                                        |
 | `createFakeSql`                                                                                                    | `libs/database/test/fake-sql.ts`                                | postgres.js `Sql` stand-in for module wiring, `@Transactional()`, health and migration-lock unit tests                                                                                                                                                                                                                            |
 | `createFakeCassandraClient`                                                                                        | `libs/cassandra/test/fake-cassandra.ts`                         | cassandra-driver stand-in for the Cassandra lib's unit tests                                                                                                                                                                                                                                                                      |
 | `InMemoryPaymentsRepository`, `InMemoryStripeEventsRepository`                                                     | `domains/billing/test/billing-test.utils.ts`                    | Billing repositories in memory                                                                                                                                                                                                                                                                                                    |
@@ -170,11 +170,10 @@ const postgres = createFakePostgres(identitySchema, (sql) =>
 );
 
 beforeAll(async () => {
-  const grpcUrl = `127.0.0.1:${await freePort()}`;
   // Point every client at a closed port so nothing can reach real infrastructure.
   for (const [k, v] of Object.entries({
     LOG_LEVEL: 'silent',
-    GRPC_URL: grpcUrl,
+    GRPC_URL: '127.0.0.1:0', // the server binds an OS-chosen port; `withBoundGrpcPort` reads it back
     DATABASE_URL: 'postgres://app:app@127.0.0.1:1/app',
     REDIS_URL: 'redis://127.0.0.1:1',
     KAFKA_BROKERS: '127.0.0.1:1',
@@ -188,7 +187,11 @@ beforeAll(async () => {
     .useValue(new InMemoryRedis().asRedis())
     .overrideProvider(KafkaProducer)
     .useValue(new FakeKafkaProducer({ source: 'identity-service' }));
-  app = await startServiceTestApp(builder, { grpc: [IDENTITY_GRPC_PACKAGE] });
+  const { value, port } = await withBoundGrpcPort(() =>
+    startServiceTestApp(builder, { grpc: [IDENTITY_GRPC_PACKAGE] }),
+  );
+  app = value;
+  const grpcUrl = `127.0.0.1:${port}`; // what the gRPC client dials
 });
 
 afterAll(async () => {
@@ -290,7 +293,7 @@ driven by calling `app.get(NotificationPushConsumer).onNotificationCreated(envel
   `notifications.mark-read` policy, an `exception` event when no ack callback is given), push and rooms (an envelope for
   (A, U) reaches U's socket in A exactly once in the REST shape, not U's socket in B nor V's in A; a redelivered
   envelope id and an envelope without `tenantId` push nothing), expiry (`exception` `TOKEN_EXPIRED`, then
-  `io server disconnect`), revocation (a logged-out token's socket closes within two sweep intervals; a message sent
+  `io server disconnect`), revocation (a logged-out token's socket closes, awaited as an event; a message sent
   before the sweep is refused with 401 `TOKEN_REVOKED`) and a real tenant switch (the switched-away socket closes, the
   user's other session keeps its socket, the new token's socket gets (B, U) pushes only).
 - **Gateway (reduced suite, the cases that need no real inbox).** Handshake, push and rooms, revocation (including the 401
@@ -317,7 +320,7 @@ the Socket.IO suites; a delivery test first waits until the server's iterator li
 - **Delivery and filters.** An (A, U) envelope gives exactly one `next`; (B, U) and (A, V) envelopes give none; a (B, U)
   payload published straight onto the (A, U) trigger gives none; a query sent over the socket reads tenant A's inbox only.
 - **Expiry and sweep.** A 2 s token closes 4401 `Access token expired`; a logout closes 4401 `Access token revoked`
-  within two sweep intervals; a tenant switch closes the old token's socket the same way while the user's second
+  (awaited as an event); a tenant switch closes the old token's socket the same way while the user's second
   session (another jti) stays open, and a socket on the new token gets (B, U) pushes only.
 - **Complexity.** An operation above `GRAPHQL_MAX_COMPLEXITY` sent on the socket returns `QUERY_TOO_COMPLEX` and the
   socket serves the next operation.

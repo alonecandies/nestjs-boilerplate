@@ -26,7 +26,7 @@ import { lastValueFrom, type Observable } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { createFakePostgres } from './support/fake-postgres.js';
-import { freePort } from './support/free-port.js';
+import { withBoundGrpcPort } from './support/free-port.js';
 import { startServiceTestApp } from './support/service-test-app.js';
 
 /*
@@ -50,11 +50,11 @@ describe('identity-service TenantsService (real AppModule, fakes at the network 
     createOutgoingMetadata({ userId, tenantId, roles: ['owner'] });
 
   beforeAll(async () => {
-    const grpcUrl = `127.0.0.1:${await freePort()}`;
     const env: Record<string, string> = {
       LOG_LEVEL: 'silent',
       SERVICE_NAME: 'identity-service',
-      GRPC_URL: grpcUrl,
+      // Port 0: the server binds an OS-chosen port, read back after it started.
+      GRPC_URL: '127.0.0.1:0',
       GRPC_DEADLINE_MS: '3000',
       DATABASE_URL: 'postgres://app:app@127.0.0.1:1/app',
       REDIS_URL: 'redis://127.0.0.1:1',
@@ -74,7 +74,11 @@ describe('identity-service TenantsService (real AppModule, fakes at the network 
       .useValue(new FakeKafkaProducer({ source: 'identity-service' }))
       .overrideProvider(getQueueToken(MAIL_QUEUE))
       .useValue({ add: vi.fn(), close: vi.fn(), on: vi.fn() });
-    app = await startServiceTestApp(builder, { grpc: [IDENTITY_GRPC_PACKAGE] });
+    const started = await withBoundGrpcPort(() =>
+      startServiceTestApp(builder, { grpc: [IDENTITY_GRPC_PACKAGE] }),
+    );
+    app = started.value;
+    const grpcUrl = `127.0.0.1:${started.port}`;
 
     client = new ClientGrpcProxy(
       createGrpcClientOptions(grpcConfig.parse(), { spec: IDENTITY_GRPC_PACKAGE, url: grpcUrl })

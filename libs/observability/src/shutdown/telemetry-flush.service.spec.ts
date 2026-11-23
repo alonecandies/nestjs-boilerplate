@@ -11,6 +11,7 @@ describe('flushLogs', () => {
 
   afterEach(() => {
     pinoLoggerClass.root = originalRoot;
+    vi.useRealTimers();
   });
 
   it('resolves immediately when no pino root logger exists yet', async () => {
@@ -26,10 +27,17 @@ describe('flushLogs', () => {
   });
 
   it('gives up after the timeout when the destination is wedged', async () => {
-    pinoLoggerClass.root = { flush: vi.fn() } as unknown as pino.Logger;
-    const startedAt = Date.now();
-    await flushLogs(20);
-    expect(Date.now() - startedAt).toBeLessThan(1_000);
+    vi.useFakeTimers();
+    const flush = vi.fn();
+    pinoLoggerClass.root = { flush } as unknown as pino.Logger;
+    const settled = vi.fn();
+    const pending = flushLogs(20).then(settled);
+    await vi.advanceTimersByTimeAsync(19);
+    expect(flush).toHaveBeenCalledOnce();
+    expect(settled).not.toHaveBeenCalled(); // still waiting for the destination
+    await vi.advanceTimersByTimeAsync(1);
+    await pending;
+    expect(settled).toHaveBeenCalledOnce(); // gave up exactly at the timeout
   });
 });
 

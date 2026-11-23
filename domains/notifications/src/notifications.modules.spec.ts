@@ -13,7 +13,7 @@ import { createMock } from '@platform/testing';
 import { KafkaProducer } from '@platform/transport';
 import { FakeKafkaProducer } from '@platform/transport/testing';
 import type cassandra from 'cassandra-driver';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { FakeRedisModule } from '../test/support/edge-test-app.js';
 import { TENANT_ID, USER_ID } from '../test/support/fixtures.js';
 import { WelcomeUserCommand } from './application/commands/welcome-user/welcome-user.command.js';
@@ -80,7 +80,7 @@ describe('notifications modules (composition, no infrastructure)', () => {
     moduleRef = undefined;
   });
 
-  it('NotificationsCoreModule: welcome flow runs command → aggregate → saga → Kafka', async () => {
+  it('NotificationsCoreModule: welcome flow runs command → aggregate → mail → Kafka', async () => {
     const infra = fakeInfrastructure();
     moduleRef = await Test.createTestingModule({
       imports: [CqrsModule.forRoot(), infra.FakeInfrastructureModule, NotificationsCoreModule],
@@ -111,10 +111,8 @@ describe('notifications modules (composition, no infrastructure)', () => {
     expect(infra.mail.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({ template: 'welcome', idempotencyKey: `welcome-${USER_ID}` }),
     );
-    // The saga publishes asynchronously on the event stream.
-    await vi.waitFor(() =>
-      expect(infra.kafka.envelopes(NOTIFICATION_CREATED_EVENT)).toHaveLength(1),
-    );
+    // The welcome handler publishes the push itself, last, before it resolves.
+    expect(infra.kafka.envelopes(NOTIFICATION_CREATED_EVENT)).toHaveLength(1);
     expect(infra.kafka.envelopes(NOTIFICATION_CREATED_EVENT)[0]).toMatchObject({
       id: notification.id,
       tenantId: TENANT_ID,

@@ -350,8 +350,9 @@ Locally each topic has 6 partitions and its `.dlq` has 1 (`docker/kafka/topics.t
 Identity and billing never publish from a request: `OutboxWriter` writes the event to `<schema>.outbox` in the
 transaction that changes the state, and the leader `OutboxRelay` publishes the rows in order on its next tick
 (`OUTBOX_POLL_INTERVAL_MS`, `OUTBOX_BATCH_SIZE`), at least once ([libs/outbox](../libs/outbox/README.md)).
-`notifications.notification-created.v1` is still published directly (see
-[Known follow-ups](#known-follow-ups)).
+`notifications.notification-created.v1` has no outbox: the welcome and receipt handlers publish it last, and a
+failed publish fails their event, which the consumer retries and then dead-letters, so it too goes out at least once
+([ARCHITECTURE.md](ARCHITECTURE.md#6-cqrs-commands-queries-sagas-the-outbox-and-its-relay)).
 
 ### Consumer
 
@@ -699,11 +700,7 @@ where the time went.
 
 ## Known follow-ups
 
-Stated honestly, as of this writing:
-
-- **Outbox for notifications.** `notifications.notification-created.v1` has no Postgres store behind
-  it, so it is published directly: a crash between the inbox write and the publish loses the push.
-  The events of identity and billing go through the transactional outbox.
+None open as of this writing.
 
 Related: [OBSERVABILITY.md](OBSERVABILITY.md), [DOCKER.md](DOCKER.md), [ARCHITECTURE.md](ARCHITECTURE.md),
 [CONFIGURATION.md](CONFIGURATION.md), [TESTING.md](TESTING.md), [SECURITY.md](SECURITY.md),
