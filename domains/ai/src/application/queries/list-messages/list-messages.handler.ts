@@ -1,10 +1,10 @@
 import { type IQueryHandler, QueryHandler } from '@nestjs/cqrs';
-import type { CursorPage } from '@platform/common';
+import { type CursorPage, resolvePageSize } from '@platform/common';
 import { Transactional } from '@platform/database';
+import { AI_PAGE_SIZE } from '../../../ai.constants.js';
 import { ConversationNotFoundException } from '../../../domain/ai.errors.js';
 import type { Message } from '../../../domain/ai.types.js';
 import { requireCaller } from '../../caller-scope.js';
-import { pageSize } from '../../page-size.js';
 import { ConversationsRepository } from '../../repositories/conversations.repository.js';
 import { MessagesRepository } from '../../repositories/messages.repository.js';
 import { ListMessagesQuery } from './list-messages.query.js';
@@ -35,7 +35,7 @@ export class ListMessagesHandler implements IQueryHandler<ListMessagesQuery> {
     return this.messages.list({
       tenantId: request.tenantId,
       conversationId: request.conversationId,
-      limit: pageSize(request.limit),
+      limit: resolvePageSize(request.limit, AI_PAGE_SIZE),
       cursor: request.cursor,
     });
   }

@@ -17,7 +17,6 @@ const API_VALUES = [
   'BillingPort',
   'BillingResolver',
   'CheckoutSessionModel',
-  'IDEMPOTENCY_KEY_PATTERN',
   'PAYMENT_STATUSES',
   'PaymentConnectionModel',
   'PaymentModel',

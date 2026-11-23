@@ -1,6 +1,12 @@
-import { isPlatformTenantId, MAX_CURSOR_LENGTH } from '@platform/common';
+import {
+  IDEMPOTENCY_KEY_MAX_LENGTH,
+  IDEMPOTENCY_KEY_MIN_LENGTH,
+  IDEMPOTENCY_KEY_PATTERN,
+  isPlatformTenantId,
+  MAX_CURSOR_LENGTH,
+} from '@platform/common';
 import { z } from 'zod';
-import { BILLING_LIMITS, IDEMPOTENCY_KEY_PATTERN } from '../../billing.constants.js';
+import { BILLING_LIMITS } from '../../billing.constants.js';
 
 /*
  * gRPC payload schemas (`ZodRpcValidationPipe`). ts-proto request types are interfaces, so
@@ -23,8 +29,8 @@ export const createCheckoutSessionRpcSchema = z.object({
   cancelUrl: z.url().nullish().transform(absentAsUndefined),
   idempotencyKey: z
     .string()
-    .min(BILLING_LIMITS.IDEMPOTENCY_KEY_MIN_LENGTH)
-    .max(BILLING_LIMITS.IDEMPOTENCY_KEY_MAX_LENGTH)
+    .min(IDEMPOTENCY_KEY_MIN_LENGTH)
+    .max(IDEMPOTENCY_KEY_MAX_LENGTH)
     .regex(IDEMPOTENCY_KEY_PATTERN)
     .nullish()
     .transform(absentAsUndefined),

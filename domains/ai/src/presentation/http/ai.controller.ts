@@ -41,12 +41,13 @@ import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
 import {
   EXCEPTIONS_FILTER_OPTIONS,
   type ExceptionsFilterOptions,
+  IDEMPOTENCY_KEY_FORMAT,
+  IdempotencyKey,
   type RequestLike,
   Timeout,
   toProblemDetails,
 } from '@platform/common';
 import { RateLimit } from '@platform/redis';
-import { AI_LIMITS } from '../../ai.constants.js';
 import { AiPermission } from '../../ai.permissions.js';
 import { AiPort } from '../../application/ports/ai.port.js';
 import { abortOnDisconnect } from '../client-disconnect.js';
@@ -73,7 +74,6 @@ import {
   toSendMessageResponse,
 } from './ai.dto.js';
 import { SSE_CONTENT_TYPE, type SseReply, writeChatSse } from './ai-sse.js';
-import { IdempotencyKey } from './idempotency-key.decorator.js';
 
 /**
  * `/v1/ai/conversations`: the caller's own conversations and the chat turn (plain or streamed as
@@ -226,7 +226,7 @@ export class AiController implements OnModuleInit {
   @ApiHeader({
     name: 'Idempotency-Key',
     required: false,
-    description: `Replays with the same key and body return the stored reply (${AI_LIMITS.IDEMPOTENCY_KEY_MIN_LENGTH}-${AI_LIMITS.IDEMPOTENCY_KEY_MAX_LENGTH} chars of [A-Za-z0-9._:-]).`,
+    description: `Replays with the same key and body return the stored reply (${IDEMPOTENCY_KEY_FORMAT}).`,
   })
   @ApiCreatedResponse({ standardSchema: sendMessageResponseSchema })
   @ApiBadRequestResponse({ description: 'Invalid body or Idempotency-Key.' })

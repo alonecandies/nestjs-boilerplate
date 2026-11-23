@@ -27,10 +27,10 @@ import {
   ApiUnprocessableEntityResponse,
 } from '@nestjs/swagger';
 import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
-import { Public } from '@platform/common';
+import { IDEMPOTENCY_KEY_FORMAT, IdempotencyKey, Public } from '@platform/common';
 import { SkipRateLimit } from '@platform/redis';
 import { BillingPort } from '../../application/ports/billing.port.js';
-import { BILLING_LIMITS, STRIPE_SIGNATURE_HEADER } from '../../billing.constants.js';
+import { STRIPE_SIGNATURE_HEADER } from '../../billing.constants.js';
 import { BillingPermission } from '../../billing.permissions.js';
 import { resolvePaymentsOwner } from '../payments-scope.js';
 import {
@@ -50,7 +50,7 @@ import {
   type ListPaymentsQueryDto,
   listPaymentsQuerySchema,
 } from './dto/list-payments-query.dto.js';
-import { HeaderValue, IdempotencyKey } from './request-headers.decorator.js';
+import { HeaderValue } from './request-headers.decorator.js';
 
 /**
  * `/v1/billing` — identical in the monolith and the gateway: it only talks to `BillingPort`.
@@ -75,7 +75,7 @@ export class BillingController {
   @ApiHeader({
     name: 'Idempotency-Key',
     required: false,
-    description: `Replays with the same key return the same session (${BILLING_LIMITS.IDEMPOTENCY_KEY_MIN_LENGTH}-${BILLING_LIMITS.IDEMPOTENCY_KEY_MAX_LENGTH} chars of [A-Za-z0-9._:-]).`,
+    description: `Replays with the same key return the same session (${IDEMPOTENCY_KEY_FORMAT}).`,
   })
   @ApiCreatedResponse({ standardSchema: checkoutSessionResponseSchema })
   @ApiBadRequestResponse({ description: 'Invalid body or Idempotency-Key' })

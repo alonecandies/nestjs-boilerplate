@@ -1,3 +1,5 @@
+import type { PageSizeBounds } from '@platform/common';
+
 /**
  * Stable error codes of the ai context's chat API (`DomainException.code`, surfaced to clients).
  * The model call's own codes (`AI_DISABLED`, `AI_MODEL_NOT_ALLOWED`, …) are `@platform/ai`'s
@@ -20,12 +22,13 @@ export const AI_LIMITS = {
   MODEL_MAX_LENGTH: 200,
   /** One message's text; the whole request is also capped by `AI_MAX_INPUT_CHARS`. */
   MESSAGE_MAX_LENGTH: 100_000,
-  IDEMPOTENCY_KEY_MIN_LENGTH: 8,
-  IDEMPOTENCY_KEY_MAX_LENGTH: 255,
 } as const;
 
-/** `Idempotency-Key` charset: printable, header- and log-safe (UUIDs, ULIDs, `msg-42:retry`). */
-export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]+$/;
+/** A listing's page size (`resolvePageSize`): absent, 0 or invalid → default; capped at the max. */
+export const AI_PAGE_SIZE: PageSizeBounds = {
+  defaultSize: AI_LIMITS.DEFAULT_PAGE_SIZE,
+  maxSize: AI_LIMITS.MAX_PAGE_SIZE,
+};
 
 /** Characters per token of the history budget (`AI_HISTORY_MAX_TOKENS`): an approximation. */
 export const APPROX_CHARS_PER_TOKEN = 4;

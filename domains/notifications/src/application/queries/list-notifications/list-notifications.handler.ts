@@ -1,6 +1,6 @@
 import type { NotificationPage } from '@domain/notifications-contracts';
 import { type IQueryHandler, QueryHandler } from '@nestjs/cqrs';
-import { clamp } from 'lodash-es';
+import { resolvePageSize } from '@platform/common';
 import {
   DEFAULT_NOTIFICATIONS_PAGE_SIZE,
   MAX_NOTIFICATIONS_PAGE_SIZE,
@@ -23,10 +23,10 @@ export class ListNotificationsHandler implements IQueryHandler<ListNotifications
     // The one inbox check for both topologies, before the repository is touched.
     requireInboxActor(tenantId, userId);
     // Edges validate, but the core never trusts them: 0/negative (proto default) → default page.
-    const pageSize =
-      limit > 0
-        ? clamp(Math.trunc(limit), 1, MAX_NOTIFICATIONS_PAGE_SIZE)
-        : DEFAULT_NOTIFICATIONS_PAGE_SIZE;
+    const pageSize = resolvePageSize(limit, {
+      defaultSize: DEFAULT_NOTIFICATIONS_PAGE_SIZE,
+      maxSize: MAX_NOTIFICATIONS_PAGE_SIZE,
+    });
     const slice = await this.notifications.listByUser(
       tenantId,
       userId,

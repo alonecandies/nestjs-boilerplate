@@ -1,9 +1,8 @@
 import type { PaymentList } from '@domain/billing-contracts';
 import { type IQueryHandler, QueryHandler } from '@nestjs/cqrs';
 import { hasPermissions, principalPermissions, RbacRegistry } from '@platform/auth';
-import { type CursorPage, PermissionDeniedException } from '@platform/common';
+import { type CursorPage, PermissionDeniedException, resolvePageSize } from '@platform/common';
 import { RlsElevation, Transactional } from '@platform/database';
-import { clamp, isInteger } from 'lodash-es';
 import { BILLING_LIMITS } from '../../../billing.constants.js';
 import { BillingPermission } from '../../../billing.permissions.js';
 import type { Payment } from '../../../domain/payment.aggregate.js';
@@ -46,11 +45,10 @@ export class ListPaymentsHandler implements IQueryHandler<ListPaymentsQuery> {
       );
     }
     // 0 / absent = default (proto3 ints decode as 0); anything else is capped at MAX.
-    const requested = criteria.limit ?? 0;
-    const limit =
-      isInteger(requested) && requested > 0
-        ? clamp(requested, 1, BILLING_LIMITS.MAX_PAGE_SIZE)
-        : BILLING_LIMITS.DEFAULT_PAGE_SIZE;
+    const limit = resolvePageSize(criteria.limit, {
+      defaultSize: BILLING_LIMITS.DEFAULT_PAGE_SIZE,
+      maxSize: BILLING_LIMITS.MAX_PAGE_SIZE,
+    });
     const page = await this.read(
       { tenantId: criteria.tenantId, userId: criteria.userId, limit, cursor: criteria.cursor },
       wholeTenant,

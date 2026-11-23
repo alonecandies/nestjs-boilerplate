@@ -9,7 +9,6 @@ export {
   BILLING_GRPC_UPSTREAM,
   BILLING_LIMITS,
   BillingErrorCode,
-  IDEMPOTENCY_KEY_PATTERN,
   STRIPE_SIGNATURE_HEADER,
 } from '../billing.constants.js';
 export { BILLING_RBAC, BillingPermission } from '../billing.permissions.js';

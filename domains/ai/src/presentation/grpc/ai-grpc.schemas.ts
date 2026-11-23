@@ -1,6 +1,11 @@
-import { MAX_CURSOR_LENGTH } from '@platform/common';
+import {
+  IDEMPOTENCY_KEY_MAX_LENGTH,
+  IDEMPOTENCY_KEY_MIN_LENGTH,
+  IDEMPOTENCY_KEY_PATTERN,
+  MAX_CURSOR_LENGTH,
+} from '@platform/common';
 import { z } from 'zod';
-import { AI_LIMITS, IDEMPOTENCY_KEY_PATTERN } from '../../ai.constants.js';
+import { AI_LIMITS } from '../../ai.constants.js';
 
 /*
  * gRPC payload schemas (`ZodRpcValidationPipe`): the same bounds as the REST bodies. ts-proto request
@@ -64,8 +69,8 @@ export const sendMessageRpcSchema = z.object({
   model,
   idempotencyKey: z
     .string()
-    .min(AI_LIMITS.IDEMPOTENCY_KEY_MIN_LENGTH)
-    .max(AI_LIMITS.IDEMPOTENCY_KEY_MAX_LENGTH)
+    .min(IDEMPOTENCY_KEY_MIN_LENGTH)
+    .max(IDEMPOTENCY_KEY_MAX_LENGTH)
     .regex(IDEMPOTENCY_KEY_PATTERN)
     .nullish()
     .transform(absentAsUndefined),
