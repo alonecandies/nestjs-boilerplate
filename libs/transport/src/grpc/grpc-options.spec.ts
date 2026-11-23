@@ -101,6 +101,48 @@ describe('buildGrpcServiceConfig', () => {
       expect(entry.retryPolicy).toBeUndefined();
     }
   });
+
+  it('gives a method its own deadline; every other method keeps the default', () => {
+    const config = buildGrpcServiceConfig([READ.service], {
+      timeoutMs: 1500,
+      methodDeadlines: [
+        { service: READ.service, method: 'UpdateUserRoles', deadlineMs: 30_000 },
+        { service: 'other.v1.Unknown', method: 'Get', deadlineMs: 30_000 },
+      ],
+    });
+    const methods = config.methodConfig as MethodConfig[];
+    expect(configFor(methods, READ.service, 'UpdateUserRoles')).toEqual({
+      name: [{ service: READ.service, method: 'UpdateUserRoles' }],
+      timeout: { seconds: 30, nanos: 0 },
+    });
+    expect(configFor(methods, READ.service, READ.method)).toEqual({
+      name: [{ service: READ.service }],
+      timeout: { seconds: 1, nanos: 500_000_000 },
+    });
+    expect(methods.flatMap(({ name }) => name)).not.toContainEqual(
+      expect.objectContaining({ service: 'other.v1.Unknown' }),
+    );
+  });
+
+  it('names a retryable method with its own deadline once (grpc-js rejects a duplicate name)', () => {
+    const config = buildGrpcServiceConfig([READ.service], {
+      timeoutMs: 1500,
+      retryableMethods: [READ, { service: READ.service, method: 'ListUsers' }],
+      methodDeadlines: [{ ...READ, deadlineMs: 4000 }],
+    });
+    const methods = config.methodConfig as MethodConfig[];
+    const names = methods.flatMap(({ name }) => name.map((n) => `${n.service}/${n.method ?? ''}`));
+    expect(new Set(names).size).toBe(names.length);
+    expect(configFor(methods, READ.service, READ.method)).toMatchObject({
+      name: [READ],
+      timeout: { seconds: 4, nanos: 0 },
+      retryPolicy: { maxAttempts: 3, retryableStatusCodes: ['UNAVAILABLE'] },
+    });
+    expect(configFor(methods, READ.service, 'ListUsers')).toMatchObject({
+      timeout: { seconds: 1, nanos: 500_000_000 },
+      retryPolicy: { maxAttempts: 3 },
+    });
+  });
 });
 
 describe('createGrpcClientOptions', () => {
@@ -157,6 +199,20 @@ describe('createGrpcClientOptions', () => {
     const channel = options.channelOptions ?? {};
     expect(channel['grpc.max_reconnect_backoff_ms']).toBe(2_000);
     expect(String(channel['grpc.service_config'])).toContain('"nanos":800000000');
+  });
+
+  it('accepts per-method deadlines over the default one', () => {
+    const { options } = createGrpcClientOptions(cfg, FIXTURE, {
+      methodDeadlines: [
+        { service: 'fixture.v1.UsersService', method: 'UpdateUserRoles', deadlineMs: 9_000 },
+      ],
+    });
+    const { methodConfig } = serviceConfigOf(options);
+    const write = configFor(methodConfig, 'fixture.v1.UsersService', 'UpdateUserRoles');
+    expect(write.timeout).toEqual({ seconds: 9, nanos: 0 });
+    expect(write.retryPolicy).toBeUndefined();
+    const read = configFor(methodConfig, 'fixture.v1.UsersService', 'GetUser');
+    expect(read.timeout).toEqual({ seconds: 2, nanos: 500_000_000 });
   });
 });
 

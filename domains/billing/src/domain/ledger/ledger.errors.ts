@@ -26,16 +26,21 @@ export class LedgerSigningKeyNotPinnedException extends Error {
   }
 }
 
-/** Why the ledger-reanchor command refused; it wrote nothing. */
+/**
+ * Why the ledger-reanchor command (or its `--reconcile-only` re-run) refused; it wrote nothing.
+ * `reanchor-needed` is the re-run's: the current state does not extend the trusted one.
+ */
 export type LedgerReanchorRefusal =
   | 'ledger-disabled'
   | 'lost-from-not-past'
+  | 'lost-from-in-grace'
   | 'signing-key-not-pinned'
   | 'signature-invalid'
   | 'other-database'
   | 'no-trusted-state'
   | 'nothing-lost'
-  | 'trusted-state-changed';
+  | 'trusted-state-changed'
+  | 'reanchor-needed';
 
 /**
  * The ledger-reanchor command refused (audit fixes OPS-1): an operator's error or a state that

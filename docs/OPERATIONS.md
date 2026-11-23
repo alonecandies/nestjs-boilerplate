@@ -157,12 +157,46 @@ the server **with the same key**: the apps pin the public key ([SECURITY.md](SEC
 
    The entrypoint is in the monolith and billing-service images. It records an audit row
    (`billing.ledger_reanchors`) and the new state in one transaction, then runs one reconciliation over
-   `[lost-from, now)`.
+   `[lost-from, now - 15 min)`: like the hourly run, it leaves out the last 15 minutes
+   (`LEDGER_RECONCILE_GRACE_MS`), whose postings may still be in flight, and the next hourly run covers them.
+   A `--lost-from` inside those 15 minutes still re-anchors (audit row and state), but that window is empty, so
+   the CLI skips the run, prints `"reconciliation":{"status":"skipped","reason":"lost-from-in-grace"}`, logs
+   that the hourly reconciliation covers the window, and exits 0: the lost window is recent, so the next hourly
+   run's own window covers it. It first takes the hourly reconciliation's Redis lock (`billing:reconcile-ledger`, from
+   the app's `REDIS_URL` and `REDIS_KEY_PREFIX`), so its run never overlaps the cron's; while the cron holds it,
+   the CLI tries again every 5 seconds for up to 10 minutes.
 
 5. That first reconciliation reports the entries missing from the restored ledger as `verification_failed`
    and re-enqueues them (R4), and the posting path posts each one once, so the ledger holds one entry per source
-   again. The next run is clean. Check `ledger_reconciliation_runs_total`, the `LedgerReconciliationStale` alert
-   and the discrepancy rows ([OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts)).
+   again. A lost charge whose payment was paid inside the window also shows an R3 `tenant_mismatch` for its ref
+   until it is posted again. The next run is clean. Check `ledger_reconciliation_runs_total`, the
+   `LedgerReconciliationStale` alert and the discrepancy rows
+   ([OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts)).
+
+   The CLI prints its result as one JSON line (with `reconciliation.runId`, `status` and `failedChecks`) and
+   exits with:
+
+   | Code | Meaning                                                                                              | Next step                                                                                                                           |
+   | ---- | ---------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+   | 0    | Re-anchored, and the reconciliation run succeeded (or was skipped: `--lost-from` inside the grace).  | None (after a skipped run, check the next hourly run).                                                                              |
+   | 1    | Refused (nothing written) or failed; the log says why. Redis unreachable for the lock is also 1.     | Fix the cause; run it again (with `--reconcile-only` if the log shows the re-anchor committed: "Ledger trusted state re-anchored"). |
+   | 2    | Bad arguments: the usage is printed, nothing is read.                                                | Fix the arguments.                                                                                                                  |
+   | 3    | The reconciliation run finished `failed` (the log names the failed checks). The re-anchor committed. | Fix the cause (Stripe for R4, say), then re-run it below.                                                                           |
+   | 4    | The reconcile lock stayed held for 10 minutes: nothing was written.                                  | Run the same command again.                                                                                                         |
+
+   A second re-anchor is refused (`nothing-lost`) once the first committed, and the hourly run looks back only
+   72 hours, so a failed run over an older window is re-run with `--reconcile-only` and the same flags:
+
+   ```bash
+   node dist/cli/ledger-reanchor.js --reconcile-only \
+     --database <ledger database> --lost-from <the same ISO time> \
+     --operator <who runs it> --reason "<why>"
+   ```
+
+   It runs the same reconciliation over `[lost-from, now - 15 min)` under the same lock, writes no audit row, and exits
+   with the codes above. It is refused (`reanchor-needed`, exit 1) while the current state does not extend the
+   trusted one: re-anchor first. It is also refused (`lost-from-in-grace`, exit 1) while `--lost-from` is inside
+   the last 15 minutes: there is nothing to reconcile yet, so run it again once it is older.
 
 `--lost-from` matters: R4 looks at Stripe's balance transactions only inside the window it is given (72 hours back
 by default, `LEDGER_RECONCILE_LOOKBACK_HOURS`), so a loss older than that is not re-posted unless the window

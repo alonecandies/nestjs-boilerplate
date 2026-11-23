@@ -44,7 +44,8 @@ export function defaultReconcileWindow(now: Date, lookbackHours: number): Ledger
  * or an overlapping window adds no row. A check that throws (or whose findings cannot be stored) is
  * logged, the remaining checks still run, rows already appended stay, and the run finishes
  * `failed`; a `ReconciliationCheckFailure`'s findings are appended before that. `found` counts findings per kind, `appended` the new rows among them; the metrics
- * count new rows only. Runs only inside `SystemContext` (`SYSTEM_CONTEXT_REQUIRED` otherwise,
+ * count new rows only. It resolves with the counts; the command's `onFinished` (if any) receives
+ * the run's id, status and failed checks as well. Runs only inside `SystemContext` (`SYSTEM_CONTEXT_REQUIRED` otherwise,
  * before anything is read or written).
  */
 @CommandHandler(ReconcileLedgerCommand)
@@ -87,7 +88,7 @@ export class ReconcileLedgerHandler implements ICommandHandler<ReconcileLedgerCo
 
     const found: Partial<Record<LedgerDiscrepancyKind, number>> = {};
     const appended: Partial<Record<LedgerDiscrepancyKind, number>> = {};
-    const failedChecks: string[] = [];
+    const failedChecks: ReconciliationCheck['name'][] = [];
     const append = async (findings: readonly LedgerDiscrepancyInput[]): Promise<void> => {
       for (const [kind, rows] of Map.groupBy(findings, (row) => row.kind)) {
         found[kind] = (found[kind] ?? 0) + rows.length;
@@ -121,6 +122,7 @@ export class ReconcileLedgerHandler implements ICommandHandler<ReconcileLedgerCo
       { runId, from: window.from, to: window.to, status, failedChecks, counts },
       'Ledger reconciliation run finished',
     );
+    command.onFinished?.({ runId, status, failedChecks, ...counts });
     return counts;
   }
 }

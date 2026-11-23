@@ -835,7 +835,8 @@ refuses an enabled ledger without `LEDGER_VERIFY=true` and a pinned key (`LEDGER
   the restored state's signature does not verify against the pinned key, and when that state still extends the
   trusted one. Otherwise it writes an audit row (`billing.ledger_reanchors`: who, why, the replaced and the new state,
   the lost-from time) and the new state in one transaction (`ledgerTrustedState.reanchor`, which no running app
-  registers), then runs one reconciliation over `[lost-from, now)`: entries the restore lost are reported and
+  registers), then runs one reconciliation over `[lost-from, now - 15 min)` (the hourly run covers the last 15
+  minutes): entries the restore lost are reported and
   posted again (`domains/billing/README.md`, Reconciliation).
 
 ### Log redaction

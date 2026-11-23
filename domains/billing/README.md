@@ -172,10 +172,11 @@ Payloads go through `ZodRpcValidationPipe` (`INVALID_ARGUMENT` + issues); `@Grpc
 errors to gRPC statuses and `x-error-code` trailers, and `BillingGrpcAdapter` maps them back to the same
 `DomainException`s (deadline = `GRPC_DEADLINE_MS`, circuit breaker `billing`). The calls that wait on Stripe,
 `CreateCheckoutSession` and `HandleStripeWebhook`, get `BILLING_GRPC_STRIPE_DEADLINE_MS` (default 30000, the
-monolith's `HTTP_HANDLER_TIMEOUT_MS`; also the channel's service-config deadline) and their own breaker,
-`billing-stripe`: slow Stripe calls neither time out at the generic deadline nor open the breaker `ListPayments`
-uses. The gateway's handler timeout still cuts the request at 30 s, as in the monolith; Stripe's own worst case
-(`STRIPE_TIMEOUT_MS` × (1 + `STRIPE_MAX_NETWORK_RETRIES`), 20 s × 3) is above both.
+monolith's `HTTP_HANDLER_TIMEOUT_MS`; also their own entries in the channel's service config) and their own
+breaker, `billing-stripe`: slow Stripe calls neither time out at the generic deadline nor open the breaker
+`ListPayments` uses. `ListPayments` keeps the channel's default deadline, `GRPC_DEADLINE_MS`, which billing-service
+also sees. The gateway's handler timeout still cuts the request at 30 s, as in the monolith; Stripe's own worst
+case (`STRIPE_TIMEOUT_MS` × (1 + `STRIPE_MAX_NETWORK_RETRIES`), 20 s × 3) is above both.
 
 ### Kafka (produced)
 
@@ -694,20 +695,33 @@ In order it refuses, writing nothing: the ledger off; `--lost-from` not in the p
 `--database` not the store's; no stored state; a current state that still extends the stored one (dual proof:
 nothing was lost). Then `ledgerTrustedState.reanchor` inserts the audit row (`ledger_reanchors`) and compare-and-sets
 the stored state to exactly the verified one, `lost-from` as its `read_at`, in one transaction (a lost compare-and-set
-writes neither), and one `ReconcileLedgerCommand` runs over `[lost-from, now)`. Expected findings of that first run:
+writes neither), and one `ReconcileLedgerCommand` runs over `[lost-from, now − LEDGER_RECONCILE_GRACE_MS)`.
+A `--lost-from` inside the last 15 minutes is not refused (audit batch 1, Task 39): that window is empty, so the run is
+skipped and the result says so (`reconciliation: { status: 'skipped', reason: 'lost-from-in-grace' }`; the CLI logs
+that the hourly reconciliation covers the window and exits 0). The lost window is recent, so the hourly run's own
+window covers it, and R5's lost-history rule keys off the re-anchor row, not this run.
+Expected findings of that first run:
 R4 reports each Stripe transaction whose entry the restore lost as `missing_entry` and re-enqueues it; R5 reports its
 ref as `verification_failed` (`ledger_entries:<id>`); for a lost charge whose payment was paid in the window, R3 also
 reports its ref as `tenant_mismatch` (no entry under the ref's tenant). Once the relay and the consumer post it again
 (once: the restored immudb lacks it; the Postgres ref keeps its old tx id), the next run verifies the ref against the
-new entry and appends nothing (the findings already stored stay: they are append-only). The run's window ends at
-now, without the cron's 15-minute grace, so a payment paid in the last minutes whose posting is still in flight can
-add a `payment_without_entry`. The CLI exits 0 once the re-anchor commits, even when that run ends `failed` (a
-Stripe error in R4, or the hourly cron winning R5's compare-and-set: the CLI does not take the reconcile lock); a
-second CLI run is then refused (`nothing-lost`), so check the run's row in `ledger_reconciliation_runs`, or the next
-hourly run. R5 honours only the latest re-anchor: a ref lost in an earlier restore and not posted again can fall out of
+new entry and appends nothing (the findings already stored stay: they are append-only). The run's window ends
+15 minutes before now, like the cron's default one (audit batch 1 review #3), so a payment paid in the last minutes
+whose posting is still in flight adds no false `payment_without_entry` or re-enqueue; the next hourly run covers
+that tail. The CLI dispatches inside the hourly cron's `RECONCILE_LEDGER_LOCK` (`RedisModule` in
+its context, Redis from the app's env): it tries the lock every 5 s for up to 10 minutes, then exits 4 having written
+nothing, so its run never loses R5's compare-and-set to the cron's. The result carries the run's id, status and failed
+checks (`ReconcileLedgerCommand`'s `onFinished`; the command still resolves with the counts alone): a run that ends
+`failed` (a Stripe error in R4, say) exits 3 after the re-anchor committed, its failed checks logged. A second
+re-anchor is then refused (`nothing-lost`), so `--reconcile-only` (same flags) dispatches
+`RerunLedgerReconciliationCommand`: the same run over `[lost-from, now − 15 min)` under the same lock, no audit row, refused
+(`reanchor-needed`) while the current state does not extend the trusted one, and (`lost-from-in-grace`) while
+`--lost-from` is inside the last 15 minutes (nothing to reconcile yet). Exit codes: 0 done (or the run skipped), 1
+refused or failed
+(Redis unreachable too), 2 usage, 3 the run failed, 4 the lock stayed busy. R5 honours only the latest re-anchor: a ref lost in an earlier restore and not posted again can fall out of
 the lost-history rule after a second re-anchor and be skipped, so heal the previous run's `verification_failed` refs
-before re-anchoring again. Without arguments the CLI prints its usage and exits 2, reading no config (the image build's load
-check). Tests: `reanchor-ledger.handler.spec.ts`, `ledger-reanchor-cli.spec.ts`, the R5 spec and
+before re-anchoring again. Without arguments the CLI prints its usage and exits 2, reading no config and opening no connection (the image build's
+load check). Tests: `reanchor-ledger.handler.spec.ts`, `ledger-reanchor-cli.spec.ts`, the R5 spec and
 `test/ledger-reanchor.int-spec.ts` (Citus + two immudb servers with one `--signingKey`: the restore fails R5; the CLI
 without a key and with another key writes nothing; with the right key one audit row and the state; B re-posted once;
 a healthy ledger refused).
