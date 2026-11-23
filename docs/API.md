@@ -994,6 +994,8 @@ The envelope fields:
 - `version`: the topic's major version.
 - `source`: the producer's `SERVICE_NAME`.
 - `correlationId`: optional. It comes from the originating request.
+- `traceparent` and `tracestate`: optional W3C trace context of the span that built the event,
+  absent without one. Outbox events are relayed under it, so consumers join the request's trace.
 - `tenantId`: optional UUID of the tenant the event belongs to; the nil UUID marks a platform event. Tenant-scoped contracts must set it when produced; consumers accept envelopes without it.
 - `actorId`: optional UUID of the user who caused the event, or `null` for system work. `tenantId` and `actorId` default to the producer's CLS principal, and consumers run as `{ userId: actorId, tenantId }` when both are usable.
 

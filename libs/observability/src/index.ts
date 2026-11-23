@@ -91,4 +91,9 @@ export {
   SPAN_ATTR_REQUEST_ID,
   tagActiveSpan,
 } from './tracing/span-context.js';
+export {
+  captureTraceCarrier,
+  runWithTraceCarrier,
+  type TraceCarrier,
+} from './tracing/trace-carrier.js';
 export { CurrentSpan, Span, Traceable, TraceService } from './tracing/tracing.module.js';

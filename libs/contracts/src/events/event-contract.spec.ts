@@ -113,9 +113,9 @@ describe('parseEventEnvelope', () => {
   });
 
   it('strips unknown keys (tolerant reader) instead of rejecting them', () => {
-    const raw = envelope({ ...orderPlaced, addedLater: true }, { traceparent: '00-abc' });
+    const raw = envelope({ ...orderPlaced, addedLater: true }, { addedLater: '00-abc' });
     const parsed = parseEventEnvelope(ORDER_PLACED_EVENT, raw);
-    expect(parsed).not.toHaveProperty('traceparent');
+    expect(parsed).not.toHaveProperty('addedLater');
     expect(parsed.payload).not.toHaveProperty('addedLater');
   });
 

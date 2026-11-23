@@ -1,9 +1,11 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Logger } from '@nestjs/common';
+import { context, propagation, type Span, type SpanContext, trace } from '@opentelemetry/api';
+import { node } from '@opentelemetry/sdk-node';
 import { ExternalServiceException, generateId, isUuidV7 } from '@platform/common';
 import { CLS_ID, CLS_REQ, ClsService } from 'nestjs-cls';
 import { type Observable, of, Subject, throwError } from 'rxjs';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import {
   FIXTURE_ORDER_PLACED_EVENT,
   FIXTURE_USER_REGISTERED_EVENT,
@@ -398,5 +400,170 @@ describe('FakeKafkaProducer', () => {
 
   it('is a KafkaProducer (drop-in for overrideProvider)', () => {
     expect(new FakeKafkaProducer()).toBeInstanceOf(KafkaProducer);
+  });
+});
+
+describe('KafkaProducer trace context (ARCH-5)', () => {
+  const exporter = new node.InMemorySpanExporter();
+  const provider = new node.NodeTracerProvider({
+    spanProcessors: [new node.SimpleSpanProcessor(exporter)],
+  });
+  const tracer = () => trace.getTracer('kafka-producer.spec');
+
+  /**
+   * Starts a `produce` span in `emit`, as the kafkajs instrumentation does around `producer.send`,
+   * and records the span context active there.
+   */
+  class TracingClientKafka extends FakeClientKafka {
+    readonly activeAtEmit: (SpanContext | undefined)[] = [];
+
+    override emit(topic: string, record: KafkaOutgoingRecord): Observable<unknown> {
+      this.activeAtEmit.push(trace.getSpanContext(context.active()));
+      tracer().startSpan(`${topic} send`).end();
+      return super.emit(topic, record);
+    }
+  }
+
+  /** The produce span `emit` started (the only span ending in ` send`). */
+  const produceSpan = () => {
+    const spans = exporter.getFinishedSpans();
+    return spans.find((span) => span.name.endsWith(' send'));
+  };
+
+  beforeAll(() => {
+    // Registers the AsyncLocalStorage context manager too: without one `context.with` is a no-op.
+    provider.register();
+  });
+
+  afterEach(() => {
+    exporter.reset();
+  });
+
+  afterAll(async () => {
+    await provider.shutdown();
+    trace.disable();
+    context.disable();
+    propagation.disable();
+  });
+
+  it('createRecord inside a span stores that span as traceparent; publishStored sends under it', async () => {
+    const origin = new KafkaProducer(new FakeClientKafka(), { source: 'origin-service' });
+    const { record, request } = tracer().startActiveSpan('POST /v1/orders', (span: Span) => {
+      const built = origin.createRecord(FIXTURE_USER_REGISTERED_EVENT, userRegistered());
+      span.end();
+      return { record: built, request: span.spanContext() };
+    });
+    expect(record.value.traceparent).toBe(`00-${request.traceId}-${request.spanId}-01`);
+    expect(record.value).not.toHaveProperty('tracestate');
+    exporter.reset();
+
+    // The relay: a later tick, from a context without a span.
+    expect(trace.getActiveSpan()).toBeUndefined();
+    const client = new TracingClientKafka();
+    const relay = new KafkaProducer(client, { source: 'relay-service' });
+    const copy = structuredClone(record.value);
+    await relay.publishStored(FIXTURE_USER_REGISTERED_EVENT.topic, record.value, null);
+
+    expect(client.activeAtEmit[0]?.traceId).toBe(request.traceId);
+    expect(client.activeAtEmit[0]?.spanId).toBe(request.spanId);
+    const produce = produceSpan();
+    expect(produce?.spanContext().traceId).toBe(request.traceId);
+    expect(produce?.parentSpanContext?.spanId).toBe(request.spanId);
+    // The envelope still goes out unchanged, with the same two headers.
+    expect(client.emitted[0]?.record.value).toEqual(copy);
+    expect(client.emitted[0]?.record.headers).toEqual({
+      'x-event-type': FIXTURE_USER_REGISTERED_EVENT.topic,
+    });
+    // And the relay's own context is untouched afterwards.
+    expect(trace.getActiveSpan()).toBeUndefined();
+  });
+
+  it('publishStored of an envelope with a traceparent parents the send on it (not on nothing)', async () => {
+    const traceId = '4bf92f3577b34da6a3ce929d0e0e4736';
+    const spanId = '00f067aa0ba902b7';
+    const envelope = {
+      ...new KafkaProducer(new FakeClientKafka(), { source: 'origin' }).createEnvelope(
+        FIXTURE_USER_REGISTERED_EVENT,
+        userRegistered(),
+      ),
+      traceparent: `00-${traceId}-${spanId}-01`,
+      tracestate: 'vendor=opaque',
+    };
+    const client = new TracingClientKafka();
+    await new KafkaProducer(client, { source: 'relay' }).publishStored(
+      FIXTURE_USER_REGISTERED_EVENT.topic,
+      envelope,
+      null,
+    );
+    expect(client.activeAtEmit[0]?.traceId).toBe(traceId);
+    expect(client.activeAtEmit[0]?.traceState?.serialize()).toBe('vendor=opaque');
+    const produce = produceSpan();
+    expect(produce?.parentSpanContext).toMatchObject({ traceId, spanId, isRemote: true });
+  });
+
+  it('a direct publish inside a span carries the traceparent too', async () => {
+    const client = new TracingClientKafka();
+    const producer = new KafkaProducer(client, { source: 'svc' });
+    const request = await tracer().startActiveSpan('request', async (span: Span) => {
+      await producer.publish(FIXTURE_USER_REGISTERED_EVENT, userRegistered());
+      span.end();
+      return span.spanContext();
+    });
+    expect(client.emitted[0]?.record.value.traceparent).toBe(
+      `00-${request.traceId}-${request.spanId}-01`,
+    );
+    expect(produceSpan()?.parentSpanContext?.spanId).toBe(request.spanId);
+  });
+
+  it('without an active span the envelope is identical to before, key for key', () => {
+    const producer = new KafkaProducer(new FakeClientKafka(), { source: 'svc' });
+    const record = producer.createRecord(FIXTURE_USER_REGISTERED_EVENT, userRegistered(), {
+      correlationId: 'corr-1',
+    });
+    expect(Object.keys(record.value).sort()).toEqual(
+      ['id', 'type', 'version', 'occurredAt', 'source', 'correlationId', 'payload'].sort(),
+    );
+  });
+
+  it('mixed versions: a stored envelope without the fields is relayed as before, with no parent', async () => {
+    const legacy = new KafkaProducer(new FakeClientKafka(), { source: 'old' }).createEnvelope(
+      FIXTURE_USER_REGISTERED_EVENT,
+      userRegistered(),
+    );
+    expect(legacy).not.toHaveProperty('traceparent');
+    const copy = structuredClone(legacy);
+    const client = new TracingClientKafka();
+    await new KafkaProducer(client, { source: 'relay' }).publishStored(
+      FIXTURE_USER_REGISTERED_EVENT.topic,
+      legacy,
+      'k',
+    );
+    expect(client.emitted[0]?.record).toEqual({
+      key: 'k',
+      value: copy,
+      headers: { 'x-event-type': FIXTURE_USER_REGISTERED_EVENT.topic },
+    });
+    expect(client.activeAtEmit[0]).toBeUndefined();
+    expect(produceSpan()?.parentSpanContext).toBeUndefined();
+  });
+
+  it('a malformed stored traceparent still publishes, under the ambient context', async () => {
+    const envelope = {
+      ...new KafkaProducer(new FakeClientKafka(), { source: 'old' }).createEnvelope(
+        FIXTURE_USER_REGISTERED_EVENT,
+        userRegistered(),
+      ),
+      traceparent: 'not-a-traceparent',
+      tracestate: '',
+    };
+    const client = new TracingClientKafka();
+    await new KafkaProducer(client, { source: 'relay' }).publishStored(
+      FIXTURE_USER_REGISTERED_EVENT.topic,
+      envelope,
+      null,
+    );
+    expect(client.emitted).toHaveLength(1);
+    expect(client.activeAtEmit[0]).toBeUndefined();
+    expect(produceSpan()?.parentSpanContext).toBeUndefined();
   });
 });

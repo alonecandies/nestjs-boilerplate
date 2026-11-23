@@ -98,6 +98,9 @@ export interface EventEnvelopeMeta {
   occurredAt?: Date | undefined;
   tenantId?: string | undefined;
   actorId?: string | null | undefined;
+  /** W3C trace context of the producing span (see `EventEnvelope.traceparent`). */
+  traceparent?: string | undefined;
+  tracestate?: string | undefined;
 }
 
 /**
@@ -128,6 +131,8 @@ export function createEventEnvelope<TPayload>(
     ...(meta.correlationId === undefined ? {} : { correlationId: meta.correlationId }),
     ...(meta.tenantId === undefined ? {} : { tenantId: meta.tenantId }),
     ...(meta.actorId === undefined ? {} : { actorId: meta.actorId }),
+    ...(meta.traceparent === undefined ? {} : { traceparent: meta.traceparent }),
+    ...(meta.tracestate === undefined ? {} : { tracestate: meta.tracestate }),
     payload,
   });
 }
