@@ -2,7 +2,7 @@ import type { User } from '@domain/identity-contracts';
 import { Injectable, Logger } from '@nestjs/common';
 import { AppCacheService } from '@platform/redis';
 import { UsersPort } from '../../application/ports/users.port.js';
-import { USER_CACHE_TTL_MS, userCacheKey } from '../../identity.constants.js';
+import { USER_CACHE_NAME, USER_CACHE_TTL_MS, userCacheKey } from '../../identity.constants.js';
 import { reviveUser } from './user-view.js';
 
 /**
@@ -26,6 +26,7 @@ export class UserReadCache {
       userCacheKey(id),
       () => this.users.getUser(id),
       USER_CACHE_TTL_MS,
+      USER_CACHE_NAME,
     );
     return reviveUser(user);
   }

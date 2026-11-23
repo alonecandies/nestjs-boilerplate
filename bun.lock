@@ -809,6 +809,7 @@
         "@nestjs/core": "catalog:",
         "@platform/common": "workspace:*",
         "@platform/config": "workspace:*",
+        "@platform/observability": "workspace:*",
         "bullmq": "catalog:",
         "handlebars": "catalog:",
         "lodash": "catalog:",

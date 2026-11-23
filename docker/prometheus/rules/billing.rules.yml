@@ -1,0 +1,74 @@
+# Billing alerts (audit fixes Task 21). The series are unlabelled counters registered by
+# @domain/billing (domains/billing/src/billing-core.module.ts, names in billing.constants.ts), so
+# each starts at 0 in every process that loads the billing module and its first increment counts.
+# Prometheus adds `service` from the scrape target. Reconcile every one of these against the Stripe
+# dashboard: money moved and the platform did not apply it as expected.
+# severity: page = wake someone; ticket = look at it in working hours.
+groups:
+  - name: billing
+    rules:
+      # Stripe reported a Checkout Session paid but no currency is known: the payment stays pending
+      # and no receipt is sent.
+      - alert: BillingPaidWithoutCurrency
+        expr: sum by (service) (increase(billing_checkout_paid_without_currency_total[15m])) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.service }}: a paid checkout has no currency"
+          description: >-
+            {{ $value | humanize }} paid Checkout Session(s) in the last 15 minutes had no usable currency
+            (none in the event, none stored). The payment is left pending and no receipt is sent.
+            Find it in the Stripe dashboard and reconcile it by hand.
+
+      # Stripe reported a Checkout Session paid but no amount is known (for example the session was
+      # never bound to a payment): pending, no receipt.
+      - alert: BillingPaidWithoutAmount
+        expr: sum by (service) (increase(billing_checkout_paid_without_amount_total[15m])) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.service }}: a paid checkout has no amount"
+          description: >-
+            {{ $value | humanize }} paid Checkout Session(s) in the last 15 minutes had no amount (none in
+            the event, none stored). The payment is left pending and no receipt is sent. Find it in the
+            Stripe dashboard and reconcile it by hand.
+
+      # A paid Checkout Session without an owner (a session from before tenancy, a nil-UUID user, or
+      # metadata that is no tenant or user id): the amount is known, nothing is applied.
+      - alert: BillingPaidWithoutOwner
+        expr: sum by (service) (increase(billing_checkout_paid_without_owner_total[15m])) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.service }}: a paid checkout has no owner"
+          description: >-
+            {{ $value | humanize }} paid Checkout Session(s) in the last 15 minutes were recorded without a
+            tenant or user. The payment is left pending and no receipt is sent. Read the session's
+            metadata in the Stripe dashboard and attribute the payment by hand.
+
+      # The charged amount or currency differs from the quote stored at session creation
+      # (promotion code, tax, a price change). The charged values are recorded; ledger reconciliation
+      # R3 later writes a discrepancy row.
+      - alert: BillingAmountMismatch
+        expr: sum by (service) (increase(billing_checkout_amount_mismatch_total[15m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.service }}: a paid checkout differs from its quote"
+          description: >-
+            {{ $value | humanize }} paid Checkout Session(s) in the last 15 minutes were charged another
+            amount or currency than quoted. Check for promotion codes, tax settings and price changes in
+            Stripe; the charged values were recorded.
+
+      # A webhook event carries an api_version other than the pinned STRIPE_API_VERSION: the payload
+      # shape this code parses may differ.
+      - alert: BillingStripeApiVersionMismatch
+        expr: sum by (service) (increase(billing_stripe_api_version_mismatch_total[15m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.service }}: Stripe webhook api_version differs from the pinned one"
+          description: >-
+            {{ $value | humanize }} webhook event(s) in the last 15 minutes had an api_version other than
+            STRIPE_API_VERSION. Compare the webhook endpoint's API version in the Stripe dashboard with
+            the pinned one before upgrading either.

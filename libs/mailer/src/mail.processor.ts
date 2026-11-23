@@ -2,14 +2,26 @@ import { OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
 import { Inject, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { maskEmail } from '@platform/common';
 import { type MailConfig, mailConfig } from '@platform/config';
+import { InjectMetric } from '@platform/observability';
 import { Job, UnrecoverableError } from 'bullmq';
 import { isPermanentMailError } from './mail.errors.js';
 import { MailService } from './mail.service.js';
 import type { MailJobData } from './mail.types.js';
 import { createThrottledErrorLog } from './mail.util.js';
-import { DEFAULT_MAIL_CONCURRENCY, MAIL_QUEUE } from './mailer.constants.js';
+import {
+  DEFAULT_MAIL_CONCURRENCY,
+  MAIL_JOB_OUTCOMES,
+  MAIL_JOBS_TOTAL,
+  MAIL_QUEUE,
+  type MailJobOutcome,
+} from './mailer.constants.js';
 
 type MailJob = Job<MailJobData, void, string>;
+
+/** The part of a prom-client `Counter<'outcome'>` the worker uses. */
+export interface MailJobsCounter {
+  inc(labels: { outcome: MailJobOutcome }, value?: number): void;
+}
 
 /**
  * BullMQ worker for the `mail` queue. Register it only in processes that should deliver mail
@@ -24,8 +36,12 @@ export class MailProcessor extends WorkerHost implements OnApplicationBootstrap 
   constructor(
     private readonly mail: MailService,
     @Inject(mailConfig.KEY) private readonly cfg: MailConfig,
+    @InjectMetric(MAIL_JOBS_TOTAL) private readonly jobs: MailJobsCounter,
   ) {
     super();
+    // A labelled series that appears with its first `inc()` starts at 1, and `increase()` misses
+    // that step: the `MailJobsFailed` alert would not see the first failed job. Start each at 0.
+    for (const outcome of MAIL_JOB_OUTCOMES) this.jobs.inc({ outcome }, 0);
   }
 
   /**
@@ -45,6 +61,7 @@ export class MailProcessor extends WorkerHost implements OnApplicationBootstrap 
       // No retry can fix a template bug or a permanent SMTP rejection, so the job fails now.
       throw new UnrecoverableError(error instanceof Error ? error.message : String(error));
     }
+    this.jobs.inc({ outcome: 'sent' });
   }
 
   /**
@@ -59,6 +76,8 @@ export class MailProcessor extends WorkerHost implements OnApplicationBootstrap 
   @OnWorkerEvent('failed')
   onFailed(job: MailJob | undefined, error: Error): void {
     if (job === undefined) {
+      // BullMQ has no job to hand over (a stalled job it gave up on): the mail is not sent.
+      this.jobs.inc({ outcome: 'failed' });
       this.logger.error(`Mail job failed: ${error.message}`);
       return;
     }
@@ -66,6 +85,7 @@ export class MailProcessor extends WorkerHost implements OnApplicationBootstrap 
     // Recipients are masked: logs are not a place for personal data.
     const summary = `"${job.name}" mail to ${maskEmail(job.data.to)} (job ${job.id ?? 'n/a'}, attempt ${job.attemptsMade}/${attempts})`;
     const final = error instanceof UnrecoverableError || job.attemptsMade >= attempts;
+    this.jobs.inc({ outcome: final ? 'failed' : 'retried' });
     if (final) this.logger.error(`Giving up on ${summary}: ${error.message}`);
     else this.logger.warn(`Retrying ${summary}: ${error.message}`);
   }

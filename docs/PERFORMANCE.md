@@ -231,6 +231,11 @@ BullMQ keys are **not** under `REDIS_KEY_PREFIX`: they use BullMQ's own prefix (
 example `bull:mail:welcome-<userId>`; mail job ids are idempotent (`welcome-<userId>`,
 `receipt-<paymentId>`).
 
+Whether reads are served from the cache is exported as `cache_requests_total{cache,outcome}`
+(`hit` or `miss`, per cache name; the user read cache is `user`; see
+[OBSERVABILITY.md](OBSERVABILITY.md)). A call that ran the loader is a miss; a call that waited on
+another call's loader counts as a hit.
+
 Each process (and each cluster worker) has its own L1, which is why the TTL is short and
 invalidation is broadcast. Do not put per-user authorization decisions in the cache longer than
 you can tolerate them being stale for `CACHE_L1_TTL_MS`.

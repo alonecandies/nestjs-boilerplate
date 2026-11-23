@@ -87,25 +87,30 @@ export class AppThrottlerModule {
             config: ThrottleConfig,
             redis: Redis,
             keys: RedisKeyService,
-            failOpenTotal: { inc(labels: { throttler: string }): void },
-          ): ThrottlerModuleOptions => ({
-            throttlers: [
-              { name: THROTTLER.IP, ttl: config.ipTtlMs, limit: config.ipLimit },
-              { name: THROTTLER.USER, ttl: config.ttlMs, limit: config.limit },
-              { name: THROTTLER.TENANT, ttl: config.tenantTtlMs, limit: config.tenantLimit },
-              // Real values come from the route's @RateLimit policy (RateLimitGuardBase.bucketsFor).
-              { name: THROTTLER.ROUTE, ttl: config.ttlMs, limit: config.limit },
-              // Real values come from the route's credentials policy; the account lockout rides on it.
-              { name: THROTTLER.AUTH, ttl: config.ttlMs, limit: config.limit },
-            ],
-            storage: new RedisThrottlerStorage(redis, keys, {
-              ...(options.failOpen === undefined ? {} : { failOpen: options.failOpen }),
-              commandTimeoutMs: config.redisTimeoutMs,
-              onFailOpen: (throttler) => failOpenTotal.inc({ throttler }),
-            }),
-            skipIf,
-            ...(options.ignoreUserAgents ? { ignoreUserAgents: options.ignoreUserAgents } : {}),
-          }),
+            failOpenTotal: { inc(labels: { throttler: string }, value?: number): void },
+          ): ThrottlerModuleOptions => {
+            // Every series starts at 0: one created by its first `inc()` starts at 1 and
+            // `increase()` misses that step, so `RateLimitFailOpen` would not see the first fail-open.
+            for (const throttler of Object.values(THROTTLER)) failOpenTotal.inc({ throttler }, 0);
+            return {
+              throttlers: [
+                { name: THROTTLER.IP, ttl: config.ipTtlMs, limit: config.ipLimit },
+                { name: THROTTLER.USER, ttl: config.ttlMs, limit: config.limit },
+                { name: THROTTLER.TENANT, ttl: config.tenantTtlMs, limit: config.tenantLimit },
+                // Real values come from the route's @RateLimit policy (RateLimitGuardBase.bucketsFor).
+                { name: THROTTLER.ROUTE, ttl: config.ttlMs, limit: config.limit },
+                // Real values come from the route's credentials policy; the account lockout rides on it.
+                { name: THROTTLER.AUTH, ttl: config.ttlMs, limit: config.limit },
+              ],
+              storage: new RedisThrottlerStorage(redis, keys, {
+                ...(options.failOpen === undefined ? {} : { failOpen: options.failOpen }),
+                commandTimeoutMs: config.redisTimeoutMs,
+                onFailOpen: (throttler) => failOpenTotal.inc({ throttler }),
+              }),
+              skipIf,
+              ...(options.ignoreUserAgents ? { ignoreUserAgents: options.ignoreUserAgents } : {}),
+            };
+          },
         }),
       ],
       providers,

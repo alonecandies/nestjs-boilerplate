@@ -3,10 +3,18 @@ import { type DynamicModule, Module, type Provider } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { MailerModule } from '@nestjs-modules/mailer';
 import { type MailConfig, mailConfig } from '@platform/config';
+import { makeCounterProvider } from '@platform/observability';
 import { MailProcessor } from './mail.processor.js';
 import { MailService } from './mail.service.js';
-import { MAIL_QUEUE } from './mailer.constants.js';
+import { MAIL_JOBS_TOTAL, MAIL_QUEUE } from './mailer.constants.js';
 import { createMailerOptions } from './mailer-options.factory.js';
+
+/** `mail_jobs_total{outcome}`; only a process that runs the worker reports it. */
+const mailJobsCounter = makeCounterProvider({
+  name: MAIL_JOBS_TOTAL,
+  help: 'Mail job attempts the worker finished, by outcome (sent, retried, failed)',
+  labelNames: ['outcome'],
+});
 
 export interface AppMailerModuleOptions {
   /**
@@ -41,7 +49,7 @@ export class AppMailerModule {
       );
     }
     const providers: Provider[] = [MailService];
-    if (worker) providers.push(MailProcessor);
+    if (worker) providers.push(mailJobsCounter, MailProcessor);
     return {
       module: AppMailerModule,
       global: true,

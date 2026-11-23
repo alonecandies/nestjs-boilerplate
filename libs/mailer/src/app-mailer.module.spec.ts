@@ -11,7 +11,7 @@ import {
 import { AppMailerModule } from './app-mailer.module.js';
 import { MailProcessor } from './mail.processor.js';
 import { MailService } from './mail.service.js';
-import { MAIL_PARTIALS_DIR } from './mailer.constants.js';
+import { MAIL_JOBS_TOTAL, MAIL_PARTIALS_DIR } from './mailer.constants.js';
 import {
   createMailerOptions,
   listMailTemplates,
@@ -25,7 +25,11 @@ describe('AppMailerModule.forRootAsync', () => {
 
     expect(module.global).toBe(true);
     expect(module.exports).toEqual([MailService]);
-    expect(module.providers).toEqual([MailService, MailProcessor]);
+    expect(module.providers).toEqual([
+      MailService,
+      expect.objectContaining({ provide: `PROM_METRIC_${MAIL_JOBS_TOTAL.toUpperCase()}` }),
+      MailProcessor,
+    ]);
   });
 
   it('omits the worker for enqueue-only processes, which need no template dir', () => {

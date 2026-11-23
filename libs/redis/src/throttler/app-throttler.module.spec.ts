@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, NestFactory } from '@nestjs/core';
 import { getStorageToken, Throttle, type ThrottlerStorage } from '@nestjs/throttler';
 import { redisConfig } from '@platform/config';
+import { register } from 'prom-client';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RedisKeyService } from '../keys/redis-key.service.js';
 import { REDIS_CLIENT } from '../redis.constants.js';
@@ -12,7 +13,12 @@ import { AppThrottlerModule } from './app-throttler.module.js';
 import { RateLimit } from './rate-limit.decorator.js';
 import { RateLimitModule } from './rate-limit.module.js';
 import { RateLimitPolicyRegistry } from './rate-limit-policy.js';
-import { RATE_LIMIT_FAIL_OPEN_TOKEN, RedisThrottlerStorage } from './redis-throttler.storage.js';
+import {
+  RATE_LIMIT_FAIL_OPEN_TOKEN,
+  RATE_LIMIT_FAIL_OPEN_TOTAL,
+  RedisThrottlerStorage,
+} from './redis-throttler.storage.js';
+import { THROTTLER } from './throttle.constants.js';
 
 const redis = new InMemoryRedis();
 
@@ -166,4 +172,31 @@ describe('AppThrottlerModule (DI wiring)', () => {
     expect(Reflect.get(storage, 'commandTimeoutMs')).toBe(250);
     expect(app.get(RATE_LIMIT_FAIL_OPEN_TOKEN)).toHaveProperty('inc');
   });
+
+  it('creates rate_limit_fail_open_total{throttler} at 0 for every throttler at boot', async () => {
+    @Module({
+      imports: [
+        ConfigModule.forRoot({ ignoreEnvFile: true }),
+        FakeRedisModule,
+        AppThrottlerModule.forRootAsync(),
+      ],
+    })
+    class TestModule {}
+    app = await NestFactory.createApplicationContext(TestModule, { logger: false });
+
+    // A series created by its first `inc()` starts at 1 and `increase()` misses that step, so the
+    // `RateLimitFailOpen` alert would not see the first fail-open of a throttler.
+    const metric = register.getSingleMetric(RATE_LIMIT_FAIL_OPEN_TOTAL);
+    const values = (await (metric as { get(): Promise<{ values: { labels: object }[] }> }).get())
+      .values;
+    expect(values.map((sample) => sample.labels).sort(byThrottler)).toEqual(
+      Object.values(THROTTLER)
+        .map((throttler) => ({ throttler }))
+        .sort(byThrottler),
+    );
+  });
 });
+
+function byThrottler(a: object, b: object): number {
+  return JSON.stringify(a).localeCompare(JSON.stringify(b));
+}

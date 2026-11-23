@@ -3,6 +3,7 @@ import { CacheModule, type CacheModuleOptions } from '@nestjs/cache-manager';
 import { type DynamicModule, Logger, Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { type CacheConfig, cacheConfig, type RedisConfig, redisConfig } from '@platform/config';
+import { makeCounterProvider } from '@platform/observability';
 import type { Keyv } from 'keyv';
 import { throttle } from 'lodash-es';
 import { joinKey } from '../keys/key.util.js';
@@ -14,9 +15,15 @@ import {
   CACHE_KEY_NAMESPACE,
   type ResolvedAppCacheOptions,
 } from './cache.constants.js';
-import { AppCacheService } from './cache.service.js';
+import { AppCacheService, CACHE_REQUESTS_TOTAL } from './cache.service.js';
 
 const ERROR_LOG_INTERVAL_MS = 10_000;
+
+const cacheRequestsCounter = makeCounterProvider({
+  name: CACHE_REQUESTS_TOTAL,
+  help: 'AppCacheService.getOrSet calls, by cache name and outcome (hit, miss)',
+  labelNames: ['cache', 'outcome'],
+});
 
 /** Keyv swallows store errors (cache = best effort); surface them, throttled, instead of silently. */
 function logStoreErrors(store: Keyv, tier: string): void {
@@ -92,7 +99,11 @@ export class AppCacheModule {
           useFactory: createCacheOptions,
         }),
       ],
-      providers: [{ provide: APP_CACHE_OPTIONS, useValue: resolved }, AppCacheService],
+      providers: [
+        { provide: APP_CACHE_OPTIONS, useValue: resolved },
+        cacheRequestsCounter,
+        AppCacheService,
+      ],
       exports: [AppCacheService],
     };
   }

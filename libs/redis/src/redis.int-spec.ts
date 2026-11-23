@@ -271,9 +271,14 @@ describe('two-tier cache (real Redis L2 + pub/sub invalidation)', () => {
       const cache = createCache({ ...options, stores: options.stores as Keyv[] });
       const subscriber = redis.duplicate({ lazyConnect: true, maxRetriesPerRequest: null });
       subscriber.on('error', () => undefined);
-      const service = new AppCacheService(cache, redis, subscriber, keys, {
-        crossInstanceInvalidation: true,
-      });
+      const service = new AppCacheService(
+        cache,
+        redis,
+        subscriber,
+        keys,
+        { crossInstanceInvalidation: true },
+        { inc: () => undefined },
+      );
       service.onModuleInit();
       replicas.push({ service, cache, subscriber });
     }

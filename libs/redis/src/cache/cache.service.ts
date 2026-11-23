@@ -7,6 +7,7 @@ import {
   type OnModuleInit,
 } from '@nestjs/common';
 import { generateId } from '@platform/common';
+import { InjectMetric } from '@platform/observability';
 import type { Cache } from 'cache-manager';
 import type { Redis } from 'ioredis';
 import { compact, isArray, isString, uniq } from 'lodash-es';
@@ -19,6 +20,30 @@ import {
   type ResolvedAppCacheOptions,
 } from './cache.constants.js';
 import { openRedisStores } from './redis-store.util.js';
+
+/** `cache_requests_total{cache,outcome}`: cached reads served from the cache (hit) or loaded (miss). */
+export const CACHE_REQUESTS_TOTAL = 'cache_requests_total';
+
+/** The slice of a prom-client counter `AppCacheService` needs (tests pass a real `Counter`). */
+export interface CacheRequestCounter {
+  inc(labels: { cache: string; outcome: 'hit' | 'miss' }): void;
+}
+
+/** The label when the caller gave no (safe) name and the key has no safe prefix. */
+const OTHER_CACHE = 'other';
+const SAFE_CACHE_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
+
+/**
+ * The `cache` label of one `getOrSet`: the caller's name, else the key's prefix before the first
+ * `:`, each only when it is short and made of `[a-z0-9_-]`; anything else (a raw uuid, an id, free
+ * text) is `other`. A key never reaches a label, which keeps the series count bounded.
+ */
+export function cacheMetricName(key: string, name?: string): string {
+  if (name !== undefined && SAFE_CACHE_NAME.test(name)) return name;
+  const separator = key.indexOf(':');
+  const prefix = separator > 0 ? key.slice(0, separator) : '';
+  return SAFE_CACHE_NAME.test(prefix) ? prefix : OTHER_CACHE;
+}
 
 interface InvalidationMessage {
   /** Publishing instance (it already dropped its own L1 copy). */
@@ -65,6 +90,7 @@ export class AppCacheService implements OnModuleInit, OnModuleDestroy {
     @InjectRedisSubscriber() private readonly subscriber: Redis,
     keys: RedisKeyService,
     @Inject(APP_CACHE_OPTIONS) private readonly options: ResolvedAppCacheOptions,
+    @InjectMetric(CACHE_REQUESTS_TOTAL) private readonly requests: CacheRequestCounter,
   ) {
     this.channel = keys.key(CACHE_INVALIDATION_CHANNEL);
     this.onMessage = (channel, message) => {
@@ -96,9 +122,31 @@ export class AppCacheService implements OnModuleInit, OnModuleDestroy {
     this.subscriber.off('message', this.onMessage);
   }
 
-  /** Cached value of `key`, or `loader()` stored for `ttlMs` (default `CACHE_TTL_MS`). */
-  async getOrSet<T>(key: string, loader: () => Promise<T>, ttlMs?: number): Promise<T> {
-    return this.cache.wrap<T>(key, loader, ttlMs);
+  /**
+   * Cached value of `key`, or `loader()` stored for `ttlMs` (default `CACHE_TTL_MS`). Counts
+   * `cache_requests_total`: a call that ran the loader is a `miss`, any other (a cache hit, or a
+   * concurrent call that waited on another's loader) a `hit`. `cacheName` is the `cache` label; see
+   * `cacheMetricName` for the fallback.
+   */
+  async getOrSet<T>(
+    key: string,
+    loader: () => Promise<T>,
+    ttlMs?: number,
+    cacheName?: string,
+  ): Promise<T> {
+    const cache = cacheMetricName(key, cacheName);
+    let loaded = false;
+    const value = await this.cache.wrap<T>(
+      key,
+      () => {
+        loaded = true;
+        this.requests.inc({ cache, outcome: 'miss' });
+        return loader();
+      },
+      ttlMs,
+    );
+    if (!loaded) this.requests.inc({ cache, outcome: 'hit' });
+    return value;
   }
 
   async get<T>(key: string): Promise<T | undefined> {
