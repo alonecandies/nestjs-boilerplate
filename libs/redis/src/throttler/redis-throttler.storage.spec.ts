@@ -192,14 +192,22 @@ describe('Redis down (C-10)', () => {
     const client = redis.asRedis();
     const storage = new RedisThrottlerStorage(client, keys, { commandTimeoutMs: 20 });
     Reflect.set(client, 'appThrottleHit', () => new Promise(() => undefined)); // never settles
-    const started = Date.now();
-    await expect(storage.increment('k', 1_000, 1, 1_000, 'user')).resolves.toMatchObject({
-      isBlocked: false,
-    });
-    await expect(storage.increment('k', 1_000, 1, 1_000, 'auth')).rejects.toMatchObject({
-      code: 'SERVICE_UNAVAILABLE',
-    });
-    expect(Date.now() - started).toBeLessThan(1_000);
+    // Fake timers: only the command timeout can end the hung calls, so each settles when the
+    // clock reaches 20 ms, not when a real timer happens to fire.
+    vi.useFakeTimers();
+    try {
+      const failOpen = expect(
+        storage.increment('k', 1_000, 1, 1_000, 'user'),
+      ).resolves.toMatchObject({ isBlocked: false });
+      const failClosed = expect(
+        storage.increment('k', 1_000, 1, 1_000, 'auth'),
+      ).rejects.toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+      await vi.advanceTimersByTimeAsync(20);
+      await failOpen;
+      await failClosed;
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('still honours a boolean failOpen for every throttler', async () => {

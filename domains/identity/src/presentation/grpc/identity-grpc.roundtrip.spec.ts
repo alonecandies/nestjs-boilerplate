@@ -19,7 +19,7 @@ import { createGrpcServerStrategy } from '@platform/transport';
 import { ClsModule } from 'nestjs-cls';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeAuthTokens, makeUser } from '../../../test/fixtures.js';
-import { freePort } from '../../../test/free-port.js';
+import { withBoundGrpcPort } from '../../../test/free-port.js';
 import { InMemoryAppCache } from '../../../test/in-memory-app-cache.js';
 import { LogoutCommand } from '../../application/commands/logout/logout.command.js';
 import { RegisterUserCommand } from '../../application/commands/register-user/register-user.command.js';
@@ -77,15 +77,17 @@ describe('identity over gRPC (forRemote adapters ↔ gRPC controllers)', () => {
   let users: UsersPort;
 
   beforeAll(async () => {
-    const port = await freePort();
-    vi.stubEnv('IDENTITY_GRPC_URL', `127.0.0.1:${port}`);
-    vi.stubEnv('GRPC_DEADLINE_MS', '3000');
-    const cfg = grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}` });
+    // Port 0: the server binds an OS-chosen port; the clients below learn it once it is bound.
+    const cfg = grpcConfig.parse({ GRPC_URL: '127.0.0.1:0' });
     server = await NestFactory.createMicroservice(IdentityServiceTestModule, {
       ...createGrpcServerStrategy(cfg, [IDENTITY_GRPC_PACKAGE]),
       logger: false,
     });
-    await server.listen();
+    const { port } = await withBoundGrpcPort(async () => {
+      await server.listen();
+    });
+    vi.stubEnv('IDENTITY_GRPC_URL', `127.0.0.1:${port}`);
+    vi.stubEnv('GRPC_DEADLINE_MS', '3000');
 
     gateway = await Test.createTestingModule({
       imports: [

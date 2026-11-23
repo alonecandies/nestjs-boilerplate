@@ -42,18 +42,22 @@ describe('identity events carry the tenant (monolith, B4-1)', () => {
     created: created().length,
     removed: removed().length,
   });
-  /** Ticks the relays and expects `expected`; then lets the bus drain and checks again after another tick (no late duplicate). */
+  /** What a tick reports when both outboxes are empty: nothing polled, nothing published. */
+  const IDLE = { polled: 0, published: 0, failed: false };
+  /**
+   * Ticks the relays and expects `expected`; then a second tick must report both outboxes empty
+   * (the tick results, not a wait, say nothing is left) and the counts must not change (no late
+   * duplicate).
+   */
   const expectPublished = async (expected: Counts): Promise<void> => {
     await e2e.tickRelays();
     expect(counts()).toEqual(expected);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    await e2e.tickRelays();
+    expect(await e2e.tickRelays()).toEqual([IDLE, IDLE]);
     expect(counts()).toEqual(expected);
   };
-  /** Nothing was published, also after the bus drained and the relays ticked. */
+  /** Nothing was published: both outboxes are empty and the producer recorded nothing. */
   const expectNothingPublished = async (): Promise<void> => {
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    await e2e.tickRelays();
+    expect(await e2e.tickRelays()).toEqual([IDLE, IDLE]);
     expect(e2e.kafka.records).toEqual([]);
   };
 

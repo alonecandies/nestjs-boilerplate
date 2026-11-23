@@ -149,8 +149,13 @@ describe('OutboxModule.forFeature', () => {
   it('starts no relay without a system pool', async () => {
     vi.stubEnv('OUTBOX_RELAY_ENABLED', 'true');
     vi.stubEnv('DATABASE_SYSTEM_URL', '');
-    await boot();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    const context = await boot();
+    // The start decision is synchronous in `onApplicationBootstrap`, which `boot()` awaited:
+    // neither relay has a running loop, so there is nothing left that could ask for the lock.
+    for (const feature of ['fx', 'fy']) {
+      const relay = context.get(outboxRelayToken(feature), { strict: false });
+      expect(Reflect.get(relay, 'running')).toBeUndefined();
+    }
     expect(lock.resources).toEqual([]);
   });
 });

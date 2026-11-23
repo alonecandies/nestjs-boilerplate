@@ -36,7 +36,7 @@ import { lastValueFrom, type Observable } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { createFakePostgres, type FakeRow } from './support/fake-postgres.js';
-import { freePort } from './support/free-port.js';
+import { withBoundGrpcPort } from './support/free-port.js';
 import { startServiceTestApp } from './support/service-test-app.js';
 
 /*
@@ -92,11 +92,11 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
     grpcCall(source, { timeoutMs: 3_000, operation, breaker: breakers.get('identity') });
 
   beforeAll(async () => {
-    const grpcUrl = `127.0.0.1:${await freePort()}`;
     const env: Record<string, string> = {
       LOG_LEVEL: 'silent',
       SERVICE_NAME: 'identity-service',
-      GRPC_URL: grpcUrl,
+      // Port 0: the server binds an OS-chosen port, read back after it started.
+      GRPC_URL: '127.0.0.1:0',
       GRPC_DEADLINE_MS: '3000',
       // Nothing may reach real infrastructure: unreachable ports wherever a client could connect.
       DATABASE_URL: 'postgres://app:app@127.0.0.1:1/app',
@@ -123,7 +123,11 @@ describe('identity-service (real AppModule, fakes at the network edges)', () => 
       // The invitation mail queue (B2-14): a recording stub, so no BullMQ connection opens.
       .overrideProvider(getQueueToken(MAIL_QUEUE))
       .useValue({ add: vi.fn(), close: vi.fn(), on: vi.fn() });
-    app = await startServiceTestApp(builder, { grpc: [IDENTITY_GRPC_PACKAGE] });
+    const started = await withBoundGrpcPort(() =>
+      startServiceTestApp(builder, { grpc: [IDENTITY_GRPC_PACKAGE] }),
+    );
+    app = started.value;
+    const grpcUrl = `127.0.0.1:${started.port}`;
     // Kept here: the config restores every spy before each test (restoreMocks).
     relayBoot.lockResources = lockAttempts.mock.calls.map(([resource]) => resource);
     relayBoot.logLines = logLines.mock.calls.filter(

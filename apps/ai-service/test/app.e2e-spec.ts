@@ -11,18 +11,13 @@
  * observability settings while its decorators evaluate.
  */
 await vi.hoisted(async () => {
-  const { createServer } = await import('node:net');
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (address === null || typeof address === 'string') throw new Error('No free port');
   Object.assign(process.env, {
     NODE_ENV: 'test',
     LOG_LEVEL: 'silent',
     SERVICE_NAME: 'ai-service',
     OTEL_SDK_DISABLED: 'true',
-    GRPC_URL: `127.0.0.1:${address.port}`,
+    // Port 0: the server binds an OS-chosen port, read back after it started.
+    GRPC_URL: '127.0.0.1:0',
     GRPC_DEADLINE_MS: '3000',
     // Nothing may reach real infrastructure: unreachable ports everywhere.
     DATABASE_URL: 'postgres://app:app@127.0.0.1:1/app',
@@ -80,6 +75,7 @@ import { lastValueFrom, type Observable, toArray } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { createFakePostgres } from './support/fake-postgres.js';
+import { withBoundGrpcPort } from './support/free-port.js';
 import { startServiceTestApp } from './support/service-test-app.js';
 
 type MockModel = ReturnType<typeof mockTextModel>;
@@ -140,12 +136,15 @@ describe('ai-service (real AppModule, fakes at the network edges)', () => {
       .useValue(persistence.usage)
       .overrideProvider(AiModelProvider)
       .useValue(new MockAiModelProvider(() => model));
-    app = await startServiceTestApp(builder, { grpc: [AI_GRPC_PACKAGE] });
+    const started = await withBoundGrpcPort(() =>
+      startServiceTestApp(builder, { grpc: [AI_GRPC_PACKAGE] }),
+    );
+    app = started.value;
 
     client = new ClientGrpcProxy(
       createGrpcClientOptions(grpcConfig.parse(), {
         spec: AI_GRPC_PACKAGE,
-        url: process.env['GRPC_URL'] ?? '',
+        url: `127.0.0.1:${started.port}`,
       }).options,
     );
     ai = client.getService<AiServiceClient>('AiService');

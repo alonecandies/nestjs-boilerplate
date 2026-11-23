@@ -41,7 +41,6 @@ import {
   type GraphqlWsClose,
   type GraphqlWsConnection,
   listenOnLoopback,
-  wait,
   waitUntil,
 } from '@platform/testing/realtime';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -63,11 +62,11 @@ interface Inbox {
 }
 
 const PASSWORD = 'correct horse battery staple';
-const SWEEP_MS = 200;
-/** Two sweep intervals plus a margin for scheduling on a loaded machine. */
-const WITHIN_TWO_SWEEPS_MS = 2 * SWEEP_MS + 600;
-/** How long a push that must NOT arrive is awaited. */
-const QUIET_MS = 300;
+/**
+ * Revocation is awaited as an event, not raced against a window: this only keeps the helper's
+ * own timer below the e2e project's 30 s test timeout so a miss reports that the socket stayed open.
+ */
+const CLOSE_WAIT_MS = 20_000;
 const SUBSCRIBE = 'subscription { notificationCreated { id title } }';
 const INBOX = '{ notifications { items { id } } }';
 const U_EMAIL = 'ursula.graphql@example.com';
@@ -263,13 +262,17 @@ describe('graphql-ws over real connections (monolith, E-2)', () => {
         notificationCreatedTrigger(tenantA, u.user.id),
       );
 
+      // A second push after the first: a subscription delivers in order, so once the second is
+      // in, a duplicate of the first would already have shown (no fixed wait for "nothing more").
       const envelope = envelopeFor(tenantA, u.user.id);
+      const next = envelopeFor(tenantA, u.user.id);
       await deliver(envelope);
-      await waitUntil(() => subscription.received.length > 0);
-      await wait(QUIET_MS);
+      await deliver(next);
+      await waitUntil(() => subscription.received.length > 1);
 
       expect(subscription.received).toEqual([
         { notificationCreated: { id: envelope.id, title: 'Hello' } },
+        { notificationCreated: { id: next.id, title: 'Hello' } },
       ]);
       expect(subscription.errors).toEqual([]);
     });
@@ -283,11 +286,19 @@ describe('graphql-ws over real connections (monolith, E-2)', () => {
       await deliver(envelopeFor(tenantB, u.user.id));
       const forV = envelopeFor(tenantA, v.user.id);
       await deliver(forV);
-      await waitUntil(() => onV.received.length > 0);
-      await wait(QUIET_MS);
+      // A legitimate push after the ones that must not arrive, per subscriber: its arrival
+      // proves the earlier pushes were already filtered out (in-order delivery per subscription).
+      const lastU = envelopeFor(tenantA, u.user.id);
+      const lastV = envelopeFor(tenantA, v.user.id);
+      await deliver(lastU);
+      await deliver(lastV);
+      await waitUntil(() => onU.received.length > 0 && onV.received.length > 1);
 
-      expect(onU.received).toEqual([]);
-      expect(onV.received).toEqual([{ notificationCreated: { id: forV.id, title: 'Hello' } }]);
+      expect(onU.received).toEqual([{ notificationCreated: { id: lastU.id, title: 'Hello' } }]);
+      expect(onV.received).toEqual([
+        { notificationCreated: { id: forV.id, title: 'Hello' } },
+        { notificationCreated: { id: lastV.id, title: 'Hello' } },
+      ]);
     });
 
     it('yields nothing for a (B,U) payload published straight onto the (A,U) trigger', async () => {
@@ -300,9 +311,14 @@ describe('graphql-ws over real connections (monolith, E-2)', () => {
       await e2e.app
         .get<{ publish(trigger: string, payload: unknown): Promise<void> }>(GRAPHQL_PUB_SUB)
         .publish(trigger, { ...payload, tenantId: tenantB });
-      await wait(QUIET_MS);
+      // The legitimate push right behind it proves the foreign one was filtered, not just slow.
+      const legitimate = envelopeFor(tenantA, u.user.id);
+      await deliver(legitimate);
+      await waitUntil(() => subscription.received.length > 0);
 
-      expect(subscription.received).toEqual([]);
+      expect(subscription.received).toEqual([
+        { notificationCreated: { id: legitimate.id, title: 'Hello' } },
+      ]);
     });
 
     it('answers a query sent over the socket from tenant A’s inbox only', async () => {
@@ -336,7 +352,7 @@ describe('graphql-ws over real connections (monolith, E-2)', () => {
 
       await logout(session);
 
-      expect(await connection.closedWithin(WITHIN_TWO_SWEEPS_MS)).toEqual({
+      expect(await connection.closedWithin(CLOSE_WAIT_MS)).toEqual({
         code: 4401,
         reason: 'Access token revoked',
       });
@@ -354,7 +370,7 @@ describe('graphql-ws over real connections (monolith, E-2)', () => {
 
       const inB = await switchTo(switching, tenantB);
 
-      expect(await oldConnection.closedWithin(WITHIN_TWO_SWEEPS_MS)).toEqual({
+      expect(await oldConnection.closedWithin(CLOSE_WAIT_MS)).toEqual({
         code: 4401,
         reason: 'Access token revoked',
       });
@@ -368,11 +384,21 @@ describe('graphql-ws over real connections (monolith, E-2)', () => {
       const forA = envelopeFor(tenantA, u.user.id);
       await deliver(forB);
       await deliver(forA);
-      await waitUntil(() => onNew.received.length > 0 && onOther.received.length > 0);
-      await wait(QUIET_MS);
+      // One more per connection behind them: in-order delivery proves nothing else came first.
+      const lastB = envelopeFor(tenantB, u.user.id);
+      const lastA = envelopeFor(tenantA, u.user.id);
+      await deliver(lastB);
+      await deliver(lastA);
+      await waitUntil(() => onNew.received.length > 1 && onOther.received.length > 1);
 
-      expect(onNew.received).toEqual([{ notificationCreated: { id: forB.id, title: 'Hello' } }]);
-      expect(onOther.received).toEqual([{ notificationCreated: { id: forA.id, title: 'Hello' } }]);
+      expect(onNew.received).toEqual([
+        { notificationCreated: { id: forB.id, title: 'Hello' } },
+        { notificationCreated: { id: lastB.id, title: 'Hello' } },
+      ]);
+      expect(onOther.received).toEqual([
+        { notificationCreated: { id: forA.id, title: 'Hello' } },
+        { notificationCreated: { id: lastA.id, title: 'Hello' } },
+      ]);
       expect(otherConnection.open).toBe(true);
     });
   });

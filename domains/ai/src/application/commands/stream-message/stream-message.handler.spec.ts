@@ -419,8 +419,9 @@ describe('StreamMessageHandler', () => {
       // The gRPC controller's shape: the call is already closed, so it releases the stream unread.
       await events[Symbol.asyncIterator]().return?.();
     });
-    // A model call started at execute() would reach the provider within a few ticks.
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // A model call started at execute() would be a chain of microtasks over in-memory fakes:
+    // one macrotask turn runs all of them first, so no wall-clock wait is needed.
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(model.doStreamCalls).toEqual([]);
     expect(await requestsCounted()).toBe(counted);

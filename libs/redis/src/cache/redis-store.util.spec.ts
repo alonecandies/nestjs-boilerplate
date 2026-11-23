@@ -27,12 +27,12 @@ describe('openRedisStores + createCacheOptions (L2 best-effort under a Redis out
     const cache = createCache({ stores: options.stores as Keyv[], ttl: 1_000 });
     openRedisStores(cache);
 
-    const startedAt = performance.now();
+    // No stopwatch: before the fix every call waited REDIS_CONNECT_TIMEOUT_MS (10 s) on get AND
+    // on set, which overruns the unit test timeout many times over (20 calls), so a regression
+    // still fails; a slow runner cannot.
     for (let i = 0; i < 20; i += 1) {
       await expect(cache.wrap(`k${String(i)}`, async () => i)).resolves.toBe(i);
     }
-    // Before: every call waited REDIS_CONNECT_TIMEOUT_MS (10 s) on get AND on set.
-    expect(performance.now() - startedAt).toBeLessThan(2_000);
     // L1 still works in front of the dead L2.
     await expect(cache.get('k3')).resolves.toBe(3);
     // No per-call listener re-registration on the node-redis client during the outage.
