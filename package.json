@@ -92,7 +92,7 @@
     "graphql": "17.0.2",
     "graphql-query-complexity": "2.0.0",
     "graphql-redis-subscriptions": "2.7.0",
-    "graphql-scalars": "2.0.0",
+    "graphql-scalars": "2.0.1",
     "graphql-subscriptions": "3.0.0",
     "graphql-ws": "6.3.0",
     "grpc-health-check": "2.1.0",
@@ -106,7 +106,7 @@
     "nestjs-cls": "7.0.1",
     "nestjs-otel": "8.1.1",
     "nestjs-pino": "5.3.1",
-    "nodemailer": "10.1.0",
+    "nodemailer": "10.1.4",
     "opossum": "10.0.0",
     "passport": "0.7.0",
     "passport-jwt": "4.0.1",
@@ -214,8 +214,10 @@
   "overrides": {
     "socket.io": "4.8.4",
     "ioredis": "6.0.0",
-    "fastify": "5.12.5",
-    "protobufjs": "7.6.6"
+    "fastify": "5.12.6",
+    "protobufjs": "7.6.6",
+    "@graphql-tools/utils": "12.0.2",
+    "preview-email": "3.4.2"
   },
   "patchedDependencies": {
     "kafkajs@2.2.4": "patches/kafkajs@2.2.4.patch"
