@@ -87,15 +87,21 @@ session of the given `refreshToken`, or **every** session when the body omits it
 
 - The denylist **fails closed**: a Redis error or a check slower than 250 ms answers 503, never
   "allowed". `AUTH_DENYLIST_ENABLED=false` turns it off (not recommended).
+- The denylist write also publishes `{"jti":"…"}` on `{REDIS_KEY_PREFIX}:auth:revoked` (a failed
+  publish is logged, never thrown). Every replica listens on that channel and closes the token's
+  live sockets as the message arrives, within a round trip. A timed sweep, every
+  `WS_REVOCATION_SWEEP_INTERVAL_MS` (30 s by default, at most 300 s), closes whatever a message did
+  not reach: a replica that only writes the key (an older version), a failed publish, or a
+  subscriber that was reconnecting.
 - WebSockets authenticate at the handshake (the denylist is checked there). Per message,
-  `WsSessionGuard` re-checks the denylist; every `WS_REVOCATION_SWEEP_INTERVAL_MS` (30 s by
-  default) each replica disconnects its sockets whose token was revoked (`TOKEN_REVOKED`), and a
-  per-socket timer disconnects a socket when its access token expires (`TOKEN_EXPIRED`).
+  `WsSessionGuard` re-checks the denylist; each replica disconnects its sockets whose token was
+  revoked (`TOKEN_REVOKED`) as above, and a per-socket timer disconnects a socket when its access
+  token expires (`TOKEN_EXPIRED`).
 - graphql-ws subscriptions authenticate at `connection_init` (close code 4403 for an invalid,
   expired, revoked or missing token) and are closed with 4401 `Access token expired` when the
-  token's `exp` passes. They are swept too: each socket is tracked by its token's `jti`, and every
-  `WS_REVOCATION_SWEEP_INTERVAL_MS` each replica closes those whose token was revoked with 4401
-  `Access token revoked`. Both transports share one `RevocationSweeper` (`@platform/auth`).
+  token's `exp` passes. Each socket is tracked by its token's `jti` and closed the same way when the
+  token is revoked, with 4401 `Access token revoked`. Both transports share one
+  `RevocationSweeper` (`@platform/auth`).
 
 ### Passwords
 
@@ -756,9 +762,10 @@ has no `tenantId` (or the platform tenant) throws in the consumer and lands in t
 push, no mail (fail closed). A principal without a tenant never reaches a key builder.
 
 **What a tenant switch guarantees.** `POST /v1/auth/switch-tenant` denylists the access token it was presented.
-Every socket authenticated with that token, on either transport and on every replica, is closed by its replica's
-sweep within `WS_REVOCATION_SWEEP_INTERVAL_MS` (Socket.IO: `exception` `TOKEN_REVOKED`, then disconnect;
-graphql-ws: close 4401 `Access token revoked`), and Socket.IO messages on it are refused at once. A socket never
+Every socket authenticated with that token, on either transport and on every replica, is closed when the
+revocation message reaches its replica, or at the latest by the next sweep within `WS_REVOCATION_SWEEP_INTERVAL_MS`
+(Socket.IO: `exception` `TOKEN_REVOKED`, then disconnect; graphql-ws: close 4401 `Access token revoked`), and
+Socket.IO messages on it are refused at once. A socket never
 changes room or trigger: it joins exactly one room, fixed at the handshake from its token, so the new tenant needs a
 new connection with the new token. There is no room-wide close: access tokens carry no session id, so the user's
 other sessions in the old tenant stay connected (switching does not end the old membership; removal flows revoke on
@@ -924,7 +931,9 @@ At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) pu
   identity and billing go through the transactional outbox and are delivered at least once.
 - A row the broker always refuses blocks its outbox until an operator acts (a batch stops at the first failed
   publish; `OutboxBacklogStuck` pages), so a poison row delays that outbox's later events, not loses them.
-- WebSocket revocation is not instant: a live socket whose token is revoked is closed by the next
-  sweep, up to `WS_REVOCATION_SWEEP_INTERVAL_MS` (30 s by default) later, on both transports.
-  Socket.IO messages and new graphql-ws operations are refused at once (their guards re-check the
-  denylist); a running subscription keeps receiving pushes until the sweep closes its socket.
+- WebSocket revocation is instant only while the revocation message arrives. A replica that missed
+  it (its subscriber was reconnecting, the publish failed, or an older replica wrote the key without
+  publishing) closes the socket at the next sweep, up to `WS_REVOCATION_SWEEP_INTERVAL_MS` later
+  (30 s by default, at most 300 s). Until then Socket.IO messages and new graphql-ws operations are
+  still refused (their guards re-check the denylist), but a running subscription keeps receiving
+  pushes.

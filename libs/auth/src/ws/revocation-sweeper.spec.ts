@@ -1,5 +1,9 @@
 import { Logger } from '@nestjs/common';
+import { authConfig, redisConfig } from '@platform/config';
+import { RedisKeyService } from '@platform/redis';
+import { InMemoryRedis } from '@platform/redis/testing';
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+import { AccessTokenDenylist } from '../tokens/access-token-denylist.service.js';
 import { type RevocableSession, RevocationSweeper } from './revocation-sweeper.js';
 
 const INTERVAL_MS = 1_000;
@@ -216,5 +220,133 @@ describe('RevocationSweeper', () => {
     expect(sweeper.size).toBe(1);
     untrack();
     expect(sweeper.size).toBe(0);
+  });
+});
+
+describe('RevocationSweeper on the revocation channel (two replicas, one Redis)', () => {
+  const keys = new RedisKeyService(redisConfig.parse({ REDIS_KEY_PREFIX: 'svc' }));
+  // The sweep interval at its maximum: a session closed here was not closed by a sweep.
+  const auth = authConfig.parse({ NODE_ENV: 'test', WS_REVOCATION_SWEEP_INTERVAL_MS: '300000' });
+  const inAMinute = (): number => Math.floor(Date.now() / 1_000) + 60;
+  /** `publish` delivers on `setImmediate` (not faked here), like a real round trip. */
+  const delivered = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+  /** A replica: its own main and subscriber connections, denylist and sweeper. */
+  function replicaOn(redis: InMemoryRedis) {
+    const denylist = new AccessTokenDenylist(
+      redis.asRedis(),
+      keys,
+      auth,
+      redis.duplicate().asRedis(),
+    );
+    const isDenied = vi.spyOn(denylist, 'isDenied');
+    const sweeper = new RevocationSweeper(denylist, {
+      name: 'test',
+      intervalMs: auth.wsRevocationSweepIntervalMs,
+    });
+    sweeper.start();
+    return { redis, denylist, isDenied, sweeper };
+  }
+
+  let redis: InMemoryRedis;
+  let a: ReturnType<typeof replicaOn>;
+  let b: ReturnType<typeof replicaOn>;
+
+  beforeEach(() => {
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    redis = new InMemoryRedis();
+    a = replicaOn(redis);
+    b = replicaOn(redis.duplicate());
+  });
+
+  afterEach(() => {
+    a.sweeper.stop();
+    b.sweeper.stop();
+    vi.useRealTimers();
+  });
+
+  it('deny() on one replica closes the session on the other before any sweep', async () => {
+    expect(auth.wsRevocationSweepIntervalMs).toBe(300_000);
+    const revoked = session('jti-1');
+    const live = session('jti-2');
+    b.sweeper.track(revoked);
+    b.sweeper.track(live);
+
+    await a.denylist.deny('jti-1', inAMinute());
+    await delivered();
+
+    expect(revoked.end).toHaveBeenCalledTimes(1);
+    expect(live.end).not.toHaveBeenCalled();
+    expect(b.sweeper.size).toBe(1);
+    expect(b.isDenied).not.toHaveBeenCalled(); // no sweep ran
+
+    // The next sweep does not end it a second time.
+    await vi.advanceTimersByTimeAsync(auth.wsRevocationSweepIntervalMs);
+    expect(b.isDenied).toHaveBeenCalledWith('jti-2');
+    expect(revoked.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('ends every session of the jti on every sweeper of the replica', async () => {
+    const graphqlWs = new RevocationSweeper(b.denylist, {
+      name: 'graphql-ws',
+      intervalMs: 300_000,
+    });
+    graphqlWs.start();
+    const onSocketIo = [session('jti-1'), session('jti-1')];
+    const onGraphqlWs = session('jti-1');
+    for (const s of onSocketIo) b.sweeper.track(s);
+    graphqlWs.track(onGraphqlWs);
+
+    await a.denylist.deny('jti-1', inAMinute());
+    await delivered();
+    graphqlWs.stop();
+
+    for (const s of [...onSocketIo, onGraphqlWs]) expect(s.end).toHaveBeenCalledTimes(1);
+    expect(b.sweeper.size + graphqlWs.size).toBe(0);
+  });
+
+  it('mixed versions: a key SET without a publish (an old replica) is closed by the next sweep', async () => {
+    const revoked = session('jti-old');
+    b.sweeper.track(revoked);
+
+    await redis.set('svc:auth:denylist:jti-old', '1', 'EX', 600);
+    await delivered();
+    expect(revoked.end).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(auth.wsRevocationSweepIntervalMs);
+    expect(revoked.end).toHaveBeenCalledTimes(1);
+    expect(b.sweeper.size).toBe(0);
+  });
+
+  it('ignores a malformed message on the channel and keeps listening', async () => {
+    const target = session('jti-1');
+    b.sweeper.track(target);
+
+    for (const garbage of ['jti-1', '{"jti":["jti-1"]}', '{"sub":"jti-1"}', '']) {
+      await redis.publish('svc:auth:revoked', garbage);
+    }
+    await delivered();
+    expect(target.end).not.toHaveBeenCalled();
+    expect(b.sweeper.size).toBe(1);
+
+    await a.denylist.deny('jti-1', inAMinute());
+    await delivered();
+    expect(target.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('stop() stops listening too; after start() the sweep closes what it missed', async () => {
+    const revoked = session('jti-1');
+    b.sweeper.track(revoked);
+    b.sweeper.stop();
+
+    await a.denylist.deny('jti-1', inAMinute());
+    await delivered();
+    expect(revoked.end).not.toHaveBeenCalled();
+
+    b.sweeper.start();
+    await vi.advanceTimersByTimeAsync(auth.wsRevocationSweepIntervalMs);
+    expect(revoked.end).toHaveBeenCalledTimes(1);
   });
 });

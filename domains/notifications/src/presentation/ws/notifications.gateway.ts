@@ -22,6 +22,8 @@ import {
 } from '@platform/auth';
 import {
   DEFAULT_PROBLEM_TYPE_BASE_URL,
+  isMaintenanceEnabled,
+  maintenanceProblem,
   type ProblemDetails,
   toProblemDetails,
   UnauthenticatedException,
@@ -82,6 +84,9 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
  *   `Authorization: Bearer`) once, including the revocation denylist, BEFORE the connection is
  *   accepted — so no message can race the authentication. A refused client gets `connect_error`
  *   whose `data` is the problem details (`code` MISSING_TOKEN / TOKEN_EXPIRED / …).
+ * - Maintenance mode (`MAINTENANCE_MODE`, `appConfig`): the handshake is refused first, before
+ *   the IP charge and the token, with `connect_error` whose `data` is the 503 problem
+ *   (`SERVICE_UNAVAILABLE`), the same document REST clients get.
  * - Connection caps (`ConnectionCaps`, when `AppThrottlerModule` is present): the handshake is
  *   charged to the client IP (`TRUST_PROXY` rules) before the token is read, and the user may hold
  *   `THROTTLE_WS_SOCKETS_PER_USER` sockets at once. Both refuse with `connect_error` whose `data`
@@ -160,6 +165,12 @@ export class NotificationsGateway
 
   /** Resolves `undefined` (accept) or the error to refuse the handshake with. */
   async authenticate(socket: NotificationsSocket): Promise<ExtendedError | undefined> {
+    // Before the IP charge and the token: a refused client must cost nothing during maintenance.
+    if (isMaintenanceEnabled(this.app?.maintenanceMode)) {
+      this.logger.debug(`Refused socket ${socket.id}: maintenance mode`);
+      const problem = maintenanceProblem();
+      return Object.assign(new Error(problem.detail ?? problem.title), { data: problem });
+    }
     try {
       this.clientIp ??= createClientIpResolver(this.app?.trustProxy ?? false);
       const ip = this.clientIp(socket.request) ?? socket.handshake?.address;

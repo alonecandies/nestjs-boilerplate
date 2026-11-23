@@ -162,6 +162,66 @@ describe('createApolloDriverConfig', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  describe('maintenance mode', () => {
+    const maintenanceConfig = (maintenanceMode: boolean | (() => boolean) | undefined) => {
+      const guard = new SubscriptionGuardRef();
+      const run = vi.spyOn(guard, 'run').mockResolvedValue(undefined);
+      const wsAuth = { onConnect: vi.fn(async () => true), onClose: vi.fn() };
+      const config = createApolloDriverConfig({
+        graphql: graphqlConfig.parse({}),
+        app: appConfig.parse({}),
+        loaders: new DataLoaderRegistry(),
+        wsAuth,
+        subscriptionGuard: guard,
+        ...(maintenanceMode === undefined ? {} : { maintenanceMode }),
+      });
+      const ws = config.subscriptions?.['graphql-ws'] as unknown as WsOptions & {
+        onSubscribe: (ctx: unknown, id: string, payload: unknown) => Promise<unknown>;
+      };
+      return { ws, wsAuth, run };
+    };
+    const ctx = { connectionParams: { token: 't' }, extra: { user: { id: 'u-1' } } };
+    const subscribe = { query: 'subscription Tick { tick }', operationName: 'Tick' };
+
+    it('on: onConnect closes the connection before authenticating it', async () => {
+      const { ws, wsAuth } = maintenanceConfig(true);
+
+      expect(await ws.onConnect(ctx)).toBe(false);
+      expect(wsAuth.onConnect).not.toHaveBeenCalled();
+    });
+
+    it('on: onSubscribe answers a SERVICE_UNAVAILABLE error and skips the guard', async () => {
+      const { ws, run } = maintenanceConfig(true);
+
+      const errors = (await ws.onSubscribe(ctx, '1', subscribe)) as GraphQLError[];
+
+      expect(errors).toHaveLength(1);
+      expect(errors[0]).toBeInstanceOf(GraphQLError);
+      expect(errors[0]?.extensions).toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+      expect(run).not.toHaveBeenCalled();
+    });
+
+    it('follows a runtime switch: a function is read at every connection', async () => {
+      let on = false;
+      const { ws, wsAuth } = maintenanceConfig(() => on);
+
+      await expect(ws.onConnect(ctx)).resolves.toBe(true);
+      on = true;
+      expect(await ws.onConnect(ctx)).toBe(false);
+      expect(wsAuth.onConnect).toHaveBeenCalledTimes(1);
+    });
+
+    it('off or unset: connections and subscriptions behave as before', async () => {
+      for (const mode of [false, undefined]) {
+        const { ws, wsAuth, run } = maintenanceConfig(mode);
+        await expect(ws.onConnect(ctx)).resolves.toBe(true);
+        await expect(ws.onSubscribe(ctx, '1', subscribe)).resolves.toBeUndefined();
+        expect(wsAuth.onConnect).toHaveBeenCalledTimes(1);
+        expect(run).toHaveBeenCalledTimes(1);
+      }
+    });
+  });
+
   it('formats subscription event errors with the production rules', () => {
     const { config } = build({ NODE_ENV: 'production' });
     const ws = config.subscriptions?.['graphql-ws'] as WsOptions;

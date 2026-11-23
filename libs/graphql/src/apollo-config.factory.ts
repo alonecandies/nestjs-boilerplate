@@ -1,9 +1,15 @@
 import { ApolloServerPluginLandingPageLocalDefault } from '@apollo/server/plugin/landingPage/default';
 import type { ApolloDriverConfig } from '@nestjs/apollo';
 import type { BuildSchemaOptions } from '@nestjs/graphql';
+import {
+  ErrorCode,
+  isMaintenanceEnabled,
+  type MaintenanceModeSwitch,
+  maintenanceProblem,
+} from '@platform/common';
 import type { AppConfig, GraphqlConfig } from '@platform/config';
 import { createClientIpResolver } from '@platform/redis';
-import { type DocumentNode, parse } from 'graphql';
+import { type DocumentNode, GraphQLError, parse } from 'graphql';
 import type { GraphqlWsAuthHandlers } from './auth/subscription-auth.js';
 import { isWsContext } from './context/gql-context.js';
 import {
@@ -27,6 +33,11 @@ export interface ApolloConfigDeps {
   buildSchemaOptions?: BuildSchemaOptions | undefined;
   /** Filled at bootstrap with the graphql-ws complexity + cost check (C-6); unset → no check. */
   subscriptionGuard?: SubscriptionGuardRef | undefined;
+  /**
+   * The maintenance switch (`app.maintenanceMode`, the value the HTTP middleware reads): on,
+   * graphql-ws refuses new connections and subscriptions. Unset → off.
+   */
+  maintenanceMode?: MaintenanceModeSwitch | undefined;
 }
 
 /**
@@ -40,7 +51,9 @@ export interface ApolloConfigDeps {
  * - **Introspection** follows `GRAPHQL_INTROSPECTION`.
  * - **Schema**: code-first, written to `GRAPHQL_SCHEMA_FILE` when set, else kept in memory
  *   (containers usually have read-only filesystems).
- * - **Subscriptions**: graphql-ws on the same path, authenticated once per connection.
+ * - **Subscriptions**: graphql-ws on the same path, authenticated once per connection. With
+ *   maintenance mode on, `onConnect` closes the connection (4403) and `onSubscribe` answers a
+ *   `SERVICE_UNAVAILABLE` error, like the 503 REST clients get.
  * - **Context**: a fresh set of DataLoaders per operation; over graphql-ws also the connection's
  *   `connectionSignal`, aborted when its socket closes.
  * - **Errors**: `formatGraphqlError`, for HTTP results and for subscription events (graphql-ws
@@ -76,7 +89,7 @@ export function createApolloDriverConfig(deps: ApolloConfigDeps): ApolloDriverCo
         connectionInitWaitTimeout: GRAPHQL_WS_INIT_TIMEOUT_MS,
         // Nest types `ctx.extra` as unknown; graphql-ws/use/ws supplies `{ socket, request }`.
         onConnect: (ctx) => {
-          if (!isWsContext(ctx)) return false;
+          if (!isWsContext(ctx) || isMaintenanceEnabled(deps.maintenanceMode)) return false;
           connections.open(ctx);
           return wsAuth.onConnect(ctx);
         },
@@ -88,6 +101,8 @@ export function createApolloDriverConfig(deps: ApolloConfigDeps): ApolloDriverCo
         // Apollo plugins never see graphql-ws operations: run the same complexity check and the
         // per-operation cost budget here. Returning errors rejects the subscription.
         onSubscribe: async (ctx, _id, payload) => {
+          // A connection opened before maintenance began may still subscribe: refuse it too.
+          if (isMaintenanceEnabled(deps.maintenanceMode)) return [maintenanceError()];
           if (!isWsContext(ctx) || deps.subscriptionGuard === undefined) return undefined;
           let document: DocumentNode;
           try {
@@ -109,4 +124,12 @@ export function createApolloDriverConfig(deps: ApolloConfigDeps): ApolloDriverCo
       },
     },
   };
+}
+
+/** The graphql-ws twin of the 503 problem: the same detail, `extensions.code` SERVICE_UNAVAILABLE. */
+function maintenanceError(): GraphQLError {
+  const problem = maintenanceProblem();
+  return new GraphQLError(problem.detail ?? problem.title, {
+    extensions: { code: ErrorCode.SERVICE_UNAVAILABLE, status: problem.status },
+  });
 }

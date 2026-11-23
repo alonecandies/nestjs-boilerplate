@@ -4,7 +4,7 @@ import { HTTP_HEADERS, PROBLEM_JSON_CONTENT_TYPE } from '../constants/headers.co
 import { MAINTENANCE_MODE, MAINTENANCE_MODE_OPTIONS } from '../constants/tokens.constants.js';
 import { getHeaderValue } from '../context/execution-context.util.js';
 import { ServiceUnavailableException } from '../errors/domain.exception.js';
-import { toProblemDetails } from '../errors/problem-details.js';
+import { type ProblemDetails, toProblemDetails } from '../errors/problem-details.js';
 import {
   type NextFunction,
   type RawRequest,
@@ -31,6 +31,24 @@ export const DEFAULT_MAINTENANCE_MODE_OPTIONS: Readonly<MaintenanceModeOptions> 
 };
 
 const MAINTENANCE_DETAIL = 'The service is undergoing maintenance. Please retry later.';
+
+/** Whether `mode` (a boot-time boolean or a runtime function; unset = off) switches maintenance on. */
+export function isMaintenanceEnabled(mode: MaintenanceModeSwitch | undefined): boolean {
+  return isFunction(mode) ? mode() : mode === true;
+}
+
+/**
+ * The 503 problem document maintenance mode answers with, for the transports that carry no HTTP
+ * response of their own (graphql-ws, Socket.IO): the same `code` and `detail` the middleware sends.
+ */
+export function maintenanceProblem(
+  context: { requestId?: string; instance?: string } = {},
+): ProblemDetails {
+  return toProblemDetails(new ServiceUnavailableException(MAINTENANCE_DETAIL), {
+    ...context,
+    exposeInternal: false,
+  });
+}
 
 /**
  * Short-circuits every request with `503` problem+json + `Retry-After` while maintenance mode is
@@ -63,10 +81,9 @@ export class MaintenanceModeMiddleware implements NestMiddleware<RawRequest, Raw
 
     const requestId =
       req.id === undefined ? getHeaderValue(req.headers, HTTP_HEADERS.REQUEST_ID) : String(req.id);
-    const problem = toProblemDetails(new ServiceUnavailableException(MAINTENANCE_DETAIL), {
-      requestId,
+    const problem = maintenanceProblem({
+      ...(requestId === undefined ? {} : { requestId }),
       instance: path,
-      exposeInternal: false,
     });
     res.statusCode = problem.status;
     res.setHeader('content-type', PROBLEM_JSON_CONTENT_TYPE);
@@ -76,8 +93,7 @@ export class MaintenanceModeMiddleware implements NestMiddleware<RawRequest, Raw
   }
 
   private isEnabled(): boolean {
-    const mode = this.maintenanceMode;
-    return isFunction(mode) ? mode() : mode === true;
+    return isMaintenanceEnabled(this.maintenanceMode);
   }
 
   private isBypassed(path: string): boolean {

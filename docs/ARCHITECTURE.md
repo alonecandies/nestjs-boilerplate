@@ -194,7 +194,7 @@ Composition rules visible in the app modules:
 - **ai-service's readiness is Postgres alone.** OpenRouter is not a contributor (a model outage fails the chat turns with 502 or 504, and `AI_ENABLED=false` answers 503 `AI_DISABLED`; neither may pull a replica out of rotation), and the services its tools call are not either: an unreachable owner is a tool error returned to the model, never a failed turn.
 - **The gateway owns no data**: no database, Cassandra, mailer, Stripe, CQRS or core module. An upstream outage degrades the affected routes (503 problem+json) instead of failing readiness.
 - **Cross-domain GraphQL fields live in the apps.** `Payment.user` (billing → identity) is resolved by `PaymentUserFieldResolver` (`apps/monolith/src/graphql`, `apps/gateway/src/graphql`) through identity's `users` DataLoader; billing exposes only `Payment.userId`, so no domain imports another.
-- Every app installs `provideCommonEnhancersAsync()` (validation pipes, `AllExceptionsFilter`, `TimeoutInterceptor`) and applies `CorrelationIdMiddleware` to all routes. The monolith and gateway also apply `MaintenanceModeMiddleware`.
+- Every app installs `provideCommonEnhancersAsync()` (validation pipes, `AllExceptionsFilter`, `TimeoutInterceptor`) and applies `CorrelationIdMiddleware` to all routes. The monolith and gateway also apply `MaintenanceModeMiddleware`; `MAINTENANCE_MODE` is read by that middleware and by the WebSocket entry points (graphql-ws `onConnect` and `onSubscribe`, the Socket.IO namespace middleware), so a socket gets the same refusal as a REST call. Kafka consumers, crons and the outbox relay keep running.
 
 Bootstrap (`main.ts`) adds the transports:
 

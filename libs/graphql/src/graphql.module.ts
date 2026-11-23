@@ -110,6 +110,7 @@ export class AppGraphqlModule {
               ),
               buildSchemaOptions: options.buildSchemaOptions,
               subscriptionGuard,
+              maintenanceMode: app.maintenanceMode,
             }),
         }),
       ],

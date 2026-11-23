@@ -1,7 +1,14 @@
 import { Test } from '@nestjs/testing';
 import { AccessTokenDenylist, AuthModule, TokenService } from '@platform/auth';
 import { signTestAccessToken } from '@platform/auth/testing';
-import { AppConfigModule, type AuthConfig, authConfig } from '@platform/config';
+import {
+  type AppConfig,
+  AppConfigModule,
+  type AuthConfig,
+  appConfig,
+  authConfig,
+} from '@platform/config';
+import type { ConnectionCaps } from '@platform/redis';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeRedisModule } from '../../../test/support/edge-test-app.js';
 import {
@@ -163,6 +170,49 @@ describe('NotificationsGateway', () => {
     it('refuses a forged token', async () => {
       const error = await gateway.authenticate(fakeSocket({ auth: { token: 'a.b.c' } }));
       expect(error?.data).toMatchObject({ status: 401 });
+    });
+  });
+
+  describe('maintenance mode', () => {
+    const maintenanceOn = (): AppConfig => appConfig.parse({ MAINTENANCE_MODE: 'true' });
+
+    it('refuses the handshake with the 503 problem, before reading the token', async () => {
+      Object.assign(gateway, { app: maintenanceOn() });
+      const issued = await signTestAccessToken({ id: USER_ID, email: 'a@b.io', roles: ['member'] });
+      const socket = fakeSocket({ auth: { token: issued.token } });
+
+      const error = await gateway.authenticate(socket);
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error?.data).toMatchObject({ status: 503, code: 'SERVICE_UNAVAILABLE' });
+      expect(socket.data.user).toBeUndefined();
+    });
+
+    it('refuses before the per-IP handshake charge, so a flood does not spend the cap', async () => {
+      const admitHandshake = vi.fn(async () => ({ ok: true as const }));
+      const capped = new NotificationsGateway(
+        tokens,
+        denylist,
+        port,
+        authWithSweepInterval(30_000),
+        { admitHandshake } as unknown as ConnectionCaps,
+      );
+      Object.assign(capped, { app: maintenanceOn() });
+
+      const error = await capped.authenticate(fakeSocket({}));
+
+      expect(error?.data).toMatchObject({ status: 503 });
+      expect(admitHandshake).not.toHaveBeenCalled();
+      capped.onModuleDestroy();
+    });
+
+    it('off: the handshake is authenticated as before', async () => {
+      Object.assign(gateway, { app: appConfig.parse({ MAINTENANCE_MODE: 'false' }) });
+      const issued = await signTestAccessToken({ id: USER_ID, email: 'a@b.io', roles: ['member'] });
+
+      await expect(
+        gateway.authenticate(fakeSocket({ auth: { token: issued.token } })),
+      ).resolves.toBeUndefined();
     });
   });
 
