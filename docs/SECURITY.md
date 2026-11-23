@@ -862,7 +862,7 @@ At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) pu
 - [ ] No `*_ALLOW_INSECURE`, `ALLOW_KNOWN_LOCAL_SECRETS` or `STRIPE_ALLOW_LOCAL_REDIRECTS` unless you
       can name what secures that hop instead (a mesh, a TLS sidecar); the compose stack sets all of them.
 - [ ] gRPC: `GRPC_TLS_CERT_PATH`/`_KEY_PATH`/`_CA_PATH` (mTLS), or a mesh + `GRPC_ALLOW_INSECURE=true`;
-      NetworkPolicy so only the gateway reaches 50051; `GRPC_REFLECTION` off.
+      NetworkPolicy so only the gateway and ai-service reach 50051; `GRPC_REFLECTION` off.
 - [ ] `METRICS_PORT` kept cluster-internal and `METRICS_BEARER_TOKEN` set; `/docs`, `/openapi.*` not routed publicly;
       `DOCS_ENABLED`, `GRAPHQL_SANDBOX`, `GRAPHQL_INTROSPECTION` left off.
 - [ ] TLS everywhere, enforced at boot: Postgres `?sslmode=verify-full`, Redis `rediss://` with a

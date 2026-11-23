@@ -680,8 +680,8 @@ load balancer's IPs/CIDRs (compose's `uniquelocal` and `true` are not for produc
 caller: anyone who reaches port 50051 can call `UpdateUserRoles` with any `actorId`, list users or payments, and (with
 reflection on) discover every method. `NODE_ENV=production` refuses to start without TLS unless that opt-out is set.
 Production: mutual TLS (`GRPC_TLS_CA_PATH`/`GRPC_TLS_CERT_PATH`/`GRPC_TLS_KEY_PATH`; server certificates must name the
-`*_GRPC_URL` hosts) or a service mesh doing mTLS, plus a NetworkPolicy that only lets the gateway reach the services'
-gRPC ports. Reflection defaults to off in production; compose turns it back on for local grpcurl/Postman.
+`*_GRPC_URL` hosts) or a service mesh doing mTLS, plus a NetworkPolicy that lets only the gateway and ai-service reach the services'
+gRPC ports (ai-service's chat tools call identity-, notifications- and billing-service). Reflection defaults to off in production; compose turns it back on for local grpcurl/Postman.
 
 **Never expose the ops routes through the public ingress.** `/metrics` (route-level traffic, error rates, queue and
 heap internals) is served on its own listener, `METRICS_PORT` (9464; the API port answers 404 for it): compose never

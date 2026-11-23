@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -126,5 +126,45 @@ describe('obs-app-metrics-sentence-stale: the metrics catalogue matches the code
 
   it('the catalogue has a row for redis_eviction_policy_safe', () => {
     expect(read('docs/OBSERVABILITY.md')).toContain('| `redis_eviction_policy_safe`');
+  });
+});
+
+describe('ARCH-8: the architecture doc covers every app and the gRPC policy lets ai-service in', () => {
+  /** The docs an operator reads: `docs/*.md`, the README and each package's README. */
+  const operatorDocs = (): string[] => {
+    const packageReadmes = ['apps', 'domains', 'libs'].flatMap((folder) =>
+      readdirSync(join(root, folder))
+        .map((name) => `${folder}/${name}/README.md`)
+        .filter((file) => existsSync(join(root, file))),
+    );
+    const docs = readdirSync(join(root, 'docs'))
+      .filter((name) => name.endsWith('.md'))
+      .map((name) => `docs/${name}`);
+    return ['README.md', ...docs, ...packageReadmes];
+  };
+
+  it('every folder under apps/ is named in docs/ARCHITECTURE.md', () => {
+    const architecture = read('docs/ARCHITECTURE.md');
+    const apps = readdirSync(join(root, 'apps'), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    expect(apps.length).toBeGreaterThanOrEqual(6);
+    for (const app of apps) expect(architecture.includes(`apps/${app}`), `apps/${app}`).toBe(true);
+  });
+
+  it('the architecture doc names the ai and immudb packages', () => {
+    const architecture = read('docs/ARCHITECTURE.md');
+    for (const path of ['domains/ai', 'libs/ai', 'libs/immudb']) {
+      expect(architecture.includes(`\`${path}\``), path).toBe(true);
+    }
+  });
+
+  it('no doc says that only the gateway reaches the services', () => {
+    const stale = ['only the gateway reaches', 'only lets the gateway reach'];
+    const hits = operatorDocs().flatMap((file) => {
+      const text = flat(read(file)).toLowerCase();
+      return stale.filter((phrase) => text.includes(phrase)).map((phrase) => `${file}: ${phrase}`);
+    });
+    expect(hits).toEqual([]);
   });
 });
