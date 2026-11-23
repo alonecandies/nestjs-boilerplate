@@ -367,7 +367,7 @@ each with a `.dlq`) travel in a zod-validated envelope defined in `libs/contract
 ├── docs/                          # the guides linked below
 ├── scripts/                       # setup-env.mjs, check-env-example.mjs, check-boundaries.mjs, docker/ (image assembly, infra checks, topology smoke test)
 ├── patches/                       # bun patchedDependencies (kafkajs)
-├── .github/workflows/ci.yml       # CI: verify, integration, image (per app), compose
+├── .github/                       # workflows/ci.yml (verify, integration, image per app, topology, compose; weekly advisories), dependabot.yml, audit-ignore.json
 ├── .husky/                        # pre-commit (lint-staged), commit-msg (commitlint)
 ├── Dockerfile                     # one multi-stage image per app (--build-arg APP=<app>)
 ├── docker-compose.yml             # infra + profiles: monolith, microservices, observability, logs, tools, loadtest
