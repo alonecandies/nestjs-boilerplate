@@ -13,6 +13,7 @@ import type { LedgerEntryDraft } from '../src/domain/ledger/ledger.types.js';
 import type { LedgerDiscrepancyInput } from '../src/domain/ledger/ledger-discrepancy.js';
 import { billingLedgerMigrations } from '../src/infrastructure/ledger/billing-ledger.migrations.js';
 import { ImmudbLedgerAdapter } from '../src/infrastructure/ledger/immudb-ledger.adapter.js';
+import { LedgerMetrics } from '../src/infrastructure/ledger/ledger-metrics.js';
 import { DrizzleLedgerSystemRepository } from '../src/infrastructure/persistence/drizzle-ledger.system-repository.js';
 import { type BillingDatabase, startBillingDatabase } from './billing-database.js';
 import { CHARGE_DRAFT, LEDGER_TEST_TENANT as TENANT_A } from './ledger-fixtures.js';
@@ -174,7 +175,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     it('real proofs: the first state is stored, a later one advances it and the new refs verify', async () => {
       if (signed === undefined) throw new Error('container not started');
       const ledger = await adapterOn(signed, { key: pinned, migrate: true });
-      const check = new R5VerificationCheck(ledger, system);
+      const check = new R5VerificationCheck(ledger, system, LedgerMetrics);
       const verifyEntry = vi.spyOn(ledger, 'verifyEntry');
       // Recorded well before this run: the next run's look-back for late refs (posted since the
       // read time this run stores) does not reach them again.
@@ -221,7 +222,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       const ledger = await adapterOn(signed, { key: otherKey });
       await post(await adapterOn(signed, { key: pinned }), TENANT_A);
 
-      const finding = await failedProof(new R5VerificationCheck(ledger, system));
+      const finding = await failedProof(new R5VerificationCheck(ledger, system, LedgerMetrics));
 
       expect(finding).toMatchObject({
         tenantId: PLATFORM_TENANT_ID,
@@ -239,7 +240,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       const ledger = await adapterOn(plain, { database, key: pinned, migrate: true });
       await post(ledger, TENANT_A);
 
-      const finding = await failedProof(new R5VerificationCheck(ledger, system));
+      const finding = await failedProof(new R5VerificationCheck(ledger, system, LedgerMetrics));
 
       expect(finding).toMatchObject({
         tenantId: PLATFORM_TENANT_ID,
@@ -260,7 +261,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       // Rebuild a history at least as long as the old one: a fresh chain, not a shorter one.
       while ((await ledger.currentState()).txId <= before.txId) await post(ledger, TENANT_A);
 
-      const finding = await failedProof(new R5VerificationCheck(ledger, system));
+      const finding = await failedProof(new R5VerificationCheck(ledger, system, LedgerMetrics));
 
       expect(finding).toMatchObject({
         tenantId: PLATFORM_TENANT_ID,

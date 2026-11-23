@@ -11,11 +11,21 @@ Layers follow the hexagonal/CQRS layout of the monorepo:
 src/
   domain/          Payment aggregate (status machine), PaymentSucceededEvent, errors, PaymentStatus
   application/     commands (CreateCheckoutSession, HandleStripeWebhook), query (ListPayments),
-                   BillingPort, repository abstractions, mappers (contract, payment-succeeded payload)
+                   BillingPort, repository abstractions, mappers (contract, payment-succeeded payload),
+                   the infrastructure ports (BillingOutboxPort, PlatformOutboxPort, LedgerMetricsPort,
+                   LEDGER_SETTINGS)
   infrastructure/  billing.schema.ts (Drizzle), Drizzle repositories, billing's outbox (BillingOutbox, its system repository), local + gRPC port adapters, the Stripe adapter (stripe/)
   presentation/    REST BillingController, GraphQL BillingResolver, gRPC BillingGrpcController
   billing-core.module.ts · billing-grpc.module.ts · billing-api.module.ts
 ```
+
+Application and domain code import infrastructure only from `infrastructure/stripe/` (the documented
+exception: `StripeService`, `stripeConfig`, `STRIPE_API_VERSION`). The outbox writer, the system
+repository's `insertAsPlatform`, the ledger metrics and the `ledger` namespace reach it through the
+ports in `application/ports/`, which `BillingCoreModule`, `BillingLedgerModule` and
+`BillingLedgerReanchorModule` bind to them (`useExisting` for the outbox, so an override of
+`BillingOutbox` or `BillingOutboxSystemRepository` reaches the handlers). `scripts/check-boundaries.mjs`
+fails on any other import ([ARCHITECTURE.md §3](../../docs/ARCHITECTURE.md#3-layers)).
 
 ## Modules and wiring
 

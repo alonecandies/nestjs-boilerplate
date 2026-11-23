@@ -1,4 +1,10 @@
-import { DomainValidationException, encodeCursor, MAX_PAGE_LIMIT } from '@platform/common';
+import {
+  DEFAULT_PAGE_LIMIT,
+  DomainValidationException,
+  encodeCursor,
+  generateId,
+  MAX_PAGE_LIMIT,
+} from '@platform/common';
 import { and, eq } from 'drizzle-orm';
 import { pgTable, text, uuid } from 'drizzle-orm/pg-core';
 import { drizzle } from 'drizzle-orm/postgres-js';
@@ -140,5 +146,26 @@ describe('keysetPage', () => {
     const page = keysetPageBy(dated, 1, (row) => ({ c: row.createdAt, id: row.id }));
     expect(page.items).toHaveLength(1);
     expect(page.nextCursor).toBe(encodeCursor({ c: '2026-09-03T00:00:00.000Z', id: ID_3 }));
+  });
+});
+
+describe('a proto3 limit of 0 or garbage (ARCH-7)', () => {
+  const many = Array.from({ length: DEFAULT_PAGE_LIMIT + 5 }, () => ({ id: generateId() }));
+
+  it('keysetPage and keysetPageBy return the default page size, not one row', () => {
+    const page = keysetPage(many, 0);
+    expect(page.items).toHaveLength(DEFAULT_PAGE_LIMIT);
+    expect(decodeIdCursor(page.nextCursor ?? '')).toEqual({ id: many[DEFAULT_PAGE_LIMIT - 1]?.id });
+    expect(keysetPageBy(many, -3, (row) => ({ id: row.id })).items).toHaveLength(
+      DEFAULT_PAGE_LIMIT,
+    );
+    expect(keysetPage(many, 2.5).items).toHaveLength(DEFAULT_PAGE_LIMIT);
+  });
+
+  it('keysetFetchLimit agrees with keysetPage: the default size plus the look-ahead row', () => {
+    expect(keysetFetchLimit(0)).toBe(DEFAULT_PAGE_LIMIT + 1);
+    expect(keysetFetchLimit(-3)).toBe(DEFAULT_PAGE_LIMIT + 1);
+    expect(keysetFetchLimit(2.5)).toBe(DEFAULT_PAGE_LIMIT + 1);
+    expect(keysetFetchLimit(10_000)).toBe(MAX_PAGE_LIMIT + 1);
   });
 });

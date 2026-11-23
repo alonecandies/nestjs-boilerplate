@@ -13,7 +13,9 @@ import { R5VerificationCheck } from '../../application/commands/reconcile-ledger
 import { ReconcileLedgerHandler } from '../../application/commands/reconcile-ledger/reconcile-ledger.handler.js';
 import { LedgerService } from '../../application/ledger/ledger.service.js';
 import { StripeOwnerResolver } from '../../application/ledger/stripe-owner-resolver.js';
+import { BillingOutboxPort } from '../../application/ports/billing-outbox.port.js';
 import { LedgerPort } from '../../application/ports/ledger.port.js';
+import { LedgerMetricsPort } from '../../application/ports/ledger-metrics.port.js';
 import { LedgerSystemRepository } from '../../application/repositories/ledger.system-repository.js';
 import { LedgerReceiptsRepository } from '../../application/repositories/ledger-receipts.repository.js';
 import { BILLING_OUTBOX, BillingOutbox } from '../persistence/billing-outbox.js';
@@ -23,7 +25,8 @@ import { ReconcileLedgerCron } from '../scheduling/reconcile-ledger.cron.js';
 import { StripeModule } from '../stripe/stripe.module.js';
 import { DisabledLedger } from './disabled-ledger.js';
 import { ImmudbLedgerAdapter } from './immudb-ledger.adapter.js';
-import { type LedgerConfig, ledgerConfig } from './ledger.config.js';
+import { type LedgerConfig, ledgerConfig, ledgerSettingsProvider } from './ledger.config.js';
+import { LedgerMetrics } from './ledger-metrics.js';
 
 /**
  * `LedgerPort` for this process: `ImmudbLedgerAdapter` over the global `ImmudbModule`'s client
@@ -83,6 +86,11 @@ export function createLedgerPort(cfg: LedgerConfig, immudb: ImmudbClient | undef
       useFactory: (txHost: DrizzleTransactionHost, kafka: KafkaProducer) =>
         new BillingOutbox(BILLING_OUTBOX, txHost, kafka),
     },
+    // The application's ports (audit fixes ARCH-6): R4's writer (an alias, so an override of
+    // BillingOutbox reaches it), the ledger series and the `ledger` namespace.
+    { provide: BillingOutboxPort, useExisting: BillingOutbox },
+    { provide: LedgerMetricsPort, useValue: LedgerMetrics },
+    ledgerSettingsProvider,
     ReconcileLedgerHandler,
     ReconcileLedgerCron,
     { provide: LedgerReceiptsRepository, useClass: DrizzleLedgerReceiptsRepository },

@@ -35,7 +35,10 @@ import { LedgerService } from '../../application/ledger/ledger.service.js';
 import type { PostingBalanceTransaction } from '../../application/ledger/posting-rules.js';
 import { BillingErrorCode } from '../../billing.constants.js';
 import { LedgerUnbalancedException } from '../../domain/ledger/ledger.errors.js';
-import { LEDGER_POSTINGS_TOTAL } from '../../infrastructure/ledger/ledger-metrics.js';
+import {
+  LEDGER_POSTINGS_TOTAL,
+  LedgerMetrics,
+} from '../../infrastructure/ledger/ledger-metrics.js';
 import type { LedgerSource, StripeService } from '../../infrastructure/stripe/stripe.service.js';
 import { InMemoryLedger } from '../../testing/in-memory-ledger.js';
 import { InMemoryLedgerStore } from '../../testing/in-memory-ledger-store.js';
@@ -125,6 +128,7 @@ describe('LedgerPostingConsumer', () => {
       new LedgerService(ledger),
       store.receipts,
       store.system,
+      LedgerMetrics,
     );
     const commandBus = {
       execute: (command: unknown): Promise<unknown> => {
@@ -145,6 +149,7 @@ describe('LedgerPostingConsumer', () => {
       stripe,
       store.receipts,
       store.system,
+      LedgerMetrics,
     );
     consumer = new LedgerPostingConsumer(commandBus);
   });

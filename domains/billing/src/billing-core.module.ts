@@ -6,6 +6,8 @@ import { CreateCheckoutSessionHandler } from './application/commands/create-chec
 import { HandleStripeWebhookHandler } from './application/commands/handle-stripe-webhook/handle-stripe-webhook.handler.js';
 import { PurgeStripeEventsHandler } from './application/commands/purge-stripe-events/purge-stripe-events.handler.js';
 import { StripeOwnerResolver } from './application/ledger/stripe-owner-resolver.js';
+import { BillingOutboxPort } from './application/ports/billing-outbox.port.js';
+import { PlatformOutboxPort } from './application/ports/platform-outbox.port.js';
 import { ListPaymentsHandler } from './application/queries/list-payments/list-payments.handler.js';
 import { PaymentsRepository } from './application/repositories/payments.repository.js';
 import { StripeEventsRepository } from './application/repositories/stripe-events.repository.js';
@@ -18,7 +20,7 @@ import {
   PAID_WITHOUT_CURRENCY_METRIC,
   PAID_WITHOUT_OWNER_METRIC,
 } from './billing.constants.js';
-import { ledgerConfig } from './infrastructure/ledger/ledger.config.js';
+import { ledgerConfig, ledgerSettingsProvider } from './infrastructure/ledger/ledger.config.js';
 import { BILLING_OUTBOX, BillingOutbox } from './infrastructure/persistence/billing-outbox.js';
 import { BillingOutboxSystemRepository } from './infrastructure/persistence/drizzle-outbox.system-repository.js';
 import { DrizzlePaymentsRepository } from './infrastructure/persistence/drizzle-payments.repository.js';
@@ -90,6 +92,11 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
       name: CHECKOUT_WITHOUT_IDEMPOTENCY_KEY_METRIC,
       help: 'Checkout requests that sent no Idempotency-Key',
     }),
+    // The webhook's ports (audit fixes ARCH-6), aliases of the outbox's providers and the `ledger`
+    // namespace, so an override of BillingOutbox or BillingOutboxSystemRepository reaches them.
+    { provide: BillingOutboxPort, useExisting: BillingOutbox },
+    { provide: PlatformOutboxPort, useExisting: BillingOutboxSystemRepository },
+    ledgerSettingsProvider,
     { provide: PaymentsRepository, useClass: DrizzlePaymentsRepository },
     { provide: StripeEventsRepository, useClass: DrizzleStripeEventsRepository },
     // The core's door to the app_system pool besides the outbox's (BILLING_SYSTEM_METHODS); the

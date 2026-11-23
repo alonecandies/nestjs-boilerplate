@@ -10,6 +10,7 @@ import type { LedgerEntryDraft } from '../../../../domain/ledger/ledger.types.js
 import {
   LEDGER_UNVERIFIED_TX_LAG,
   LEDGER_VERIFIED_TX_ID,
+  LedgerMetrics,
 } from '../../../../infrastructure/ledger/ledger-metrics.js';
 import { InMemoryLedger } from '../../../../testing/in-memory-ledger.js';
 import { InMemoryLedgerStore } from '../../../../testing/in-memory-ledger-store.js';
@@ -64,6 +65,7 @@ describe('R5VerificationCheck (reconciliation R5: the trusted state and verified
       quiet<R3PaymentsCheck>('R3'),
       quiet<R4StripeCheck>('R4'),
       check,
+      LedgerMetrics,
     );
   const reconcile = (verify = true) =>
     asSystem(() => handler(verify).execute(new ReconcileLedgerCommand({ from: FROM, to: TO })));
@@ -110,7 +112,7 @@ describe('R5VerificationCheck (reconciliation R5: the trusted state and verified
     register.resetMetrics();
     ledger = new InMemoryLedger();
     store = new InMemoryLedgerStore();
-    check = new R5VerificationCheck(ledger, store.system);
+    check = new R5VerificationCheck(ledger, store.system, LedgerMetrics);
     verified = [];
     const verifyEntry = ledger.verifyEntry.bind(ledger);
     vi.spyOn(ledger, 'verifyEntry').mockImplementation(async (entryId, hash, state) => {
@@ -359,7 +361,7 @@ describe('R5VerificationCheck (reconciliation R5: the trusted state and verified
       ),
     ).resolves.toBe(true);
     expect(trusted()).toMatchObject({ txId: 2n, readAt: lostFrom });
-    check = new R5VerificationCheck(restored, store.system);
+    check = new R5VerificationCheck(restored, store.system, LedgerMetrics);
     const verifyEntry = restored.verifyEntry.bind(restored);
     vi.spyOn(restored, 'verifyEntry').mockImplementation(async (entryId, hash, trustedState) => {
       verified.push(entryId);

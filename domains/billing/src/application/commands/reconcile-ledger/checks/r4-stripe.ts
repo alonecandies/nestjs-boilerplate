@@ -12,7 +12,6 @@ import {
   type LedgerEntryKind,
 } from '../../../../domain/ledger/ledger.types.js';
 import type { LedgerDiscrepancyInput } from '../../../../domain/ledger/ledger-discrepancy.js';
-import { BillingOutbox } from '../../../../infrastructure/persistence/billing-outbox.js';
 import { StripeService } from '../../../../infrastructure/stripe/stripe.service.js';
 import {
   type LedgerPostingOwner,
@@ -29,6 +28,7 @@ import {
   type ResolvedStripeOwner,
   StripeOwnerResolver,
 } from '../../../ledger/stripe-owner-resolver.js';
+import { BillingOutboxPort } from '../../../ports/billing-outbox.port.js';
 import { LedgerPort } from '../../../ports/ledger.port.js';
 import { LedgerSystemRepository } from '../../../repositories/ledger.system-repository.js';
 import type { LedgerEntryRef } from '../../../repositories/ledger-receipts.repository.js';
@@ -110,7 +110,7 @@ export class R4StripeCheck implements ReconciliationCheck {
     private readonly system: LedgerSystemRepository,
     private readonly stripe: StripeService,
     private readonly owners: StripeOwnerResolver,
-    private readonly outbox: BillingOutbox,
+    private readonly outbox: BillingOutboxPort,
   ) {}
 
   async run(ctx: ReconciliationContext): Promise<readonly LedgerDiscrepancyInput[]> {

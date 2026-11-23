@@ -480,4 +480,95 @@ describe('scripts/check-boundaries.mjs', () => {
       expect(status).toBe(0);
     });
   });
+
+  describe('application and domain code import infrastructure only through the documented exceptions (ARCH-6)', () => {
+    const DOMAINS: Tree = {
+      ...LAYERED,
+      'domains/identity/package.json': manifest('@domain/identity'),
+      'domains/billing/package.json': manifest('@domain/billing'),
+    };
+    const WHY =
+      'application and domain code must not import infrastructure or presentation: depend on a port in application/ports, or document an exception';
+
+    it('fails for application or domain files that import infrastructure or presentation', () => {
+      const { status, output } = check({
+        ...DOMAINS,
+        'domains/orders/src/application/place-order.handler.ts':
+          "import { OrdersOutbox } from '../infrastructure/persistence/orders-outbox.js';\n",
+        'domains/orders/src/domain/order.aggregate.ts':
+          "import type { OrderDto } from '../presentation/http/order.dto.js';\n",
+        // An exception belongs to its domain: orders has no Stripe exception.
+        'domains/orders/src/application/pay.handler.ts':
+          "import { StripeService } from '../infrastructure/stripe/stripe.service.js';\n",
+        // identity's exception names one persistence module, not the folder.
+        'domains/identity/src/application/login.handler.ts':
+          "import { DrizzleUsersRepository } from '../infrastructure/persistence/drizzle-users.repository.js';\n",
+        // The folder itself (its index) is infrastructure too.
+        'domains/billing/src/application/ledger/metrics.ts':
+          "export * from '../../infrastructure';\n",
+      });
+      expect(status).toBe(1);
+      expect(output).toContain('Layer boundary violations (5):');
+      for (const [file, specifier] of [
+        [
+          'domains/orders/src/application/place-order.handler.ts',
+          '../infrastructure/persistence/orders-outbox.js',
+        ],
+        ['domains/orders/src/domain/order.aggregate.ts', '../presentation/http/order.dto.js'],
+        [
+          'domains/orders/src/application/pay.handler.ts',
+          '../infrastructure/stripe/stripe.service.js',
+        ],
+        [
+          'domains/identity/src/application/login.handler.ts',
+          '../infrastructure/persistence/drizzle-users.repository.js',
+        ],
+        ['domains/billing/src/application/ledger/metrics.ts', '../../infrastructure'],
+      ] as const) {
+        expect(output).toContain(`${file}: must not import "${specifier}" (${WHY})`);
+      }
+    });
+
+    it('passes for the exceptions, inward imports, outer layers and test code', () => {
+      const { status, output } = check({
+        ...DOMAINS,
+        'domains/identity/src/application/login.handler.ts': [
+          "import { PasswordHasher } from '../infrastructure/security/password-hasher.service.js';",
+          "import { IdentityOutbox } from '../infrastructure/persistence/identity-outbox.js';",
+          '',
+        ].join('\n'),
+        'domains/billing/src/application/checkout.handler.ts':
+          "import { StripeService } from '../infrastructure/stripe/stripe.service.js';\n",
+        'domains/orders/src/application/place-order.handler.ts': [
+          "import { OrdersOutboxPort } from './ports/orders-outbox.port.js';",
+          "import { Order } from '../domain/order.aggregate.js';",
+          '',
+        ].join('\n'),
+        'domains/orders/src/infrastructure/orders.module.ts':
+          "import { PlaceOrderHandler } from '../application/place-order.handler.js';\n",
+        'domains/orders/src/presentation/http/orders.controller.ts':
+          "import { OrdersPort } from '../../application/ports/orders.port.js';\n",
+        'domains/orders/src/orders-core.module.ts':
+          "import { OrdersOutbox } from './infrastructure/persistence/orders-outbox.js';\n",
+        'domains/orders/src/application/place-order.handler.spec.ts':
+          "import { OrdersOutbox } from '../infrastructure/persistence/orders-outbox.js';\n",
+        'domains/orders/src/application/notes.ts': [
+          "// import { OrdersOutbox } from '../infrastructure/persistence/orders-outbox.js';",
+          'export const notes = 1;',
+          '',
+        ].join('\n'),
+        // Only domain packages have the rule.
+        'libs/kernel/src/application/kernel.ts':
+          "import { adapter } from '../infrastructure/adapter.js';\n",
+      });
+      expect(output).toContain('Layer boundaries OK (');
+      expect(status).toBe(0);
+    });
+
+    it('holds in this repository', () => {
+      const result = spawnSync(process.execPath, [SCRIPT], { encoding: 'utf8' });
+      expect(`${result.stdout}${result.stderr}`).toContain('Layer boundaries OK (');
+      expect(result.status).toBe(0);
+    });
+  });
 });

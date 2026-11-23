@@ -4,6 +4,7 @@ import {
   decodeCursor,
   encodeCursor,
   MAX_PAGE_LIMIT,
+  resolvePageSize,
 } from '@platform/common';
 import { asc, desc, gt, lt, type SQL } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
@@ -31,15 +32,22 @@ export interface IdCursor {
 
 const idCursorSchema: z.ZodType<IdCursor> = z.object({ id: z.uuid() });
 
-/** Clamps a requested page size into `[1, MAX_PAGE_LIMIT]` (default `DEFAULT_PAGE_LIMIT`). */
+/**
+ * Clamps a requested page size into `[1, MAX_PAGE_LIMIT]` (default `DEFAULT_PAGE_LIMIT`). Maps `0`
+ * to 1, so it is not the listing rule: `keysetFetchLimit` and `keysetPage` use `resolvePageSize`
+ * (`@platform/common`), which treats 0 (proto3's "not set") as the default.
+ */
 export function normalizePageLimit(limit?: number | null): number {
   if (isNil(limit) || !Number.isFinite(limit)) return DEFAULT_PAGE_LIMIT;
   return clamp(Math.trunc(limit), 1, MAX_PAGE_LIMIT);
 }
 
-/** SQL `LIMIT` for a keyset query: the page size plus one look-ahead row. */
+/**
+ * SQL `LIMIT` for a keyset query: the page size (`resolvePageSize`: 0, absent or garbage → the
+ * default) plus one look-ahead row.
+ */
 export function keysetFetchLimit(limit?: number | null): number {
-  return normalizePageLimit(limit) + 1;
+  return resolvePageSize(limit) + 1;
 }
 
 /** Opaque cursor pointing just after the row with this id. */
@@ -87,7 +95,7 @@ export function keysetPageBy<T>(
   limit: number,
   cursorOf: (row: T) => Record<string, unknown>,
 ): CursorPage<T> {
-  const size = normalizePageLimit(limit);
+  const size = resolvePageSize(limit);
   const items = rows.slice(0, size);
   const lastItem = last(items);
   const hasMore = rows.length > size && lastItem !== undefined;

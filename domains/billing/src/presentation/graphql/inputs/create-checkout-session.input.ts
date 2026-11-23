@@ -1,6 +1,11 @@
 import { Field, InputType, Int } from '@nestjs/graphql';
+import {
+  IDEMPOTENCY_KEY_MAX_LENGTH,
+  IDEMPOTENCY_KEY_MIN_LENGTH,
+  IDEMPOTENCY_KEY_PATTERN,
+} from '@platform/common';
 import { IsInt, IsOptional, IsString, Length, Matches, Max, Min } from 'class-validator';
-import { BILLING_LIMITS, IDEMPOTENCY_KEY_PATTERN } from '../../../billing.constants.js';
+import { BILLING_LIMITS } from '../../../billing.constants.js';
 
 /** Validated by the global class-validator pipe (every field needs a decorator). */
 @InputType('CreateCheckoutSessionInput')
@@ -22,7 +27,7 @@ export class CreateCheckoutSessionInput {
   })
   @IsOptional()
   @IsString()
-  @Length(BILLING_LIMITS.IDEMPOTENCY_KEY_MIN_LENGTH, BILLING_LIMITS.IDEMPOTENCY_KEY_MAX_LENGTH)
+  @Length(IDEMPOTENCY_KEY_MIN_LENGTH, IDEMPOTENCY_KEY_MAX_LENGTH)
   @Matches(IDEMPOTENCY_KEY_PATTERN)
   idempotencyKey?: string | null;
 }

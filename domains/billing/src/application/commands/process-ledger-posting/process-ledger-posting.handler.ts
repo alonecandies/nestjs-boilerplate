@@ -3,9 +3,9 @@ import { Logger } from '@nestjs/common';
 import { CommandBus, CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { SystemContext } from '@platform/common';
 import type { LedgerDiscrepancyInput } from '../../../domain/ledger/ledger-discrepancy.js';
-import { LedgerMetrics } from '../../../infrastructure/ledger/ledger-metrics.js';
 import { type LedgerSource, StripeService } from '../../../infrastructure/stripe/stripe.service.js';
 import { draftFromBalanceTransaction } from '../../ledger/posting-rules.js';
+import { LedgerMetricsPort } from '../../ports/ledger-metrics.port.js';
 import { LedgerSystemRepository } from '../../repositories/ledger.system-repository.js';
 import { LedgerReceiptsRepository } from '../../repositories/ledger-receipts.repository.js';
 import { PostLedgerEntryCommand } from '../post-ledger-entry/post-ledger-entry.command.js';
@@ -36,6 +36,7 @@ export class ProcessLedgerPostingHandler implements ICommandHandler<ProcessLedge
     private readonly stripe: StripeService,
     private readonly receipts: LedgerReceiptsRepository,
     private readonly system: LedgerSystemRepository,
+    private readonly metrics: LedgerMetricsPort,
   ) {}
 
   async execute({ request }: ProcessLedgerPostingCommand): Promise<void> {
@@ -78,7 +79,7 @@ export class ProcessLedgerPostingHandler implements ICommandHandler<ProcessLedge
     const appended = SystemContext.isActive()
       ? (await this.system.appendDiscrepancies([finding])) > 0
       : await this.receipts.appendDiscrepancy(finding);
-    if (appended) LedgerMetrics.discrepancies('fee_unavailable');
+    if (appended) this.metrics.discrepancies('fee_unavailable');
     this.logger.warn(
       `Stripe has no balance transaction for ${request.objectType} ${request.objectId} after ${LEDGER_SOURCE_ATTEMPTS} attempts: recorded fee_unavailable (R4 posts it later)`,
     );

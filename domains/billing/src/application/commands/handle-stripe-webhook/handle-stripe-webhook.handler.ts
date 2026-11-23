@@ -19,9 +19,6 @@ import {
 import { PaymentSucceededEvent } from '../../../domain/events/payment-succeeded.event.js';
 import { normalizeCurrency, type Payment } from '../../../domain/payment.aggregate.js';
 import { PLATFORM_OWNER, type StripeOwner, stripeOwnerOf } from '../../../domain/stripe-owner.js';
-import { type LedgerConfig, ledgerConfig } from '../../../infrastructure/ledger/ledger.config.js';
-import { BillingOutbox } from '../../../infrastructure/persistence/billing-outbox.js';
-import { BillingOutboxSystemRepository } from '../../../infrastructure/persistence/drizzle-outbox.system-repository.js';
 import { STRIPE_API_VERSION } from '../../../infrastructure/stripe/stripe.constants.js';
 import { StripeService } from '../../../infrastructure/stripe/stripe.service.js';
 import {
@@ -32,6 +29,9 @@ import {
 } from '../../ledger/ledger-posting-request.js';
 import { StripeOwnerResolver } from '../../ledger/stripe-owner-resolver.js';
 import { toPaymentSucceededPayload } from '../../mappers/payment.mapper.js';
+import { BillingOutboxPort } from '../../ports/billing-outbox.port.js';
+import { LEDGER_SETTINGS, type LedgerSettings } from '../../ports/ledger-settings.port.js';
+import { PlatformOutboxPort } from '../../ports/platform-outbox.port.js';
 import { PaymentsRepository } from '../../repositories/payments.repository.js';
 import { StripeEventsRepository } from '../../repositories/stripe-events.repository.js';
 import { StripeEventsSystemRepository } from '../../repositories/stripe-events.system-repository.js';
@@ -222,9 +222,9 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
     private readonly stripeEvents: StripeEventsRepository,
     private readonly platformEvents: StripeEventsSystemRepository,
     private readonly payments: PaymentsRepository,
-    private readonly outbox: BillingOutbox,
-    private readonly outboxSystem: BillingOutboxSystemRepository,
-    @Inject(ledgerConfig.KEY) private readonly ledger: LedgerConfig,
+    private readonly outbox: BillingOutboxPort,
+    private readonly outboxSystem: PlatformOutboxPort,
+    @Inject(LEDGER_SETTINGS) private readonly ledger: LedgerSettings,
     private readonly publisher: EventPublisher,
     @InjectMetric(PAID_WITHOUT_CURRENCY_METRIC)
     private readonly paidWithoutCurrency: { inc(): void },

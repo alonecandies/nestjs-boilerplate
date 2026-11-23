@@ -1,8 +1,13 @@
 import { Field, InputType } from '@nestjs/graphql';
+import {
+  IDEMPOTENCY_KEY_MAX_LENGTH,
+  IDEMPOTENCY_KEY_MIN_LENGTH,
+  IDEMPOTENCY_KEY_PATTERN,
+} from '@platform/common';
 import { GraphQLUUID } from '@platform/graphql';
 import { Transform, type TransformFnParams } from 'class-transformer';
 import { IsOptional, IsString, IsUUID, Length, Matches } from 'class-validator';
-import { AI_LIMITS, IDEMPOTENCY_KEY_PATTERN } from '../../../ai.constants.js';
+import { AI_LIMITS } from '../../../ai.constants.js';
 
 /** Trims surrounding whitespace before validation, like the REST schemas (`z.string().trim()`). */
 const Trim = (): PropertyDecorator =>
@@ -59,7 +64,7 @@ export class SendAiMessageInput {
   })
   @IsOptional()
   @IsString()
-  @Length(AI_LIMITS.IDEMPOTENCY_KEY_MIN_LENGTH, AI_LIMITS.IDEMPOTENCY_KEY_MAX_LENGTH)
+  @Length(IDEMPOTENCY_KEY_MIN_LENGTH, IDEMPOTENCY_KEY_MAX_LENGTH)
   @Matches(IDEMPOTENCY_KEY_PATTERN)
   idempotencyKey?: string | null;
 }

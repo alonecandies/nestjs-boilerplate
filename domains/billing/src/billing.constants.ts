@@ -53,16 +53,7 @@ export const BILLING_LIMITS = {
   MAX_PAGE_SIZE: 100,
   MAX_QUANTITY: 100,
   PRICE_ID_MAX_LENGTH: 255,
-  IDEMPOTENCY_KEY_MIN_LENGTH: 8,
-  IDEMPOTENCY_KEY_MAX_LENGTH: 255,
 } as const;
-
-/**
- * `Idempotency-Key` charset: printable, header- and log-safe (UUIDs, ULIDs, `order-42:retry`).
- * The key is stored per user and never forwarded to Stripe verbatim (see
- * `CreateCheckoutSessionHandler`), so no Stripe-specific constraint applies.
- */
-export const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]+$/;
 
 /**
  * `stripe_events` retention. The table only dedupes redeliveries, and Stripe retries a webhook

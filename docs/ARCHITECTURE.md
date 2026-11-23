@@ -46,7 +46,8 @@ Three top-level folders, one dependency direction: `apps/*` (`@app/*`, the deplo
 - a domain imports an app, or another domain other than through its contracts package;
 - a contracts package depends on anything but `@platform/contracts` and third-party packages;
 - production source imports a `@<scope>/<pkg>/testing` subpath or the test-only package `@platform/testing` (fakes, test token signers and Vitest helpers are for specs and `test/` code only);
-- a relative import reaches outside its own package, or a package's `name` does not match its folder.
+- a relative import reaches outside its own package, or a package's `name` does not match its folder;
+- a file under a domain's `src/application/` or `src/domain/` imports that domain's `src/infrastructure/` or `src/presentation/`, outside the exceptions of [section 3](#3-layers) (specs and `test/` code may).
 
 | Path                                                                                                                 | Role                                                                                                                                                                                                                                                                                                              |
 | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -79,6 +80,8 @@ Each domain package (`domains/identity`, `domains/notifications`, `domains/billi
 
 - **billing**: `CreateCheckoutSessionHandler` and `HandleStripeWebhookHandler` inject billing's Stripe adapter, `StripeService`, and `CreateCheckoutSessionHandler` also reads its `stripe` config namespace (`stripeConfig`), both from `infrastructure/stripe/`. A port over the Stripe SDK's types would only restate them.
 - **identity**: `LoginHandler` and `RegisterUserHandler` inject `PasswordHasher`, and `SessionTokensService`, `LogoutHandler` and `RefreshSessionHandler` inject `TokenIssuer`, both from identity's `infrastructure/security/`.
+
+`scripts/check-boundaries.mjs` keeps it so: a file under `application/` or `domain/` that imports `infrastructure/` or `presentation/` fails the check, unless its allowlist (`LAYER_EXCEPTIONS`) names the target. The allowlist holds the two folders above and one module, identity's `infrastructure/persistence/identity-outbox.ts`: `IdentityOutbox` is an empty subclass of `@platform/outbox`'s `OutboxWriter` that only gives identity its DI token, so `IdentityIntegrationEventsService` injecting it is the platform-library case below. Specs and `test/` code may import any layer. Everything else in billing's application layer reaches infrastructure through ports in `application/ports/`: `BillingOutboxPort` (the webhook's and R4's outbox writer, `BillingOutbox`), `PlatformOutboxPort` (the webhook's payout rows, `BillingOutboxSystemRepository.insertAsPlatform` on the system pool), `LedgerMetricsPort` (`LedgerMetrics`) and the `LEDGER_SETTINGS` token (the `ledger` config namespace), bound in `BillingCoreModule`, `BillingLedgerModule` and `BillingLedgerReanchorModule`. A new exception is an entry in `LAYER_EXCEPTIONS` and a bullet here.
 
 ```mermaid
 flowchart TB

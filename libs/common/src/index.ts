@@ -5,9 +5,11 @@
  * pagination DTOs and small lodash-backed utilities. Depends on no other workspace package.
  */
 export * from './constants/headers.constants.js';
+export * from './constants/idempotency-key.constants.js';
 export * from './constants/metadata.constants.js';
 export * from './constants/tokens.constants.js';
 export * from './context/execution-context.util.js';
+export * from './decorators/idempotency-key.decorator.js';
 export * from './decorators/public.decorator.js';
 export * from './decorators/timeout.decorator.js';
 export * from './dto/cursor-pagination.dto.js';
@@ -31,4 +33,5 @@ export * from './utils/crypto.util.js';
 export * from './utils/cursor.util.js';
 export * from './utils/id.util.js';
 export * from './utils/object.util.js';
+export * from './utils/page-size.util.js';
 export * from './utils/string.util.js';

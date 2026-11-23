@@ -1,25 +1,18 @@
 import type { UserPage } from '@domain/identity-contracts';
 import { type IQueryHandler, QueryHandler } from '@nestjs/cqrs';
 import {
-  DEFAULT_PAGE_LIMIT,
   DomainValidationException,
   isUuid,
-  MAX_PAGE_LIMIT,
+  resolvePageSize,
   SystemContext,
 } from '@platform/common';
-import { clamp, isNil, trim } from 'lodash-es';
+import { trim } from 'lodash-es';
 import { IDENTITY_LIMITS } from '../../../identity.constants.js';
 import { toUserContract } from '../../mappers/user.mapper.js';
 import { SYSTEM_READS } from '../../persistence/system-reads.js';
 import { UsersSystemRepository } from '../../persistence/users.system-repository.js';
 import { requireActingIn } from '../../services/tenant-actor.js';
 import { ListUsersQuery } from './list-users.query.js';
-
-/** gRPC sends `0` for an absent int32: treat it (and garbage) as "default page size". */
-function pageLimit(limit: number | undefined): number {
-  if (isNil(limit) || !Number.isFinite(limit) || limit < 1) return DEFAULT_PAGE_LIMIT;
-  return clamp(Math.trunc(limit), 1, MAX_PAGE_LIMIT);
-}
 
 @QueryHandler(ListUsersQuery)
 export class ListUsersHandler implements IQueryHandler<ListUsersQuery> {
@@ -39,7 +32,8 @@ export class ListUsersHandler implements IQueryHandler<ListUsersQuery> {
     const page = await SystemContext.run(SYSTEM_READS.USER_DIRECTORY, () =>
       this.usersSystem.listInTenant({
         tenantId,
-        limit: pageLimit(query.limit),
+        // gRPC sends `0` for an absent int32: it (and garbage) means the default page size.
+        limit: resolvePageSize(query.limit),
         cursor: query.cursor === '' ? undefined : query.cursor,
         search: search === '' ? undefined : search,
       }),

@@ -2,11 +2,12 @@ import {
   LEDGER_POSTING_REQUESTED_EVENT,
   type LedgerPostingRequestedPayload,
 } from '@domain/billing-contracts';
-import type { OutboxRecord, OutboxWriter } from '@platform/outbox';
+import type { OutboxRecord } from '@platform/outbox';
 import type { KafkaPublishOptions } from '@platform/transport';
 import { v5 as uuidv5 } from 'uuid';
 import { LEDGER_NAMESPACE } from '../../domain/ledger/ledger.types.js';
 import type { StripeOwner } from '../../domain/stripe-owner.js';
+import type { BillingOutboxPort } from '../ports/billing-outbox.port.js';
 
 /** The Stripe event a posting comes from (a verified webhook event). */
 export interface LedgerPostingSource {
@@ -101,10 +102,11 @@ export function ledgerPostingRequest(
 
 /**
  * The validated outbox record of a posting (no SQL): what `outbox.insertAsPlatform` stores for
- * platform money; a tenant's row is the same record, written by `BillingOutbox.enqueue` as the owner.
+ * platform money; a tenant's row is the same record, written by `BillingOutboxPort.enqueue` as the
+ * owner.
  */
 export function ledgerPostingRecord(
-  outbox: OutboxWriter,
+  outbox: Pick<BillingOutboxPort, 'record'>,
   event: LedgerPostingSource,
   owner: LedgerPostingOwner,
   objectType: LedgerPostingObjectType,

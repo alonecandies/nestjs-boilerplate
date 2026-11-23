@@ -1,23 +1,26 @@
 import { BadRequestException, createParamDecorator, type ExecutionContext } from '@nestjs/common';
-import {
-  getHeaderValue,
-  getRequest,
-  HTTP_HEADERS,
-  toValidationIssues,
-  type ValidationErrorBody,
-} from '@platform/common';
 import { z } from 'zod';
-import { AI_LIMITS, IDEMPOTENCY_KEY_PATTERN } from '../../ai.constants.js';
+import { HTTP_HEADERS } from '../constants/headers.constants.js';
+import {
+  IDEMPOTENCY_KEY_MAX_LENGTH,
+  IDEMPOTENCY_KEY_MIN_LENGTH,
+  IDEMPOTENCY_KEY_PATTERN,
+} from '../constants/idempotency-key.constants.js';
+import { getHeaderValue, getRequest } from '../context/execution-context.util.js';
+import { toValidationIssues } from '../errors/validation-issue.js';
+import type { ValidationErrorBody } from '../pipes/validation.js';
 
 export const idempotencyKeySchema = z
   .string()
-  .min(AI_LIMITS.IDEMPOTENCY_KEY_MIN_LENGTH)
-  .max(AI_LIMITS.IDEMPOTENCY_KEY_MAX_LENGTH)
+  .min(IDEMPOTENCY_KEY_MIN_LENGTH)
+  .max(IDEMPOTENCY_KEY_MAX_LENGTH)
   .regex(IDEMPOTENCY_KEY_PATTERN, 'Only letters, digits and . _ : - are allowed');
 
 /**
- * The optional `Idempotency-Key` header, validated (8–255 chars of `[A-Za-z0-9._:-]`). An invalid
- * key is a 400 with the validation pipes' body shape (`errors[].path` = `headers.idempotency-key`).
+ * The optional `Idempotency-Key` header, validated (`IDEMPOTENCY_KEY_FORMAT`). Absent or empty →
+ * `undefined`; a repeated header → its first value. An invalid key is a 400 with the same body
+ * shape as the validation pipes (`errors[].path` = `headers.idempotency-key`), so clients handle
+ * every request-validation failure alike.
  */
 export const IdempotencyKey: () => ParameterDecorator = createParamDecorator(
   (_data: unknown, ctx: ExecutionContext): string | undefined => {
