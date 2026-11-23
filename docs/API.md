@@ -1039,6 +1039,10 @@ node --env-file=.env libs/transport/scripts/kafka-dlq-replay.mjs identity.user-r
 # options: --dry-run, --group <id> (default <topic>.dlq-replay)
 ```
 
+In production, run the same CLI from the consuming app's image as a one-off Job:
+`node dist/cli/dlq-replay.js <topic> [--dry-run] [--group <id>]` (gateway, monolith, notifications-service and
+billing-service images; runbook and `.dlq` retention in [OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts)).
+
 How the replay behaves:
 
 - The argument is the source topic. The script reads `<topic>.dlq`.

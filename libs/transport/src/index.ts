@@ -31,6 +31,7 @@ export * from './grpc/zod-rpc-validation.pipe.js';
 export * from './hybrid/connect-microservices.js';
 export * from './kafka/dead-letter.js';
 export * from './kafka/dead-letter-replay.js';
+export * from './kafka/dlq-replay-cli.js';
 export * from './kafka/instrumented-server-kafka.js';
 export * from './kafka/kafka.constants.js';
 export * from './kafka/kafka.errors.js';

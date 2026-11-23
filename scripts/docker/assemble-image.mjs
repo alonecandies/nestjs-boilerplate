@@ -14,13 +14,16 @@
 //     - a non-TS asset under src/ (.proto, .hbs, .cql, .sql, migration meta …) that is not in dist/,
 //     - a declared runtime dependency that the filtered production install did not provide,
 //     - a workspace symlink that is dangling, or the app's dist/main.js / dist/instrument.js, or its
-//       dist/migrate.js when the app has a src/migrate.ts (the migration release job);
-//  4b. with --trace true (default), follows the static imports of dist/main.js, dist/instrument.js and
-//      dist/migrate.js through the closure's dist/ (workspace packages file by file, via their exports maps;
-//      third-party packages by name) and deletes every untraced JS file, every workspace package without a
-//      traced file, and every node_modules package outside the manifest closure (dependencies, optional and
-//      installed peer dependencies) of the imported packages. Non-JS assets of traced packages stay.
-//      --keep a,b keeps extra packages; --verify-load true then imports dist/app.module.js once.
+//       dist/migrate.js when the app has a src/migrate.ts (the migration release job), or a
+//       dist/cli/<name>.js for each one-off CLI src/cli/<name>.ts (specs and .d.ts excluded);
+//  4b. with --trace true (default), follows the static imports of dist/main.js, dist/instrument.js,
+//      dist/migrate.js and dist/cli/*.js through the closure's dist/ (workspace packages file by file, via
+//      their exports maps; third-party packages by name) and deletes every untraced JS file, every workspace
+//      package without a traced file, and every node_modules package outside the manifest closure
+//      (dependencies, optional and installed peer dependencies) of the imported packages. Non-JS assets of
+//      traced packages stay. --keep a,b keeps extra packages; --verify-load true then imports
+//      dist/app.module.js and every dist/cli/*.js once. Importing a CLI runs it with no arguments, so a
+//      CLI must then only print its usage (and set an exit code): it must not read config or connect.
 //  5. removes install-only files (bun.lock, bunfig.toml, patches/);
 //  6. with --prune true, deletes from node_modules what Node never reads at runtime: type declarations,
 //     TS sources (Node refuses to strip types under node_modules), source maps (not loaded without
@@ -132,6 +135,16 @@ for (const { dir } of workspace.values()) {
 // the gateway and notifications-service have none, so it is required only where the source exists.
 const entrypoints = ['main.js', 'instrument.js'];
 if (existsSync(join(build, appPackage.dir, 'src', 'migrate.ts'))) entrypoints.push('migrate.js');
+// One-off jobs run from the image (`node dist/cli/<name>.js …`, e.g. dist/cli/dlq-replay.js).
+const CLI_SOURCE = /^[^.][^/]*(?<!\.d|\.spec|\.test)\.ts$/;
+const cliDir = join(build, appPackage.dir, 'src', 'cli');
+const cliEntrypoints = existsSync(cliDir)
+  ? readdirSync(cliDir, { withFileTypes: true })
+      .filter((entry) => entry.isFile() && CLI_SOURCE.test(entry.name))
+      .map((entry) => `cli/${entry.name.replace(/\.ts$/, '.js')}`)
+      .sort()
+  : [];
+entrypoints.push(...cliEntrypoints);
 
 // 3 + 4. dist/ per closure member, asset and dependency checks.
 const problems = [];
@@ -358,18 +371,22 @@ function pruneUntraced(traced) {
   );
 }
 
-/** Imports dist/app.module.js once in a child process: tracing must never ship a module graph that
- * cannot load (computed imports, string-only requires the tracer cannot see). */
+/** Imports dist/app.module.js and every dist/cli/*.js once in a child process: tracing must never ship
+ * a module graph that cannot load (computed imports, string-only requires the tracer cannot see).
+ * A CLI runs without arguments there (it prints its usage and sets an exit code); a module that
+ * fails to load rejects its import, so the child exits non-zero, and the CLIs' exit code is reset. */
 function verifyAppLoads() {
-  const appModule = join(out, appPackage.dir, 'dist', 'app.module.js');
-  if (!existsSync(appModule)) return;
+  const appDist = join(out, appPackage.dir, 'dist');
+  const modules = ['app.module.js', ...cliEntrypoints]
+    .map((file) => join(appDist, file))
+    .filter((file) => existsSync(file));
+  if (modules.length === 0) return;
+  const imports = modules
+    .map((file) => `await import(${JSON.stringify(pathToFileURL(file).href)});`)
+    .join(' ');
   const result = spawnSync(
     process.execPath,
-    [
-      '--input-type=module',
-      '-e',
-      `await import(${JSON.stringify(pathToFileURL(appModule).href)});`,
-    ],
+    ['--input-type=module', '-e', `${imports} process.exitCode = 0;`],
     {
       cwd: join(out, appPackage.dir),
       encoding: 'utf8',
@@ -380,7 +397,8 @@ function verifyAppLoads() {
   if (result.status !== 0) {
     const reason = result.error?.message ?? (result.signal ? `killed by ${result.signal}` : '');
     fail(
-      `load check failed for ${relative(out, appModule)} (exit ${result.status}${reason ? `, ${reason}` : ''}):\n` +
+      `load check failed for ${modules.map((file) => relative(out, file)).join(', ')} ` +
+        `(exit ${result.status}${reason ? `, ${reason}` : ''}):\n` +
         `${result.stderr || result.stdout}`,
     );
   }

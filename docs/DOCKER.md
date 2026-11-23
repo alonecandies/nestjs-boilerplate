@@ -258,6 +258,12 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   `docker compose run --rm --no-deps identity-service dist/migrate.js` (Kubernetes: a Job with
   `args: [dist/migrate.js]`) and set `DATABASE_RUN_MIGRATIONS=false`. The image's entrypoint is `node`, so the args
   replace only the default `CMD`. Release flow: [RELEASING.md](RELEASING.md).
+- **One-off CLIs** (`apps/<app>/src/cli/*.ts`, shipped as `dist/cli/*.js`) run the same way:
+  `docker compose run --rm --no-deps notifications-service dist/cli/dlq-replay.js <topic> --dry-run`
+  (Kubernetes: a Job with `args: [dist/cli/dlq-replay.js, <topic>]`). `dlq-replay` replays `<topic>.dlq` into
+  `<topic>` and ships in the gateway, monolith, notifications-service and billing-service images; the runbook is in
+  [OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts). Run without arguments, a CLI only prints its
+  usage and exits 2.
 - **`infra-ready`**: `docker compose up --wait` only accepts a one-shot container that _exited_ when an enabled service
   depends on it with `service_completed_successfully`. Without an app profile nothing would, and `--wait` would fail
   with `kafka-init exited (0)`. This idle 1 MB container depends on the five init jobs, and so means "infra bootstrapped".
@@ -407,18 +413,22 @@ Compose builds the same targets (`APP_TARGET`, tag `boilerplate/<app>:${TAG:-loc
     from its `dist/` (swc `copyFiles`),
   - a declared runtime dependency of any closure package is not installed, or a workspace symlink dangles,
   - `dist/main.js` or `dist/instrument.js` is missing, or `dist/migrate.js` (the release job) for an app with a
-    `src/migrate.ts` (monolith, identity-service, billing-service, ai-service).
+    `src/migrate.ts` (monolith, identity-service, billing-service, ai-service), or a `dist/cli/<name>.js` for a
+    one-off CLI `src/cli/<name>.ts` (specs and `.d.ts` files there are ignored).
 
   It also removes install-only files (`bun.lock`, `bunfig.toml`, `patches/`) from the runtime tree.
 
 - **Only the files the entrypoints import ship** (`TRACE_FILES=true`, default). `assemble-image.mjs` follows the
-  static imports of `dist/main.js`, `dist/instrument.js` and `dist/migrate.js` (`scripts/docker/trace-imports.mjs`):
-  workspace packages file by file through their `exports` maps, third-party packages by name. It then deletes every
+  static imports of `dist/main.js`, `dist/instrument.js`, `dist/migrate.js` and every `dist/cli/*.js`
+  (`scripts/docker/trace-imports.mjs`): workspace packages file by file through their `exports` maps, third-party
+  packages by name. It then deletes every
   untraced JS file of the closure's `dist/`, every workspace package with no traced file, and every `node_modules`
   package outside the manifest closure (dependencies, optional and installed peer dependencies) of the imported
   packages. Non-JS assets of traced packages (`.proto`, `.sql`, `.cql`, templates, migration `meta/`) stay. A load
-  check then imports `dist/app.module.js` once, so an import the tracer cannot see (a computed `import()`) fails the
-  build instead of the container. `--build-arg TRACE_FILES=false` copies the closure packages whole, as before
+  check then imports `dist/app.module.js` and every `dist/cli/*.js` once, so an import the tracer cannot see (a
+  computed `import()`) fails the build instead of the container. Imported there without arguments, a CLI must only
+  print its usage: it must not read config or connect. `--build-arg TRACE_FILES=false` copies the closure packages
+  whole, as before
   tracing. `scripts/docker/assemble-image.spec.ts` pins this on fixture install trees.
 
 - **Pruned `node_modules`** (`PRUNE_NODE_MODULES=true`, default): `*.d.ts`, `*.map`, TS sources (Node refuses to

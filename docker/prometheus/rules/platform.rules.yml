@@ -1,0 +1,23 @@
+# Platform alerts (audit fixes Task 4). The series come from @platform/transport
+# (libs/transport/src/kafka/kafka-metrics.ts); Prometheus adds `service` from the scrape target.
+# severity: page = wake someone; ticket = look at it in working hours.
+groups:
+  - name: platform
+    rules:
+      # A consumer gave up on a message after its in-process retries and published it to
+      # `<topic>.dlq`. The event's effect is missing until it is replayed, and the shipped topic config
+      # deletes `.dlq` records after 14 days. Resolves 15 minutes after the last dead letter.
+      - alert: KafkaDeadLetters
+        expr: >-
+          sum by (service, topic)
+          (increase(kafka_consumer_messages_total{outcome="dead_letter"}[15m])) > 0
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.service }}: {{ $labels.topic }} messages were dead-lettered"
+          description: >-
+            {{ $value | humanize }} message(s) of {{ $labels.topic }} went to {{ $labels.topic }}.dlq in
+            the last 15 minutes on {{ $labels.service }}. Find the cause in that service's logs (the
+            x-error-* headers of the .dlq record name it), fix it, then replay the topic with
+            dist/cli/dlq-replay.js before the .dlq retention deletes the records. See the dead-letter
+            runbook in docs/OBSERVABILITY.md.

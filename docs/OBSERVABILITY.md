@@ -270,7 +270,7 @@ Containers never publish `9464`, so the `host-apps` targets cannot duplicate the
 
 ### Outbox, ledger and AI alerts
 
-[`docker/prometheus/rules/`](../docker/prometheus/rules) holds three rule files (`outbox`, `ledger`, `ai`), loaded through `rule_files` in
+[`docker/prometheus/rules/`](../docker/prometheus/rules) holds four rule files (`outbox`, `ledger`, `ai`, `platform`), loaded through `rule_files` in
 `prometheus.yml` and mounted by the compose `prometheus` service. Prometheus only evaluates them: compose runs no
 Alertmanager, so route `severity` in your own (`page` wakes someone, `ticket` waits for working hours).
 `scripts/prometheus-rules.spec.ts` pins the alert names, severities, thresholds and that every `expr` reads a series
@@ -285,6 +285,7 @@ of the table above.
 | `LedgerTamperEvidence`      | page     | `kind` `verification_failed` or `ledger_row_mutated` increases within one hour                                                  | an incident: immudb proofs or a rewritten row ([SECURITY.md](SECURITY.md#immudb-state-signing-key))                                                                                                |
 | `LedgerPostConflict`        | ticket   | `ledger_postings_total{outcome="conflict"}` increases within one hour                                                           | the `post_conflict` row names the source key; the same Stripe transaction produced a different payload                                                                                             |
 | `LedgerReconciliationStale` | page     | the last success of the hourly reconciliation is older than 3 hours                                                             | `ledger_reconciliation_runs_total{status="failed"}`, the billing logs (`Ledger reconciliation run finished`), immudb health                                                                        |
+| `KafkaDeadLetters`          | page     | any increase of `kafka_consumer_messages_total{outcome="dead_letter"}` within 15 minutes, per `service` and `topic`             | the dead-letter runbook below: that service's logs and the `x-error-*` headers of the `.dlq` record                                                                                                |
 | `AiErrorRate`               | ticket   | `error` and `timeout` calls of `ai_requests_total` above 10 % of a model's calls (5 m rates) for 10 minutes; `aborted` excluded | OpenRouter's status and the model's provider, the app logs (error name and upstream status only), the key's credit, `AI_REQUEST_TIMEOUT_MS`; consider `AI_FALLBACK_MODELS` ([AI.md](AI.md#models)) |
 
 Reading the series:
@@ -301,6 +302,22 @@ Reading the series:
 - **Outbox runbook.** A relay that stopped: fix the cause, the rows go out in `created_at` order and are delivered at
   least once. A row the broker always refuses (an oversized or invalid envelope): inspect it as `app_system` and decide;
   deleting an unpublished row loses that event, so prefer fixing the topic. Consumers deduplicate on the envelope id.
+- **Dead-letter runbook (`KafkaDeadLetters`).** A consumer gave up on a message after its in-process retries (or at
+  once, for a 4xx-class error or a `ZodError`) and published it to `<topic>.dlq`; the event's effect is missing until
+  it is replayed. For example, a dead-lettered `identity.membership-created.v1` means the notifications recipient row is
+  missing and that member's payment receipts are not mailed. Find the cause in the service's logs and the
+  `x-error-type` / `x-error-message` headers of the `.dlq` record, fix and deploy it, then replay the topic as a
+  one-off Job from the consuming app's image (gateway, monolith, notifications-service or billing-service), with the
+  app's Kafka settings (`KAFKA_BROKERS`, `KAFKA_SSL`, `KAFKA_SASL_*`):
+  `node dist/cli/dlq-replay.js <topic> --dry-run`, then without `--dry-run`. Kubernetes: a Job with
+  `args: [dist/cli/dlq-replay.js, <topic>]`. Compose:
+  `docker compose run --rm --no-deps notifications-service dist/cli/dlq-replay.js <topic>`.
+  Exit codes: 0 replayed, 1 a record from another topic was skipped or the replay failed, 2 usage.
+  Progress is committed to `<topic>.dlq-replay`, so a second run replays only newer dead letters, and consumers deduplicate on the envelope id ([API.md](API.md#replaying-a-dead-letter-topic)). The shipped
+  `docker/kafka/topics.txt` keeps `.dlq` records for **14 days** (`retention.ms=1209600000`); a dead letter not
+  replayed by then is deleted. In production, raise the `.dlq` retention on your cluster or archive the topics
+  elsewhere so an incident found late can still be replayed. The alert resolves 15 minutes after the last dead
+  letter, so it does not say whether the replay ran: check the replay's log line (`Replayed N record(s)`).
 - **Enabling the ledger later.** `LEDGER_ENABLED=false` writes no posting rows. After enabling it, backfill history with
   one `ReconcileLedgerCommand` with an explicit window (reconciliation R4 re-enqueues every Stripe balance
   transaction without an entry); see [domains/billing/README.md](../domains/billing/README.md#ledger-immudb).
@@ -328,6 +345,7 @@ with a multi-select `service` variable:
 | HTTP                         | Request rate by service; Latency p50/p95/p99 by service; Error ratio by service (4xx / 5xx); Responses by status code; Top 10 routes by request rate; Top 10 slowest routes (p95) |
 | Node.js runtime              | Event-loop lag p99; CPU (cores); GC time per second; Memory (RSS / heap used / heap total); Active handles / requests (libuv)                                                     |
 | k6 load test                 | k6 throughput; k6 `http_req_duration` p95/p99; k6 failed requests / VUs (filled by `bun run loadtest`)                                                                            |
+| Kafka consumers              | Dead-lettered messages by topic (15 m increase, the `KafkaDeadLetters` series)                                                                                                    |
 
 How to read it under load is covered in [PERFORMANCE.md](PERFORMANCE.md#reading-the-grafana-dashboard).
 Other local UIs: Prometheus `http://localhost:9090`, Jaeger `http://localhost:16686`.
