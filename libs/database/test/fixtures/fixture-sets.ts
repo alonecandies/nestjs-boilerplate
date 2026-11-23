@@ -67,3 +67,26 @@ export const lockWaitMigrations: DatabaseMigrationSet = {
   migrationsSchema: 'lock_wait',
   migrationsTable: MIGRATIONS_TABLE,
 };
+
+/**
+ * The online-steps fixture (OPS-2): a tenant table (distributed on Citus) in its own schema, and an
+ * `online/` folder inside its migrations folder with one `CREATE INDEX CONCURRENTLY`. Runs after platformMigrations (it calls
+ * its helpers). `gizmosTablesMigrations` is the same set without online steps.
+ */
+export const gizmosTablesMigrations: DatabaseMigrationSet = {
+  name: 'gizmos',
+  folder: join(import.meta.dirname, 'gizmos', 'migrations'),
+  migrationsSchema: 'gizmos',
+  migrationsTable: MIGRATIONS_TABLE,
+};
+
+export const gizmosMigrations: DatabaseMigrationSet = {
+  ...gizmosTablesMigrations,
+  onlineFolder: join(import.meta.dirname, 'gizmos', 'migrations', 'online'),
+};
+
+/** The gizmos set with another online folder of `fixtures/gizmos` (`online-retry`, …) instead. */
+export const gizmosWithOnline = (folder: string): DatabaseMigrationSet => ({
+  ...gizmosTablesMigrations,
+  onlineFolder: join(import.meta.dirname, 'gizmos', folder),
+});

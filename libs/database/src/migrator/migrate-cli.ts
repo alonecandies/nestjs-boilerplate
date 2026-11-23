@@ -19,7 +19,8 @@ import { runMigrations } from './run-migrations.js';
  * DATABASE_URL fails with the same message. Applies `platformMigrations`, then `migrations` in
  * order, under the migrations advisory lock, over DATABASE_MIGRATION_URL only (the owner role,
  * direct to the coordinator): without it the job exits 1 before connecting. Lock waits are bounded
- * by DATABASE_MIGRATION_LOCK_TIMEOUT_MS, with DATABASE_MIGRATION_LOCK_RETRIES retries per set.
+ * by DATABASE_MIGRATION_LOCK_TIMEOUT_MS, with DATABASE_MIGRATION_LOCK_RETRIES retries per set; a set's
+ * online steps run with DATABASE_MIGRATION_ONLINE_LOCK_TIMEOUT_MS (0 = wait).
  *
  * Takes no flags: an unknown one (such as the removed `--migrations-folder`) fails instead of being
  * ignored. Sets `process.exitCode` (0 = schema current, 1 = failure) instead of exiting, so the last
@@ -46,9 +47,16 @@ export async function runMigrationsCli(
       applicationName: serviceName,
       lockWaitTimeoutMs: cfg.migrationLockTimeoutMs,
       lockWaitRetries: cfg.migrationLockRetries,
+      onlineLockTimeoutMs: cfg.migrationOnlineLockTimeoutMs,
     });
     const names = summary.sets.map((set) => set.name).join(', ');
-    logger.log(`Done: ${summary.applied} applied, ${summary.total} total (${names})`);
+    const { online } = summary;
+    logger.log(
+      `Done: ${summary.applied} applied, ${summary.total} total (${names})` +
+        (online.total > 0
+          ? `; online steps: ${online.applied} applied, ${online.total} total`
+          : ''),
+    );
   } catch (error) {
     // The Error itself, not `error.stack`: with `json: true` ConsoleLogger treats a lone
     // stack-formatted string as a stack trace and prints nothing (printStackTrace is a no-op in

@@ -91,4 +91,28 @@ describe('assertMigrationSets (what runMigrations checks before it connects)', (
       ]),
     ).toThrow(/"orders" and "audit" share orders\.__drizzle_migrations/);
   });
+
+  it('rejects two sets with online steps in one schema: they would share its __online_migrations', () => {
+    expect(() =>
+      assertMigrationSets([
+        platformMigrations,
+        set('orders', { onlineFolder: '/migrations/orders/online' }),
+        set('audit', {
+          migrationsSchema: 'orders',
+          migrationsTable: '__audit_migrations',
+          onlineFolder: '/migrations/audit/online',
+        }),
+      ]),
+    ).toThrow(/"orders" and "audit" both have online steps in schema orders/);
+  });
+
+  it('accepts sets sharing a schema when at most one of them has online steps', () => {
+    expect(() =>
+      assertMigrationSets([
+        platformMigrations,
+        set('orders', { onlineFolder: '/migrations/orders/online' }),
+        set('audit', { migrationsSchema: 'orders', migrationsTable: '__audit_migrations' }),
+      ]),
+    ).not.toThrow();
+  });
 });

@@ -92,18 +92,50 @@ describe('inspectDatabase', () => {
     const params = (kind: Kind): unknown[] | undefined =>
       calls.find(([query]) => kindOf(query) === kind)?.[1];
     expect(params('owned')).toEqual([['app', 'parcels']]);
-    expect(params('rls')).toEqual([
-      ['app', 'parcels'],
-      ['app', 'app', 'parcels'],
-      ['__drizzle_migrations', 'tenant_colocation', '__drizzle_migrations'],
-    ]);
-    expect(params('privilege')).toEqual([
-      ['app', 'app', 'parcels'],
-      ['__drizzle_migrations', 'tenant_colocation', '__drizzle_migrations'],
-    ]);
+    const internal = [
+      ['app', 'app', 'app', 'parcels', 'parcels'],
+      [
+        '__drizzle_migrations',
+        'tenant_colocation',
+        '__online_migrations',
+        '__drizzle_migrations',
+        '__online_migrations',
+      ],
+    ];
+    expect(params('rls')).toEqual([['app', 'parcels'], ...internal]);
+    expect(params('privilege')).toEqual(internal);
     for (const [query] of calls) {
-      expect(query).not.toMatch(/parcels|__drizzle_migrations|tenant_colocation/);
+      expect(query).not.toMatch(
+        /parcels|__drizzle_migrations|__online_migrations|tenant_colocation/,
+      );
     }
+  });
+
+  it("lists each schema's __online_migrations once, whether or not a set has online steps now", async () => {
+    // The table outlives an onlineFolder: a replica of the previous release, a rollback or a
+    // removed folder still meets it. A listed table that does not exist matches nothing.
+    const runtime = connection(GOOD_RUNTIME);
+    const audit = {
+      ...parcels,
+      name: 'audit',
+      migrationsTable: '__audit_migrations',
+      onlineFolder: '/migrations/audit/online',
+    };
+    await inspectDatabase({ runtime, system: null, sets: [platformMigrations, parcels, audit] });
+    const calls = runtime.unsafe.mock.calls;
+    const params = (kind: Kind): unknown[] | undefined =>
+      calls.find(([query]) => kindOf(query) === kind)?.[1];
+    expect(params('privilege')).toEqual([
+      ['app', 'app', 'app', 'parcels', 'parcels', 'parcels'],
+      [
+        '__drizzle_migrations',
+        'tenant_colocation',
+        '__online_migrations',
+        '__drizzle_migrations',
+        '__online_migrations',
+        '__audit_migrations',
+      ],
+    ]);
   });
 
   describe('each single bad answer gives exactly its finding', () => {

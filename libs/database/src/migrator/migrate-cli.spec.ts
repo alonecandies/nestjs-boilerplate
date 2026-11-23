@@ -13,6 +13,8 @@ const orders: DatabaseMigrationSet = {
   migrationsSchema: 'orders',
   migrationsTable: MIGRATIONS_TABLE,
 };
+/** The online-step counts of a set, or a run, without online steps. */
+const NO_ONLINE = { online: { total: 0, applied: 0 } };
 
 describe('runMigrationsCli', () => {
   afterEach(() => {
@@ -28,11 +30,12 @@ describe('runMigrationsCli', () => {
     const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     vi.mocked(runMigrations).mockResolvedValue({
       sets: [
-        { name: 'platform', folder: platformMigrations.folder, total: 1, applied: 1 },
-        { name: 'orders', folder: orders.folder, total: 2, applied: 2 },
+        { name: 'platform', folder: platformMigrations.folder, total: 1, applied: 1, ...NO_ONLINE },
+        { name: 'orders', folder: orders.folder, total: 2, applied: 2, ...NO_ONLINE },
       ],
       total: 3,
       applied: 3,
+      ...NO_ONLINE,
     });
 
     await runMigrationsCli([orders], []);
@@ -55,7 +58,7 @@ describe('runMigrationsCli', () => {
     vi.stubEnv('DATABASE_MIGRATION_URL', 'postgres://app:app@db:5432/app');
     vi.stubEnv('LOG_PRETTY', 'false');
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
-    vi.mocked(runMigrations).mockResolvedValue({ sets: [], total: 0, applied: 0 });
+    vi.mocked(runMigrations).mockResolvedValue({ sets: [], total: 0, applied: 0, ...NO_ONLINE });
 
     vi.stubEnv('DATABASE_MIGRATION_LOCK_TIMEOUT_MS', '750');
     vi.stubEnv('DATABASE_MIGRATION_LOCK_RETRIES', '2');
@@ -75,6 +78,35 @@ describe('runMigrationsCli', () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it('gives online steps DATABASE_MIGRATION_ONLINE_LOCK_TIMEOUT_MS (default 0) and logs their counts', async () => {
+    vi.stubEnv('DATABASE_MIGRATION_URL', 'postgres://app:app@db:5432/app');
+    vi.stubEnv('LOG_PRETTY', 'false');
+    const out = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    vi.mocked(runMigrations).mockResolvedValue({
+      sets: [],
+      total: 3,
+      applied: 0,
+      online: { total: 2, applied: 1 },
+    });
+
+    await runMigrationsCli([orders], []);
+    expect(runMigrations).toHaveBeenLastCalledWith(
+      'postgres://app:app@db:5432/app',
+      expect.objectContaining({ onlineLockTimeoutMs: 0 }),
+    );
+    expect(JSON.parse(String(out.mock.calls.at(-1)?.[0]))).toMatchObject({
+      message: 'Done: 0 applied, 3 total (); online steps: 1 applied, 2 total',
+    });
+
+    vi.stubEnv('DATABASE_MIGRATION_ONLINE_LOCK_TIMEOUT_MS', '60000');
+    await runMigrationsCli([orders], []);
+    expect(runMigrations).toHaveBeenLastCalledWith(
+      'postgres://app:app@db:5432/app',
+      expect.objectContaining({ onlineLockTimeoutMs: 60_000 }),
+    );
+    expect(process.exitCode).toBeUndefined();
+  });
+
   it('a production release job needs no DATABASE_SYSTEM_URL (it never opens the system pool)', async () => {
     vi.stubEnv('NODE_ENV', 'production');
     vi.stubEnv('DATABASE_URL', 'postgres://app_runtime:r@pgbouncer:6432/app?sslmode=verify-full');
@@ -84,7 +116,7 @@ describe('runMigrationsCli', () => {
     vi.stubEnv('LOG_PRETTY', 'false');
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
     const err = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
-    vi.mocked(runMigrations).mockResolvedValue({ sets: [], total: 0, applied: 0 });
+    vi.mocked(runMigrations).mockResolvedValue({ sets: [], total: 0, applied: 0, ...NO_ONLINE });
 
     await runMigrationsCli([orders], []);
 

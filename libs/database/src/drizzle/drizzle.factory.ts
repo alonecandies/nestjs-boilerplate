@@ -43,9 +43,11 @@ export async function createDrizzleDatabase<TSchema extends DrizzleSchema>(
       migrations: withPlatformMigrations(options.migrations),
       logger,
       applicationName: app.serviceName,
-      // Bounded lock waits, as in the release job (DATABASE_MIGRATION_LOCK_*).
+      // Bounded lock waits and the online steps' own timeout, as in the release job
+      // (DATABASE_MIGRATION_LOCK_*, DATABASE_MIGRATION_ONLINE_LOCK_TIMEOUT_MS).
       lockWaitTimeoutMs: cfg.migrationLockTimeoutMs,
       lockWaitRetries: cfg.migrationLockRetries,
+      onlineLockTimeoutMs: cfg.migrationOnlineLockTimeoutMs,
     });
   }
 

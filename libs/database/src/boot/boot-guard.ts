@@ -1,5 +1,6 @@
 import type { DatabaseConfig } from '@platform/config';
 import type { DatabaseMigrationSet } from '../database.types.js';
+import { ONLINE_MIGRATIONS_TABLE } from '../migrator/migrations.constants.js';
 import { platformMigrations } from '../platform/platform.migrations.js';
 
 /**
@@ -14,8 +15,9 @@ import { platformMigrations } from '../platform/platform.migrations.js';
  *   same Citus setting; another user than the runtime connection. In `enforce` mode a missing one
  *   (no DATABASE_SYSTEM_URL) is itself a finding: login, register, invitations and the purges need it.
  *
- * Internal tables carry no RLS and are granted to no app role: each set's bookkeeping table and the
- * platform set's colocation anchor `app.tenant_colocation` (0001; always empty, never queried).
+ * Internal tables carry no RLS and are granted to no app role: each set's bookkeeping table, the
+ * online-steps bookkeeping `<schema>.__online_migrations` of every set's schema and the platform
+ * set's colocation anchor `app.tenant_colocation` (0001; always empty, never queried).
  *
  * Fail closed: a check whose statement errors, or answers in another shape than expected, is a
  * finding like any other. Each check is one catalog statement with bound parameters only (schema
@@ -200,10 +202,19 @@ const citusVerdict = (who: string, answer: { citus: boolean; setting: string | n
 function scopeOf(sets: readonly DatabaseMigrationSet[]) {
   const schemas = [...new Set(sets.map((set) => set.migrationsSchema))];
   const anchor = { schema: platformMigrations.migrationsSchema, table: TENANT_COLOCATION_TABLE };
-  // Each set's bookkeeping table in set order, the anchor right after the platform set's.
+  // Each set's bookkeeping table in set order, the anchor right after the platform set's, and the
+  // online-steps table of each schema after its first set. That one for EVERY schema, not only
+  // those of sets with an onlineFolder now: the table outlives the folder (a replica of the
+  // previous release, a rollback, a removed folder), and a listed table that is absent matches
+  // nothing.
+  const onlineListed = new Set<string>();
   const internal = sets.flatMap((set) => {
     const bookkeeping = { schema: set.migrationsSchema, table: set.migrationsTable };
-    return set === platformMigrations ? [bookkeeping, anchor] : [bookkeeping];
+    const online = onlineListed.has(set.migrationsSchema)
+      ? []
+      : [{ schema: set.migrationsSchema, table: ONLINE_MIGRATIONS_TABLE }];
+    onlineListed.add(set.migrationsSchema);
+    return set === platformMigrations ? [bookkeeping, anchor, ...online] : [bookkeeping, ...online];
   });
   if (!sets.includes(platformMigrations)) internal.push(anchor);
   return {

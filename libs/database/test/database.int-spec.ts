@@ -4,7 +4,7 @@ import { promisify } from 'node:util';
 import { type INestApplicationContext, Injectable, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { Transactional, TransactionHost } from '@nestjs-cls/transactional';
-import { createPrincipal, generateId, isUuidV7, runWithPrincipal } from '@platform/common';
+import { createPrincipal, generateId, isUuidV7, runWithPrincipal, sleep } from '@platform/common';
 import { AppConfigModule } from '@platform/config';
 import { readRolesInitSql, startTestPostgres, type TestPostgres } from '@platform/testing/postgres';
 import { and, eq, sql } from 'drizzle-orm';
@@ -29,6 +29,9 @@ import {
 } from '../src/index.js';
 import {
   gadgetsMigrations,
+  gizmosMigrations,
+  gizmosTablesMigrations,
+  gizmosWithOnline,
   lockWaitMigrations,
   widgetsMigrations,
 } from './fixtures/fixture-sets.js';
@@ -202,15 +205,17 @@ describe('@platform/database against PostgreSQL 18', () => {
         name: 'MixedCase',
         migrationsSchema: 'MixedCase_Bookkeeping',
       };
+      const online = { total: 0, applied: 0 }; // no online steps
       await expect(
         runMigrations(url, { migrations: [platformMigrations, mixed], logger: silent }),
       ).resolves.toEqual({
         sets: [
-          { name: 'platform', folder: platformMigrations.folder, total: 3, applied: 3 },
-          { name: 'MixedCase', folder: mixed.folder, total: 1, applied: 1 },
+          { name: 'platform', folder: platformMigrations.folder, total: 3, applied: 3, online },
+          { name: 'MixedCase', folder: mixed.folder, total: 1, applied: 1, online },
         ],
         total: 4,
         applied: 4,
+        online,
       });
       expect(await migrationRows(url, mixed)).toBe(1);
       await expect(
@@ -322,6 +327,221 @@ describe('@platform/database against PostgreSQL 18', () => {
       expect(await migrationRows(url, lockWaitMigrations)).toBe(1);
       expect(await hasNoteColumn(url)).toBe(true);
     }, 20_000);
+  });
+
+  describe('runMigrations() online steps (OPS-2)', () => {
+    const TENANT = '0190a0a0-0000-7000-8000-000000000001';
+
+    /** Runs `fn` on a short-lived superuser connection to `url`. */
+    const withClient = async <T>(url: string, fn: (client: Sql) => Promise<T>): Promise<T> => {
+      const client = postgres(url, { max: 1, onnotice: noop });
+      try {
+        return await fn(client);
+      } finally {
+        await client.end();
+      }
+    };
+
+    /** `gizmos.<name>`'s validity, or `undefined` when there is no such index. */
+    const indexValid = (url: string, name: string): Promise<boolean | undefined> =>
+      withClient(url, async (client) => {
+        const [row] = await client<{ valid: boolean }[]>`
+          select i.indisvalid as valid from pg_index i
+          join pg_class c on c.oid = i.indexrelid
+          join pg_namespace n on n.oid = c.relnamespace
+          where n.nspname = 'gizmos' and c.relname = ${name}`;
+        return row?.valid;
+      });
+
+    /** The online steps recorded for the gizmos set; `null` before its bookkeeping table exists. */
+    const recorded = (url: string): Promise<string[] | null> =>
+      withClient(url, async (client) => {
+        const [table] = await client<{ exists: boolean }[]>`
+          select to_regclass('gizmos.__online_migrations') is not null as exists`;
+        if (table?.exists !== true) return null;
+        const rows = await client<{ name: string }[]>`
+          select name from gizmos.__online_migrations order by name`;
+        return rows.map((row) => row.name);
+      });
+
+    const insertGizmos = (url: string, rows: { id: number; code: string }[]): Promise<void> =>
+      withClient(url, async (client) => {
+        for (const { id, code } of rows) {
+          await client`
+            insert into gizmos.gizmos (tenant_id, id, name, code)
+            values (${TENANT}, ${id}, ${`gizmo ${id}`}, ${code})`;
+        }
+      });
+
+    it('applies an online file once, outside the transaction, records it; a second run applies 0', async () => {
+      const url = await createDatabase('online_once');
+      const migrations = [platformMigrations, gizmosMigrations];
+
+      const first = await runMigrations(url, { migrations, logger: silent });
+
+      expect(first.sets.at(-1)).toMatchObject({
+        name: 'gizmos',
+        applied: 1,
+        online: { total: 1, applied: 1 },
+      });
+      expect(first.online).toEqual({ total: 1, applied: 1 });
+      expect(await recorded(url)).toEqual(['0000_gizmos_name_idx.sql']);
+      expect(await indexValid(url, 'gizmos_name_idx')).toBe(true);
+
+      const second = await runMigrations(url, { migrations, logger: silent });
+      expect(second).toMatchObject({ applied: 0, online: { total: 1, applied: 0 } });
+      expect(await recorded(url)).toEqual(['0000_gizmos_name_idx.sql']);
+    });
+
+    it('waits for a writer although the set timeout is 500 ms: the online session has its own lock_timeout (0)', async () => {
+      const url = await createDatabase('online_waits');
+      await runMigrations(url, {
+        migrations: [platformMigrations, gizmosTablesMigrations],
+        logger: silent,
+      });
+      // A transaction that wrote to gizmos, open for 3 s: a concurrent build waits for it, which
+      // the sets' 500 ms lock_timeout would cut short (55P03, and an invalid index left behind).
+      const writer = postgres(url, { max: 1, onnotice: noop });
+      const conn = await writer.reserve();
+      await conn`begin`;
+      await conn`
+        insert into gizmos.gizmos (tenant_id, id, name, code) values (${TENANT}, 1, 'held', 'h')`;
+      const released = (async () => {
+        await sleep(3_000);
+        await conn`commit`;
+        conn.release();
+      })();
+      onTestFinished(async () => {
+        await released.catch(noop);
+        await writer.end({ timeout: 5 });
+      });
+
+      const started = Date.now();
+      const summary = await runMigrations(url, {
+        migrations: [platformMigrations, gizmosMigrations],
+        logger: silent,
+        lockWaitTimeoutMs: 500,
+      });
+
+      expect(summary.online).toEqual({ total: 1, applied: 1 });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(2_000);
+      expect(await indexValid(url, 'gizmos_name_idx')).toBe(true);
+    }, 30_000);
+
+    it('a failing file records nothing and fails the run naming it; the next run drops the invalid index it left and retries it', async () => {
+      const url = await createDatabase('online_retry');
+      await runMigrations(url, {
+        migrations: [platformMigrations, gizmosTablesMigrations],
+        logger: silent,
+      });
+      // Two rows of one tenant share a code: the unique build fails part-way.
+      await insertGizmos(url, [
+        { id: 1, code: 'dup' },
+        { id: 2, code: 'dup' },
+      ]);
+      const migrations = [platformMigrations, gizmosWithOnline('online-retry')];
+
+      const error: unknown = await runMigrations(url, { migrations, logger: silent }).catch(
+        (caught: unknown) => caught,
+      );
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toMatch(
+        /^Migration set "gizmos": online step 0000_gizmos_code_key\.sql \(.*\) failed; nothing was recorded for it/,
+      );
+      expect((error as Error).cause).toMatchObject({ code: '23505' });
+      expect(await recorded(url)).toEqual([]);
+      // What a plain rerun of `IF NOT EXISTS` would then skip silently.
+      expect(await indexValid(url, 'gizmos_code_key')).toBe(false);
+
+      await withClient(url, (client) => client`delete from gizmos.gizmos where id = 2`);
+      const retry = await runMigrations(url, { migrations, logger: silent });
+
+      expect(retry.online).toEqual({ total: 1, applied: 1 });
+      expect(await recorded(url)).toEqual(['0000_gizmos_code_key.sql']);
+      expect(await indexValid(url, 'gizmos_code_key')).toBe(true);
+    });
+
+    it('refuses a file holding two statements: neither runs, nothing is recorded', async () => {
+      const url = await createDatabase('online_two');
+      const error: unknown = await runMigrations(url, {
+        migrations: [platformMigrations, gizmosWithOnline('online-two-statements')],
+        logger: silent,
+      }).catch((caught: unknown) => caught);
+
+      expect((error as Error).message).toMatch(/online step 0000_two_indexes\.sql/);
+      expect((error as Error).cause).toMatchObject({ code: '42601' });
+      expect(await recorded(url)).toEqual([]);
+      expect(await indexValid(url, 'gizmos_name_idx')).toBeUndefined();
+      expect(await indexValid(url, 'gizmos_code_idx')).toBeUndefined();
+    });
+
+    it('on Citus, builds the index on every shard of a distributed table and waits for a writer although the set timeout is 500 ms; the role default is back at 500 ms afterwards', async () => {
+      const url = pg.url; // database `app`: the citus extension
+      onTestFinished(async () => {
+        // The runner leaves the role default at the set timeout (500 ms here): give the superuser
+        // back its unset default before later tests open connections as it.
+        await admin`alter role current_user reset lock_timeout`;
+      });
+      await runMigrations(url, {
+        migrations: [platformMigrations, gizmosTablesMigrations],
+        logger: silent,
+        lockWaitTimeoutMs: 500,
+      });
+      const [distributed] = await withClient(
+        url,
+        (client) => client<{ shards: number }[]>`
+          select count(*)::int as shards from pg_dist_shard
+          where logicalrelid = 'gizmos.gizmos'::regclass`,
+      );
+      expect(distributed?.shards).toBe(4);
+
+      // A writer's lock on ONE shard, held for 3 s: only the shard connections Citus opens for the
+      // build meet it, and they start from the role's default (500 ms here), not from the online
+      // session's lock_timeout. (A write through the coordinator would first hold up the build on
+      // the shell table, where the session's own setting applies, and end before the shards.)
+      const writer = postgres(url, { max: 1, onnotice: noop });
+      const conn = await writer.reserve();
+      await conn`begin`;
+      const [shard] = await conn<{ name: string }[]>`
+        select shard_name as name from citus_shards
+        where table_name = 'gizmos.gizmos'::regclass order by shardid limit 1`;
+      await conn.unsafe(`lock table ${shard?.name ?? 'missing'} in row exclusive mode`);
+      const released = (async () => {
+        await sleep(3_000);
+        await conn`commit`;
+        conn.release();
+      })();
+      onTestFinished(async () => {
+        await released.catch(noop);
+        await writer.end({ timeout: 5 });
+      });
+
+      const started = Date.now();
+      const summary = await runMigrations(url, {
+        migrations: [platformMigrations, gizmosMigrations],
+        logger: silent,
+        lockWaitTimeoutMs: 500,
+      });
+      const waitedMs = Date.now() - started;
+
+      expect(summary.online).toEqual({ total: 1, applied: 1 });
+      expect(waitedMs).toBeGreaterThanOrEqual(2_000);
+      expect(await indexValid(url, 'gizmos_name_idx')).toBe(true);
+      const shardIndexes = await withClient(url, async (client) => {
+        await client`set citus.override_table_visibility to off`; // shards are hidden otherwise
+        return client<{ valid: boolean }[]>`
+          select i.indisvalid as valid from pg_index i
+          join pg_class c on c.oid = i.indexrelid
+          join pg_namespace n on n.oid = c.relnamespace
+          where n.nspname = 'gizmos' and c.relname like 'gizmos\\_name\\_idx\\_%'`;
+      });
+      expect(shardIndexes.map((row) => row.valid)).toEqual([true, true, true, true]);
+      const [role] = await admin<{ setconfig: string[] | null }[]>`
+        select setconfig from pg_db_role_setting
+        where setdatabase = 0 and setrole = (select oid from pg_roles where rolname = current_user)`;
+      expect(role?.setconfig).toContain('lock_timeout=500');
+    }, 60_000);
   });
 
   describe("runMigrationsCli() (the body of every app's migrate.ts)", () => {
