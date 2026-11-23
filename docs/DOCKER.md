@@ -6,7 +6,7 @@ Files: [`Dockerfile`](../Dockerfile), [`.dockerignore`](../.dockerignore), [`doc
 
 Related: [README](../README.md) · [Architecture](ARCHITECTURE.md) · [Development](DEVELOPMENT.md) ·
 [Configuration](CONFIGURATION.md) · [API](API.md) · [Observability](OBSERVABILITY.md) · [Performance](PERFORMANCE.md) ·
-[Testing](TESTING.md) · [Releasing](RELEASING.md) · [Security](SECURITY.md).
+[Testing](TESTING.md) · [Releasing](RELEASING.md) · [Security](SECURITY.md) · [Operations](OPERATIONS.md).
 
 ## TL;DR
 
@@ -242,8 +242,10 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   `/readyz` are on port 9497, in-network only; pg-wire is off). The
   database, the SELECT/INSERT-only application user and the tables come from the apps' migrate step
   (`@platform/immudb` `runImmudbMigrations`, gRPC `ChangeSQLPrivileges`), wired in ledger wave 2. Data is
-  append-only and cannot be erased: back up the `immudb-data` volume (stop the service, snapshot the
-  volume) and never configure truncation for the ledger database. Licence: the server image is
+  append-only and cannot be erased: never configure truncation for the ledger database. Backups
+  (`immuadmin hot-backup`, or synchronous replicas), the restore and the trusted-state re-anchor are in
+  [OPERATIONS.md](OPERATIONS.md#immudb); for a local volume you want to keep, copy `immudb-data` with the
+  service stopped. Licence: the server image is
   BUSL-1.1 (`LICENSE` at v1.11.2: "Licensed Work: immudb Version 1.9DOM.2 or later"); its Additional
   Use Grant allows production use unless the product offers immudb to third parties, hosted or
   embedded, in competition with Codenotary's paid versions (internal use is not competitive). The
@@ -569,7 +571,7 @@ Memory limits are caps (sum > 4 GB on purpose); measured RSS once idle:
 | cassandra                                    | 1.5 GB                   | 1.05 GB                  | `MAX_HEAP_SIZE=512M` (`CASSANDRA_HEAP`), `MaxDirectMemorySize=256M` |
 | kafka                                        | 768 MB                   | 300–420 MB               | `-Xmx384m`; CLI tools (healthcheck/init) run with a 96–128 MB heap  |
 | postgres                                     | 512 MB                   | 40 MB                    | `shared_buffers=128MB`, `jit=off`, `pg_stat_statements`             |
-| rustfs / redis / mailpit / gcs               | 256 / 256 / 128 / 128 MB | 55–90 / 15 / 17 / 12 MB  | Redis `maxmemory 192mb noeviction` (BullMQ)                         |
+| rustfs / redis / mailpit / gcs               | 256 / 256 / 128 / 128 MB | 55–90 / 15 / 17 / 12 MB  | Redis `maxmemory 192mb noeviction` (BullMQ), AOF on                 |
 | monolith                                     | 768 MB                   | 230 MB                   | heap cap 512 MB                                                     |
 | gateway · identity · notifications · billing | 512 · 448 · 448 · 448 MB | 180 · 130 · 160 · 120 MB | heap caps 384/320 MB                                                |
 | jaeger · prometheus · grafana · exporters    | 512 · 384 · 256 · 64 MB  | —                        | `observability`; Jaeger keeps traces in memory                      |
@@ -629,7 +631,10 @@ least 8 GiB.
 1. **PG18 volume path**: mount `/var/lib/postgresql` (PGDATA is `/var/lib/postgresql/18/docker`). The old
    `/var/lib/postgresql/data` silently lands in an anonymous volume.
 2. `pg_isready` over the unix socket reports ready during initdb; the healthcheck uses `-h 127.0.0.1`.
-3. `redis-cli ping` exits 0 on error replies: the healthcheck greps `PONG`. **BullMQ needs `noeviction`.**
+3. `redis-cli ping` exits 0 on error replies: the healthcheck greps `PONG`. **BullMQ needs `noeviction`**, and so do the
+   token denylist, locks and throttle counters that share the instance: the apps log an error at boot and set
+   `redis_eviction_policy_safe` to `0` when it is anything else. Production Redis needs `noeviction` and AOF too
+   ([SECURITY.md](SECURITY.md#production-checklist), [CONFIGURATION.md](CONFIGURATION.md#redis--cache-locks-throttling-bullmq-socketio-adapter-graphql-pubsub)).
 4. Cassandra 5 = G1: set `MAX_HEAP_SIZE` only (`HEAP_NEWSIZE` is CMS-only). The DC name (`CASSANDRA_DC`) must equal
    the apps' `CASSANDRA_LOCAL_DC` or the driver ignores the node. cassandra-driver 4.10 speaks protocol v4.
 5. Single-node Kafka needs RF=1 on **every** internal topic (else "group coordinator not available"). The CLI inherits
@@ -677,8 +682,8 @@ load balancer's IPs/CIDRs (compose's `uniquelocal` and `true` are not for produc
 caller: anyone who reaches port 50051 can call `UpdateUserRoles` with any `actorId`, list users or payments, and (with
 reflection on) discover every method. `NODE_ENV=production` refuses to start without TLS unless that opt-out is set.
 Production: mutual TLS (`GRPC_TLS_CA_PATH`/`GRPC_TLS_CERT_PATH`/`GRPC_TLS_KEY_PATH`; server certificates must name the
-`*_GRPC_URL` hosts) or a service mesh doing mTLS, plus a NetworkPolicy that only lets the gateway reach the services'
-gRPC ports. Reflection defaults to off in production; compose turns it back on for local grpcurl/Postman.
+`*_GRPC_URL` hosts) or a service mesh doing mTLS, plus a NetworkPolicy that lets only the gateway and ai-service reach the services'
+gRPC ports (ai-service's chat tools call identity-, notifications- and billing-service). Reflection defaults to off in production; compose turns it back on for local grpcurl/Postman.
 
 **Never expose the ops routes through the public ingress.** `/metrics` (route-level traffic, error rates, queue and
 heap internals) is served on its own listener, `METRICS_PORT` (9464; the API port answers 404 for it): compose never

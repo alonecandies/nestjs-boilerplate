@@ -33,6 +33,10 @@ export const appEnvSchema = z
     HTTP_HANDLER_TIMEOUT_MS: zInt(30_000, { min: 1 }),
     CLUSTER_WORKERS: zInt(1, { min: 0, max: 1024 }),
     SHUTDOWN_TIMEOUT_MS: zInt(10_000, { min: 0 }),
+    // How long every app keeps serving after SIGTERM while /health/ready already answers 503, so a
+    // load balancer or Service stops routing first (about 5000 behind one). Part of the shutdown
+    // budget, so it must stay below SHUTDOWN_TIMEOUT_MS (refused below). 0 = close at once.
+    SHUTDOWN_DRAIN_MS: zInt(0, { min: 0 }),
     MAINTENANCE_MODE: zBool(false),
     DOCS_ENABLED: zBool(),
   })
@@ -43,6 +47,13 @@ export const appEnvSchema = z
         path: ['TRUST_PROXY'],
         message:
           'TRUST_PROXY=true trusts a client-supplied X-Forwarded-For: in production list the load balancer IPs/CIDRs instead',
+      });
+    }
+    if (env.SHUTDOWN_DRAIN_MS >= env.SHUTDOWN_TIMEOUT_MS && env.SHUTDOWN_DRAIN_MS > 0) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['SHUTDOWN_DRAIN_MS'],
+        message: `SHUTDOWN_DRAIN_MS (${env.SHUTDOWN_DRAIN_MS}) must be below SHUTDOWN_TIMEOUT_MS (${env.SHUTDOWN_TIMEOUT_MS}): the drain is part of the shutdown budget, so the process would be killed before it closed`,
       });
     }
     // createHttpApp enables credentials: a wildcard would let any site make authenticated calls.
@@ -71,6 +82,8 @@ export const appEnvSchema = z
     /** `0` = one worker per core (`os.availableParallelism()`); `1` = no cluster. */
     clusterWorkers: env.CLUSTER_WORKERS,
     shutdownTimeoutMs: env.SHUTDOWN_TIMEOUT_MS,
+    /** Keep serving this long after SIGTERM while readiness fails; `0` = no delay. */
+    shutdownDrainMs: env.SHUTDOWN_DRAIN_MS,
     maintenanceMode: env.MAINTENANCE_MODE,
     /** Swagger/Scalar docs; off in production unless explicitly enabled. */
     docsEnabled: env.DOCS_ENABLED ?? env.NODE_ENV !== 'production',

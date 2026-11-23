@@ -29,6 +29,7 @@ import {
   redactRedisUrl,
   waitForRedisReady,
 } from './redis.factory.js';
+import { checkRedisEvictionPolicy } from './redis-eviction-check.js';
 
 export interface RedisModuleOptions {
   /**
@@ -61,6 +62,8 @@ async function createMainClient(
       client.disconnect(); // stop the background reconnect loop of the failed client
       throw error;
     }
+    // A diagnostic only (OPS-5): logs and sets a gauge, never fails the boot.
+    await checkRedisEvictionPolicy(client);
   }
   return client;
 }

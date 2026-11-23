@@ -446,6 +446,7 @@ Run any of them with `bun run <script>`.
 | [docs/SECURITY.md](docs/SECURITY.md)           | authentication, RBAC, rate limiting, hardening                    |
 | [docs/AI.md](docs/AI.md)                       | AI chat through OpenRouter: setup, models, limits, privacy, tools |
 | [docs/DOCKER.md](docs/DOCKER.md)               | local infrastructure, compose profiles, images, CI                |
+| [docs/OPERATIONS.md](docs/OPERATIONS.md)       | backup and restore of Postgres/Citus, Cassandra and immudb        |
 | [docs/RELEASING.md](docs/RELEASING.md)         | Conventional Commits, Lerna versioning, changelogs                |
 
 Package READMEs:

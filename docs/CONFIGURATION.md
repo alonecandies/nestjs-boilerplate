@@ -145,22 +145,23 @@ several namespaces with the same rules; they are listed once, under `app`.
 
 [`app.config.ts`](../libs/config/src/namespaces/app.config.ts) · every app
 
-| Variable                     | Default                                       | Description                                                                                                                                                                                                                                                                                      |
-| ---------------------------- | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `NODE_ENV`                   | `development`                                 | `development` \| `test` \| `production`. Production turns on the [guards](#production-guards) and flips the dev-tooling defaults off (docs, GraphQL sandbox/introspection, gRPC reflection). Also read by every namespace with a production guard (see [Production guards](#production-guards)). |
-| `SERVICE_NAME`               | `app`                                         | `[a-z0-9._-]`, max 63 chars. Logs, metrics, OTel `service.name` fallback, Kafka client/group id default, Postgres `application_name`. Also read by `observability`, `kafka`.                                                                                                                     |
-| `HOST`                       | `0.0.0.0`                                     | HTTP bind address.                                                                                                                                                                                                                                                                               |
-| `PORT`                       | `3000`                                        | HTTP port (`0`–`65535`; `0` = OS-assigned).                                                                                                                                                                                                                                                      |
-| `CORS_ORIGINS`               | `http://localhost:3000,http://localhost:5173` | CSV allowlist for the HTTP API (credentials enabled). `*` is rejected in production.                                                                                                                                                                                                             |
-| `TRUST_PROXY`                | `false`                                       | Whose `X-Forwarded-*` Fastify trusts: `false` (nobody; `req.ip` = socket address), a CSV of IPs/CIDRs/presets (`loopback`, `linklocal`, `uniquelocal`), or `true` (every hop — rejected in production). Hop counts are invalid.                                                                  |
-| `BODY_LIMIT_BYTES`           | `1048576`                                     | Max request body (≥ 1).                                                                                                                                                                                                                                                                          |
-| `HTTP_KEEP_ALIVE_TIMEOUT_MS` | `72000`                                       | Must exceed the load balancer idle timeout (60 s typical), or the LB reuses closed sockets (502s).                                                                                                                                                                                               |
-| `HTTP_REQUEST_TIMEOUT_MS`    | `30000`                                       | Time allowed to RECEIVE the whole request (Fastify `requestTimeout`); also bounds streamed uploads. Not a handler timeout.                                                                                                                                                                       |
-| `HTTP_HANDLER_TIMEOUT_MS`    | `30000`                                       | Budget for each handler (`TimeoutInterceptor`): 504 problem+json over HTTP, `DEADLINE_EXCEEDED` over gRPC. `@Timeout(ms)` overrides it per route.                                                                                                                                                |
-| `CLUSTER_WORKERS`            | `1`                                           | `node:cluster` workers, `0`–`1024`: `1` = no cluster, `0` = one per core (`os.availableParallelism()`). Containers keep `1` and scale replicas.                                                                                                                                                  |
-| `SHUTDOWN_TIMEOUT_MS`        | `10000`                                       | Hard deadline of the graceful shutdown; keep it below the orchestrator grace period.                                                                                                                                                                                                             |
-| `MAINTENANCE_MODE`           | `false`                                       | `503` problem+json with `Retry-After` on every route except `/health*` and `/metrics`.                                                                                                                                                                                                           |
-| `DOCS_ENABLED`               | on unless `NODE_ENV=production`               | Swagger/Scalar (`/docs`, `/openapi.json`, `/openapi.yaml`).                                                                                                                                                                                                                                      |
+| Variable                     | Default                                       | Description                                                                                                                                                                                                                                                                                                                                                     |
+| ---------------------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `NODE_ENV`                   | `development`                                 | `development` \| `test` \| `production`. Production turns on the [guards](#production-guards) and flips the dev-tooling defaults off (docs, GraphQL sandbox/introspection, gRPC reflection). Also read by every namespace with a production guard (see [Production guards](#production-guards)).                                                                |
+| `SERVICE_NAME`               | `app`                                         | `[a-z0-9._-]`, max 63 chars. Logs, metrics, OTel `service.name` fallback, Kafka client/group id default, Postgres `application_name`. Also read by `observability`, `kafka`.                                                                                                                                                                                    |
+| `HOST`                       | `0.0.0.0`                                     | HTTP bind address.                                                                                                                                                                                                                                                                                                                                              |
+| `PORT`                       | `3000`                                        | HTTP port (`0`–`65535`; `0` = OS-assigned).                                                                                                                                                                                                                                                                                                                     |
+| `CORS_ORIGINS`               | `http://localhost:3000,http://localhost:5173` | CSV allowlist for the HTTP API (credentials enabled). `*` is rejected in production.                                                                                                                                                                                                                                                                            |
+| `TRUST_PROXY`                | `false`                                       | Whose `X-Forwarded-*` Fastify trusts: `false` (nobody; `req.ip` = socket address), a CSV of IPs/CIDRs/presets (`loopback`, `linklocal`, `uniquelocal`), or `true` (every hop — rejected in production). Hop counts are invalid.                                                                                                                                 |
+| `BODY_LIMIT_BYTES`           | `1048576`                                     | Max request body (≥ 1).                                                                                                                                                                                                                                                                                                                                         |
+| `HTTP_KEEP_ALIVE_TIMEOUT_MS` | `72000`                                       | Must exceed the load balancer idle timeout (60 s typical), or the LB reuses closed sockets (502s).                                                                                                                                                                                                                                                              |
+| `HTTP_REQUEST_TIMEOUT_MS`    | `30000`                                       | Time allowed to RECEIVE the whole request (Fastify `requestTimeout`); also bounds streamed uploads. Not a handler timeout.                                                                                                                                                                                                                                      |
+| `HTTP_HANDLER_TIMEOUT_MS`    | `30000`                                       | Budget for each handler (`TimeoutInterceptor`): 504 problem+json over HTTP, `DEADLINE_EXCEEDED` over gRPC. `@Timeout(ms)` overrides it per route.                                                                                                                                                                                                               |
+| `CLUSTER_WORKERS`            | `1`                                           | `node:cluster` workers, `0`–`1024`: `1` = no cluster, `0` = one per core (`os.availableParallelism()`). Containers keep `1` and scale replicas.                                                                                                                                                                                                                 |
+| `SHUTDOWN_TIMEOUT_MS`        | `10000`                                       | Hard deadline of the graceful shutdown; keep it below the orchestrator grace period.                                                                                                                                                                                                                                                                            |
+| `SHUTDOWN_DRAIN_MS`          | `0`                                           | Keep serving this long after SIGTERM while `/health/ready` already answers 503 `shutting_down`, so the load balancer or Service stops routing first; set about `5000` behind one. Read by every app (`ObservabilityModule` uses it unless `shutdownDrainMs` is passed). Part of the shutdown budget: must stay below `SHUTDOWN_TIMEOUT_MS`, or boot is refused. |
+| `MAINTENANCE_MODE`           | `false`                                       | `503` problem+json with `Retry-After` on every route except `/health*` and `/metrics`.                                                                                                                                                                                                                                                                          |
+| `DOCS_ENABLED`               | on unless `NODE_ENV=production`               | Swagger/Scalar (`/docs`, `/openapi.json`, `/openapi.yaml`).                                                                                                                                                                                                                                                                                                     |
 
 ### `observability` — logs, metrics, tracing, `@nestjs/observe`
 
@@ -262,8 +263,8 @@ notifications-service
 
 ### `immudb` — append-only verifiable SQL store
 
-[`immudb.config.ts`](../libs/config/src/namespaces/immudb.config.ts) · not loaded by any app yet
-(ledger wave 2 wires monolith and billing-service)
+[`immudb.config.ts`](../libs/config/src/namespaces/immudb.config.ts) · monolith and billing-service, loaded
+only with `LEDGER_ENABLED=true` (no other app reads `IMMUDB_*`)
 
 | Variable                                | Default               | Description                                                                                                                                                                                                                                           |
 | --------------------------------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -294,6 +295,24 @@ notifications-service
 | `REDIS_CONNECT_TIMEOUT_MS`      | `10000`                  |                                                                                                                                                                                                                                  |
 | `REDIS_ALLOW_INSECURE`          | `false`                  | Production requires a lowercase `rediss://` URL with a password or ACL user and no `tls=` parameter (checked the way ioredis reads it) unless this is `true` (the network layer secures Redis). The local compose stack sets it. |
 
+**Server requirements (production).** One Redis behind `REDIS_URL` holds the cache, the access-token denylist
+(`{REDIS_KEY_PREFIX}:auth:denylist:*`), BullMQ queues, distributed locks, throttle counters and the socket.io and
+GraphQL pub/sub. Configure it as the compose file does:
+
+- `maxmemory-policy noeviction`. Any other policy can drop a denylist entry (a logged-out token works again), a queued
+  job, a lock or a throttle counter once memory runs out; with `noeviction` a full Redis refuses writes instead, which
+  the apps report as errors you can alert on. A cache-only instance for another purpose may use `allkeys-lfu`; this one
+  may not.
+- AOF: `appendonly yes` with `appendfsync everysec` (and a periodic `save`), so a restart loses at most about a second
+  of writes rather than every queue and denylist entry.
+- Size: set `maxmemory` to the working set plus at least 50% headroom, and alert when `used_memory / maxmemory`
+  stays above 80% (the `redis-exporter` metrics `redis_memory_used_bytes` and `redis_memory_max_bytes`).
+
+At boot `@platform/redis` reads `maxmemory_policy` from `INFO memory`. A policy other than `noeviction` logs one error
+line (`event: redis_eviction_policy_unsafe`, with the `policy` found) and sets the gauge `redis_eviction_policy_safe`
+to `0` (`1` when safe). The gauge is absent when the server hides the value or `INFO` fails. The check never stops a
+boot.
+
 ### `kafka` — integration events (kafkajs)
 
 [`kafka.config.ts`](../libs/config/src/namespaces/kafka.config.ts) · every app (the gateway only
@@ -318,8 +337,10 @@ consumes)
 > ([below](#app-local-variables)) with fixed defaults `gateway-push` / `monolith`;
 > notifications-service ignores it for its consumer and pins `notifications-service`
 > (`NOTIFICATIONS_CONSUMER_GROUP` in `apps/notifications-service/src/notifications-service.constants.ts`);
-> identity-service and billing-service only produce today. Every replica of an app must share its
-> group, and the gateway's group must differ from notifications-service's.
+> billing-service ignores it too and pins `billing-service` (`BILLING_CONSUMER_GROUP` in
+> `apps/billing-service/src/billing-service.constants.ts`), a consumer that exists only while
+> `LEDGER_ENABLED=true` (`billing.ledger-posting.v1`); identity-service only produces. Every replica
+> of an app must share its group, and the gateway's group must differ from notifications-service's.
 
 ### `outbox` — transactional outbox relay
 

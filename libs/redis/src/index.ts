@@ -63,6 +63,11 @@ export {
 } from './redis.factory.js';
 export { RedisModule, type RedisModuleOptions, RedisShutdownHook } from './redis.module.js';
 export {
+  checkRedisEvictionPolicy,
+  REDIS_EVICTION_POLICY_SAFE,
+  REQUIRED_EVICTION_POLICY,
+} from './redis-eviction-check.js';
+export {
   createRedisIoAdapter,
   DEFAULT_IO_SERVER_OPTIONS,
   type IoServerOptions,

@@ -26,9 +26,10 @@ import { DATABASE_MIGRATIONS } from './database.migrations.js';
     // validated at boot like every other namespace, and resolvable from the app container.
     ConfigModule.forFeature(grpcConfig),
     // Readiness = every dependency a gRPC call cannot be served without; liveness never checks
-    // dependencies. Kafka is deliberately NOT a contributor: `identity.user-registered.v1` is a
-    // best-effort publish after commit (a failure is logged, never fails the call), so a broker
-    // outage must not pull every replica out of rotation and take login/register down with it.
+    // dependencies. Kafka is deliberately NOT a contributor: `identity.user-registered.v1` leaves
+    // through `identity.outbox` (the row commits with the user) and the relay publishes it once
+    // the broker is back, so a broker outage must not pull every replica out of rotation and take
+    // login/register down with it.
     ObservabilityModule.forRoot({
       healthContributors: [DatabaseHealthIndicator, RedisHealthIndicator],
     }),

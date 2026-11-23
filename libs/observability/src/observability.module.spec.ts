@@ -6,8 +6,9 @@ import { TraceService } from 'nestjs-otel';
 import { Logger, PARAMS_PROVIDER_TOKEN, type Params, PinoLogger } from 'nestjs-pino';
 import type { Options as PinoHttpOptions } from 'pino-http';
 import { register } from 'prom-client';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { RequestContextService } from './context/request-context.service.js';
+import { HealthModule } from './health/health.module.js';
 import { HealthContributor } from './health/health-contributor.js';
 import { HealthContributorRegistry } from './health/health-contributor.registry.js';
 import { LOG_REDACT_PATHS } from './logging/logger-params.js';
@@ -92,5 +93,38 @@ describe('ObservabilityModule', () => {
       );
     expect(hasObserve(false)).toBe(false);
     expect(hasObserve(true)).toBe(true);
+  });
+});
+
+describe('ObservabilityModule.forRoot: shutdown drain', () => {
+  const original = process.env['SHUTDOWN_DRAIN_MS'];
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (original === undefined) delete process.env['SHUTDOWN_DRAIN_MS'];
+    else process.env['SHUTDOWN_DRAIN_MS'] = original;
+  });
+
+  const drainHandedToHealth = (options: { shutdownDrainMs?: number }): number | undefined => {
+    vi.restoreAllMocks();
+    const register = vi.spyOn(HealthModule, 'register');
+    ObservabilityModule.forRoot({ observe: false, ...options });
+    return register.mock.calls[0]?.[0].shutdownDrainMs;
+  };
+
+  it('uses SHUTDOWN_DRAIN_MS when the option is not passed', () => {
+    process.env['SHUTDOWN_DRAIN_MS'] = '5000';
+    expect(drainHandedToHealth({})).toBe(5000);
+  });
+
+  it('defaults to 0 without the variable', () => {
+    delete process.env['SHUTDOWN_DRAIN_MS'];
+    expect(drainHandedToHealth({})).toBe(0);
+  });
+
+  it('lets an explicit option win over the environment', () => {
+    process.env['SHUTDOWN_DRAIN_MS'] = '5000';
+    expect(drainHandedToHealth({ shutdownDrainMs: 1200 })).toBe(1200);
+    expect(drainHandedToHealth({ shutdownDrainMs: 0 })).toBe(0);
   });
 });

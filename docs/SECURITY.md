@@ -862,15 +862,25 @@ At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) pu
 - [ ] No `*_ALLOW_INSECURE`, `ALLOW_KNOWN_LOCAL_SECRETS` or `STRIPE_ALLOW_LOCAL_REDIRECTS` unless you
       can name what secures that hop instead (a mesh, a TLS sidecar); the compose stack sets all of them.
 - [ ] gRPC: `GRPC_TLS_CERT_PATH`/`_KEY_PATH`/`_CA_PATH` (mTLS), or a mesh + `GRPC_ALLOW_INSECURE=true`;
-      NetworkPolicy so only the gateway reaches 50051; `GRPC_REFLECTION` off.
+      NetworkPolicy so only the gateway and ai-service reach 50051; `GRPC_REFLECTION` off.
 - [ ] `METRICS_PORT` kept cluster-internal and `METRICS_BEARER_TOKEN` set; `/docs`, `/openapi.*` not routed publicly;
       `DOCS_ENABLED`, `GRAPHQL_SANDBOX`, `GRAPHQL_INTROSPECTION` left off.
 - [ ] TLS everywhere, enforced at boot: Postgres `?sslmode=verify-full`, Redis `rediss://` with a
       password or ACL user, `KAFKA_SSL` + SASL, `CASSANDRA_SSL` with `CASSANDRA_TLS_CA_PATH` and
       `CASSANDRA_REPLICATION_DATACENTERS`, SMTP with STARTTLS (`SMTP_REQUIRE_TLS`); S3/GCS credentials
       scoped to the bucket (`GCS_KEY_FILE` must be a `service_account` key, or use workload identity).
+- [ ] Redis (the one behind `REDIS_URL`) runs with `maxmemory-policy noeviction`, AOF on (`appendonly yes`,
+      `appendfsync everysec`) and memory sized for the working set with at least 50% headroom, plus an alert when
+      `used_memory / maxmemory` stays above 80% and when `redis_eviction_policy_safe` is `0`. The token denylist,
+      BullMQ queues, locks and throttle counters share it: an evicting policy silently un-revokes logged-out tokens,
+      loses jobs and frees locks, and a restart without AOF forgets all of them
+      ([CONFIGURATION.md](CONFIGURATION.md#redis--cache-locks-throttling-bullmq-socketio-adapter-graphql-pubsub)).
 - [ ] immudb runs with `--signingKey` (private key in the secret store, never the compose development key), apps pin the
       public key, `LEDGER_VERIFY=true` ([immudb state signing key](#immudb-state-signing-key)).
+- [ ] Backups of every store, rehearsed: Postgres/Citus base backups and a WAL archive on every node (with
+      `citus_create_restore_point` before a release), `immuadmin hot-backup` or synchronous replicas for immudb,
+      `nodetool snapshot` per Cassandra node, and the restore order, including the ledger re-anchor
+      ([OPERATIONS.md](OPERATIONS.md)). The signing key is backed up with the secret store, not the data.
 - [ ] Database roles created from the production SQL in [Database roles](#database-roles), with
       secret-store passwords; on a multi-node cluster, TLS (`verify-full`) and SCRAM between nodes.
 - [ ] Every app that uses the database has `DATABASE_URL` (`app_runtime`), `DATABASE_SYSTEM_URL` (`app_system`) and,
@@ -880,6 +890,8 @@ At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) pu
       `extra_float_digits` only, and `app_system` capped at 5 connections; `DATABASE_POOLER=pgbouncer`.
 - [ ] `DATABASE_RUN_MIGRATIONS=false` and migrations run as a release job (see [DOCKER.md](DOCKER.md#bootstrap-jobs--migrations)).
 - [ ] `UV_THREADPOOL_SIZE` ≤ container CPU limit; `CLUSTER_WORKERS=1` under Kubernetes.
+- [ ] `SHUTDOWN_DRAIN_MS` about 5000 behind a Service or load balancer, below `SHUTDOWN_TIMEOUT_MS`, which
+      stays below the pod's `terminationGracePeriodSeconds`; otherwise a rollout drops in-flight requests.
 - [ ] Proxy-level limit on WebSocket frame size (graphql-ws, Socket.IO).
 - [ ] First admin promoted manually; review `files:manage` and `billing:read-all` holders.
 - [ ] Nothing from `docker-compose.yml` reused as is: it ships known credentials, plaintext Kafka,

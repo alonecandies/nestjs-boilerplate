@@ -1,5 +1,5 @@
 import { type DynamicModule, Module, type Type } from '@nestjs/common';
-import { type ObservabilityConfig, observabilityConfig } from '@platform/config';
+import { appConfig, type ObservabilityConfig, observabilityConfig } from '@platform/config';
 import { RequestContextModule } from './context/request-context.module.js';
 import { HealthModule } from './health/health.module.js';
 import type { HealthContributor } from './health/health-contributor.js';
@@ -21,7 +21,8 @@ export interface ObservabilityModuleOptions {
   readinessTimeoutMs?: number;
   /**
    * After SIGTERM, keep serving while readiness reports 503 `shutting_down` for this long (ms), so
-   * load balancers stop routing before the server closes. Default 0; ~5000 behind k8s Services.
+   * load balancers stop routing before the server closes. Default: `SHUTDOWN_DRAIN_MS` (0 when
+   * unset; ~5000 behind k8s Services). An explicit value wins over the environment.
    */
   shutdownDrainMs?: number;
   /** Include failure messages in readiness responses. Default: not in production. */
@@ -60,6 +61,8 @@ export class ObservabilityModule {
     // Decided at module-definition time: whether the ObserveModule exists at all can't depend on
     // DI. Reads the same env the `observability` namespace validates.
     const observe = options.observe ?? isObserveEnabled();
+    // Same reason: terminus takes its drain delay when the module is defined, not from DI.
+    const shutdownDrainMs = options.shutdownDrainMs ?? appConfig.parse().shutdownDrainMs;
     return {
       module: ObservabilityModule,
       global: true,
@@ -70,7 +73,7 @@ export class ObservabilityModule {
         HealthModule.register({
           contributors: options.healthContributors ?? [],
           readinessTimeoutMs: options.readinessTimeoutMs ?? DEFAULT_READINESS_TIMEOUT_MS,
-          shutdownDrainMs: options.shutdownDrainMs ?? 0,
+          shutdownDrainMs,
           ...(options.exposeHealthDetails === undefined
             ? {}
             : { exposeDetails: options.exposeHealthDetails }),

@@ -42,6 +42,7 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
       handlerTimeoutMs: 30_000,
       clusterWorkers: 1,
       shutdownTimeoutMs: 10_000,
+      shutdownDrainMs: 0,
       maintenanceMode: false,
       docsEnabled: true,
     } satisfies AppConfig);
