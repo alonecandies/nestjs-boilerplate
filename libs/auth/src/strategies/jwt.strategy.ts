@@ -10,14 +10,16 @@ import {
   JWT_STRATEGY,
 } from '../auth.constants.js';
 import { AccessTokenDenylist } from '../tokens/access-token-denylist.service.js';
+import { accessKeySet, resolveVerificationSecret } from '../tokens/jwt-key-set.js';
 import { TokenService } from '../tokens/token.service.js';
 import { parseAccessTokenClaims } from '../tokens/token-claims.js';
 import type { AuthUser } from '../types/auth-user.js';
 
 /**
  * Passport `jwt` strategy: `Authorization: Bearer <access token>` verified LOCALLY (HS256
- * signature, `iss`, `aud`, `exp` with 5 s tolerance — no RPC to the token issuer), then the
- * `typ` claim, then the Redis denylist. The returned `AuthUser` becomes `req.user`.
+ * signature with the key `resolveVerificationSecret` picks, as `TokenService` does; `iss`, `aud`,
+ * `exp` with 5 s tolerance — no RPC to the token issuer), then the `typ` claim, then the Redis
+ * denylist. The returned `AuthUser` becomes `req.user`.
  */
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy, JWT_STRATEGY) {
@@ -26,9 +28,20 @@ export class JwtStrategy extends PassportStrategy(Strategy, JWT_STRATEGY) {
     private readonly denylist: AccessTokenDenylist,
     private readonly tokens: TokenService,
   ) {
+    const keys = accessKeySet(config);
     super({
       jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
-      secretOrKey: config.accessSecret,
+      // An unknown `kid` fails here with INVALID_TOKEN (passport hands it to the guard as `info`).
+      secretOrKeyProvider: (_request: unknown, rawJwtToken: string, done) => {
+        let secret: string;
+        try {
+          secret = resolveVerificationSecret(rawJwtToken, keys);
+        } catch (error) {
+          done(error);
+          return;
+        }
+        done(null, secret);
+      },
       algorithms: [JWT_ALGORITHM],
       issuer: config.issuer,
       audience: config.audience,

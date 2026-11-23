@@ -138,6 +138,8 @@ describe('config namespaces — defaults work with an EMPTY environment (local d
   it('auth, throttle-adjacent and graphql defaults', () => {
     expect(authConfig.parse({})).toEqual({
       accessSecret: DEV_JWT_ACCESS_SECRET,
+      accessKeyId: undefined,
+      accessVerifyKeys: [],
       accessTtlSec: 900,
       issuer: 'nestjs-boilerplate',
       audience: 'nestjs-boilerplate',

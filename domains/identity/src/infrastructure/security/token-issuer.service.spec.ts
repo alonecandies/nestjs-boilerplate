@@ -147,3 +147,76 @@ describe('TokenIssuer', () => {
     expect((await authErrorOf(issuer.verifyRefreshToken(''))).code).toBe('MISSING_TOKEN');
   });
 });
+
+describe('TokenIssuer refresh key rotation (SEC-1)', () => {
+  const OLD = 'rotation-old-refresh-secret-of-32-chars-aaaa';
+  const NEW = 'rotation-new-refresh-secret-of-32-chars-bbbb';
+  const issuerWith = (env: Record<string, string>): TokenIssuer =>
+    new TokenIssuer(jwt, access, refreshTokenConfig.parse({ NODE_ENV: 'test', ...env }));
+  const kidOf = (token: string): unknown =>
+    jwt.decode<{ header: Record<string, unknown> }>(token, { complete: true }).header.kid;
+  const outcome = async (verifier: TokenIssuer, token: string): Promise<string> =>
+    verifier.verifyRefreshToken(token).then(
+      () => 'ok',
+      (error: unknown) => (error instanceof UnauthenticatedException ? error.code : 'thrown'),
+    );
+
+  it('a refresh token signed with the old secret and no kid verifies where the new one signs', async () => {
+    const { token } = await issuerWith({ JWT_REFRESH_SECRET: OLD }).issueRefreshToken({
+      userId: user.id,
+      sessionId: 's',
+    });
+    expect(kidOf(token)).toBeUndefined();
+    const rotating = issuerWith({
+      JWT_REFRESH_SECRET: NEW,
+      JWT_REFRESH_KEY_ID: 'r2',
+      JWT_REFRESH_VERIFY_SECRETS: `r1:${OLD}`,
+    });
+    expect(await outcome(rotating, token)).toBe('ok');
+    // Dropping the old secret from the list refuses its tokens at once.
+    expect(
+      await outcome(issuerWith({ JWT_REFRESH_SECRET: NEW, JWT_REFRESH_KEY_ID: 'r2' }), token),
+    ).toBe('INVALID_TOKEN');
+  });
+
+  it('writes the refresh kid, which a phase-1 issuer accepts and an unknown-kid one refuses', async () => {
+    const { token } = await issuerWith({
+      JWT_REFRESH_SECRET: NEW,
+      JWT_REFRESH_KEY_ID: 'r2',
+    }).issueRefreshToken({ userId: user.id, sessionId: 's' });
+    expect(kidOf(token)).toBe('r2');
+    const phaseOne = issuerWith({
+      JWT_REFRESH_SECRET: OLD,
+      JWT_REFRESH_VERIFY_SECRETS: `r2:${NEW}`,
+    });
+    expect(await outcome(phaseOne, token)).toBe('ok');
+    const unknown = issuerWith({
+      JWT_REFRESH_SECRET: NEW,
+      JWT_REFRESH_KEY_ID: 'r3',
+      JWT_REFRESH_VERIFY_SECRETS: `r1:${OLD}`,
+    });
+    expect(await outcome(unknown, token)).toBe('INVALID_TOKEN');
+  });
+
+  it('writes the access kid from JWT_ACCESS_KEY_ID, which the edge verifier selects', async () => {
+    const rotatedAccess = authConfig.parse({
+      NODE_ENV: 'test',
+      JWT_ACCESS_SECRET: NEW,
+      JWT_ACCESS_KEY_ID: 'a2',
+    });
+    const issued = await new TokenIssuer(jwt, rotatedAccess, refresh).issueAccessToken(user);
+    expect(kidOf(issued.token)).toBe('a2');
+    const edge = authConfig.parse({
+      NODE_ENV: 'test',
+      JWT_ACCESS_VERIFY_SECRETS: `a2:${NEW}`,
+    });
+    const edgeVerifier = new TokenService(
+      new JwtService(createJwtModuleOptions(edge)),
+      edge,
+      createTestRbacRegistry(),
+    );
+    await expect(edgeVerifier.verifyAccessToken(issued.token)).resolves.toMatchObject({
+      sub: user.id,
+    });
+  });
+});

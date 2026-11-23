@@ -77,6 +77,11 @@ afterInit(namespace: Namespace): void {
 These variables come from the `auth` namespace of `@platform/config`:
 
 - `JWT_ACCESS_SECRET`: at least 32 characters. The dev default is rejected in production.
+- `JWT_ACCESS_KEY_ID` and `JWT_ACCESS_VERIFY_SECRETS` (`kid:secret`, comma-separated): the key set
+  that lets the secret rotate in phases. Every verifier picks the key with
+  `resolveVerificationSecret`: a known `kid` selects its key only, an unknown `kid` is
+  `INVALID_TOKEN`, and a token without `kid` tries the signing key, then each verify-only key. See
+  [SECURITY.md](../../docs/SECURITY.md#rotating-the-jwt-secrets).
 - `JWT_ACCESS_TTL_SEC`: default 900.
 - `JWT_ISSUER` and `JWT_AUDIENCE`: default `nestjs-boilerplate`.
 - `AUTH_DENYLIST_ENABLED`: default `true`.
