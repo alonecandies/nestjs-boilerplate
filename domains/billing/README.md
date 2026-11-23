@@ -308,6 +308,10 @@ A paid session with no known amount is refused the same way and increments
 `billing_checkout_paid_without_amount_total`. When Stripe charged an amount or currency other than
 the stored quote (promotion codes, tax), the charged values are recorded and `billing_checkout_amount_mismatch_total`
 increments.
+A paid session recorded without an owner (a pre-B2 session, a nil-UUID user, metadata that is no tenant or user
+UUID) is recorded only: the payment stays `pending` and no receipt is sent. Its first delivery increments
+`billing_checkout_paid_without_owner_total` (a duplicate delivery, an `expired` session and a completed session
+still `unpaid` do not): alert on it and reconcile in the Stripe dashboard.
 Infrastructure errors propagate, the transaction rolls back (forgetting the event id) and Stripe's retry is
 processed again. Old receipts are purged: see **Retention** below.
 
