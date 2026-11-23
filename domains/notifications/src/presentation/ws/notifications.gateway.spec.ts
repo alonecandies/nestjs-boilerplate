@@ -491,6 +491,32 @@ describe('NotificationsGateway connection caps', () => {
     expect(caps.releaseSocket).toHaveBeenCalledWith('u-1', FAILED_OPEN.id);
   });
 
+  it('takes no slot for a socket that closed while its token was verified', async () => {
+    const socket = capsSocket();
+    const verify = vi.fn(async () => {
+      // The client goes away while the token is being verified.
+      socket.conn.readyState = 'closed';
+      return { jti: 'j', exp };
+    });
+    const caps = {
+      admitHandshake: vi.fn(async () => ({ ok: true as const })),
+      acquireSocket: vi.fn(async () => SLOT),
+      releaseSocket: vi.fn(async () => undefined),
+    };
+    const gateway = new NotificationsGateway(
+      { ...tokens, verifyAccessToken: verify } as never,
+      denylist as never,
+      {} as never,
+      authWithSweepInterval(30_000),
+      caps as never,
+    );
+    await expect(gateway.authenticate(socket as never)).resolves.toBeInstanceOf(Error);
+    expect(verify).toHaveBeenCalledTimes(1);
+    expect(caps.acquireSocket).not.toHaveBeenCalled();
+    expect(caps.releaseSocket).not.toHaveBeenCalled();
+    expect(socket.data['capSlot']).toBeUndefined();
+  });
+
   it('does not release a slot for a socket that never acquired one', () => {
     const caps = { admitHandshake: vi.fn(), acquireSocket: vi.fn(), releaseSocket: vi.fn() };
     const socket = capsSocket();
