@@ -1,12 +1,18 @@
-import type { INestApplicationContext } from '@nestjs/common';
+import type { DynamicModule, INestApplicationContext } from '@nestjs/common';
 import { CommandBus } from '@nestjs/cqrs';
 import { SystemContext } from '@platform/common';
+import { DatabaseModule } from '@platform/database';
+import { ImmudbModule } from '@platform/immudb';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ReanchorLedgerCommand } from '../../application/commands/reanchor-ledger/reanchor-ledger.command.js';
 import { LedgerReanchorRefusedException } from '../../domain/ledger/ledger.errors.js';
 import { ledgerConfig } from '../../infrastructure/ledger/ledger.config.js';
 import { billingMigrations } from '../../infrastructure/persistence/billing.migrations.js';
-import { LEDGER_REANCHOR_REASON, runLedgerReanchorCli } from './ledger-reanchor-cli.js';
+import {
+  createLedgerReanchorModule,
+  LEDGER_REANCHOR_REASON,
+  runLedgerReanchorCli,
+} from './ledger-reanchor-cli.js';
 
 const ARGS = [
   '--database',
@@ -148,5 +154,31 @@ describe('runLedgerReanchorCli (the dist/cli/ledger-reanchor.js body, audit fixe
 
     expect(process.exitCode).toBe(1);
     expect(`${written(stdout)}${written(stderr)}`).toContain('database unreachable');
+  });
+
+  it('its root module runs no migrations, whatever the env says, and imports immudb only with the ledger on', () => {
+    /** The options each dynamic module of the root was given, by its module class. */
+    const options = (ledgerEnabled: boolean): Map<unknown, Record<string, unknown>> => {
+      const root = createLedgerReanchorModule([billingMigrations], ledgerEnabled);
+      const imports = Reflect.getMetadata('imports', root) as DynamicModule[];
+      return new Map(
+        imports.map((imported) => {
+          const value = (imported.providers ?? []).find(
+            (provider) =>
+              typeof provider === 'object' &&
+              'useValue' in provider &&
+              'migrations' in provider.useValue,
+          );
+          return [
+            imported.module,
+            (value as { useValue?: Record<string, unknown> })?.useValue ?? {},
+          ];
+        }),
+      );
+    };
+    const on = options(true);
+    expect(on.get(ImmudbModule)).toMatchObject({ runMigrations: false });
+    expect(on.get(DatabaseModule)).toMatchObject({ runMigrations: false });
+    expect(options(false).has(ImmudbModule)).toBe(false);
   });
 });

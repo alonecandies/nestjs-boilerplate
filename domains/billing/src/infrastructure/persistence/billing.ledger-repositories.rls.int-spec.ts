@@ -730,8 +730,19 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           readAt: lostFrom,
           reanchor: { txId: 9n, lostFrom, at: expect.any(Date) },
         });
-        // The same re-anchor again: its `from` is stale now, and its id would collide anyway.
+        // The same re-anchor again: its `from` is stale now, so the UPDATE matches nothing.
         await expect(inSystem(() => system.reanchorTrustedState(reanchor))).resolves.toBe(false);
+        expect(await reanchorRows()).toHaveLength(1);
+        // A current `from` with a reused audit id: the compare-and-set matches, then the audit
+        // INSERT fails on its primary key, and the transaction rolls the state change back.
+        await expect(
+          sqlState(
+            inSystem(() =>
+              system.reanchorTrustedState({ ...reanchor, from: restored, to: state(8n, [0x0b]) }),
+            ),
+          ),
+        ).resolves.toBe('23505');
+        expect(await trustedRows()).toEqual([{ database: 'ledger', tx_id: '9', hash: '0a' }]);
         expect(await reanchorRows()).toHaveLength(1);
         // R5 advances from the re-anchored state as from any other.
         await expect(

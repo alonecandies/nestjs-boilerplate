@@ -170,6 +170,8 @@ describe('ReanchorLedgerHandler (audit fixes OPS-1)', () => {
     });
 
     it('signing-key-not-pinned: the client pins no key, whatever LEDGER_ALLOW_UNVERIFIED says', async () => {
+      // The guard itself is ImmudbLedgerAdapter.signedState (pinsSigningKey(), its own spec) and
+      // test/ledger-reanchor.int-spec.ts; this case pins that the handler maps it and writes nothing.
       vi.spyOn(ledger, 'signedState').mockRejectedValue(new LedgerSigningKeyNotPinnedException());
       await expect(refusal(reanchor(REQUEST, { ...ENABLED, allowUnverified: true }))).resolves.toBe(
         'signing-key-not-pinned',

@@ -104,8 +104,9 @@ export async function runLedgerReanchorCli(options: LedgerReanchorCliOptions): P
 }
 
 /**
- * The CLI's root module: config, CLS, CQRS, the database pools (no migrations), immudb while the
- * ledger is on (the handler refuses when it is off), a Kafka producer that never connects (R4 only
+ * The CLI's root module: config, CLS, CQRS, the database pools and immudb while the ledger is on
+ * (the handler refuses when it is off), neither running migrations whatever
+ * `DATABASE_RUN_MIGRATIONS` / `IMMUDB_RUN_MIGRATIONS` say (a refusal writes nothing), a Kafka producer that never connects (R4 only
  * builds outbox records) and `BillingLedgerReanchorModule`. No scheduler, no outbox relay, no
  * consumer, no HTTP or gRPC server.
  */
@@ -114,7 +115,7 @@ export function createLedgerReanchorModule(
   ledgerEnabled: boolean,
 ): Type {
   const ledger: (Type | DynamicModule)[] = ledgerEnabled
-    ? [ImmudbModule.forRootAsync({ migrations: [billingLedgerMigrations] })]
+    ? [ImmudbModule.forRootAsync({ migrations: [billingLedgerMigrations], runMigrations: false })]
     : [];
 
   @Module({
