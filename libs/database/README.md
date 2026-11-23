@@ -272,7 +272,9 @@ is left alone, and it ships in `dist/` like the other migration files):
   release: so a later file can use the step's index (`ADD CONSTRAINT … USING INDEX`), and a later drop or rename of its
   table never strands it. Without a pending step, the set's pending files run in one `migrate()`, as always. With
   some, the runner applies the files up to the first pending anchor (drizzle `migrate()` over a temporary copy of the
-  folder whose journal stops there, in `os.tmpdir()`, removed afterwards), runs the steps anchored there, and so on,
+  folder whose journal stops there, in `os.tmpdir()`, removed afterwards; so a pending online step needs a writable
+  temp directory wherever migrations run, e.g. a writable `/tmp` under a read-only root filesystem), runs the steps
+  anchored there, and so on,
   then the files after the last anchor; a stretch the database already has is skipped. A step anchored behind the
   database's position (added after its anchor was applied, or failed last time) therefore runs before the remaining
   files. Each step runs on its own, outside any transaction, and is recorded in `<schema>.__online_migrations`
