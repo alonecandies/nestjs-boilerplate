@@ -119,7 +119,7 @@ when set and not empty, that database is used instead of a container. `startRlsT
 `TEST_POSTGRES_STARTUP_TIMEOUT_MS`: how long `startTestPostgres` waits for a healthy container, in ms (default
 120000, testcontainers' own). Raise it when the amd64-only Citus image starts slowly under emulation on a busy
 machine. A value that is not a positive integer throws. The root `vitest.config.ts` keeps the int projects'
-hook timeout 60 s above it.
+hook timeout 60 s above the larger of it and 180 s, the wait of the Cassandra and Kafka specs.
 
 ## Gotchas
 

@@ -271,3 +271,77 @@ describe('spec-roadmap-status-stale: the program spec says which phases shipped'
     }
   });
 });
+
+describe('CI-2 and test-gap-statements-stale: the test docs describe the coverage that exists', () => {
+  /** Every `apps|domains|libs/<package>` folder that holds a file with the suffix, with its project name. */
+  function packagesWith(suffix: string, parents: string[]): string[] {
+    const found = new Set<string>();
+    const walk = (dir: string, owner: string): void => {
+      for (const entry of readdirSync(join(root, dir), { withFileTypes: true })) {
+        if (['node_modules', 'dist', 'coverage', 'generated'].includes(entry.name)) continue;
+        if (entry.isDirectory()) walk(`${dir}/${entry.name}`, owner);
+        else if (entry.name.endsWith(suffix)) found.add(owner);
+      }
+    };
+    for (const parent of parents) {
+      for (const entry of readdirSync(join(root, parent), { withFileTypes: true })) {
+        if (entry.isDirectory()) walk(`${parent}/${entry.name}`, `${parent}/${entry.name}`);
+      }
+    }
+    return [...found].sort();
+  }
+  const testing = (): string => flat(read('docs/TESTING.md'));
+
+  it('docs/TESTING.md names the project of every package that has an *.int-spec.ts', () => {
+    const domains = new Set(
+      readdirSync(join(root, 'domains'), { withFileTypes: true }).map((entry) => entry.name),
+    );
+    const packages = packagesWith('.int-spec.ts', ['apps', 'domains', 'libs']);
+    expect(packages.length).toBeGreaterThan(8);
+    for (const pkg of packages) {
+      const [parent = '', name = ''] = pkg.split('/');
+      const project = parent === 'libs' && domains.has(name) ? `platform-${name}` : name;
+      expect(testing(), `${pkg} has int specs`).toContain(`\`${project}:int\``);
+    }
+  });
+
+  it('docs/TESTING.md counts and names every app that has an e2e suite', () => {
+    const apps = packagesWith('.e2e-spec.ts', ['apps']).map((pkg) => pkg.slice('apps/'.length));
+    expect(apps).toHaveLength(6);
+    expect(testing()).toContain('Every app has an e2e spec');
+    expect(testing()).toContain('the six app e2e suites');
+    expect(testing()).not.toContain('five app e2e');
+    for (const app of apps) expect(testing(), app).toContain(`\`${app}\``);
+  });
+
+  it('docs/TESTING.md keeps one known gap: the Nest consumer stack on a real broker', () => {
+    const gapsSection = section(read('docs/TESTING.md'), '## Known gaps');
+    const gaps = flat(gapsSection);
+    expect(gaps).not.toContain('no broker or cross-process integration specs');
+    expect(gaps).toContain('Nest consumer');
+    expect(gaps).toContain('outbox-kafka-delivery.int-spec.ts');
+    expect(gaps).toContain('topology');
+    expect(gapsSection.match(/^- /gm) ?? []).toHaveLength(1);
+  });
+
+  it('docs/TESTING.md gives the int hook timeout the CI-2 budget', () => {
+    expect(testing()).toContain('integration projects 120 s / 240 s');
+    expect(testing()).not.toContain('120 s / 180 s');
+  });
+
+  it('docs/DOCKER.md describes the integration job and the six image apps', () => {
+    const job = flat(read('docs/DOCKER.md'));
+    for (const store of ['Citus', 'Cassandra', 'Kafka', 'immudb', 'RustFS', 'fake-gcs-server']) {
+      expect(job).toMatch(new RegExp(`\\*\\*integration\\*\\*:[^\\n]*${store}`));
+    }
+    expect(job).toContain('scripts/int-images.mjs');
+    expect(job).toContain('**image** (matrix of the 6 apps)');
+  });
+
+  it('docs/RELEASING.md links the test doc instead of listing int specs', () => {
+    const releasing = read('docs/RELEASING.md');
+    expect(releasing).not.toContain('known follow-up');
+    expect(releasing).not.toContain('Today only `@platform/database`');
+    expect(releasing).toContain('(TESTING.md');
+  });
+});
