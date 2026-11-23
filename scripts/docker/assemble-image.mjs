@@ -136,7 +136,8 @@ for (const { dir } of workspace.values()) {
 const entrypoints = ['main.js', 'instrument.js'];
 if (existsSync(join(build, appPackage.dir, 'src', 'migrate.ts'))) entrypoints.push('migrate.js');
 // One-off jobs run from the image (`node dist/cli/<name>.js …`, e.g. dist/cli/dlq-replay.js).
-const CLI_SOURCE = /^[^.][^/]*(?<!\.d|\.spec|\.test)\.ts$/;
+// Declarations and every spec naming the repo uses (.spec, .test, .int-spec, .e2e-spec) are not.
+const CLI_SOURCE = /^[^.][^/]*(?<!\.d|[.-]spec|[.-]test)\.ts$/;
 const cliDir = join(build, appPackage.dir, 'src', 'cli');
 const cliEntrypoints = existsSync(cliDir)
   ? readdirSync(cliDir, { withFileTypes: true })
