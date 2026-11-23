@@ -22,6 +22,7 @@ import { classifyRefreshRejection, isSessionActive } from '../../../domain/sessi
 import { TokenIssuer } from '../../../infrastructure/security/token-issuer.service.js';
 import { MembershipsRepository } from '../../persistence/memberships.repository.js';
 import { SessionsRepository } from '../../persistence/sessions.repository.js';
+import { TransactionRunner } from '../../persistence/transaction-runner.js';
 import { UsersRepository } from '../../persistence/users.repository.js';
 import { SessionTokensService } from '../../services/session-tokens.service.js';
 import { RefreshSessionCommand } from './refresh-session.command.js';
@@ -29,8 +30,9 @@ import { RefreshSessionCommand } from './refresh-session.command.js';
 /**
  * Refresh-token rotation with reuse detection (blueprint §2.4; plan B3 Task 12 flow table):
  * 1. verify the JWT (signature, iss/aud, exp, `typ: refresh`) — no DB access for garbage;
- * 2. as `{ sub, null }`: read the user, the session by `(sub, jti)` and the membership of the
- *    session's tenant (its roles become the principal's);
+ * 2. as `{ sub, null }`, in ONE read transaction (one BEGIN/COMMIT and pool checkout, not one per
+ *    read): read the user, the session by `(sub, jti)` and the membership of the session's tenant
+ *    (its roles become the principal's);
  * 3. ONE unit of work as `{ sub, session.tenantId, roles }`: the membership check, the conditional
  *    revoke (active + same user + same sha256) and the successor session in the same tenant — two
  *    concurrent refreshes of one token cannot both win;
@@ -49,6 +51,7 @@ export class RefreshSessionHandler implements ICommandHandler<RefreshSessionComm
     private readonly sessions: SessionsRepository,
     private readonly sessionTokens: SessionTokensService,
     private readonly memberships: MembershipsRepository,
+    private readonly transactions: TransactionRunner,
   ) {}
 
   async execute(command: RefreshSessionCommand): Promise<AuthTokens> {
@@ -59,19 +62,25 @@ export class RefreshSessionHandler implements ICommandHandler<RefreshSessionComm
 
     // Fresh email for the new access token; the session row decides the tenant (spec §5.2:
     // refresh keeps it; a router query on Citus) and the membership there the roles.
-    const current = await runWithPrincipal(owner, async () => {
-      const user = await this.users.findById(claims.sub);
-      if (!user) return null;
-      const session = await this.sessions.findById(claims.sub, claims.jti);
-      if (
-        session === null ||
-        !isSessionActive(session, now) ||
-        !timingSafeEqualStr(session.refreshTokenHash, refreshTokenHash)
-      ) {
-        return { user, session: null, membership: null };
-      }
-      return { user, session, membership: await this.memberships.find(session.tenantId, user.id) };
-    });
+    const current = await runWithPrincipal(owner, () =>
+      this.transactions.run(async () => {
+        const user = await this.users.findById(claims.sub);
+        if (!user) return null;
+        const session = await this.sessions.findById(claims.sub, claims.jti);
+        if (
+          session === null ||
+          !isSessionActive(session, now) ||
+          !timingSafeEqualStr(session.refreshTokenHash, refreshTokenHash)
+        ) {
+          return { user, session: null, membership: null };
+        }
+        return {
+          user,
+          session,
+          membership: await this.memberships.find(session.tenantId, user.id),
+        };
+      }),
+    );
     if (current === null) throw new InvalidRefreshTokenException();
 
     const { user, session, membership } = current;
