@@ -3,7 +3,9 @@ import { CommandBus, CommandHandler, type ICommandHandler } from '@nestjs/cqrs';
 import { MailService } from '@platform/mailer';
 import { trim } from 'lodash-es';
 import { defineNotificationsMail } from '../../mail/notifications-mail.js';
+import { toNotificationProps } from '../../mappers/notification.mapper.js';
 import { CreateNotificationCommand } from '../create-notification/create-notification.command.js';
+import { PublishNotificationCreatedCommand } from '../publish-notification-created/publish-notification-created.command.js';
 import { WelcomeUserCommand } from './welcome-user.command.js';
 
 export const WELCOME_NOTIFICATION_TITLE = 'Welcome aboard!';
@@ -43,6 +45,11 @@ export class WelcomeUserHandler implements ICommandHandler<WelcomeUserCommand> {
         context: { displayName: displayName || email },
         idempotencyKey: `welcome-${userId}`,
       }),
+    );
+    // The push goes last: a failed publish rejects, and the redelivered event finds the row and
+    // the mail already there (same id, same mail job id) and publishes again.
+    await this.commandBus.execute(
+      new PublishNotificationCreatedCommand(toNotificationProps(notification)),
     );
     return notification;
   }

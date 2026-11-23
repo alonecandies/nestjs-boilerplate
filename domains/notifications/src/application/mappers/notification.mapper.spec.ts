@@ -10,6 +10,7 @@ import {
   toNotificationContract,
   toNotificationCreatedPayload,
   toNotificationPage,
+  toNotificationProps,
 } from './notification.mapper.js';
 
 describe('notification mapper', () => {
@@ -33,6 +34,16 @@ describe('notification mapper', () => {
       createdAt: props.createdAt,
     });
     expect(contract.data).not.toBe(props.data);
+  });
+
+  it('maps the contract back to domain state (copying data), and refuses an unknown type', () => {
+    const props = makeNotificationProps({ type: 'payment_receipt', read: true });
+    const contract = toNotificationContract(props);
+    const back = toNotificationProps(contract);
+    expect(back).toEqual(props);
+    expect(back.data).not.toBe(contract.data);
+    expect(() => toNotificationProps({ ...contract, type: 'nope' })).toThrow(props.id);
+    expect(() => toNotificationProps({ ...contract, createdAt: undefined })).toThrow(props.id);
   });
 
   it('omits nextPageState on the last page, like the proto `optional`', () => {

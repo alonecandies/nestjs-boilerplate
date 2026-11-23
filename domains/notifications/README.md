@@ -14,10 +14,8 @@ identity.membership-created.v1 ┤                       │   Cassandra notific
 identity.membership-removed.v1 ┼─► Messaging consumers ─┤
 billing.payment-succeeded.v1 ──┤   → WelcomeUser /      ├─► MailService.enqueue (BullMQ, idempotent)
                                │     Upsert/RemoveRecipient,
-                               │     SendPaymentReceipt └─► NotificationCreatedEvent
-                              │                            └─► NotificationsSagas (@Saga)
-                              │                                 └─► PublishNotificationCreatedCommand
-                              │                                      └─► notifications.notification-created.v1
+                               │     SendPaymentReceipt └─► PublishNotificationCreatedCommand (last)
+                              │                             └─► notifications.notification-created.v1
 edge (gateway / monolith) ◄───┴── NotificationPushConsumer ◄──────────────┘
    ├─► socket.io room t:{tid}:u:{uid} ('notification.created') — fanned out by the Redis adapter
    └─► GRAPHQL_PUB_SUB 'notificationCreated:{tid}:{uid}'       — RedisPubSub, one channel per (tenant, user)
@@ -27,7 +25,7 @@ edge (gateway / monolith) ◄───┴── NotificationPushConsumer ◄─�
 
 | Module                                               | Contents                                                                                                                                                                                                      | Imported by                                  |
 | ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------- |
-| `NotificationsCoreModule`                            | Command/query handlers, `NotificationsSagas`, Cassandra repositories, `DailyDigestCron`                                                                                                                       | monolith, notifications-service              |
+| `NotificationsCoreModule`                            | Command/query handlers, Cassandra repositories, `DailyDigestCron`                                                                                                                                             | monolith, notifications-service              |
 | `NotificationsGrpcModule`                            | Core + `NotificationsGrpcController` (`notifications.v1.NotificationsService`)                                                                                                                                | notifications-service                        |
 | `NotificationsMessagingModule`                       | Core + `IdentityEventsConsumer`, `BillingEventsConsumer`                                                                                                                                                      | monolith, notifications-service              |
 | `NotificationsApiModule.forLocal()` / `.forRemote()` | `NotificationsController`, `NotificationsResolver`, `NotificationsGateway`, `NotificationPushConsumer` + the port (local adapter, the monolith imports `NotificationsCoreModule` too / gRPC adapter + client) | monolith (`forLocal`), gateway (`forRemote`) |
@@ -208,13 +206,13 @@ becomes `NOT_FOUND` with an `x-error-code: NOTIFICATION_NOT_FOUND` trailer. The 
 
 ### Kafka
 
-| Topic                                   | Role                                   | Handler                                                          |
-| --------------------------------------- | -------------------------------------- | ---------------------------------------------------------------- |
-| `identity.user-registered.v1`           | consumed (Messaging)                   | `WelcomeUserCommand`                                             |
-| `identity.membership-created.v1`        | consumed (Messaging)                   | `UpsertRecipientCommand`                                         |
-| `identity.membership-removed.v1`        | consumed (Messaging)                   | `RemoveRecipientCommand`                                         |
-| `billing.payment-succeeded.v1`          | consumed (Messaging)                   | `SendPaymentReceiptCommand`                                      |
-| `notifications.notification-created.v1` | produced (saga) · consumed (edge push) | `PublishNotificationCreatedCommand` · `NotificationPushConsumer` |
+| Topic                                   | Role                                               | Handler                                                          |
+| --------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------- |
+| `identity.user-registered.v1`           | consumed (Messaging)                               | `WelcomeUserCommand`                                             |
+| `identity.membership-created.v1`        | consumed (Messaging)                               | `UpsertRecipientCommand`                                         |
+| `identity.membership-removed.v1`        | consumed (Messaging)                               | `RemoveRecipientCommand`                                         |
+| `billing.payment-succeeded.v1`          | consumed (Messaging)                               | `SendPaymentReceiptCommand`                                      |
+| `notifications.notification-created.v1` | produced (welcome, receipt) · consumed (edge push) | `PublishNotificationCreatedCommand` · `NotificationPushConsumer` |
 
 Consumers use `@KafkaEventPattern` + `ParseEventEnvelopePipe` (typed, validated envelopes) with a
 controller-scoped dead-letter filter: any failure, including an invalid envelope, goes to
@@ -235,11 +233,11 @@ publishes it with the explicit option `tenantId: notification.tenantId` (the inb
 | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `CreateNotificationCommand`         | `NotificationEntity.create()` → insert into the input's `(tenant, user)` inbox → `NotificationCreatedEvent`. With `idempotency: { key, occurredAt }` the id is derived (upsert). |
 | `MarkNotificationReadCommand`       | `requireInboxActor`, then `UPDATE … USING TTL <remaining> … IF EXISTS`; 404 `NOTIFICATION_NOT_FOUND` when not in the `(tenant, user)` inbox (or past its 90 days)                |
-| `PublishNotificationCreatedCommand` | Kafka publish (key = user id, envelope id = notification id, envelope tenant = inbox tenant). Never throws; resolves `false` on failure                                          |
-| `WelcomeUserCommand`                | Welcome notification (`welcome:{userId}`), welcome mail to the event's email (`welcome-{userId}`)                                                                                |
+| `PublishNotificationCreatedCommand` | Kafka publish (key = user id, envelope id = notification id, envelope tenant = inbox tenant). Rejects on failure, so the event that created the notification fails               |
+| `WelcomeUserCommand`                | Welcome notification (`welcome:{userId}`), welcome mail to the event's email (`welcome-{userId}`), then the push                                                                 |
 | `UpsertRecipientCommand`            | Upsert the `(tenant, user)` recipient row, `USING TIMESTAMP` = the membership's `createdAt`                                                                                      |
 | `RemoveRecipientCommand`            | Delete the `(tenant, user)` recipient row, `USING TIMESTAMP` = `removedAt`                                                                                                       |
-| `SendPaymentReceiptCommand`         | Receipt notification (`receipt:{paymentId}`), receipt mail (`receipt-{paymentId}`) when the user is a recipient in the payment's tenant                                          |
+| `SendPaymentReceiptCommand`         | Receipt notification (`receipt:{paymentId}`), receipt mail (`receipt-{paymentId}`) when the user is a recipient in the payment's tenant, then the push                           |
 | `SendDailyDigestCommand`            | Bounded scan of `(tenant, user)` recipients, each pair's own unread items, one digest mail per pair (`digest-{tenantId}-{userId}-{yyyy-mm-dd}`)                                  |
 | `ListNotificationsQuery`            | `requireInboxActor`, then one `(tenant, user)` inbox page (`executePage`, driver paging state)                                                                                   |
 
@@ -313,7 +311,7 @@ paged and capped.
 `bunx vitest run --project notifications` needs no infrastructure.
 
 - Domain: aggregate invariants and events, deterministic ids. Mapper round-trips, validated against the registered Kafka envelope schema.
-- Every command/query handler (`*.handler.spec.ts`) with mocked repositories, buses, mail and `FakeKafkaProducer`. The saga (`ofType` mapping).
+- Every command/query handler (`*.handler.spec.ts`) with mocked repositories, buses, mail and `FakeKafkaProducer`. The welcome and receipt handlers publish last, after the mail, and reject when the publish fails; `src/notifications-push-redelivery.spec.ts` runs them through the real core: a broker failure rejects, and the redelivery publishes once, with one inbox row and one mail.
 - Mail templates (`infrastructure/mail/notifications-mail-templates.spec.ts`): every declared template ships, has a context type and renders with the shared layout partials in strict mode, with HTML escaping.
 - Repositories against a mocked `cassandra-driver` client (CQL, prepare/idempotent flags, paging, LWT result). Migrations parsed with `@platform/cassandra`'s loader.
 - `test/recipients.int-spec.ts` (Docker; `INTEGRATION=1 bunx vitest run --project notifications:int`): the real migrations and recipients repository on `@platform/testing/cassandra`: per-pair rows, removal of one pair, write-timestamp ordering and the scan.
@@ -324,7 +322,7 @@ paged and capped.
 - gRPC controller and Kafka consumers run through Nest's real RPC pipeline on in-memory transports (`test/support/in-memory-{grpc,kafka}.server.ts`): bus mapping, `INVALID_ARGUMENT`, NOT_FOUND trailers, and DLQ records for invalid envelopes and failing commands.
 - gRPC round trip (`presentation/grpc/notifications-grpc.roundtrip.spec.ts`): `NotificationsGrpcAdapter` ↔ `NotificationsGrpcController` over real loopback gRPC. The remote adapter returns the local mapper's exact shape (map data, Date, `nextPageState` absent on the last page) and keeps `NOTIFICATION_NOT_FOUND` across the hop.
 - WebSocket gateway: handshake middleware (valid, Bearer header, missing, revoked, forged), room join, disconnect at token expiry (and timer cleanup), the revocation sweep, `WsSessionGuard` (TOKEN_REVOKED), `markRead` ack, `ping`, room push.
-- Module composition for every topology: the Core welcome flow end to end (command → aggregate → saga → Kafka), `forLocal()`/`forRemote()` port binding, and the gRPC/Messaging controllers.
+- Module composition for every topology: the Core welcome flow end to end (command → aggregate → mail → Kafka), `forLocal()`/`forRemote()` port binding, and the gRPC/Messaging controllers.
 - Test doubles for the apps: `@domain/notifications/testing` exports `FakeNotificationsPort` (an in-memory inbox per `(tenantId, userId)` behind the gateway's `NotificationsPort`; `add()` requires the tenant), `InMemoryNotificationsRepository` (the inbox repository keyed like the table) and `InMemoryNotificationRecipientsRepository` (the recipients projection with the Cassandra adapter's last-write-wins rules).
 
 ## Gotchas
@@ -333,8 +331,12 @@ paged and capped.
   interceptor and bounded in-process retry of transient failures). Transport recognises the
   `KafkaContext` with `instanceof`, which relies on the hoisted linker installing a single
   `@nestjs/microservices` copy (see `libs/transport/README.md`).
-- The push is best-effort. The inbox row is written before the event is published, but a crash
-  between the two loses only the push; a transactional outbox would close that gap.
+- The push is published at least once without an outbox. The welcome and receipt handlers publish
+  `notifications.notification-created.v1` last, after the inbox row and the mail, and a failed
+  publish fails their event: the consumer retries it in process, then dead-letters it
+  (`KafkaDeadLetters` pages; replay with `dlq-replay`). The redelivery rewrites the same row,
+  enqueues the same mail job (a no-op) and publishes again. The trade-off: a persistent publish
+  failure dead-letters an event whose row and mail were already written.
 - `executePage` can return a page state at the exact end of a partition. The next page is then
   empty with a `null` state, so clients must treat that as the end.
 - Recipients are only known after a `membership-created` event for that `(tenant, user)`. A receipt

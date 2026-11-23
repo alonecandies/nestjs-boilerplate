@@ -9,7 +9,7 @@ reacts to other services' integration events:
   notification + welcome mail, `identity.membership-created.v1` / `identity.membership-removed.v1`
   → the `(tenant, user)` mail recipients, `billing.payment-succeeded.v1` → receipt notification +
   receipt mail in the payment's tenant;
-- produces `notifications.notification-created.v1` (saga), which the gateway pushes to the user
+- produces `notifications.notification-created.v1` (last step of the welcome and receipt), which the gateway pushes to the user
   over Socket.IO and GraphQL subscriptions;
 - the BullMQ `mail` worker (SMTP) and the daily digest cron (09:00 UTC, `@WithLock`).
 
@@ -29,7 +29,7 @@ only the composition root.
 | ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | `AppConfigModule.forRoot()` + `ConfigModule.forFeature(grpcConfig)`                                                                 | `app`/`observability` + the gRPC bind namespace, validated at boot                                                           |
 | `ObservabilityModule.forRoot({ healthContributors: [cassandra, redis, kafka] })`                                                    | pino JSON logs, request context, `/metrics`, `/health/*`                                                                     |
-| `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`                                                                                  | buses + `NotificationsSagas`; `DailyDigestCron`                                                                              |
+| `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`                                                                                  | buses; `DailyDigestCron`                                                                                                     |
 | `CassandraModule.forRootAsync({ migrations: [notificationsCassandraMigrations] })`                                                  | keyspace + CQL migrations at boot (LWT-claimed), prepared statements, driver paging                                          |
 | `RedisModule.forRootAsync()`                                                                                                        | the digest's distributed lock                                                                                                |
 | `AppQueueModule.forRootAsync()`, `AppMailerModule.forRootAsync({ templateDirs: [NOTIFICATIONS_MAIL_TEMPLATES_DIR], worker: true })` | BullMQ connection, `mail` queue, `MailService`, the `MailProcessor` worker (SMTP pool) rendering the notifications templates |

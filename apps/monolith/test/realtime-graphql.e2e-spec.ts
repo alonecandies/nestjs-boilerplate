@@ -23,7 +23,11 @@ await vi.hoisted(async () => {
 import type { EventEmitter } from 'node:events';
 import { refreshTokenConfig } from '@domain/identity';
 import { TokenIssuer } from '@domain/identity/testing';
-import { CreateNotificationCommand } from '@domain/notifications';
+import {
+  CreateNotificationCommand,
+  PublishNotificationCreatedCommand,
+  toNotificationProps,
+} from '@domain/notifications';
 import { NotificationPushConsumer, notificationCreatedTrigger } from '@domain/notifications/api';
 import { NOTIFICATION_CREATED_EVENT } from '@domain/notifications-contracts';
 import { CommandBus } from '@nestjs/cqrs';
@@ -174,12 +178,17 @@ describe('graphql-ws over real connections (monolith, E-2)', () => {
     return collector;
   };
 
-  const createNotification = (tenantId: string, userId: string, title: string) =>
-    e2e.app
-      .get(CommandBus)
-      .execute(
-        new CreateNotificationCommand({ tenantId, userId, type: 'system', title, body: title }),
-      );
+  /** Creates a notification and publishes its push, as the welcome and receipt handlers do. */
+  const createNotification = async (tenantId: string, userId: string, title: string) => {
+    const commandBus = e2e.app.get(CommandBus);
+    const notification = await commandBus.execute(
+      new CreateNotificationCommand({ tenantId, userId, type: 'system', title, body: title }),
+    );
+    await commandBus.execute(
+      new PublishNotificationCreatedCommand(toNotificationProps(notification)),
+    );
+    return notification;
+  };
 
   /** What the Kafka server hands the push consumer. */
   const envelopeFor = (tenantId: string, userId: string, id = generateId()) =>

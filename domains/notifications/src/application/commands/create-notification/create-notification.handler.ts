@@ -30,8 +30,9 @@ export class CreateNotificationHandler implements ICommandHandler<CreateNotifica
         createdAt,
       }),
     );
-    // Persist first, publish second: the push must never announce a row that is not there. A
-    // crash in between loses the push, never the notification (an outbox would close that gap).
+    // This only stores the row. The callers that create notifications (welcome, receipt)
+    // publish the push themselves, after the row and the mail, so a failed publish fails their
+    // event and its redelivery publishes again; the push never announces a missing row.
     await this.notifications.insert(notification.toSnapshot());
     notification.commit();
     return toNotificationContract(notification.toSnapshot());

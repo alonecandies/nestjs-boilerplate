@@ -223,9 +223,9 @@ export class GetUserByIdQuery extends Query<User> { … }
 | Command handler | One write use case. Loads/creates an aggregate, persists it, then `commit()`s its domain events                                                                                         | `RegisterUserHandler`, `LoginHandler`, `HandleStripeWebhookHandler`, `CreateNotificationHandler`, `WelcomeUserHandler` |
 | Query handler   | Read use case, returns a contracts-package (ts-proto) shape                                                                                                                             | `GetUserByIdHandler`, `GetUsersByIdsHandler` (feeds the GraphQL `users` DataLoader), `ListPaymentsHandler`             |
 | Domain event    | Fact raised by an aggregate (`AggregateRoot.apply`), published on `commit()`                                                                                                            | `UserRegisteredEvent`, `PaymentSucceededEvent`, `NotificationCreatedEvent`                                             |
-| Event handler   | In-process reaction to a domain event; none of them publishes to Kafka (that is the outbox's job)                                                                                       | (the sagas below react to domain events)                                                                               |
+| Event handler   | In-process reaction to a domain event; none of them publishes to Kafka (that is the outbox's job)                                                                                       | (none today)                                                                                                           |
 | **Outbox**      | `OutboxWriter#enqueue` writes the integration event to `<schema>.outbox` in the transaction that changes the state; the leader `OutboxRelay` of that outbox publishes the rows to Kafka | `IdentityOutbox` → `identity.user-registered.v1`, `BillingOutbox` → `billing.payment-succeeded.v1`                     |
-| **Saga**        | `@Saga()` stream mapping events to commands. Pure mapping only: an error inside the operator pipeline would complete the saga stream for good, so all I/O lives in the command handler  | `NotificationsSagas.notificationCreated`: `NotificationCreatedEvent` → `PublishNotificationCreatedCommand`             |
+| **Saga**        | `@Saga()` stream mapping events to commands. Pure mapping only: an error inside the operator pipeline would complete the saga stream for good, so all I/O lives in the command handler  | (none today: a saga cannot fail the command that raised the event, so the notification push is not one)                |
 | Kafka consumer  | Presentation for inbound integration events: validates the envelope, dispatches a command                                                                                               | `IdentityEventsConsumer` → `WelcomeUserCommand`, `BillingEventsConsumer` → `SendPaymentReceiptCommand`                 |
 | Cron            | `@nestjs/schedule` job guarded by a Redis lock (`@WithLock`), so one replica runs it                                                                                                    | `PurgeExpiredSessionsCron`, `PurgeStripeEventsCron`, `DailyDigestCron`                                                 |
 
@@ -245,7 +245,7 @@ user.commit(); // in-process domain events only, after COMMIT
 
 **The relay.** One `OutboxRelay` per outbox runs in every process that owns it, and only the holder of the Redis lock `outbox-relay:<schema>` publishes: poll the unpublished rows on the system pool, `KafkaProducer#publishStored` them in order (no Postgres transaction is open across a publish), mark the acknowledged rows. A failed publish ends the batch; the row and the later ones go out on a later tick. Delivery is therefore **at least once**, and every consumer deduplicates on the envelope id (below). A row the broker always refuses blocks its outbox until an operator acts (the `OutboxBacklogStuck` alert pages; [OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts)). Published rows are purged after `OUTBOX_RETENTION_HOURS`. Details: [libs/outbox/README.md](../libs/outbox/README.md). Notifications (Cassandra) and files (no store) do not use an outbox.
 
-**Exception: `notifications.notification-created.v1`.** The notifications context has no Postgres store behind it. `PublishNotificationCreatedHandler` publishes it directly after the inbox row was written, so a crash between the two loses the push (the inbox row stays). That is the one event path that is not transactional.
+**Exception: `notifications.notification-created.v1`.** The notifications context has no Postgres store behind it, so it has no outbox. The two commands that create a notification, `WelcomeUserHandler` and `SendPaymentReceiptHandler`, publish it themselves, last, after the inbox row and the mail, through `PublishNotificationCreatedCommand`, and a failed publish fails them. The upstream event is then retried in process and dead-lettered if it keeps failing (`KafkaDeadLetters` pages; replay it with `dlq-replay`). Its redelivery rewrites the same row (derived id), enqueues the same mail job (a no-op for 24 h) and publishes again, and the edge deduplicates the push on the envelope id, so the push is published at least once. The trade-off: a persistent publish failure dead-letters an event whose row and mail were already written.
 
 **Idempotent consumers.** Inbound commands derive their ids from the business key, so redelivery and DLQ replays are harmless: `WelcomeUserHandler` creates the notification with idempotency key `welcome:<userId>` and enqueues mail with idempotency key `welcome-<userId>`; `SendPaymentReceiptHandler` uses `receipt:<paymentId>` / `receipt-<paymentId>`. `CreateNotificationHandler` derives the notification id from the key (`deriveNotificationId`).
 
@@ -253,14 +253,14 @@ user.commit(); // in-process domain events only, after COMMIT
 
 Topics are named `<context>.<event-name>.v<major>` and declared once, as an `EventContract` (`<EVENT>_EVENT`: topic + payload schema) in the producer's `domains/<x>/contracts/src/events`. Each has a dead-letter twin `<topic>.dlq`.
 
-| Topic                                   | Producer (relay / handler)                                     | Key     | Consumers                                                                 |
-| --------------------------------------- | -------------------------------------------------------------- | ------- | ------------------------------------------------------------------------- |
-| `identity.user-registered.v1`           | `identity.outbox` (`IdentityOutbox`), relayed                  | user id | `IdentityEventsConsumer` → welcome notification + welcome email           |
-| `identity.membership-created.v1`        | `identity.outbox`, relayed                                     | user id | `IdentityEventsConsumer` → upsert the `(tenant, user)` mail recipient     |
-| `identity.membership-removed.v1`        | `identity.outbox`, relayed                                     | user id | `IdentityEventsConsumer` → remove the `(tenant, user)` mail recipient     |
-| `billing.payment-succeeded.v1`          | `billing.outbox` (`BillingOutbox`), relayed                    | user id | `BillingEventsConsumer` → receipt notification + receipt email            |
-| `billing.ledger-posting.v1`             | `billing.outbox`, relayed (Stripe money events)                | tenant  | `LedgerPostingConsumer` (billing) → ledger entries in immudb              |
-| `notifications.notification-created.v1` | `PublishNotificationCreatedHandler` (via `NotificationsSagas`) | user id | `NotificationPushConsumer` (edge) → Socket.IO room + GraphQL subscription |
+| Topic                                   | Producer (relay / handler)                             | Key     | Consumers                                                                 |
+| --------------------------------------- | ------------------------------------------------------ | ------- | ------------------------------------------------------------------------- |
+| `identity.user-registered.v1`           | `identity.outbox` (`IdentityOutbox`), relayed          | user id | `IdentityEventsConsumer` → welcome notification + welcome email           |
+| `identity.membership-created.v1`        | `identity.outbox`, relayed                             | user id | `IdentityEventsConsumer` → upsert the `(tenant, user)` mail recipient     |
+| `identity.membership-removed.v1`        | `identity.outbox`, relayed                             | user id | `IdentityEventsConsumer` → remove the `(tenant, user)` mail recipient     |
+| `billing.payment-succeeded.v1`          | `billing.outbox` (`BillingOutbox`), relayed            | user id | `BillingEventsConsumer` → receipt notification + receipt email            |
+| `billing.ledger-posting.v1`             | `billing.outbox`, relayed (Stripe money events)        | tenant  | `LedgerPostingConsumer` (billing) → ledger entries in immudb              |
+| `notifications.notification-created.v1` | `PublishNotificationCreatedHandler` (welcome, receipt) | user id | `NotificationPushConsumer` (edge) → Socket.IO room + GraphQL subscription |
 
 Keying by user id keeps one user's events ordered on one partition (`billing.ledger-posting.v1` is keyed by tenant id). The first five are tenant-scoped: the envelope
 `tenantId` names the tenant, and a consumer without one (or with the platform tenant) throws, so the message
@@ -473,8 +473,8 @@ sequenceDiagram
   IC->>W: CommandBus.execute(WelcomeUserCommand)
   W->>CN: CreateNotificationCommand (key welcome:userId)
   CN->>CS: insert notification
-  CN-)K: NotificationCreatedEvent, saga, publish notifications.notification-created.v1
   W->>Q: enqueue welcome mail (idempotency key welcome-userId)
+  W-)K: publish notifications.notification-created.v1 (last; a failure fails the event)
   Q-)Q: MailProcessor sends via SMTP
   K-)PC: notifications.notification-created.v1
   PC->>C: Socket.IO notification.created + GraphQL notificationCreated
@@ -650,11 +650,7 @@ Other structural decisions:
 
 ## 12. Known follow-ups
 
-Stated honestly, none of these are done:
-
-| Follow-up                    | Today                                                                                                                                                                                                                         |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Outbox for notifications** | `notifications.notification-created.v1` is published directly: the notifications context has no Postgres store to hold an outbox row, so a crash between the inbox write and the publish loses the push (the inbox row stays) |
+None open. The last one, an outbox for `notifications.notification-created.v1`, was closed without a new store: the push is published last and a failed publish fails the event (section 6).
 
 ## See also
 

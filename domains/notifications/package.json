@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Notifications bounded context: Cassandra inbox (pageState paging, mark-read), welcome/receipt/digest flows from Kafka events, CQRS + saga, REST/GraphQL/WebSocket/gRPC edges bound through NotificationsPort",
+  "description": "Notifications bounded context: Cassandra inbox (pageState paging, mark-read), welcome/receipt/digest flows from Kafka events, CQRS, REST/GraphQL/WebSocket/gRPC edges bound through NotificationsPort",
   "exports": {
     ".": {
       "@repo/source": "./src/index.ts",

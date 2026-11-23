@@ -10,7 +10,6 @@ import { WelcomeUserHandler } from './application/commands/welcome-user/welcome-
 import { NotificationRecipientsRepository } from './application/ports/notification-recipients.repository.js';
 import { NotificationsRepository } from './application/ports/notifications.repository.js';
 import { ListNotificationsHandler } from './application/queries/list-notifications/list-notifications.handler.js';
-import { NotificationsSagas } from './application/sagas/notifications.sagas.js';
 import { CassandraNotificationRecipientsRepository } from './infrastructure/persistence/cassandra-notification-recipients.repository.js';
 import { CassandraNotificationsRepository } from './infrastructure/persistence/cassandra-notifications.repository.js';
 import { DailyDigestCron } from './infrastructure/scheduling/daily-digest.cron.js';
@@ -29,7 +28,7 @@ export const NOTIFICATIONS_COMMAND_HANDLERS: Provider[] = [
 export const NOTIFICATIONS_QUERY_HANDLERS: Provider[] = [ListNotificationsHandler];
 
 /**
- * The notifications core: CQRS handlers, saga, Cassandra repositories and the daily digest cron.
+ * The notifications core: CQRS handlers, Cassandra repositories and the daily digest cron.
  * Imported by processes that OWN the data (monolith, notifications-service); the gateway never
  * imports it.
  *
@@ -43,7 +42,6 @@ export const NOTIFICATIONS_QUERY_HANDLERS: Provider[] = [ListNotificationsHandle
   providers: [
     ...NOTIFICATIONS_COMMAND_HANDLERS,
     ...NOTIFICATIONS_QUERY_HANDLERS,
-    NotificationsSagas,
     DailyDigestCron,
     { provide: NotificationsRepository, useClass: CassandraNotificationsRepository },
     {

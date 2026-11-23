@@ -40,6 +40,30 @@ export function toNotificationContract(props: Readonly<NotificationProps>): Noti
   };
 }
 
+/**
+ * Contract → domain state, the inverse of `toNotificationContract`: the input of
+ * `PublishNotificationCreatedCommand` for a notification that `CreateNotificationCommand` returned.
+ * Throws on a type this context does not know or a missing `createdAt` (never the case for a
+ * notification it created).
+ */
+export function toNotificationProps(notification: Readonly<Notification>): NotificationProps {
+  const { type, createdAt } = notification;
+  if (!Object.hasOwn(KIND_BY_TYPE, type) || createdAt === undefined) {
+    throw new Error(`Notification ${notification.id} has no known type or no createdAt`);
+  }
+  return {
+    id: notification.id,
+    tenantId: notification.tenantId,
+    userId: notification.userId,
+    type: KIND_BY_TYPE[type as NotificationType],
+    title: notification.title,
+    body: notification.body,
+    data: { ...notification.data },
+    read: notification.read,
+    createdAt,
+  };
+}
+
 /** Repository slice → contract page (`nextPageState` absent on the last page, as in the proto). */
 export function toNotificationPage(slice: NotificationsSlice): NotificationPage {
   const page: NotificationPage = { items: slice.items.map(toNotificationContract) };

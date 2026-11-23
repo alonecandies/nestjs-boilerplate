@@ -11,8 +11,10 @@ import {
   USER_ID,
 } from '../../../../test/support/fixtures.js';
 import { InMemoryNotificationRecipientsRepository } from '../../../testing/in-memory-notification-recipients.repository.js';
+import { toNotificationProps } from '../../mappers/notification.mapper.js';
 import type { NotificationRecipient } from '../../ports/notification-recipients.repository.js';
 import { CreateNotificationCommand } from '../create-notification/create-notification.command.js';
+import { PublishNotificationCreatedCommand } from '../publish-notification-created/publish-notification-created.command.js';
 import { SendPaymentReceiptCommand } from './send-payment-receipt.command.js';
 import {
   RECEIPT_NOTIFICATION_TITLE,
@@ -34,7 +36,11 @@ async function setup(rows: NotificationRecipient[]) {
   const recipients = new InMemoryNotificationRecipientsRepository();
   for (const row of rows) await recipients.upsert(row);
   const find = vi.spyOn(recipients, 'find');
-  const commandBus = createMock<CommandBus>({ execute: async () => notification });
+  // CreateNotificationCommand answers the notification; PublishNotificationCreatedCommand, nothing.
+  const commandBus = createMock<CommandBus>({
+    execute: async (command: unknown) =>
+      command instanceof CreateNotificationCommand ? notification : undefined,
+  });
   const mail = createMock<MailService>({ enqueue: async () => ({ jobId: 'receipt' }) });
   const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
   return {
@@ -92,6 +98,34 @@ describe('SendPaymentReceiptHandler', () => {
       },
       idempotencyKey: `receipt-${PAYMENT_ID}`,
     });
+    // The push is published last, after the mail is queued.
+    expect(commandBus.execute).toHaveBeenCalledTimes(2);
+    const [publish] = commandBus.execute.mock.calls[1] ?? [];
+    expect(publish).toBeInstanceOf(PublishNotificationCreatedCommand);
+    expect((publish as PublishNotificationCreatedCommand).notification).toEqual(
+      toNotificationProps(notification),
+    );
+    const [enqueued] = mail.enqueue.mock.invocationCallOrder;
+    const [, published] = commandBus.execute.mock.invocationCallOrder;
+    expect(published).toBeGreaterThan(enqueued ?? Number.POSITIVE_INFINITY);
+  });
+
+  it('rejects when the push publish fails, so the event is redelivered', async () => {
+    const { commandBus, handler } = await setup([recipientIn(OTHER_TENANT_ID, 'ada@b.example')]);
+    commandBus.execute.mockImplementation(async (command) => {
+      if (command instanceof PublishNotificationCreatedCommand) throw new Error('broker down');
+      return makeContractNotification({ type: 'payment_receipt' });
+    });
+    await expect(handler.execute(command)).rejects.toThrow('broker down');
+  });
+
+  it('does not publish when the mail cannot be queued (the redelivery publishes)', async () => {
+    const { commandBus, mail, handler } = await setup([
+      recipientIn(OTHER_TENANT_ID, 'ada@b.example'),
+    ]);
+    mail.enqueue.mockRejectedValueOnce(new Error('redis down'));
+    await expect(handler.execute(command)).rejects.toThrow('redis down');
+    expect(commandBus.execute).toHaveBeenCalledTimes(1);
   });
 
   it('creates the inbox entry but sends no mail when the user is a recipient only in another tenant', async () => {
@@ -99,7 +133,9 @@ describe('SendPaymentReceiptHandler', () => {
       recipientIn(TENANT_ID, 'ada@a.example'),
     ]);
     await expect(handler.execute(command)).resolves.toBe(notification);
-    expect(commandBus.execute).toHaveBeenCalledTimes(1);
+    // The inbox entry and its push, without a mail.
+    expect(commandBus.execute).toHaveBeenCalledTimes(2);
+    expect(commandBus.execute.mock.calls[1]?.[0]).toBeInstanceOf(PublishNotificationCreatedCommand);
     // No fallback lookup in another tenant.
     expect(find.mock.calls).toEqual([[OTHER_TENANT_ID, USER_ID]]);
     expect(mail.enqueue).not.toHaveBeenCalled();

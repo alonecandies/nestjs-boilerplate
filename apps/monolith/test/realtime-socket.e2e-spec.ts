@@ -22,7 +22,11 @@ await vi.hoisted(async () => {
 
 import { refreshTokenConfig } from '@domain/identity';
 import { TokenIssuer } from '@domain/identity/testing';
-import { CreateNotificationCommand } from '@domain/notifications';
+import {
+  CreateNotificationCommand,
+  PublishNotificationCreatedCommand,
+  toNotificationProps,
+} from '@domain/notifications';
 import { NotificationPushConsumer, NotificationsGateway } from '@domain/notifications/api';
 import { NOTIFICATION_CREATED_EVENT } from '@domain/notifications-contracts';
 import { CommandBus } from '@nestjs/cqrs';
@@ -155,12 +159,17 @@ describe('Socket.IO gateway over real connections (monolith, E-1)', () => {
   const ack = (socket: Socket, event: string, body: unknown): Promise<Ack> =>
     socket.timeout(3_000).emitWithAck(event, body) as Promise<Ack>;
 
-  const createNotification = (tenantId: string, userId: string, title: string) =>
-    e2e.app
-      .get(CommandBus)
-      .execute(
-        new CreateNotificationCommand({ tenantId, userId, type: 'system', title, body: title }),
-      );
+  /** Creates a notification and publishes its push, as the welcome and receipt handlers do. */
+  const createNotification = async (tenantId: string, userId: string, title: string) => {
+    const commandBus = e2e.app.get(CommandBus);
+    const notification = await commandBus.execute(
+      new CreateNotificationCommand({ tenantId, userId, type: 'system', title, body: title }),
+    );
+    await commandBus.execute(
+      new PublishNotificationCreatedCommand(toNotificationProps(notification)),
+    );
+    return notification;
+  };
   const inbox = async (token: string): Promise<{ id: string; read: boolean }[]> => {
     const res = await e2e.app.inject({
       method: 'GET',

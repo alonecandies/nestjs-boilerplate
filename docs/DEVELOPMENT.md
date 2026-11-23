@@ -371,7 +371,7 @@ Add root scripts by copying `dev:billing` (`"dev:orders": "bun run setup:env && 
 Known limits that apply to extracted services:
 
 - **Image size.** The gateway imports each domain only through its `@domain/<x>/api` subpath (`scripts/check-api-subpaths.mjs`); the build stage compiles every lib and domain; the runtime image keeps only traced files (see [DOCKER.md](DOCKER.md)).
-- **Events.** Integration events of a Postgres context are rows of `<schema>.outbox`, published at least once by one leader relay per outbox (see step 5 and [libs/outbox/README.md](../libs/outbox/README.md)). A context without a Postgres store (notifications) does not use an outbox and publishes directly.
+- **Events.** Integration events of a Postgres context are rows of `<schema>.outbox`, published at least once by one leader relay per outbox (see step 5 and [libs/outbox/README.md](../libs/outbox/README.md)). A context without a Postgres store (notifications) does not use an outbox: it publishes as the last step of the command that handles the upstream event, so a failed publish fails that event and its redelivery publishes again.
 
 ## Conventions and DI pitfalls
 

@@ -40,7 +40,7 @@ import { InMemoryKafkaServer } from './support/in-memory-kafka.server.js';
 import { startServiceTestApp } from './support/service-test-app.js';
 
 /*
- * notifications-service end to end, no Docker: the REAL AppModule (CQRS handlers + saga,
+ * notifications-service end to end, no Docker: the REAL AppModule (CQRS handlers,
  * Cassandra repositories, mailer, observability, common enhancers) with fakes only at the network
  * edges — a Cassandra client answering CQL, an in-memory Redis, a recording BullMQ queue and Kafka
  * producer. gRPC is real (loopback server + gateway-style ClientGrpcProxy); the Kafka consumer runs
@@ -360,10 +360,8 @@ describe('notifications-service (real AppModule, fakes at the network edges)', (
         expect.objectContaining({ to: 'grace@example.com', template: 'welcome' }),
         expect.objectContaining({ jobId: `welcome-${userId}` }),
       );
-      // The saga publishes asynchronously on the event stream.
-      await vi.waitFor(() =>
-        expect(kafkaProducer.envelopes(NOTIFICATION_CREATED_EVENT)).toHaveLength(1),
-      );
+      // The welcome handler publishes the push itself, last, before the consumer returns.
+      expect(kafkaProducer.envelopes(NOTIFICATION_CREATED_EVENT)).toHaveLength(1);
       expect(kafkaProducer.envelopes(NOTIFICATION_CREATED_EVENT)[0]).toMatchObject({
         source: 'notifications-service',
         tenantId,
