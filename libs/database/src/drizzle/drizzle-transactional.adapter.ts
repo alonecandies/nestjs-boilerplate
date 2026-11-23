@@ -14,6 +14,7 @@ import {
   recordAppliedRlsContext,
   rlsContextOf,
 } from '../rls/rls-context.js';
+import { rememberElevationBeforeSavepoint } from '../rls/rls-elevation.service.js';
 import { transactionClientOf } from '../rls/transaction-client.js';
 import type { DrizzleDB } from './drizzle.types.js';
 
@@ -61,8 +62,9 @@ function contextForBegin(): { context: RlsContextInput; sql: string } {
  *    not `set_config()`: Citus propagates only `SET LOCAL` to the worker connections
  *    (`citus.propagate_set_commands = 'local'` on the app roles). Without a principal (also inside
  *    a system context) it throws RLS_NO_PRINCIPAL before BEGIN. A savepoint sends nothing and
- *    requires the same principal; at COMMIT the CLS principal is compared with what was applied,
- *    and a different one rolls back with RLS_CONTEXT_STALE.
+ *    requires the same principal; when it rolls back, an `elevate()` made inside it is forgotten
+ *    too (the database reverted its `SET LOCAL`). At COMMIT the CLS principal is compared with
+ *    what was applied, and a different one rolls back with RLS_CONTEXT_STALE.
  * 2. **Empty configs.** `TransactionHost` always merges `defaultTxOptions` with the per-call
  *    options, so a plain `@Transactional()` hands drizzle `{}`, and drizzle then sends
  *    `set transaction ` with no modes — every transaction fails on a real server (reproduced in
@@ -102,15 +104,25 @@ export class DrizzlePostgresTransactionalAdapter extends TransactionalAdapterDri
         wrapWithNestedTransaction: async (config, fn, setClient, client): Promise<unknown> => {
           const context = appliedRlsContextOf(client);
           assertRlsContextCurrent(context);
-          return base.wrapWithNestedTransaction(
-            normalizeTxConfig(config),
-            fn,
-            (savepoint) => {
-              if (context !== undefined) recordAppliedRlsContext(savepoint as object, context);
-              setClient(savepoint);
-            },
-            client,
-          ) as Promise<unknown>;
+          // assertRlsContextCurrent threw when context is undefined; this narrows the type.
+          const restoreElevation =
+            context === undefined ? undefined : rememberElevationBeforeSavepoint(context);
+          try {
+            return await (base.wrapWithNestedTransaction(
+              normalizeTxConfig(config),
+              fn,
+              (savepoint) => {
+                if (context !== undefined) recordAppliedRlsContext(savepoint as object, context);
+                setClient(savepoint);
+              },
+              client,
+            ) as Promise<unknown>);
+          } catch (error) {
+            // The driver rolled the savepoint back (on any error of the whole call), and with it
+            // an elevate() made inside: the elevation flag goes back to its value from before.
+            restoreElevation?.();
+            throw error;
+          }
         },
       };
     };

@@ -1,6 +1,6 @@
 import { Global, type INestApplicationContext, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
-import { TransactionHost } from '@nestjs-cls/transactional';
+import { Propagation, TransactionHost } from '@nestjs-cls/transactional';
 import {
   createPrincipal,
   type Principal,
@@ -232,6 +232,49 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         expect(seen.refusal).toMatchObject({ code: 'ELEVATION_DENIED' });
         expect(seen.after).toEqual([ROW_2]);
         expect(seen.settings).toEqual({ elevated: false, tenant_id: TENANT_A });
+      });
+
+      it('a savepoint that elevated and rolled back leaves own rows, and justified() elevates again', async () => {
+        const rollback = new Error('rollback the savepoint');
+        const seen = await asUnit(adminOfA, async (tx) => {
+          await rows(tx);
+          const rejection = await txHost
+            .withTransaction(Propagation.Nested, async () => {
+              await elevation.elevate(READ_ALL);
+              throw rollback;
+            })
+            .catch((error: unknown) => error);
+          const afterRollback = { rows: await rows(tx), settings: await settings(tx) };
+          const inside = await elevation.justified('membership-activity', () => rows(tx));
+          return {
+            rejection,
+            afterRollback,
+            inside,
+            after: await rows(tx),
+            settings: await settings(tx),
+          };
+        });
+        expect(seen.rejection).toBe(rollback);
+        // Fail-closed pin: Citus rolled the savepoint's SET LOCAL back on the workers too.
+        expect(seen.afterRollback).toEqual({
+          rows: [ROW_1],
+          settings: { elevated: false, tenant_id: TENANT_A },
+        });
+        expect(seen.inside).toEqual([ROW_1, ROW_2]);
+        expect(seen.after).toEqual([ROW_1]);
+        expect(seen.settings?.elevated).toBe(false);
+      });
+
+      it('a savepoint that elevated and resolved keeps the transaction elevated until COMMIT', async () => {
+        const seen = await asUnit(adminOfA, async (tx) => {
+          await rows(tx);
+          await txHost.withTransaction(Propagation.Nested, () => elevation.elevate(READ_ALL));
+          const inside = await elevation.justified('membership-activity', () => rows(tx));
+          return { inside, after: await rows(tx), settings: await settings(tx) };
+        });
+        expect(seen.inside).toEqual([ROW_1, ROW_2]);
+        expect(seen.after).toEqual([ROW_1, ROW_2]);
+        expect(seen.settings).toEqual({ elevated: true, tenant_id: TENANT_A });
       });
     });
   },

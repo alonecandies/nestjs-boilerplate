@@ -550,8 +550,9 @@ refusal happens before anything is sent. Each elevation is logged and counted in
 `db_rls_elevations_total{kind,name}`.
 
 - **`elevate(permission)`** (`RlsElevation`) asserts in TypeScript that the principal holds the permission, then sends
-  `SET LOCAL app.elevated = 'on'`, on until `COMMIT`. A principal without it gets 403 `ELEVATION_DENIED`, and nothing
-  is sent. It is the first call of the unit of work of `CreateInvitation`, `UpdateMemberRoles`, `RemoveMember`,
+  `SET LOCAL app.elevated = 'on'`, on until `COMMIT`, unless it was sent inside a savepoint that rolls back: the
+  database reverts it, and `RlsElevation` forgets it too. A principal without it gets 403 `ELEVATION_DENIED`, and
+  nothing is sent. It is the first call of the unit of work of `CreateInvitation`, `UpdateMemberRoles`, `RemoveMember`,
   `RenameTenant` and the whole-tenant `ListPayments` (`members:manage`, `tenant:manage`, `billing:read-all`).
 - **`justified(reason, work)`** is elevation without a permission, for the code paths where the transaction itself
   proves the right, on for `work` only and off again in `finally`. The reasons are a closed list, and only a
