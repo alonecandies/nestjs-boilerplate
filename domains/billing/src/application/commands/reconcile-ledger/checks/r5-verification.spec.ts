@@ -329,6 +329,69 @@ describe('R5VerificationCheck (reconciliation R5: the trusted state and verified
     expect(await metric(LEDGER_UNVERIFIED_TX_LAG)).toBe(1);
   });
 
+  it('after a re-anchor, a ref of the lost history is verified whatever its tx id, on every run, until its entry is back', async () => {
+    const a = await post(1);
+    const lostFrom = new Date(NOW.getTime() - 30 * 60_000);
+    const b = await post(2, { postedAt: new Date(NOW.getTime() - 20 * 60_000) });
+    const c = await post(3, { postedAt: new Date(NOW.getTime() - 10 * 60_000) });
+    await reconcile();
+    const before = trusted() ?? expect.fail('no state');
+    expect(before.txId).toBe(3n);
+
+    // The restore keeps A; one entry posted after it came back takes tx 2, B's old tx id.
+    const restored = new InMemoryLedger();
+    await restored.post(draft(1));
+    await restored.post(draft(9));
+    const state = await restored.currentState();
+    expect(state.txId).toBe(2n);
+    vi.setSystemTime(new Date(NOW.getTime() + HOUR));
+    await expect(
+      asSystem(() =>
+        store.system.reanchorTrustedState({
+          id: '0192f0c1-0000-7000-8000-00000000ae01',
+          database: DB,
+          from: before,
+          to: state,
+          lostFrom,
+          operator: 'ops',
+          reason: 'immudb restored from the nightly backup',
+        }),
+      ),
+    ).resolves.toBe(true);
+    expect(trusted()).toMatchObject({ txId: 2n, readAt: lostFrom });
+    check = new R5VerificationCheck(restored, store.system);
+    const verifyEntry = restored.verifyEntry.bind(restored);
+    vi.spyOn(restored, 'verifyEntry').mockImplementation(async (entryId, hash, trustedState) => {
+      verified.push(entryId);
+      return verifyEntry(entryId, hash, trustedState);
+    });
+    verified = [];
+
+    // B (tx 2, not above the new state) and C (tx 3, above it): both lost, both found.
+    vi.setSystemTime(new Date(NOW.getTime() + 2 * HOUR));
+    await expect(reconcile()).resolves.toEqual({
+      found: { verification_failed: 2 },
+      appended: { verification_failed: 2 },
+    });
+    expect(verified.toSorted()).toEqual([b.entryId, c.entryId].toSorted());
+    expect(store.discrepancies.map((row) => row.sourceKey).toSorted()).toEqual(
+      [`ledger_entries:${b.entryId}`, `ledger_entries:${c.entryId}`].toSorted(),
+    );
+
+    // The posting path posts both again (their refs keep the old tx ids): every later run that
+    // lists them verifies them again, and they now hold.
+    await restored.post(draft(2));
+    await restored.post(draft(3));
+    for (const hours of [3, 4]) {
+      verified = [];
+      vi.setSystemTime(new Date(NOW.getTime() + hours * HOUR));
+      await expect(reconcile()).resolves.toEqual({ found: {}, appended: {} });
+      expect(verified.toSorted()).toEqual([b.entryId, c.entryId].toSorted());
+      expect(lastRun()?.status).toBe('succeeded');
+    }
+    expect(verified).not.toContain(a.entryId);
+  });
+
   it('a trusted state ahead of the store fails the same way', async () => {
     await post(1);
     const ahead = {

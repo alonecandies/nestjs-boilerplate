@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectSystemDatabase, SystemDatabase } from '@platform/database';
 import type { OutboxRecord } from '@platform/outbox';
-import { and, asc, eq, gt, gte, inArray, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 import { chunk } from 'lodash-es';
 import {
@@ -10,13 +10,15 @@ import {
   assertPaymentKeys,
   assertPlatformAccounts,
   assertTrustedStateAdvance,
+  assertTrustedStateReanchor,
   type LedgerCursor,
   type LedgerPaymentRow,
+  type LedgerReanchor,
   type LedgerRunCounts,
   type LedgerSystemRepository,
   PAID_PAYMENT_STATUSES,
   type PaidPaymentRow,
-  type StoredTrustedState,
+  type TrustedStateRead,
 } from '../../application/repositories/ledger.system-repository.js';
 import type {
   LedgerAccountRef,
@@ -29,6 +31,7 @@ import {
   ledgerAccounts,
   ledgerDiscrepancies,
   ledgerEntryRefs,
+  ledgerReanchors,
   ledgerReconciliationRuns,
   ledgerTrustedState,
   outbox,
@@ -50,6 +53,9 @@ const {
   ledgerRuns: runs,
 } = BILLING_SYSTEM_METHODS;
 
+/** Rolls back a re-anchor whose compare-and-set matched no row. */
+class LostReanchor extends Error {}
+
 /** Rows per INSERT statement (far below Postgres' 65 535 bind parameters). */
 const INSERT_CHUNK = 500;
 
@@ -62,10 +68,12 @@ function keysetAfter(tenant: PgColumn, id: PgColumn, after: LedgerCursor | null)
 /**
  * The ledger on the `app_system` (BYPASSRLS) pool, through `SystemDatabase.run` and the pinned
  * methods only (`BILLING_SYSTEM_METHODS`): each call is logged and counted, refused outside
- * `SystemContext`, and its statements commit on their own. `app_system` holds `SELECT, INSERT` on
- * the three tenant ledger tables, `SELECT, INSERT, UPDATE` on the two local ones, the
- * outbox grants and `SELECT` on `payments`. The lists are multi-shard keyset reads
- * over a half-open window, without row locks; the only UPDATEs touch the two local tables.
+ * `SystemContext`, and its statements commit on their own (`reanchorTrustedState` opens the one
+ * transaction). `app_system` holds `SELECT, INSERT` on the three tenant ledger tables,
+ * `SELECT, INSERT, UPDATE` on the runs and the trusted state, `SELECT, INSERT` on the re-anchor
+ * audit (coordinator-local, 0001), the outbox grants and `SELECT` on `payments`. The lists are
+ * multi-shard keyset reads over a half-open window, without row locks; the only UPDATEs touch the
+ * runs and the trusted state.
  */
 @Injectable()
 export class DrizzleLedgerSystemRepository implements LedgerSystemRepository {
@@ -247,7 +255,7 @@ export class DrizzleLedgerSystemRepository implements LedgerSystemRepository {
     });
   }
 
-  readTrustedState(database: string): Promise<StoredTrustedState | null> {
+  readTrustedState(database: string): Promise<TrustedStateRead | null> {
     return this.system.run(trustedState.read, async (db) => {
       const [row] = await db
         .select({
@@ -260,8 +268,18 @@ export class DrizzleLedgerSystemRepository implements LedgerSystemRepository {
         .from(ledgerTrustedState)
         .where(eq(ledgerTrustedState.database, database));
       if (row === undefined) return null;
+      const [latest] = await db
+        .select({
+          txId: ledgerReanchors.newTxId,
+          lostFrom: ledgerReanchors.lostFrom,
+          at: ledgerReanchors.createdAt,
+        })
+        .from(ledgerReanchors)
+        .where(eq(ledgerReanchors.database, database))
+        .orderBy(desc(ledgerReanchors.createdAt), desc(ledgerReanchors.id))
+        .limit(1);
       // postgres.js parses bytea as a Buffer: hand out a plain Uint8Array copy.
-      return { ...row, txHash: new Uint8Array(row.txHash) };
+      return { ...row, txHash: new Uint8Array(row.txHash), reanchor: latest ?? null };
     });
   }
 
@@ -293,6 +311,44 @@ export class DrizzleLedgerSystemRepository implements LedgerSystemRepository {
         );
       return result.count > 0;
     });
+  }
+
+  async reanchorTrustedState(reanchor: LedgerReanchor): Promise<boolean> {
+    assertTrustedStateReanchor(reanchor);
+    const { id, database, from, to, lostFrom, operator, reason } = reanchor;
+    return this.system.run(trustedState.reanchor, (db) =>
+      db
+        .transaction(async (tx) => {
+          const replaced = await tx
+            .update(ledgerTrustedState)
+            .set({ txId: to.txId, txHash: to.txHash, verifiedAt: sql`now()`, readAt: lostFrom })
+            .where(
+              and(
+                eq(ledgerTrustedState.database, database),
+                eq(ledgerTrustedState.txId, from.txId),
+                eq(ledgerTrustedState.txHash, from.txHash),
+              ),
+            );
+          // Lost the compare-and-set: roll back, so no audit row stays without its state.
+          if (replaced.count === 0) throw new LostReanchor();
+          await tx.insert(ledgerReanchors).values({
+            id,
+            database,
+            replacedTxId: from.txId,
+            replacedTxHash: from.txHash,
+            newTxId: to.txId,
+            newTxHash: to.txHash,
+            lostFrom,
+            operator,
+            reason,
+          });
+          return true;
+        })
+        .catch((error: unknown) => {
+          if (error instanceof LostReanchor) return false;
+          throw error;
+        }),
+    );
   }
 
   async startRun(run: {

@@ -19,6 +19,15 @@ export abstract class ImmudbClient {
   abstract verifyConsistency(trusted: ImmudbState, target: ImmudbState): Promise<void>;
 
   /**
+   * Whether this client pins the server's state-signing public key, so `verifyConsistency` and
+   * `verifiedRow` check signatures. `false` unless a client overrides it: a caller that must not
+   * trust an unsigned state (the ledger re-anchor) then refuses.
+   */
+  pinsSigningKey(): boolean {
+    return false;
+  }
+
+  /**
    * Row by primary key, proven included in a tx consistent with `trusted`. A missing row or table
    * and every failed proof throw `ImmudbError` with kind `verification-failed`. Only the row's key
    * and value bytes are proven, not the table catalog the server labels them with (see

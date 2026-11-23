@@ -12,6 +12,7 @@ import {
   ledgerAccounts,
   ledgerDiscrepancies,
   ledgerEntryRefs,
+  ledgerReanchors,
   ledgerReconciliationRuns,
   ledgerTrustedState,
   outbox,
@@ -76,6 +77,7 @@ describe('billingMigrations', () => {
       ledgerDiscrepancies,
       ledgerReconciliationRuns,
       ledgerTrustedState,
+      ledgerReanchors,
     ];
     expect(tables.map((table) => getTableConfig(table).schema)).toEqual(
       tables.map(() => 'billing'),
@@ -131,13 +133,14 @@ describe('billingMigrations', () => {
         join(import.meta.dirname, '..', '..', '..', 'test', 'stacked-history', 'migrations'),
       );
 
-      expect(read(billingMigrations.folder)).toEqual([stacked.at(-1)]);
+      expect(read(billingMigrations.folder)[0]).toBe(stacked.at(-1));
     });
 
-    it('is the only journal entry, with one snapshot', () => {
-      expect(journalTags()).toEqual(['0000_init']);
+    it('is the first journal entry; every entry has its snapshot', () => {
+      expect(journalTags()).toEqual(['0000_init', '0001_ledger_reanchors']);
       expect(readdirSync(join(billingMigrations.folder, 'meta')).toSorted()).toEqual([
         '0000_snapshot.json',
+        '0001_snapshot.json',
         '_journal.json',
       ]);
     });
@@ -270,6 +273,46 @@ describe('billingMigrations', () => {
         'CREATE INDEX "outbox_unpublished_idx" ON "billing"."outbox" USING btree ("created_at","id") WHERE "billing"."outbox"."published_at" IS NULL;',
         'CREATE INDEX "outbox_published_at_idx" ON "billing"."outbox" USING btree ("published_at") WHERE "billing"."outbox"."published_at" IS NOT NULL;',
       ]);
+    });
+  });
+
+  describe('0001_ledger_reanchors (audit fixes OPS-1: the audit trail of a trusted-state re-anchor)', () => {
+    const statements = (): string[] => statementsOf('0001_ledger_reanchors.sql');
+    const journal = (): { tag: string; when: number }[] =>
+      (
+        JSON.parse(
+          readFileSync(join(billingMigrations.folder, 'meta', '_journal.json'), 'utf8'),
+        ) as { entries: { tag: string; when: number }[] }
+      ).entries;
+
+    it('comes after the baseline in the journal (a later timestamp)', () => {
+      const [baseline, reanchors] = journal();
+      expect(reanchors?.tag).toBe('0001_ledger_reanchors');
+      expect(reanchors?.when ?? 0).toBeGreaterThan(baseline?.when ?? Number.POSITIVE_INFINITY);
+    });
+
+    it('creates billing.ledger_reanchors and its lookup index, coordinator-local (no distribution call)', () => {
+      const [create, index, ...rest] = statements();
+      expect(create).toBe(
+        'CREATE TABLE "billing"."ledger_reanchors" ( "id" uuid NOT NULL, "database" text NOT NULL, "replaced_tx_id" bigint NOT NULL, "replaced_tx_hash" "bytea" NOT NULL, "new_tx_id" bigint NOT NULL, "new_tx_hash" "bytea" NOT NULL, "lost_from" timestamp (3) with time zone NOT NULL, "operator" text NOT NULL, "reason" text NOT NULL, "created_at" timestamp (3) with time zone DEFAULT now() NOT NULL, CONSTRAINT "ledger_reanchors_id_pk" PRIMARY KEY("id") );',
+      );
+      expect(index).toBe(
+        'CREATE INDEX "ledger_reanchors_database_created_at_idx" ON "billing"."ledger_reanchors" USING btree ("database","created_at");',
+      );
+      expect(rest.join('\n')).not.toMatch(/app\.distribute_|CREATE TABLE|ALTER TABLE "billing"\./);
+    });
+
+    it('forces RLS without a policy and grants INSERT and SELECT to app_system only (append-only)', () => {
+      const text = statements().join('\n');
+      expect(statements().filter((statement) => /ROW LEVEL SECURITY;$/.test(statement))).toEqual([
+        'ALTER TABLE billing.ledger_reanchors ENABLE ROW LEVEL SECURITY;',
+        'ALTER TABLE billing.ledger_reanchors FORCE ROW LEVEL SECURITY;',
+      ]);
+      expect(statements().filter((statement) => /^(GRANT|REVOKE)\b/.test(statement))).toEqual([
+        'GRANT SELECT, INSERT ON TABLE billing.ledger_reanchors TO app_system;',
+      ]);
+      expect(text).not.toMatch(/CREATE POLICY|app_runtime|UPDATE|DELETE|FOREIGN KEY|REFERENCES/i);
+      expect(text).not.toMatch(/DEFAULT PRIVILEGES|\bPUBLIC\b|__drizzle_migrations/i);
     });
   });
 });

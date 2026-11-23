@@ -255,8 +255,9 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing distribution on Cit
     };
     const before = await citusTables();
     const files = await applied();
-    // 0000_init, the squashed baseline (SH-12).
-    expect(files).toBe(1);
+    // 0000_init, the squashed baseline (SH-12), and 0001_ledger_reanchors (a local table: the
+    // distribution is unchanged).
+    expect(files).toBe(2);
     const first = app;
     app = undefined; // afterAll then closes only what is open, even if the boot below throws
     await first?.close();

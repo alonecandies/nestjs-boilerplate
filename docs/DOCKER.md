@@ -262,8 +262,10 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   `docker compose run --rm --no-deps notifications-service dist/cli/dlq-replay.js <topic> --dry-run`
   (Kubernetes: a Job with `args: [dist/cli/dlq-replay.js, <topic>]`). `dlq-replay` replays `<topic>.dlq` into
   `<topic>` and ships in the gateway, monolith, notifications-service and billing-service images; the runbook is in
-  [OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts). Run without arguments, a CLI only prints its
-  usage and exits 2.
+  [OBSERVABILITY.md](OBSERVABILITY.md#outbox-ledger-and-ai-alerts). `ledger-reanchor` (monolith and billing-service)
+  re-anchors the ledger's trusted state after an immudb restore, with an audit row
+  ([SECURITY.md](SECURITY.md#immudb-state-signing-key), runbook in OPERATIONS.md). Run without arguments, a CLI only
+  prints its usage and exits 2.
 - **`infra-ready`**: `docker compose up --wait` only accepts a one-shot container that _exited_ when an enabled service
   depends on it with `service_completed_successfully`. Without an app profile nothing would, and `--wait` would fail
   with `kafka-init exited (0)`. This idle 1 MB container depends on the five init jobs, and so means "infra bootstrapped".

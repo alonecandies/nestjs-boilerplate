@@ -14,7 +14,8 @@ import { OUTBOX_SYSTEM_METHODS } from '@platform/outbox';
  *   re-enqueued postings), `ledgerEntryRefs.recordAsSystem` (10: refs of platform or user-less
  *   postings), `ledgerAccounts.recordPlatformAccounts` (plan delta 4, ruling 2: the
  *   `PLATFORM_TENANT_ID` account rows a tenant's posting opens), `ledgerTrustedState` and
- *   `ledgerRuns` (11: R5's compare-and-set and the run bookkeeping).
+ *   `ledgerRuns` (11: R5's compare-and-set and the run bookkeeping). `ledgerTrustedState.reanchor`
+ *   (audit fixes OPS-1) is the ledger-reanchor CLI's alone: no running app registers its handler.
  */
 export const BILLING_SYSTEM_METHODS = Object.freeze({
   stripeEvents: Object.freeze({
@@ -60,6 +61,11 @@ export const BILLING_SYSTEM_METHODS = Object.freeze({
     read: defineSystemMethod('ledgerTrustedState.read', 'system'),
     /** 11: R5's compare-and-set advance after the dual proof. */
     advance: defineSystemMethod('ledgerTrustedState.advance', 'system'),
+    /**
+     * OPS-1: the audited re-anchor after an immudb restore (the ledger-reanchor CLI only): the
+     * audit row and the compare-and-set of the state, in one transaction.
+     */
+    reanchor: defineSystemMethod('ledgerTrustedState.reanchor', 'system'),
   }),
   ledgerRuns: Object.freeze({
     /** 11: a reconciliation run starts. */

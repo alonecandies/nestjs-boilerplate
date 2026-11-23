@@ -118,6 +118,10 @@ export class GrpcImmudbClient extends ImmudbClient {
     });
   }
 
+  override pinsSigningKey(): boolean {
+    return this.options.serverSigningPublicKeyPem !== undefined;
+  }
+
   override currentState(): Promise<ImmudbState> {
     return this.pool.use(async (session) => toImmudbState(await mapped(session.currentState())));
   }

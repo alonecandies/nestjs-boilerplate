@@ -44,4 +44,12 @@ export abstract class LedgerPort {
    *   or the signature does not verify.
    */
   abstract advanceTrustedState(trusted: LedgerTrustedState | null): Promise<LedgerTrustedState>;
+  /**
+   * The current state, its signature verified against the server signing key the client pins
+   * (audit fixes OPS-1: the re-anchor never takes a state on trust). Refused without a pinned key,
+   * whatever `LEDGER_ALLOW_UNVERIFIED` says.
+   * @throws LedgerSigningKeyNotPinnedException when the client pins no key (before any call)
+   * @throws LedgerVerificationFailedException when the signature does not verify
+   */
+  abstract signedState(): Promise<LedgerTrustedState>;
 }

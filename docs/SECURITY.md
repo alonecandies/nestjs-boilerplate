@@ -592,7 +592,8 @@ it); it never falls back to `DATABASE_URL`.
 - **Grants.** `app_system` holds per-table grants for these methods and nothing else (identity: `SELECT` on `users`,
   `tenants`, `memberships` and `invitations`, `SELECT, DELETE` on `sessions`; billing: `SELECT, INSERT, DELETE` on
   `stripe_events`, `SELECT` on `payments` for reconciliation R3, the outbox's `SELECT, INSERT, UPDATE, DELETE`,
-  `SELECT, INSERT` on the three tenant ledger tables and `SELECT, INSERT, UPDATE` on the two local ones).
+  `SELECT, INSERT` on the three tenant ledger tables, `SELECT, INSERT, UPDATE` on the runs and the trusted state, and
+  `SELECT, INSERT` on the append-only re-anchor audit `ledger_reanchors`).
 - **Not a pool method:** `staff:grant` connects as `app_owner` on `DATABASE_MIGRATION_URL`.
 
 The pinned lists (12 methods when B3 shipped, 22 with the ledger's ten, 29 with the outbox's seven; program spec
@@ -623,6 +624,7 @@ itself; the shared `outbox.*` methods are in
 | `ledgerAccounts.recordPlatformAccounts`       | system   | ledger postings (outbox plan delta 4): `PLATFORM_TENANT_ID` account rows only                       |
 | `ledgerTrustedState.read`                     | system   | reconciliation R5 (spec 11): the stored trusted immudb state                                        |
 | `ledgerTrustedState.advance`                  | system   | reconciliation R5 (spec 11): compare-and-set after the dual proof                                   |
+| `ledgerTrustedState.reanchor`                 | system   | the `ledger-reanchor` CLI only (OPS-1): audit row and state compare-and-set, one transaction        |
 | `ledgerRuns.start`                            | system   | the reconciliation cron (spec 11): a run starts                                                     |
 | `ledgerRuns.finish`                           | system   | the reconciliation cron (spec 11): a run finishes, once                                             |
 
@@ -639,7 +641,7 @@ scope: the relay runs in `SystemContext.run('outbox.relay', …)`, the reconcili
 | Domain   | Pinned list after this plan                                                                                                                                                          |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | identity | B3's ten (`users.*`, `invitations.findByTokenHash`, `sessions.deleteExpired`, `memberships.*`) plus `outbox.pollUnpublished`, `outbox.markPublished`, `outbox.deletePublishedBefore` |
-| billing  | B3's two (`stripeEvents.deleteProcessedBefore`, `stripeEvents.markProcessedAsPlatform`) plus the four `outbox.*` and the eleven `ledger*` names of the table above                   |
+| billing  | B3's two (`stripeEvents.deleteProcessedBefore`, `stripeEvents.markProcessedAsPlatform`) plus the four `outbox.*` and the twelve `ledger*` names of the table above                   |
 
 | Method                         | Scope  | What it does                                                                                                                |
 | ------------------------------ | ------ | --------------------------------------------------------------------------------------------------------------------------- |
@@ -823,9 +825,17 @@ refuses an enabled ledger without `LEDGER_VERIFY=true` and a pinned key (`LEDGER
   rotation: it is a consistency anchor of the history, independent of the key, and the next advance is proven by
   the dual proof from it to the new state. Do not clear that row to "fix" a rotation: that turns the next run
   into a trust-on-first-use of whatever immudb then serves.
-- **Losing or replacing the server.** A fresh immudb (empty volume, any key) fails the dual proof against the stored
-  trusted state: R5 reports `verification_failed` and does not advance. That is the intended alarm; restore the
-  ledger volume rather than resetting the trusted state.
+- **Losing or replacing the server.** A fresh immudb (empty volume, any key), or one restored from a backup older
+  than the stored trusted state, fails the dual proof against it: R5 reports `verification_failed` and does not
+  advance. That is the intended alarm, and the row is never cleared or edited by hand. After a restore, re-anchor it
+  with the audited command in the monolith and billing-service images:
+  `node dist/cli/ledger-reanchor.js --database <db> --lost-from <ISO time> --operator <name> --reason <text>`. It
+  refuses, writing nothing, with the ledger off, without a pinned key (`LEDGER_ALLOW_UNVERIFIED` does not help), when
+  the restored state's signature does not verify against the pinned key, and when that state still extends the
+  trusted one. Otherwise it writes an audit row (`billing.ledger_reanchors`: who, why, the replaced and the new state,
+  the lost-from time) and the new state in one transaction (`ledgerTrustedState.reanchor`, which no running app
+  registers), then runs one reconciliation over `[lost-from, now)`: entries the restore lost are reported and
+  posted again (`domains/billing/README.md`, Reconciliation).
 
 ### Log redaction
 

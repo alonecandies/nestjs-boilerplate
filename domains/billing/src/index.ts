@@ -95,6 +95,12 @@ export * from './infrastructure/stripe/stripe.errors.js';
 export * from './infrastructure/stripe/stripe.module.js';
 export * from './infrastructure/stripe/stripe.service.js';
 export type * from './infrastructure/stripe/stripe.types.js';
-// Presentation: the gRPC server (billing-service) and the ledger-posting consumer
+// Presentation: the gRPC server (billing-service), the ledger-posting consumer, and the body of the
+// apps' ledger-reanchor CLI (audit fixes OPS-1; its module and command stay internal).
+export {
+  LEDGER_REANCHOR_REASON,
+  type LedgerReanchorCliOptions,
+  runLedgerReanchorCli,
+} from './presentation/cli/ledger-reanchor-cli.js';
 export * from './presentation/grpc/billing-grpc.controller.js';
 export * from './presentation/messaging/ledger-posting.consumer.js';

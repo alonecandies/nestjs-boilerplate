@@ -8,13 +8,16 @@ import {
   assertPaymentKeys,
   assertPlatformAccounts,
   assertTrustedStateAdvance,
+  assertTrustedStateReanchor,
   type LedgerCursor,
   type LedgerPaymentRow,
+  type LedgerReanchor,
   type LedgerRunCounts,
   LedgerSystemRepository,
   PAID_PAYMENT_STATUSES,
   type PaidPaymentRow,
   type StoredTrustedState,
+  type TrustedStateRead,
 } from '../application/repositories/ledger.system-repository.js';
 import {
   assertTenantOwnedAccounts,
@@ -44,6 +47,11 @@ export interface InMemoryLedgerRun {
   finishedAt: Date | null;
 }
 
+/** A stored re-anchor audit row (`billing.ledger_reanchors`). */
+export interface InMemoryLedgerReanchor extends LedgerReanchor {
+  readonly createdAt: Date;
+}
+
 export interface InMemoryLedgerStoreOptions {
   /** Where `enqueueMissingPostings` writes. Default: a new `createInMemoryBillingOutbox()`. */
   readonly outbox?: InMemoryOutbox;
@@ -70,6 +78,8 @@ export class InMemoryLedgerStore {
   readonly discrepancies: InMemoryLedgerDiscrepancy[] = [];
   readonly runs = new Map<string, InMemoryLedgerRun>();
   readonly trustedStates = new Map<string, StoredTrustedState>();
+  /** The re-anchor audit rows, in insert order (append-only). */
+  readonly reanchors: InMemoryLedgerReanchor[] = [];
   readonly payments: PaidPaymentRow[] = [];
   readonly outbox: InMemoryOutbox;
   readonly receipts: InMemoryLedgerReceiptsRepository;
@@ -212,9 +222,10 @@ export class InMemoryLedgerSystemRepository extends LedgerSystemRepository {
     return rows.filter((row) => this.store.insertAccount(row)).length;
   }
 
-  override async readTrustedState(database: string): Promise<StoredTrustedState | null> {
+  override async readTrustedState(database: string): Promise<TrustedStateRead | null> {
     requireSystemContext('ledgerTrustedState.read');
     const stored = this.store.trustedStates.get(database);
+    const latest = this.store.reanchors.findLast((row) => row.database === database);
     return stored === undefined
       ? null
       : {
@@ -222,6 +233,14 @@ export class InMemoryLedgerSystemRepository extends LedgerSystemRepository {
           txHash: new Uint8Array(stored.txHash),
           verifiedAt: new Date(stored.verifiedAt),
           readAt: stored.readAt === null ? null : new Date(stored.readAt),
+          reanchor:
+            latest === undefined
+              ? null
+              : {
+                  txId: latest.to.txId,
+                  lostFrom: new Date(latest.lostFrom),
+                  at: new Date(latest.createdAt),
+                },
         };
   }
 
@@ -248,6 +267,30 @@ export class InMemoryLedgerSystemRepository extends LedgerSystemRepository {
       verifiedAt: this.store.now(),
       readAt: new Date(readAt),
     });
+    return true;
+  }
+
+  override async reanchorTrustedState(reanchor: LedgerReanchor): Promise<boolean> {
+    assertTrustedStateReanchor(reanchor);
+    requireSystemContext('ledgerTrustedState.reanchor');
+    const { database, from, to } = reanchor;
+    const stored = this.store.trustedStates.get(database);
+    if (
+      stored === undefined ||
+      stored.txId !== from.txId ||
+      !sameBytes(stored.txHash, from.txHash)
+    ) {
+      return false;
+    }
+    const now = this.store.now();
+    this.store.trustedStates.set(database, {
+      database,
+      txId: to.txId,
+      txHash: new Uint8Array(to.txHash),
+      verifiedAt: now,
+      readAt: new Date(reanchor.lostFrom),
+    });
+    this.store.reanchors.push({ ...reanchor, createdAt: now });
     return true;
   }
 

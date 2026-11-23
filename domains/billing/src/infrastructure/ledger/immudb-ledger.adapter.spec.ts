@@ -1,8 +1,9 @@
 import { ImmudbError, type ImmudbTx } from '@platform/immudb';
 import { type RecordedStatement, RecordingImmudbClient } from '@platform/immudb/testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { CHARGE_DRAFT } from '../../../test/ledger-fixtures.js';
 import {
+  LedgerSigningKeyNotPinnedException,
   LedgerUnbalancedException,
   LedgerVerificationFailedException,
 } from '../../domain/ledger/ledger.errors.js';
@@ -137,6 +138,42 @@ describe('ImmudbLedgerAdapter', () => {
         reason: 'state signature of tx 0 does not verify',
       },
     );
+  });
+
+  it('a signed state (the re-anchor): refused without a pinned key, before any server call', async () => {
+    const client = new RecordingImmudbClient();
+    const currentState = vi.spyOn(client, 'currentState');
+    await expect(new ImmudbLedgerAdapter(client).signedState()).rejects.toBeInstanceOf(
+      LedgerSigningKeyNotPinnedException,
+    );
+    expect(currentState).not.toHaveBeenCalled();
+    expect(client.statements).toEqual([]);
+  });
+
+  it('a signed state with a pinned key: proven from tx 0, so its signature is checked', async () => {
+    const client = new RecordingImmudbClient();
+    vi.spyOn(client, 'pinsSigningKey').mockReturnValue(true);
+    await client.readWrite((tx) => tx.exec('INSERT'));
+    await expect(new ImmudbLedgerAdapter(client).signedState()).resolves.toMatchObject({
+      database: 'test',
+      txId: 1n,
+    });
+    expect(client.statements.at(-1)).toMatchObject({
+      sql: 'verifyConsistency',
+      params: { trustedTxId: 0n, targetTxId: 1n },
+    });
+
+    const badSignature = new RecordingImmudbClient((s) => {
+      if (s.sql === 'verifyConsistency') {
+        throw new ImmudbError('verification-failed', 'state signature of tx 0 does not verify');
+      }
+      return [];
+    });
+    vi.spyOn(badSignature, 'pinsSigningKey').mockReturnValue(true);
+    await expect(new ImmudbLedgerAdapter(badSignature).signedState()).rejects.toMatchObject({
+      constructor: LedgerVerificationFailedException,
+      reason: 'state signature of tx 0 does not verify',
+    });
   });
 
   it('reports the current state unverified', async () => {

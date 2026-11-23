@@ -44,6 +44,41 @@ export type StoredTrustedState = LedgerTrustedState & {
   readonly readAt: Date | null;
 };
 
+/**
+ * The latest re-anchor of a database (`billing.ledger_reanchors`, audit fixes OPS-1): R5 treats a
+ * ref posted before `at` as possibly lost with the old history when its tx id is above `txId` or
+ * it was posted since `lostFrom`.
+ */
+export interface LedgerReanchorMark {
+  /** The tx id of the state the re-anchor stored (the restored server's). */
+  readonly txId: bigint;
+  /** Where the operator said the lost history starts. */
+  readonly lostFrom: Date;
+  /** When the re-anchor committed (the database clock). */
+  readonly at: Date;
+}
+
+/** What `readTrustedState` returns: the stored state and its database's latest re-anchor. */
+export type TrustedStateRead = StoredTrustedState & {
+  /** The latest re-anchor of the database; null when it was never re-anchored. */
+  readonly reanchor: LedgerReanchorMark | null;
+};
+
+/** One re-anchor (`reanchorTrustedState`): the audit row's content. */
+export interface LedgerReanchor {
+  /** The audit row's id. */
+  readonly id: string;
+  readonly database: string;
+  /** The stored state it replaces (compare-and-set on its tx id and hash). */
+  readonly from: LedgerTrustedState;
+  /** The restored server's state, its signature verified against the pinned key. */
+  readonly to: LedgerTrustedState;
+  /** Where the lost history starts; stored as the new state's read time. */
+  readonly lostFrom: Date;
+  readonly operator: string;
+  readonly reason: string;
+}
+
 /** The statuses `listSucceededPayments` returns: every status a paid payment can be in. */
 export const PAID_PAYMENT_STATUSES: readonly PaymentStatus[] = Object.freeze([
   PaymentStatus.Succeeded,
@@ -125,9 +160,10 @@ export abstract class LedgerSystemRepository {
 
   /**
    * `ledgerTrustedState.read`: the stored state of `database`, when it was verified and when R5
-   * read it (`null` for a state stored before migration 0008), or null.
+   * read it (`null` for a state stored before migration 0008), with the database's latest
+   * re-anchor (`null` when none), or null.
    */
-  abstract readTrustedState(database: string): Promise<StoredTrustedState | null>;
+  abstract readTrustedState(database: string): Promise<TrustedStateRead | null>;
 
   /**
    * `ledgerTrustedState.advance`: compare-and-set. With `from = null` it inserts `to` only when
@@ -142,6 +178,17 @@ export abstract class LedgerSystemRepository {
     to: LedgerTrustedState,
     readAt: Date,
   ): Promise<boolean>;
+
+  /**
+   * `ledgerTrustedState.reanchor` (audit fixes OPS-1), the ledger-reanchor CLI's door only
+   * (`ReanchorLedgerHandler`): in ONE transaction, replaces the stored state of `database` while it
+   * still equals `from` (tx id and hash) with `to`, stamping `verified_at` and storing `lostFrom` as
+   * its `read_at`, and inserts the audit row into `billing.ledger_reanchors`. `false` (and nothing
+   * written) when the stored state is not `from` any more. Unlike `advanceTrustedState`, `to` may
+   * have a lower tx id: a restore moves the history back.
+   * @throws Error before any SQL when a state names another database or a text field is empty
+   */
+  abstract reanchorTrustedState(reanchor: LedgerReanchor): Promise<boolean>;
 
   /** `ledgerRuns.start`: records the run as `running` over `[from, to)` with zero counts. */
   abstract startRun(run: {
@@ -193,6 +240,22 @@ export function assertOutboxRecords(records: readonly OutboxRecord[]): void {
   );
   if (bad !== undefined) {
     throw new Error(`outbox record ${bad.id}: its tenant and id must be its envelope's`);
+  }
+}
+
+/** @throws Error when a state names another database, or the operator or reason is blank */
+export function assertTrustedStateReanchor(reanchor: LedgerReanchor): void {
+  const { database, from, to } = reanchor;
+  if (from.database !== database || to.database !== database) {
+    throw new Error(`trusted state re-anchor of ${database}: every state must name that database`);
+  }
+  if (reanchor.operator.trim() === '' || reanchor.reason.trim() === '') {
+    throw new Error(
+      `trusted state re-anchor of ${database}: an operator and a reason are required`,
+    );
+  }
+  if (Number.isNaN(reanchor.lostFrom.getTime())) {
+    throw new Error(`trusted state re-anchor of ${database}: lost-from is not a valid time`);
   }
 }
 

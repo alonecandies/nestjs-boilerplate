@@ -98,6 +98,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')('billing migrations on Postg
       'billing.ledger_accounts',
       'billing.ledger_discrepancies',
       'billing.ledger_entry_refs',
+      'billing.ledger_reanchors',
       'billing.ledger_reconciliation_runs',
       'billing.ledger_trusted_state',
       'billing.outbox',

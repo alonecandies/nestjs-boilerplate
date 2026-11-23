@@ -7,11 +7,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { billingMigrations } from './billing.migrations.js';
 
 /*
- * The five ledger tables (0000_init, outbox plan Task 10, "Ledger tables") on Citus 14.2,
- * single node, local execution off (startRlsTestPostgres): ledger_accounts, ledger_entry_refs and
- * ledger_discrepancies distributed by tenant_id and colocated with app.tenant_colocation;
- * ledger_reconciliation_runs and ledger_trusted_state coordinator-local and system-only. All five
- * have forced RLS and no FK. The runtime role inserts its own tenant's rows and reads them only when
+ * The six ledger tables (0000_init, outbox plan Task 10, "Ledger tables"; ledger_reanchors from
+ * 0001, audit fixes OPS-1) on Citus 14.2, single node, local execution off
+ * (startRlsTestPostgres): ledger_accounts, ledger_entry_refs and ledger_discrepancies distributed by
+ * tenant_id and colocated with app.tenant_colocation; ledger_reconciliation_runs,
+ * ledger_trusted_state and ledger_reanchors coordinator-local and system-only, ledger_reanchors
+ * append-only (insert and select). All six have forced RLS and no FK. The runtime role inserts its own tenant's rows and reads them only when
  * elevated; refs and discrepancies are append-only for both application roles. The real billing
  * migration set runs as app_owner; every runtime case is raw postgres.js on app_runtime in its own
  * transaction opened with buildRlsContextSql (plus app.elevated = 'on' where a case is elevated);
@@ -33,7 +34,9 @@ const USER_B1 = id('1b1');
 
 const TENANT_TABLES = ['ledger_accounts', 'ledger_entry_refs', 'ledger_discrepancies'] as const;
 const LOCAL_TABLES = ['ledger_reconciliation_runs', 'ledger_trusted_state'] as const;
-const ALL_TABLES = [...TENANT_TABLES, ...LOCAL_TABLES] as const;
+/** Coordinator-local, system-only and append-only (0001). */
+const AUDIT_TABLE = 'ledger_reanchors';
+const ALL_TABLES = [...TENANT_TABLES, ...LOCAL_TABLES, AUDIT_TABLE] as const;
 type TenantTable = (typeof TENANT_TABLES)[number];
 type LocalTable = (typeof LOCAL_TABLES)[number];
 
@@ -89,6 +92,13 @@ const insertInto: Record<TenantTable, (tx: TransactionSql, tenantId: string) => 
         values (${tenantId}, ${generateId()}, 'missing_entry', 'stripe:txn:x',
           ${tx.json({ amount: '100' })}, ${tx.json({ amount: null })}, 'R3', null, null)`,
   };
+
+/** One plain INSERT of a fresh re-anchor audit row with id `key`. */
+const insertReanchor = (tx: TransactionSql, key: string) =>
+  tx`insert into billing.ledger_reanchors (id, database, replaced_tx_id, replaced_tx_hash,
+      new_tx_id, new_tx_hash, lost_from, operator, reason)
+    values (${key}, 'ledger', 12, ${Buffer.from('0304', 'hex')}, 9, ${Buffer.from('0a', 'hex')},
+      now() - interval '1 hour', 'ops-oncall', 'immudb restored')`;
 
 /** One plain INSERT of a fresh row of a coordinator-local table. */
 const insertLocal: Record<LocalTable, (tx: TransactionSql, key: string) => Promise<unknown>> = {
@@ -186,7 +196,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
             kind: 'hash:tenant_id',
             colocation: anchor?.colocation,
           })),
-          ...LOCAL_TABLES.map((table) => ({
+          ...[...LOCAL_TABLES, AUDIT_TABLE].map((table) => ({
             table: `billing.${table}`,
             kind: 'local',
             colocation: null,
@@ -194,7 +204,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         ]);
       });
 
-      it('all five have RLS enabled and forced, and no foreign key', async () => {
+      it('all six have RLS enabled and forced, and no foreign key', async () => {
         const tables = await admin<
           { table: string; enabled: boolean; forced: boolean; fks: number }[]
         >`
@@ -212,7 +222,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         );
       });
 
-      it("grants exactly the contract's privileges: S, I / S, I on tenant tables; none / S, I, U on local ones", async () => {
+      it("grants exactly the contract's privileges: S, I / S, I on tenant tables; none / S, I, U on local ones; none / S, I on the audit", async () => {
         const grants = await admin<{ table: string; grantee: string; privileges: string }[]>`
           select table_name::text as "table", grantee::text,
             string_agg(privilege_type::text, ',' order by privilege_type) as privileges
@@ -227,6 +237,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           { table: 'ledger_discrepancies', grantee: 'app_system', privileges: 'INSERT,SELECT' },
           { table: 'ledger_entry_refs', grantee: 'app_runtime', privileges: 'INSERT,SELECT' },
           { table: 'ledger_entry_refs', grantee: 'app_system', privileges: 'INSERT,SELECT' },
+          { table: 'ledger_reanchors', grantee: 'app_system', privileges: 'INSERT,SELECT' },
           {
             table: 'ledger_reconciliation_runs',
             grantee: 'app_system',
@@ -428,6 +439,49 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           ),
         );
         expect([...rows]).toEqual([{ key }]);
+      });
+    });
+
+    describe('ledger_reanchors (coordinator-local, system only, append-only)', () => {
+      it('runtime SELECT and INSERT raise 42501, elevated or not', async () => {
+        for (const elevated of [false, true]) {
+          const context = { user: USER_A1, tenant: TENANT_A, elevated };
+          expect(
+            await failure(
+              asRuntime(context, (tx) => tx.unsafe(`select * from billing.${AUDIT_TABLE}`)),
+            ),
+          ).toEqual(permissionDenied(AUDIT_TABLE));
+          expect(
+            await failure(asRuntime(context, (tx) => insertReanchor(tx, generateId()))),
+          ).toEqual(permissionDenied(AUDIT_TABLE));
+        }
+      });
+
+      it('the system role inserts and reads a row, and can neither update nor delete it', async () => {
+        const key = generateId();
+        await asSystem((tx) => insertReanchor(tx, key));
+        const rows = await asSystem(
+          (tx) =>
+            tx<{ key: string; replaced: string; operator: string }[]>`
+              select id::text as key, replaced_tx_id::text as replaced, operator
+              from billing.ledger_reanchors where id = ${key}`,
+        );
+        expect([...rows]).toEqual([{ key, replaced: '12', operator: 'ops-oncall' }]);
+        const before = await snapshot(AUDIT_TABLE);
+        expect(
+          await failure(
+            asSystem(
+              (tx) =>
+                tx`update billing.ledger_reanchors set operator = 'someone' where id = ${key}`,
+            ),
+          ),
+        ).toEqual(permissionDenied(AUDIT_TABLE));
+        expect(
+          await failure(
+            asSystem((tx) => tx`delete from billing.ledger_reanchors where id = ${key}`),
+          ),
+        ).toEqual(permissionDenied(AUDIT_TABLE));
+        expect(await snapshot(AUDIT_TABLE)).toEqual(before);
       });
     });
 
