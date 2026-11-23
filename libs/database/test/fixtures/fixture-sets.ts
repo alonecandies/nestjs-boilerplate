@@ -90,3 +90,23 @@ export const gizmosWithOnline = (folder: string): DatabaseMigrationSet => ({
   ...gizmosTablesMigrations,
   onlineFolder: join(import.meta.dirname, 'gizmos', folder),
 });
+
+/**
+ * The anchored-steps fixture (review #4): transactional 0000 creates a table, the online step
+ * `0000_anchored_code_key.sql` (anchored at 0000) builds a unique index concurrently, and
+ * transactional 0001 turns that index into a constraint (`UNIQUE USING INDEX`), so 0001 needs the
+ * online step to have run before it. `anchoredAt0000` is the same set as of 0000: its folder's
+ * journal stops there, with the same online folder (the database a release with only 0000 left).
+ */
+export const anchoredMigrations: DatabaseMigrationSet = {
+  name: 'anchored',
+  folder: join(import.meta.dirname, 'anchored', 'migrations'),
+  migrationsSchema: 'anchored',
+  migrationsTable: MIGRATIONS_TABLE,
+  onlineFolder: join(import.meta.dirname, 'anchored', 'migrations', 'online'),
+};
+
+export const anchoredAt0000: DatabaseMigrationSet = {
+  ...anchoredMigrations,
+  folder: join(import.meta.dirname, 'anchored', 'at-0000'),
+};

@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { DatabaseMigrationSet } from '../database.types.js';
 import { platformMigrations } from '../platform/platform.migrations.js';
 import { assertMigrationSets, withPlatformMigrations } from './migration-sets.js';
@@ -106,13 +109,76 @@ describe('assertMigrationSets (what runMigrations checks before it connects)', (
     ).toThrow(/"orders" and "audit" both have online steps in schema orders/);
   });
 
-  it('accepts sets sharing a schema when at most one of them has online steps', () => {
-    expect(() =>
-      assertMigrationSets([
-        platformMigrations,
-        set('orders', { onlineFolder: '/migrations/orders/online' }),
-        set('audit', { migrationsSchema: 'orders', migrationsTable: '__audit_migrations' }),
-      ]),
-    ).not.toThrow();
+  describe('online steps', () => {
+    let dir: string;
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'migration-sets-'));
+    });
+    afterEach(() => {
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    /** A set on disk: a journal listing `tags` and an `online/` folder holding `files`. */
+    const onDisk = (
+      name: string,
+      tags: string[],
+      files: Record<string, string>,
+    ): DatabaseMigrationSet => {
+      const folder = join(dir, name);
+      const onlineFolder = join(folder, 'online');
+      mkdirSync(join(folder, 'meta'), { recursive: true });
+      mkdirSync(onlineFolder);
+      const entries = tags.map((tag, idx) => ({
+        idx,
+        when: 1_700_000_000_000 + idx,
+        tag,
+        breakpoints: true,
+      }));
+      writeFileSync(join(folder, 'meta', '_journal.json'), JSON.stringify({ entries }));
+      for (const [file, text] of Object.entries(files))
+        writeFileSync(join(onlineFolder, file), text);
+      return set(name, { folder, onlineFolder });
+    };
+    const VALIDATE = 'ALTER TABLE orders.orders VALIDATE CONSTRAINT orders_b_check;';
+
+    it('accepts sets sharing a schema when at most one of them has online steps', () => {
+      expect(() =>
+        assertMigrationSets([
+          platformMigrations,
+          onDisk('orders', ['0000_init'], { '0000_b.sql': VALIDATE }),
+          set('audit', { migrationsSchema: 'orders', migrationsTable: '__audit_migrations' }),
+        ]),
+      ).not.toThrow();
+    });
+
+    it('accepts several steps anchored at one file, and steps anchored at any file of the journal', () => {
+      expect(() =>
+        assertMigrationSets([
+          platformMigrations,
+          onDisk('orders', ['0000_init', '0001_more'], {
+            '0000_a.sql': VALIDATE,
+            '0000_b.sql': VALIDATE,
+            '0001_c.sql': VALIDATE,
+          }),
+        ]),
+      ).not.toThrow();
+    });
+
+    it('rejects a step anchored beyond the journal, also through withPlatformMigrations', () => {
+      const orders = onDisk('orders', ['0000_init', '0001_more'], { '0002_c.sql': VALIDATE });
+      const beyond =
+        /Migration set "orders": online step 0002_c\.sql \(.*\) is anchored at 0002, beyond the set's journal \(2 file\(s\), the last is 0001_more\)/;
+      expect(() => assertMigrationSets([platformMigrations, orders])).toThrow(beyond);
+      expect(() => withPlatformMigrations([orders])).toThrow(beyond);
+    });
+
+    it('rejects a declared online folder that does not exist', () => {
+      expect(() =>
+        assertMigrationSets([
+          platformMigrations,
+          set('orders', { onlineFolder: join(dir, 'missing') }),
+        ]),
+      ).toThrow(/Migration set "orders" declares online steps in .*missing, which does not exist/);
+    });
   });
 });

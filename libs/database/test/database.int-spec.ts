@@ -28,6 +28,8 @@ import {
   runMigrations,
 } from '../src/index.js';
 import {
+  anchoredAt0000,
+  anchoredMigrations,
   gadgetsMigrations,
   gizmosMigrations,
   gizmosTablesMigrations,
@@ -476,6 +478,74 @@ describe('@platform/database against PostgreSQL 18', () => {
       expect(await indexValid(url, 'gizmos_code_idx')).toBeUndefined();
     });
 
+    describe('at their place in the history (review #4)', () => {
+      /** The `anchored` table's key constraints, by name and type (`p` primary, `u` unique). */
+      const anchoredConstraints = (url: string): Promise<string[]> =>
+        withClient(url, async (client) => {
+          const rows = await client<{ constraint: string }[]>`
+            select conname || ':' || contype::text as constraint from pg_constraint
+            where conrelid = to_regclass('anchored.anchored') and contype in ('p', 'u')
+            order by conname`;
+          return rows.map((row) => row.constraint);
+        });
+
+      /** The anchored set's online steps recorded so far. */
+      const anchoredRecorded = (url: string): Promise<string[]> =>
+        withClient(url, async (client) => {
+          const rows = await client<{ name: string }[]>`
+            select name from anchored.__online_migrations order by name`;
+          return rows.map((row) => row.name);
+        });
+
+      it('a fresh database runs the step anchored at 0000 before 0001, which needs its index', async () => {
+        const url = await createDatabase('anchored_fresh');
+
+        const summary = await runMigrations(url, {
+          migrations: [platformMigrations, anchoredMigrations],
+          logger: silent,
+        });
+
+        expect(summary.sets.at(-1)).toMatchObject({
+          name: 'anchored',
+          total: 2,
+          applied: 2,
+          online: { total: 1, applied: 1 },
+        });
+        expect(await anchoredConstraints(url)).toEqual(['anchored_code_key:u', 'anchored_pkey:p']);
+        expect(await anchoredRecorded(url)).toEqual(['0000_anchored_code_key.sql']);
+        expect(await migrationRows(url, anchoredMigrations)).toBe(2);
+        await expect(
+          runMigrations(url, {
+            migrations: [platformMigrations, anchoredMigrations],
+            logger: silent,
+          }),
+        ).resolves.toMatchObject({ applied: 0, online: { total: 1, applied: 0 } });
+      });
+
+      it('a database at 0000 with the step applied applies 0001 alone', async () => {
+        const url = await createDatabase('anchored_existing');
+        const before = await runMigrations(url, {
+          migrations: [platformMigrations, anchoredAt0000],
+          logger: silent,
+        });
+        expect(before.sets.at(-1)).toMatchObject({ applied: 1, online: { total: 1, applied: 1 } });
+        expect(await anchoredConstraints(url)).toEqual(['anchored_pkey:p']);
+
+        const summary = await runMigrations(url, {
+          migrations: [platformMigrations, anchoredMigrations],
+          logger: silent,
+        });
+
+        expect(summary.sets.at(-1)).toMatchObject({
+          total: 2,
+          applied: 1,
+          online: { total: 1, applied: 0 },
+        });
+        expect(await anchoredConstraints(url)).toEqual(['anchored_code_key:u', 'anchored_pkey:p']);
+        expect(await migrationRows(url, anchoredMigrations)).toBe(2);
+      });
+    });
+
     it('on Citus, builds the index on every shard of a distributed table and waits for a writer although the set timeout is 500 ms; the role default is back at 500 ms afterwards', async () => {
       const url = pg.url; // database `app`: the citus extension
       onTestFinished(async () => {
@@ -541,6 +611,34 @@ describe('@platform/database against PostgreSQL 18', () => {
         select setconfig from pg_db_role_setting
         where setdatabase = 0 and setrole = (select oid from pg_roles where rolname = current_user)`;
       expect(role?.setconfig).toContain('lock_timeout=500');
+    }, 60_000);
+
+    it('on Citus, a per-database lock_timeout of the migration role (which takes precedence) ends at the configured value', async () => {
+      const url = pg.url; // database `app`: the citus extension
+      onTestFinished(async () => {
+        await admin`alter role current_user in database app reset lock_timeout`;
+        await admin`alter role current_user reset lock_timeout`;
+      });
+      await admin`alter role current_user in database app set lock_timeout = 0`;
+
+      await runMigrations(url, {
+        migrations: [platformMigrations],
+        logger: silent,
+        lockWaitTimeoutMs: 700,
+      });
+
+      // A new connection without a lock_timeout startup parameter starts from the role's settings,
+      // as the worker connections Citus opens do: the per-database one wins over the role-wide one.
+      const [effective] = await withClient(
+        url,
+        (client) => client<{ lock_timeout: string }[]>`show lock_timeout`,
+      );
+      expect(effective?.lock_timeout).toBe('700ms');
+      const [perDatabase] = await admin<{ setconfig: string[] | null }[]>`
+        select setconfig from pg_db_role_setting
+        where setdatabase = (select oid from pg_database where datname = 'app')
+          and setrole = (select oid from pg_roles where rolname = current_user)`;
+      expect(perDatabase?.setconfig).toContain('lock_timeout=700');
     }, 60_000);
   });
 
