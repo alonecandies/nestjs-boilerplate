@@ -441,10 +441,10 @@ Every app serves both probes on its HTTP port, including the gRPC/Kafka services
 serves nothing else. Both are VERSION_NEUTRAL (`/health/…`, never `/v1/health/…`), `@Public()`,
 `Cache-Control: no-store`, not auto-logged and not traced.
 
-| Endpoint            | Checks                                                                                                                            | Status                                                                                                                         | Use it for                               |
-| ------------------- | --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------- |
-| `GET /health/live`  | Nothing: the process and its event loop answer                                                                                    | Always 200 while the process runs, **including during graceful shutdown**                                                      | Liveness probe, Docker `HEALTHCHECK`     |
-| `GET /health/ready` | Every contributor of the app, in parallel, each bounded by 3000 ms (`readinessTimeoutMs`); a throw, rejection or timeout = `down` | 200 when all are up; 503 when one is down, and 503 `shutting_down` while draining after SIGTERM (`shutdownDrainMs`, default 0) | Readiness probe, load balancer, k6 setup |
+| Endpoint            | Checks                                                                                                                            | Status                                                                                                                           | Use it for                               |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- |
+| `GET /health/live`  | Nothing: the process and its event loop answer                                                                                    | Always 200 while the process runs, **including during graceful shutdown**                                                        | Liveness probe, Docker `HEALTHCHECK`     |
+| `GET /health/ready` | Every contributor of the app, in parallel, each bounded by 3000 ms (`readinessTimeoutMs`); a throw, rejection or timeout = `down` | 200 when all are up; 503 when one is down, and 503 `shutting_down` while draining after SIGTERM (`SHUTDOWN_DRAIN_MS`, default 0) | Readiness probe, load balancer, k6 setup |
 
 Liveness deliberately checks no dependency: a database outage must not make the orchestrator
 restart every replica. In production (`exposeHealthDetails` defaults to `NODE_ENV !== 'production'`)
@@ -464,8 +464,8 @@ Readiness contributors per app:
 
 Contributor details: `postgres` runs `select 1` with a 2 s timeout and cancels the query;
 `kafka` runs `describeCluster` through a reused admin client with no retries and a short result
-cache; `redis` sends `PING`; `cassandra` runs `SELECT release_version FROM system.local`. No app
-sets `shutdownDrainMs` today (default 0). The gateway's readiness does not include its gRPC
+cache; `redis` sends `PING`; `cassandra` runs `SELECT release_version FROM system.local`. Every app
+reads `SHUTDOWN_DRAIN_MS` (default 0) for its drain delay; no app module passes `shutdownDrainMs`. The gateway's readiness does not include its gRPC
 upstreams; failing calls to them are handled by deadlines and circuit breakers (see
 [PERFORMANCE.md](PERFORMANCE.md#grpc)). gRPC servers additionally expose the standard `grpc.health.v1` service
 (`SERVING` only after `listen()`, `NOT_SERVING` as soon as shutdown starts).
@@ -480,7 +480,8 @@ curl -s http://localhost:3000/health/ready
 To add a contributor, implement `HealthContributor` (`key` + `check()`) and list the class in
 `ObservabilityModule.forRoot({ healthContributors: [...] })`. Kubernetes: use `httpGet` probes
 on `/health/live` and `/health/ready` (it ignores the image `HEALTHCHECK`), and set
-`shutdownDrainMs` to about 5000 behind a Service so endpoints are removed before the server closes.
+`SHUTDOWN_DRAIN_MS` to about 5000 behind a Service so endpoints are removed before the server closes
+(it must stay below `SHUTDOWN_TIMEOUT_MS`, which bounds drain and close together).
 
 ## Configuration reference
 

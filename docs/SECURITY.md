@@ -880,6 +880,8 @@ At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) pu
       `extra_float_digits` only, and `app_system` capped at 5 connections; `DATABASE_POOLER=pgbouncer`.
 - [ ] `DATABASE_RUN_MIGRATIONS=false` and migrations run as a release job (see [DOCKER.md](DOCKER.md#bootstrap-jobs--migrations)).
 - [ ] `UV_THREADPOOL_SIZE` ≤ container CPU limit; `CLUSTER_WORKERS=1` under Kubernetes.
+- [ ] `SHUTDOWN_DRAIN_MS` about 5000 behind a Service or load balancer, below `SHUTDOWN_TIMEOUT_MS`, which
+      stays below the pod's `terminationGracePeriodSeconds`; otherwise a rollout drops in-flight requests.
 - [ ] Proxy-level limit on WebSocket frame size (graphql-ws, Socket.IO).
 - [ ] First admin promoted manually; review `files:manage` and `billing:read-all` holders.
 - [ ] Nothing from `docker-compose.yml` reused as is: it ships known credentials, plaintext Kafka,
