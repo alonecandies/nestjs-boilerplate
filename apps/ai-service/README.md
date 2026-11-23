@@ -18,15 +18,15 @@ the composition root.
 
 ## Composition (`src/app.module.ts`)
 
-| Module                                                                               | Why                                                                                                                     |
-| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- |
-| `AppConfigModule.forRoot()` + `ConfigModule.forFeature(grpcConfig)`                  | `app`/`observability`/`ai` + the gRPC bind namespace, validated at boot                                                 |
-| `ObservabilityModule.forRoot({ healthContributors: [postgres] })`                    | pino JSON logs, `/metrics`, `/health/*`; OpenRouter is not a readiness dependency                                       |
-| `CqrsModule.forRoot()`, `RbacModule.forRoot()`                                       | the buses behind `AiPort`; permissions recomputed from the roles in the call metadata                                   |
-| `DatabaseModule.forRootAsync({ schema: aiSchema, migrations: DATABASE_MIGRATIONS })` | Drizzle + postgres.js pool, the units of work (transactional CLS plugin), the platform set then `ai`                    |
-| `AiGrpcModule`                                                                       | `AiCoreModule` (handlers, repositories, `AiModule`) + `AiGrpcController` over `AiPort` → the CQRS buses                 |
-| `AiToolSourcesModule.forRoot()` (`src/tools/`)                                       | `AiToolSources` over `UsersPort`, `NotificationsPort`, `BillingPort` bound to their gRPC adapters; `NOTIFICATIONS_RBAC` |
-| `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`                        | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC too                                       |
+| Module                                                                               | Why                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `AppConfigModule.forRoot()` + `ConfigModule.forFeature(grpcConfig)`                  | `app`/`observability`/`ai` + the gRPC bind namespace, validated at boot                                                                                                |
+| `ObservabilityModule.forRoot({ healthContributors: [postgres] })`                    | pino JSON logs, `/metrics`, `/health/*`; OpenRouter is not a readiness dependency                                                                                      |
+| `CqrsModule.forRoot()`, `RbacModule.forRoot()`                                       | the buses behind `AiPort`; permissions recomputed from the roles in the call metadata                                                                                  |
+| `DatabaseModule.forRootAsync({ schema: aiSchema, migrations: DATABASE_MIGRATIONS })` | Drizzle + postgres.js pool, the units of work (transactional CLS plugin), the platform set then `ai`                                                                   |
+| `AiGrpcModule`                                                                       | `AiCoreModule` (handlers, repositories, `AiModule`) + `AiGrpcController` over `AiPort` → the CQRS buses                                                                |
+| `AiToolSourcesModule.forRoot()` (`src/tools/`)                                       | `AiToolSources` (`OwnerPortsAiToolSources`, from `@domain/ai`) over `UsersPort`, `NotificationsPort`, `BillingPort` bound to their gRPC adapters; `NOTIFICATIONS_RBAC` |
+| `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`                        | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC too                                                                                      |
 
 `main.ts`: `createServiceApp(AppModule)` → `connectGrpcServer(app, [AI_GRPC_PACKAGE])` →
 `startAllMicroservices()` → `listenMetrics(app)` → `listen(app)`.

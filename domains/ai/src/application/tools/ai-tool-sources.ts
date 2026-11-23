@@ -21,3 +21,44 @@ export abstract class AiToolSources {
   /** `BillingPort.listPayments` with `userId` set: the caller's own payments in the tenant. */
   abstract listPayments(input: ListPaymentsRequest): Promise<PaymentList>;
 }
+
+/**
+ * The owners' ports as the tools read them, typed structurally: ai imports no other domain, so the
+ * composition root passes in the real `UsersPort`, `NotificationsPort` and `BillingPort` and `tsc`
+ * checks each against the slice below.
+ */
+export interface AiToolOwnerPorts {
+  readonly users: { getUser(id: string): Promise<User> };
+  readonly notifications: { list(input: ListNotificationsRequest): Promise<NotificationPage> };
+  readonly billing: { listPayments(input: ListPaymentsRequest): Promise<PaymentList> };
+}
+
+/**
+ * `AiToolSources` over the owners' ports: three one-line delegations, shared by the monolith (the
+ * in-process adapters) and ai-service (the gRPC adapters). Each call runs in the request's CLS
+ * context, as the caller; the owners' own checks apply.
+ *
+ * Not `@Injectable`: the parameter types are structural, which Nest cannot inject by type. Each app
+ * builds it with a `useFactory` provider, `inject: [UsersPort, NotificationsPort, BillingPort]`.
+ */
+export class OwnerPortsAiToolSources extends AiToolSources {
+  constructor(
+    private readonly users: AiToolOwnerPorts['users'],
+    private readonly notifications: AiToolOwnerPorts['notifications'],
+    private readonly billing: AiToolOwnerPorts['billing'],
+  ) {
+    super();
+  }
+
+  override getUser(id: string): Promise<User> {
+    return this.users.getUser(id);
+  }
+
+  override listNotifications(input: ListNotificationsRequest): Promise<NotificationPage> {
+    return this.notifications.list(input);
+  }
+
+  override listPayments(input: ListPaymentsRequest): Promise<PaymentList> {
+    return this.billing.listPayments(input);
+  }
+}

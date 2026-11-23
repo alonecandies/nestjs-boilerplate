@@ -198,9 +198,11 @@ domain's own checks (RLS, the inbox owner, own payments). Their input schemas ar
   reply that does not hold the key, so a retry runs the turn again, as a sent turn's retry does after the same 502.
 - **Stored.** The tool calls and results become messages (`assistant` / `tool`) between the user message and the reply,
   so the next turn's history replays them.
-- **Wiring.** ai imports no other domain: the composition root binds `AiToolSources` to the owners' ports (the
-  monolith's `AiToolSourcesModule` in-process; ai-service's over the identity, notifications and billing gRPC clients,
-  forwarding the caller's principal). Without a binding no tools are offered. To add a tool, add it to `AI_TOOLS`
+- **Wiring.** ai imports no other domain: the composition root binds `AiToolSources` to ai's one delegate,
+  `OwnerPortsAiToolSources` (three one-line forwards over structurally typed owner ports), built by a `useFactory`
+  provider over `UsersPort`, `NotificationsPort` and `BillingPort` (the monolith's `AiToolSourcesModule` in-process;
+  ai-service's over the identity, notifications and billing gRPC clients, forwarding the caller's principal). Without a
+  binding no tools are offered. To add a tool, add it to `AI_TOOLS`
   (`domains/ai/src/application/tools/ai-tools.ts`) with a strict schema, a caller-scoped read and, when its REST twin has
   one, the same permission; to drop one, remove it there.
 

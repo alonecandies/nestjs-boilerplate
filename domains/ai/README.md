@@ -25,8 +25,9 @@ Wiring (when an app owns the ai tables, the monolith now): `aiSchema` and `aiMig
 `AiCoreModule` (the handlers, the Drizzle repositories bound to their ports, and
 `AiModule.forRootAsync()`) and then `AiApiModule.forLocal()` (REST, GraphQL resolver, RBAC feature,
 rate-limit policy, `AiPort` on the CQRS buses). The resolver expects the app's `AppGraphqlModule`
-and `GraphqlPubSubModule`. For the tools the app binds `AiToolSources` globally to the owners'
-ports (the monolith's `AiToolSourcesModule`, below); without it no tools are offered.
+and `GraphqlPubSubModule`. For the tools the app binds `AiToolSources` globally to
+`OwnerPortsAiToolSources` over the owners' ports (the monolith's `AiToolSourcesModule`, below);
+without it no tools are offered.
 
 ## Microservices topology (`ai.v1`)
 
@@ -162,8 +163,10 @@ strict input schema with no id field:
   ports and their own checks (runtime pool under RLS, inbox actor, own payments): never a system
   context. A tool's permission is checked from the caller's roles (`PrincipalPermissions`).
 - **Composed in the app.** ai imports no other domain: `AiToolSources` (an ai port typed with the
-  owners' contracts) is bound by the composition root; the monolith's `AiToolSourcesModule`
-  forwards to `UsersPort`, `NotificationsPort` and `BillingPort` (like `Payment.user`).
+  owners' contracts) is bound by the composition root to ai's `OwnerPortsAiToolSources`, which
+  forwards to the owners' ports typed structurally (`AiToolOwnerPorts`); each app's
+  `AiToolSourcesModule` builds it with a `useFactory` provider over `UsersPort`,
+  `NotificationsPort` and `BillingPort` (like `Payment.user`).
 - **Bounded.** At most `AI_MAX_TOOL_STEPS` model steps (`stopWhen` in `@platform/ai`); each result is
   JSON, free text clipped to `AI_TOOL_LIMITS.TEXT_MAX_CHARS`, lists to `MAX_ITEMS`, the whole to
   `OUTPUT_MAX_CHARS` (items dropped from the end with `truncated: true`, else `{ truncated: true }`).

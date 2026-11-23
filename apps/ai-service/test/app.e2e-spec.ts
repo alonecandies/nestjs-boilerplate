@@ -42,6 +42,7 @@ import {
   aiSchema,
   ConversationsRepository,
   MessagesRepository,
+  OwnerPortsAiToolSources,
   UsageRepository,
 } from '@domain/ai';
 import { createInMemoryAiPersistence } from '@domain/ai/testing';
@@ -78,7 +79,6 @@ import {
 import { lastValueFrom, type Observable, toArray } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
-import { PortsAiToolSources } from '../src/tools/ai-tool-sources.module.js';
 import { createFakePostgres } from './support/fake-postgres.js';
 import { startServiceTestApp } from './support/service-test-app.js';
 
@@ -162,7 +162,7 @@ describe('ai-service (real AppModule, fakes at the network edges)', () => {
   });
 
   it('binds the chat tools to the owners over gRPC (identity-, notifications-, billing-service)', () => {
-    expect(app.get(AiToolSources)).toBeInstanceOf(PortsAiToolSources);
+    expect(app.get(AiToolSources)).toBeInstanceOf(OwnerPortsAiToolSources);
     expect(app.get(UsersPort)).toBeInstanceOf(UsersGrpcAdapter);
     expect(app.get(NotificationsPort)).toBeInstanceOf(NotificationsGrpcAdapter);
     expect(app.get(BillingPort)).toBeInstanceOf(BillingGrpcAdapter);
