@@ -216,3 +216,58 @@ describe('OPS-1: one runbook says how each store is backed up and restored', () 
     expect(flat(read('docs/DOCKER.md'))).not.toContain('stop the service, snapshot the volume');
   });
 });
+
+describe('batch 1 docs drift: follow-ups that shipped and a Kafka section from before the outbox', () => {
+  const development = (): string => flat(read('docs/DEVELOPMENT.md'));
+
+  it('api-subpath-followup-stale: no doc calls the per-domain API subpath exports a follow-up', () => {
+    expect(development()).not.toMatch(/subpath exports[^.]*known follow-up/);
+    expect(flat(read('docs/API.md'))).not.toContain('(per-domain API subpath exports)');
+    expect(development()).toContain(
+      'the build stage compiles every lib and domain; the runtime image keeps only traced files',
+    );
+  });
+
+  it('devdocs-kafka-section-pre-outbox: the Kafka section does not count topics and points at topics.txt', () => {
+    const kafka = flat(section(read('docs/DEVELOPMENT.md'), '## Kafka topics'));
+    expect(kafka).not.toContain('Today there are three');
+    expect(kafka).toContain('docker/kafka/topics.txt');
+    expect(kafka).toMatch(/Postgres contexts? enqueues? through (?:their|its) outbox/);
+  });
+
+  it('devdocs-kafka-section-pre-outbox: only a context without a store publishes directly', () => {
+    const kafka = flat(section(read('docs/DEVELOPMENT.md'), '## Kafka topics'));
+    expect(kafka).not.toContain('Producers call `KafkaProducer.publish');
+    expect(kafka).toMatch(
+      /only a context without a (?:Postgres )?store[^`]*calls `KafkaProducer\.publish/i,
+    );
+  });
+
+  it('OPS-2: the expand/contract note points at the lock timeout and the online steps', () => {
+    const note = development()
+      .split('- ')
+      .find((item) => item.startsWith('Migrations are forward-only'));
+    expect(note).toBeDefined();
+    expect(note).toContain('lock timeout');
+    expect(note).toContain('online');
+    expect(note).toContain('libs/database/README.md');
+  });
+});
+
+describe('spec-roadmap-status-stale: the program spec says which phases shipped', () => {
+  const spec = read('docs/superpowers/specs/2026-10-12-domains-tenancy-rls-program-design.md');
+
+  it('has a status line under the header that says every phase shipped', () => {
+    const header = spec.split('\n').slice(0, 12).join('\n');
+    expect(flat(header)).toMatch(/\*\*Delivery:\*\*[^-]*shipped/);
+  });
+
+  it('has no roadmap row marked next, and every row is done', () => {
+    const rows = spec.split('\n').filter((line) => /^\| (?:A1|H|D|F|B|S|L|C|G|E) +\|/.test(line));
+    expect(rows).toHaveLength(10);
+    for (const row of rows) {
+      expect(row, row).not.toMatch(/\bnext\b/);
+      expect(row, row).toContain('**done**');
+    }
+  });
+});

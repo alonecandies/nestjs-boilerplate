@@ -370,7 +370,7 @@ Add root scripts by copying `dev:billing` (`"dev:orders": "bun run setup:env && 
 
 Known limits that apply to extracted services:
 
-- **Image size.** Today the gateway imports whole domain packages, and the Dockerfile builds every domain and lib (`bun run --filter "./libs/*" --filter "./domains/*" …`). Per-domain `@domain/<x>/api` subpath exports, which would let the gateway image drop the core and persistence code, are a known follow-up.
+- **Image size.** The gateway imports each domain only through its `@domain/<x>/api` subpath (`scripts/check-api-subpaths.mjs`); the build stage compiles every lib and domain; the runtime image keeps only traced files (see [DOCKER.md](DOCKER.md)).
 - **Events.** Integration events of a Postgres context are rows of `<schema>.outbox`, published at least once by one leader relay per outbox (see step 5 and [libs/outbox/README.md](../libs/outbox/README.md)). A context without a Postgres store (notifications) does not use an outbox and publishes directly.
 
 ## Conventions and DI pitfalls
@@ -461,7 +461,7 @@ Each Postgres-backed context owns a Postgres **schema** and its own **migration 
 Notes:
 
 - `DATABASE_RUN_MIGRATIONS=true` (set in the per-app `.env` of the monolith, identity-service and billing-service) applies the sets at boot under a Postgres **advisory lock**, so replicas and services that boot together apply each file once. In production, set it to `false` and run each app image's migrate job.
-- Migrations are forward-only. Write expand/contract changes (add a nullable column → backfill → enforce) so the old and new versions of the code can run side by side during a rollout.
+- Migrations are forward-only. Write expand/contract changes (add a nullable column → backfill → enforce) so the old and new versions of the code can run side by side during a rollout. A lock-taking `ALTER` waits at most `DATABASE_MIGRATION_LOCK_TIMEOUT_MS` and then retries; `CREATE INDEX CONCURRENTLY` and `VALIDATE CONSTRAINT` go in a set's `online/` folder, outside the migration transaction. Both are described in [`libs/database/README.md`](../libs/database/README.md#migrations) (the lock timeout and the online steps).
 - One domain at a time: `bun run --filter @domain/identity db:generate --name <change>`. A hand-written domain migration: add `--custom` for an empty file registered in that domain's journal.
 - **A new history** starts with `bun run --filter @domain/<x> db:generate --name init`. Change its first statement from `CREATE SCHEMA "<x>";` to `CREATE SCHEMA IF NOT EXISTS "<x>";`: the migrator creates the schema first, for `<x>.__drizzle_migrations`. It is the only hand edit of generated SQL, and the domain's `*.migrations.spec.ts` checks it.
 - **Squashed baselines (SH-12, 2026-11-20).** identity's and billing's stacked histories (`0000_init` ..
@@ -600,11 +600,7 @@ Details: [`libs/cassandra/README.md`](../libs/cassandra/README.md).
 
 ## Kafka topics
 
-Integration events use topics named `<context>.<event>.v<major>`, plus a `.dlq` topic for each one. Today there are three:
-
-- `identity.user-registered.v1`
-- `billing.payment-succeeded.v1`
-- `notifications.notification-created.v1`
+Integration events use topics named `<context>.<event>.v<major>`, plus a `.dlq` topic for each one. [`docker/kafka/topics.txt`](../docker/kafka/topics.txt) lists them all: the six topics (`identity.user-registered`, `identity.membership-created`, `identity.membership-removed`, `billing.payment-succeeded`, `billing.ledger-posting` and `notifications.notification-created`, each `.v1`) and their `.dlq` twins.
 
 Broker auto-creation is **off**, locally as in production. Adding a topic touches the contracts and the provisioning file:
 
@@ -617,7 +613,7 @@ Check the provisioning file against the contracts with `bun run build && node sc
 
 Producing and consuming:
 
-- Producers call `KafkaProducer.publish(contract, payload, { key })` with the producer's contract (`PAYMENT_SUCCEEDED_EVENT`). Key by user id so each user's events stay in order.
+- Postgres contexts enqueue through their outbox (step 5): `this.outbox.enqueue(PAYMENT_SUCCEEDED_EVENT, payload, options)` inside the unit of work, and the relay publishes it. Only a context without a store (notifications) calls `KafkaProducer.publish(contract, payload, { key })` with the producer's contract. Key by user id so each user's events stay in order.
 - Consumers are `@KafkaConsumerController()` classes with `@KafkaEventPattern(contract)` and `new ParseEventEnvelopePipe(contract)`, the contract imported from the producer's contracts package.
 - The consumer group comes from `KAFKA_GROUP_ID` in the app's `.env`. Use a distinct group per consuming service, and the same group for every replica of that service.
 - A breaking payload change ships as a new `.v2` topic, consumed side by side with `.v1`. Additive changes stay on the same topic.

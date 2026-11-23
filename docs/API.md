@@ -1056,7 +1056,7 @@ Project-wide guides:
 
 - [README.md](../README.md): overview and quick start.
 - [ARCHITECTURE.md](ARCHITECTURE.md): topologies, hexagonal/CQRS layout, the transactional outbox, known
-  follow-ups (per-domain API subpath exports).
+  follow-ups.
 - [CONFIGURATION.md](CONFIGURATION.md): every environment variable mentioned here.
 - [SECURITY.md](SECURITY.md): tokens, RBAC, gRPC mTLS, webhook verification.
 - [AI.md](AI.md): the AI chat feature (OpenRouter setup, models, limits, privacy, tools).
