@@ -147,7 +147,9 @@ outputTokens, costUsd }`, `null` on a key replay) or one `error` (an RFC 9457 pr
   token (`aiMessageStream:<tenantId>:<userId>:<conversationId>`) and the subscription filter checks
   the payload's tenant, user and conversation again (the `notificationCreated` pattern): another user,
   or the same user in another tenant, receives nothing. Closing the mutation's request (HTTP) or its
-  socket (graphql-ws, the context's `connectionSignal`) aborts the call like SSE.
+  socket (graphql-ws, the context's `connectionSignal`) aborts the call like SSE. Over graphql-ws
+  each turn is aborted with a reason of its own, so turns that one close cuts keep their own
+  billed usage.
 
 ## Tools (`application/tools`)
 

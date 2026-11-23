@@ -34,7 +34,11 @@ export interface GqlContext {
   reply?: unknown;
   /**
    * graphql-ws operations only: the connection's signal, aborted when its socket closes. One per
-   * connection, shared by its operations; a long-running resolver passes it on to stop its work.
+   * connection, shared by every operation of the socket, with one abort reason for all of them. A
+   * consumer that keys state by the abort reason (the AI call's billed usage) derives a controller
+   * per operation instead: aborted from a once listener on this signal with a reason of its own,
+   * the listener removed when the operation ends. Not an `AbortSignal.any` of it: a composite of
+   * this long-lived signal can keep what listens on it alive for the socket's whole life.
    */
   connectionSignal?: AbortSignal;
   /** Fresh DataLoaders for this operation: per-request cache, never shared across users. */

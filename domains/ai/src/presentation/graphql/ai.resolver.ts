@@ -3,11 +3,17 @@ import { Logger } from '@nestjs/common';
 import { Args, Context, Mutation, Query, Resolver, Subscription } from '@nestjs/graphql';
 import { type AuthUser, CurrentUser, RequirePermissions } from '@platform/auth';
 import { ErrorCode, isDomainException, Timeout } from '@platform/common';
-import { type GqlContext, GraphQLUUID, type GraphqlPubSub, InjectPubSub } from '@platform/graphql';
+import {
+  type GqlContext,
+  GraphQLUUID,
+  type GraphqlPubSub,
+  GraphqlWsConnectionClosedError,
+  InjectPubSub,
+} from '@platform/graphql';
 import { RateLimit } from '@platform/redis';
 import { AiPermission } from '../../ai.permissions.js';
 import { AiPort, type SendMessageResult } from '../../application/ports/ai.port.js';
-import { abortOnDisconnect } from '../client-disconnect.js';
+import { abortOnDisconnect, type ClientDisconnect } from '../client-disconnect.js';
 import { toMessageResponse } from '../http/ai.dto.js';
 import { AI_RATE_LIMITS } from '../rate-limit/ai-rate-limit.js';
 import {
@@ -36,6 +42,25 @@ import { AiMessageStreamEventModel } from './models/ai-message-stream-event.mode
 function rawResponseOf(reply: unknown): ServerResponse | undefined {
   if (typeof reply !== 'object' || reply === null || !('raw' in reply)) return undefined;
   return reply.raw as ServerResponse;
+}
+
+/**
+ * One graphql-ws operation's abort: a plain controller of its own, aborted with a FRESH
+ * `GraphqlWsConnectionClosedError` when the socket's `connection` signal aborts (at once if it
+ * already did). The connection's signal and reason are shared by every operation of the socket, and
+ * the AI call keys its billed usage by the abort reason (`aiUsageOf`): two turns cut by one close
+ * must not share it. Not an `AbortSignal.any` of the connection's signal either: a composite of a
+ * long-lived source can keep each finished call alive. `dispose` removes the listener.
+ */
+function abortOnConnectionClose(connection: AbortSignal): ClientDisconnect {
+  const operation = new AbortController();
+  const onClose = (): void => operation.abort(new GraphqlWsConnectionClosedError());
+  if (connection.aborted) onClose();
+  else connection.addEventListener('abort', onClose, { once: true });
+  return {
+    signal: operation.signal,
+    dispose: () => connection.removeEventListener('abort', onClose),
+  };
 }
 
 /**
@@ -186,12 +211,13 @@ export class AiResolver {
       conversationId: input.conversationId,
     };
     const trigger = aiMessageStreamTrigger(user.tenantId, user.id, input.conversationId);
-    // Over HTTP the request's close aborts the turn; over graphql-ws the socket's close does.
-    const disconnect = abortOnDisconnect(rawResponseOf(context.reply));
-    const signal =
+    // Over HTTP the request's close aborts the turn; over graphql-ws the socket's close does, with
+    // a reason of this operation's own.
+    const disconnect =
       context.connectionSignal === undefined
-        ? disconnect.signal
-        : AbortSignal.any([disconnect.signal, context.connectionSignal]);
+        ? abortOnDisconnect(rawResponseOf(context.reply))
+        : abortOnConnectionClose(context.connectionSignal);
+    const { signal } = disconnect;
     try {
       const events = await this.ai.streamMessage({
         ...base,
