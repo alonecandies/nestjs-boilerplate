@@ -93,7 +93,7 @@ export class AppThrottlerModule {
               { name: THROTTLER.IP, ttl: config.ipTtlMs, limit: config.ipLimit },
               { name: THROTTLER.USER, ttl: config.ttlMs, limit: config.limit },
               { name: THROTTLER.TENANT, ttl: config.tenantTtlMs, limit: config.tenantLimit },
-              // Real values come from the route's @RateLimit policy (RateLimitGuardBase.bucketFor).
+              // Real values come from the route's @RateLimit policy (RateLimitGuardBase.bucketsFor).
               { name: THROTTLER.ROUTE, ttl: config.ttlMs, limit: config.limit },
               // Real values come from the route's credentials policy; the account lockout rides on it.
               { name: THROTTLER.AUTH, ttl: config.ttlMs, limit: config.limit },

@@ -308,6 +308,10 @@ A paid session with no known amount is refused the same way and increments
 `billing_checkout_paid_without_amount_total`. When Stripe charged an amount or currency other than
 the stored quote (promotion codes, tax), the charged values are recorded and `billing_checkout_amount_mismatch_total`
 increments.
+A paid session recorded without an owner (a pre-B2 session, a nil-UUID user, metadata that is no tenant or user
+UUID) is recorded only: the payment stays `pending` and no receipt is sent. Its first delivery increments
+`billing_checkout_paid_without_owner_total` (a duplicate delivery, an `expired` session and a completed session
+still `unpaid` do not): alert on it and reconcile in the Stripe dashboard.
 Infrastructure errors propagate, the transaction rolls back (forgetting the event id) and Stripe's retry is
 processed again. Old receipts are purged: see **Retention** below.
 
@@ -625,7 +629,9 @@ other checks still run, rows already appended stay). It never corrects anything;
 reruns and overlapping windows append nothing new. **R1**: entries recorded in the window with fewer than two
 postings or unbalanced in a currency → `unbalanced_entry` (the entry's tenant); debit ≠ credit per currency over the
 ledger → `unbalanced_currency` (platform). **R2**: any immudb row with a revision above 1 → `ledger_row_mutated`
-(platform, `<table>:<id>`). **R3**: paid payments and refs over `[from − 24 h, to + 15 min)` in pages of 500, joined by
+(platform, `<table>:<id>`). The run reads the refs of all tenants once, posted from `from − 24 h` until R3 asks for them,
+in pages of 500, and R3 and R4 share that read; a failed read is not kept, so R4 reads again when R3's read failed.
+**R3**: paid payments over `[from − 24 h, to + 15 min)` in pages of 500 and the shared refs of that range, joined by
 tenant and payment id; a charge ref whose payment that list does not hold (paid before the lookback) is looked up by
 `(tenant, payment id)` (`findPaymentsByIds`, batches of 500) before it counts as `entry_without_payment`; reported for
 rows of the window only: `payment_without_entry`, `entry_without_payment`,
@@ -633,9 +639,9 @@ rows of the window only: `payment_without_entry`, `entry_without_payment`,
 `status_mismatch` (refund and dispute refs vs the payment status). **R4** (the self-healing path for a lost webhook,
 a `fee_unavailable` posting or a ledger enabled late): every Stripe balance transaction created in the window
 (`StripeService.listBalanceTransactions`, auto-paginated, source expanded) is looked up by
-`ledgerEntryId('stripe:txn:' + id)` among the refs of all tenants posted since `from` (so an entry posted during the
-grace period, or under another tenant than the metadata names today, is found). No entry → `missing_entry` and one
-`billing.ledger-posting.v1` record (`objectType: 'balance_transaction'`, envelope id
+`ledgerEntryId('stripe:txn:' + id)` among the shared refs plus those posted since that read until R4 starts (so an
+entry posted during the grace period, or under another tenant than the metadata names today, is found). No entry →
+`missing_entry` and one `billing.ledger-posting.v1` record (`objectType: 'balance_transaction'`, envelope id
 `uuidv5('reconcile:' + runId + ':' + txnId)`, new per run) through `enqueueMissingPostings`, under the owner
 `StripeOwnerResolver` gives for the source (platform kinds: the platform tenant; an unresolved tenant-level owner: the
 platform tenant plus `tenant_unresolved`), naming the signed payment only when `findPaymentsByIds` shows it is the

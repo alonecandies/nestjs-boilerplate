@@ -409,7 +409,71 @@ describe('R3PaymentsCheck (reconciliation R3: billing payments against the ledge
     await expect(run()).resolves.toEqual([]);
   });
 
-  it('lists payments from 24 h before the window and both lists up to the end of the grace period', async () => {
+  describe('a refund after a clean run is reported by the next hourly run (no watermark)', () => {
+    const HOUR = 60 * MINUTE;
+    const nextRun = () =>
+      asSystem(() =>
+        check.run({
+          ...ctx,
+          from: new Date(FROM.getTime() + HOUR),
+          to: new Date(TO.getTime() + HOUR),
+        }),
+      );
+
+    it('a refund ref posted after the clean run while the payment still says succeeded', async () => {
+      const paid = payment(TENANT_A);
+      await posted('charge', paid);
+      await expect(run()).resolves.toEqual([]);
+
+      await posted('refund', paid, { postedAt: new Date(TO.getTime() + 10 * MINUTE) });
+      vi.setSystemTime(new Date(NOW.getTime() + HOUR));
+
+      await expect(nextRun()).resolves.toEqual([
+        finding({
+          tenantId: TENANT_A,
+          kind: 'status_mismatch',
+          sourceKey: `payment:${paid.id}`,
+          expected: { status: PaymentStatus.Succeeded },
+          actual: { netRefunds: 1, openDisputes: 0 },
+        }),
+      ]);
+    });
+
+    it('the payment turns refunded after the clean run with no refund ref', async () => {
+      const paid = payment(TENANT_A);
+      await posted('charge', paid);
+      await expect(run()).resolves.toEqual([]);
+
+      store.payments.splice(store.payments.indexOf(paid), 1, {
+        ...paid,
+        status: PaymentStatus.Refunded,
+      });
+      vi.setSystemTime(new Date(NOW.getTime() + HOUR));
+
+      await expect(nextRun()).resolves.toEqual([
+        finding({
+          tenantId: TENANT_A,
+          kind: 'status_mismatch',
+          sourceKey: `payment:${paid.id}`,
+          expected: { status: PaymentStatus.Refunded },
+          actual: { netRefunds: 0, openDisputes: 0 },
+        }),
+      ]);
+    });
+  });
+
+  it('ignores a ref posted after the end of the grace period, however late the run reads', async () => {
+    const paid = payment(TENANT_A);
+    await posted('charge', paid);
+    await posted('refund', paid, { postedAt: new Date(TO.getTime() + 20 * MINUTE) });
+    vi.setSystemTime(new Date(NOW.getTime() + 60 * MINUTE));
+
+    await expect(run()).resolves.toEqual([]);
+  });
+
+  it('lists payments from 24 h before the window to the end of the grace period, and refs from there until now', async () => {
+    const later = new Date(NOW.getTime() + 60 * MINUTE);
+    vi.setSystemTime(later);
     const listPayments = vi.spyOn(store.system, 'listSucceededPayments');
     const listRefs = vi.spyOn(store.system, 'listEntryRefs');
 
@@ -417,8 +481,28 @@ describe('R3PaymentsCheck (reconciliation R3: billing payments against the ledge
 
     const listFrom = new Date(FROM.getTime() - 24 * 60 * MINUTE);
     const listTo = new Date(TO.getTime() + 15 * MINUTE);
-    expect(listPayments).toHaveBeenCalledWith(listFrom, listTo, null, R3_PAGE_SIZE);
-    expect(listRefs).toHaveBeenCalledWith(listFrom, listTo, null, R3_PAGE_SIZE);
+    expect(listPayments).toHaveBeenCalledExactlyOnceWith(listFrom, listTo, null, R3_PAGE_SIZE);
+    expect(listRefs).toHaveBeenCalledExactlyOnceWith(listFrom, later, null, R3_PAGE_SIZE);
+  });
+
+  it("reads the run's shared refs instead of listing them itself", async () => {
+    const paid = payment(TENANT_A);
+    const charge = await posted('charge', paid);
+    const refund = await posted('refund', paid);
+    const listRefs = vi.spyOn(store.system, 'listEntryRefs');
+    const entryRefs = vi.fn(async () => ({ readAt: NOW, rows: [charge, refund] }));
+
+    await expect(asSystem(() => check.run({ ...ctx, entryRefs }))).resolves.toEqual([
+      finding({
+        tenantId: TENANT_A,
+        kind: 'status_mismatch',
+        sourceKey: `payment:${paid.id}`,
+        expected: { status: PaymentStatus.Succeeded },
+        actual: { netRefunds: 1, openDisputes: 0 },
+      }),
+    ]);
+    expect(entryRefs).toHaveBeenCalledTimes(1);
+    expect(listRefs).not.toHaveBeenCalled();
   });
 
   it('runs only inside SystemContext (its lists are system methods)', async () => {

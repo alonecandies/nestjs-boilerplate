@@ -14,6 +14,7 @@ import {
   API_VERSION_MISMATCH_METRIC,
   PAID_WITHOUT_AMOUNT_METRIC,
   PAID_WITHOUT_CURRENCY_METRIC,
+  PAID_WITHOUT_OWNER_METRIC,
 } from '../../../billing.constants.js';
 import { PaymentSucceededEvent } from '../../../domain/events/payment-succeeded.event.js';
 import { normalizeCurrency, type Payment } from '../../../domain/payment.aggregate.js';
@@ -233,6 +234,8 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
     private readonly apiVersionMismatch: { inc(): void },
     @InjectMetric(PAID_WITHOUT_AMOUNT_METRIC)
     private readonly paidWithoutAmount: { inc(): void },
+    @InjectMetric(PAID_WITHOUT_OWNER_METRIC)
+    private readonly paidWithoutOwner: { inc(): void },
   ) {}
 
   async execute(command: HandleStripeWebhookCommand): Promise<HandleStripeWebhookResponse> {
@@ -345,6 +348,14 @@ export class HandleStripeWebhookHandler implements ICommandHandler<HandleStripeW
       this.logger.debug(`Duplicate Stripe event ${event.id} (${event.type}) acknowledged`);
     } else if (event.type.startsWith('checkout.session.')) {
       // Checkout always signs the paying user: a session without one is not ours to apply.
+      // Count a paid one (the same "paid" test `process()` uses) once: money taken, nothing applied.
+      if (
+        (event.type === 'checkout.session.completed' ||
+          event.type === 'checkout.session.async_payment_succeeded') &&
+        event.data.object.payment_status !== 'unpaid'
+      ) {
+        this.paidWithoutOwner.inc();
+      }
       this.logger.warn(
         `Stripe event ${event.id} (${event.type}) carries no user: recorded, no payment applied`,
       );

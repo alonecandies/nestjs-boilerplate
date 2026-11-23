@@ -100,6 +100,15 @@ export const PAID_WITHOUT_CURRENCY_METRIC = 'billing_checkout_paid_without_curre
 export const PAID_WITHOUT_AMOUNT_METRIC = 'billing_checkout_paid_without_amount_total';
 
 /**
+ * Prometheus counter: paid Checkout Sessions (`checkout.session.completed` or
+ * `checkout.session.async_payment_succeeded`, not unpaid) recorded without an owner: a pre-B2
+ * session, a nil-UUID user, or metadata that is no tenant or user UUID. Counted on the first
+ * delivery only. The amount is known but no payment is applied (it stays `pending`, no receipt):
+ * alert on any increase and reconcile it against the Stripe dashboard.
+ */
+export const PAID_WITHOUT_OWNER_METRIC = 'billing_checkout_paid_without_owner_total';
+
+/**
  * Prometheus counter: paid Checkout Sessions whose charged amount or currency differs from the quote
  * stored at session creation (promotion codes, tax, price changes). The charged values are recorded;
  * reconcile any increase (ledger reconciliation R3 later writes a discrepancy row).

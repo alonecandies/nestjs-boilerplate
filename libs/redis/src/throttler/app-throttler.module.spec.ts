@@ -1,7 +1,7 @@
 import { Controller, Global, type INestApplicationContext, Module, Post } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { APP_GUARD, NestFactory } from '@nestjs/core';
-import { getStorageToken, type ThrottlerStorage } from '@nestjs/throttler';
+import { getStorageToken, Throttle, type ThrottlerStorage } from '@nestjs/throttler';
 import { redisConfig } from '@platform/config';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RedisKeyService } from '../keys/redis-key.service.js';
@@ -105,6 +105,51 @@ describe('AppThrottlerModule (DI wiring)', () => {
     await expect(
       NestFactory.createApplicationContext(TestModule, { logger: false, abortOnError: false }),
     ).rejects.toThrow('@RateLimit names unregistered policies: test.missing');
+  });
+
+  it('refuses to boot when a handler carries an @Throttle override', async () => {
+    @Controller('y')
+    class OverrideController {
+      @Post() @Throttle({ user: { limit: 2, ttl: 1_000 } }) handle(): void {
+        // route handler stub
+      }
+    }
+    @Module({
+      imports: [
+        ConfigModule.forRoot({ ignoreEnvFile: true }),
+        FakeRedisModule,
+        AppThrottlerModule.forRootAsync(),
+      ],
+      controllers: [OverrideController],
+    })
+    class TestModule {}
+
+    await expect(
+      NestFactory.createApplicationContext(TestModule, { logger: false, abortOnError: false }),
+    ).rejects.toThrow('@Throttle overrides are not supported: OverrideController.handle');
+  });
+
+  it('refuses to boot when a controller class carries an @Throttle override', async () => {
+    @Throttle({ route: { limit: 1, ttl: 1_000 } })
+    @Controller('z')
+    class ClassOverrideController {
+      @Post() handle(): void {
+        // route handler stub
+      }
+    }
+    @Module({
+      imports: [
+        ConfigModule.forRoot({ ignoreEnvFile: true }),
+        FakeRedisModule,
+        AppThrottlerModule.forRootAsync(),
+      ],
+      controllers: [ClassOverrideController],
+    })
+    class TestModule {}
+
+    await expect(
+      NestFactory.createApplicationContext(TestModule, { logger: false, abortOnError: false }),
+    ).rejects.toThrow('@Throttle overrides are not supported: ClassOverrideController');
   });
 
   it('registers the fail-open counter and passes THROTTLE_REDIS_TIMEOUT_MS to the storage', async () => {

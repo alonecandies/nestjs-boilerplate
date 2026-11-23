@@ -4,6 +4,7 @@ import type {
   LedgerDiscrepancyInput,
 } from '../../../domain/ledger/ledger-discrepancy.js';
 import type { LedgerRunCounts } from '../../repositories/ledger.system-repository.js';
+import type { LedgerEntryRef } from '../../repositories/ledger-receipts.repository.js';
 
 /** The half-open window `[from, to)` one reconciliation run looks at. */
 export interface LedgerReconcileWindow {
@@ -28,11 +29,27 @@ export class ReconcileLedgerCommand extends Command<LedgerRunCounts> {
   }
 }
 
-/** What a check sees of its run. */
+/** One run's read of the ledger refs (`ReconciliationContext.entryRefs`). */
+export interface RunEntryRefs {
+  /** When the read started: every row was posted before it. */
+  readonly readAt: Date;
+  /** The refs of all tenants posted from the read's start until `readAt`. */
+  readonly rows: readonly LedgerEntryRef[];
+}
+
+/**
+ * What a check sees of its run: one object per run, the same for every check. `entryRefs` reads
+ * the refs of all tenants posted in `[from − 24 h, now)` on its first call and resolves with that
+ * same read on later ones (a failed read is not kept: the next call reads again). R3 calls it
+ * first and filters to its own window; R4 reuses it and lists only the refs posted since its
+ * `readAt`. R5 keeps its own listing. Without it (a check run on its own), R3 and R4 read their
+ * own refs.
+ */
 export interface ReconciliationContext {
   readonly runId: string;
   readonly from: Date;
   readonly to: Date;
+  readonly entryRefs?: () => Promise<RunEntryRefs>;
 }
 
 /**

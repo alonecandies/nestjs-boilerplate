@@ -12,6 +12,8 @@ import {
 } from '../../../repositories/ledger.system-repository.js';
 import type { LedgerEntryRef } from '../../../repositories/ledger-receipts.repository.js';
 import type { ReconciliationCheck, ReconciliationContext } from '../reconcile-ledger.command.js';
+import { memoizedEntryRefs } from './entry-refs.js';
+import { keysetPages } from './keyset-pages.js';
 
 /** Page size of both system lists. */
 export const R3_PAGE_SIZE = 500;
@@ -19,17 +21,20 @@ export const R3_PAGE_SIZE = 500;
 export const R3_PAYMENT_LOOKBEHIND_MS = 24 * 3_600_000;
 
 const key = (tenantId: string, id: string) => `${tenantId}/${id}`;
-const inWindow = (at: Date, ctx: ReconciliationContext) =>
-  at.getTime() >= ctx.from.getTime() && at.getTime() < ctx.to.getTime();
+const inRange = (at: Date, from: Date, to: Date) =>
+  at.getTime() >= from.getTime() && at.getTime() < to.getTime();
+const inWindow = (at: Date, ctx: ReconciliationContext) => inRange(at, ctx.from, ctx.to);
 const count = (refs: readonly LedgerEntryRef[], kind: LedgerEntryKind) =>
   refs.filter((ref) => ref.kind === kind).length;
 
 /**
  * R3, billing's payments against the ledger (ledger design §4; outbox plan Task 15). Reads every
- * page (`R3_PAGE_SIZE`) of `listSucceededPayments` and `listEntryRefs` over
- * `[from − 24 h, to + grace)` and joins them in memory by tenant and payment id; only rows of the
- * window `[from, to)` are reported, so a payment paid during the grace period is not, and a pair
- * whose payment and ref fall on either side of a window edge still pairs. Findings:
+ * page (`R3_PAGE_SIZE`) of `listSucceededPayments` over `[from − 24 h, to + grace)`, takes the
+ * refs of that range from the run's shared read (`ctx.entryRefs`, refs from `from − 24 h` until
+ * now; its own read of them when the context has none) and joins them in memory by tenant and
+ * payment id; only rows of the window `[from, to)` are reported, so a payment paid during the
+ * grace period is not, and a pair whose payment and ref fall on either side of a window edge still
+ * pairs. Findings:
  * - a paid payment of the window without a `charge` ref → `payment_without_entry`
  *   (source key `payment:<id>`);
  * - a `charge` ref of the window with no payment id, or one that is not a paid payment of its
@@ -56,12 +61,16 @@ export class R3PaymentsCheck implements ReconciliationCheck {
   async run(ctx: ReconciliationContext): Promise<readonly LedgerDiscrepancyInput[]> {
     const listFrom = new Date(ctx.from.getTime() - R3_PAYMENT_LOOKBEHIND_MS);
     const listTo = new Date(ctx.to.getTime() + LEDGER_RECONCILE_GRACE_MS);
-    const payments = await this.readAll((after) =>
-      this.system.listSucceededPayments(listFrom, listTo, after, R3_PAGE_SIZE),
-    );
-    const refs = await this.readAll((after) =>
-      this.system.listEntryRefs(listFrom, listTo, after, R3_PAGE_SIZE),
-    );
+    const payments: PaidPaymentRow[] = [];
+    for await (const page of keysetPages(
+      R3_PAGE_SIZE,
+      (last: PaidPaymentRow) => ({ tenantId: last.tenantId, id: last.id }),
+      (after) => this.system.listSucceededPayments(listFrom, listTo, after, R3_PAGE_SIZE),
+    )) {
+      payments.push(...page);
+    }
+    const read = ctx.entryRefs ?? memoizedEntryRefs(this.system, listFrom, R3_PAGE_SIZE);
+    const refs = (await read()).rows.filter((ref) => inRange(ref.postedAt, listFrom, listTo));
     const paid = new Set(payments.map((payment) => key(payment.tenantId, payment.id)));
     const refsByPayment = Map.groupBy(
       refs.filter((ref) => ref.paymentId !== null),
@@ -131,21 +140,6 @@ export class R3PaymentsCheck implements ReconciliationCheck {
       }
     }
     return paid;
-  }
-
-  /** Every page of a keyset list, cursor = the last row's `(tenantId, id)`. */
-  private async readAll<T extends PaidPaymentRow | LedgerEntryRef>(
-    page: (after: LedgerCursor | null) => Promise<readonly T[]>,
-  ): Promise<T[]> {
-    const rows: T[] = [];
-    let after: LedgerCursor | null = null;
-    for (;;) {
-      const batch = await page(after);
-      rows.push(...batch);
-      const last = batch.at(-1);
-      if (last === undefined || batch.length < R3_PAGE_SIZE) return rows;
-      after = { tenantId: last.tenantId, id: 'entryId' in last ? last.entryId : last.id };
-    }
   }
 
   /** The entry of a `charge` ref against its payment: tenant first, then the presentment. */

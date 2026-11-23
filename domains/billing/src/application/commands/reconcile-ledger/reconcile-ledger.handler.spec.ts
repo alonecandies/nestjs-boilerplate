@@ -26,6 +26,7 @@ import { ReconcileLedgerCommand } from './reconcile-ledger.command.js';
 import { ReconcileLedgerHandler } from './reconcile-ledger.handler.js';
 
 const HOUR = 3_600_000;
+const MINUTE = 60_000;
 const NOW = new Date('2026-11-19T12:00:00.000Z');
 const PAYMENT_ID = '0197d400-0000-7000-8000-000000000001';
 const config: LedgerConfig = {
@@ -42,6 +43,19 @@ const OFF_BY_ONE: LedgerEntryDraft = {
   sourceKey: 'stripe:txn:txn_handler_off_by_one',
   lines: CHARGE_DRAFT.lines.map((l, i) => (i === 0 ? { ...l, debit: l.debit + 1n } : l)),
 };
+
+/** A payout Stripe lists that the ledger has no entry for (R4: one missing_entry). */
+const LOST_PAYOUT = {
+  id: 'txn_handler_lost',
+  object: 'balance_transaction',
+  amount: -5_000,
+  fee: 0,
+  net: -5_000,
+  currency: 'usd',
+  created: Math.floor(NOW.getTime() / 1_000) - 7_200,
+  reporting_category: 'payout',
+  source: { id: 'po_handler', object: 'payout' },
+} as unknown as Stripe.BalanceTransaction;
 
 type Sample = { labels: Record<string, string>; value: number };
 const metric = async (name: string, labels: Record<string, string> = {}) => {
@@ -131,19 +145,7 @@ describe('ReconcileLedgerHandler', () => {
   });
 
   it("appends R4's missing_entry with its detector and run id and keeps R4's outbox record", async () => {
-    balanceTransactions = [
-      {
-        id: 'txn_handler_lost',
-        object: 'balance_transaction',
-        amount: -5_000,
-        fee: 0,
-        net: -5_000,
-        currency: 'usd',
-        created: Math.floor(NOW.getTime() / 1_000) - 7_200,
-        reporting_category: 'payout',
-        source: { id: 'po_handler', object: 'payout' },
-      } as unknown as Stripe.BalanceTransaction,
-    ];
+    balanceTransactions = [LOST_PAYOUT];
 
     await expect(reconcile()).resolves.toEqual({
       found: { missing_entry: 1 },
@@ -186,7 +188,56 @@ describe('ReconcileLedgerHandler', () => {
     await reconcile(window);
 
     expect(onlyRun()).toMatchObject(window);
-    expect(spy).toHaveBeenCalledWith({ runId: onlyRun()?.id, ...window });
+    expect(spy).toHaveBeenCalledWith({
+      runId: onlyRun()?.id,
+      ...window,
+      entryRefs: expect.any(Function),
+    });
+  });
+
+  it('builds one context per run and hands the same one to every check', async () => {
+    const r2Run = vi.spyOn(r2, 'run');
+    const r4Run = vi.spyOn(r4, 'run');
+
+    await reconcile();
+
+    expect(r4Run.mock.calls[0]?.[0]).toBe(r2Run.mock.calls[0]?.[0]);
+  });
+
+  it('reads the refs from 24 h before the window once per run; R4 lists only the top-up since that read', async () => {
+    const listRefs = vi.spyOn(store.system, 'listEntryRefs');
+    const r3Run = r3.run.bind(r3);
+    vi.spyOn(r3, 'run').mockImplementation(async (ctx) => {
+      const found = await r3Run(ctx);
+      vi.setSystemTime(new Date(NOW.getTime() + MINUTE));
+      return found;
+    });
+
+    await expect(reconcile()).resolves.toEqual({ found: {}, appended: {} });
+
+    const from = new Date(NOW.getTime() - LEDGER_RECONCILE_GRACE_MS - 72 * HOUR);
+    expect(listRefs.mock.calls).toEqual([
+      [new Date(from.getTime() - 24 * HOUR), NOW, null, 500],
+      [NOW, new Date(NOW.getTime() + MINUTE), null, 500],
+    ]);
+  });
+
+  it('a failing first ref read fails R3 only: R4 reads again and its findings are appended', async () => {
+    balanceTransactions = [LOST_PAYOUT];
+    const listRefs = vi
+      .spyOn(store.system, 'listEntryRefs')
+      .mockRejectedValueOnce(new Error('statement timeout'));
+    const r3Run = vi.spyOn(r3, 'run');
+
+    const counts = await reconcile();
+
+    await expect(r3Run.mock.results[0]?.value).rejects.toThrow('statement timeout');
+    expect(listRefs).toHaveBeenCalledTimes(2);
+    expect(counts).toEqual({ found: { missing_entry: 1 }, appended: { missing_entry: 1 } });
+    expect(onlyRun()).toMatchObject({ status: 'failed', counts });
+    expect(store.discrepancies.map((d) => [d.kind, d.detectedBy])).toEqual([
+      ['missing_entry', 'R4'],
+    ]);
   });
 
   it('refuses an empty or inverted window', () => {

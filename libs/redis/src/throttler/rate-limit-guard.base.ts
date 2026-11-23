@@ -89,7 +89,10 @@ export abstract class RateLimitGuardBase extends ThrottlerGuard {
     return id ? `user:${id}` : this.ipTracker(subject.ip);
   }
 
-  /** The bucket `request.throttler` charges, or `undefined` when it does not apply here. */
+  /**
+   * The bucket a global (non-route) `request.throttler` charges, or `undefined` when it does not
+   * apply here. The `route` throttler is resolved by `bucketsFor`.
+   */
   protected bucketFor(
     request: ThrottlerRequest,
     subject: RateLimitSubject,
@@ -111,55 +114,58 @@ export abstract class RateLimitGuardBase extends ThrottlerGuard {
         const tenantId = authenticatedTenantId(subject.user);
         return tenantId === undefined ? undefined : { ...global, tracker: `tenant:${tenantId}` };
       }
-      case THROTTLER.ROUTE: {
-        const policy = this.policyFor(request.context);
-        if (policy === undefined || policy.key === 'credentials') return undefined;
-        return {
-          throttler: name,
-          scope: policy.name,
-          tracker: policy.key === 'ip' ? this.ipTracker(subject.ip) : this.userTracker(subject),
-          limit: policy.limit,
-          ttlMs: policy.ttlMs,
-          blockMs: policy.blockMs ?? policy.ttlMs,
-        };
-      }
       default:
         return undefined;
     }
   }
 
   /**
-   * The `tenant` budget of the route's policy: one bucket per active tenant, scope = the policy
-   * name (its own key and header item, `"tenant:<policy>"`); `undefined` without one or anonymous.
+   * The buckets `request.throttler` charges for this request, in charging order. The `route`
+   * throttler resolves the route's policy once: the member's bucket first, then the policy's
+   * `tenant` budget (one bucket per active tenant, scope = the policy name, its own key and header
+   * item, `"tenant:<policy>"`) when the policy has one and the caller has a tenant. Every other
+   * throttler charges the single bucket of `bucketFor`.
    */
-  protected policyTenantBucket(
-    context: ExecutionContext,
-    subject: RateLimitSubject,
-  ): RateLimitBucket | undefined {
-    const policy = this.policyFor(context);
+  protected bucketsFor(request: ThrottlerRequest, subject: RateLimitSubject): RateLimitBucket[] {
+    if ((request.throttler.name ?? THROTTLER.USER) !== THROTTLER.ROUTE) {
+      const bucket = this.bucketFor(request, subject);
+      return bucket === undefined ? [] : [bucket];
+    }
+    const policy = this.policyFor(request.context);
+    if (policy === undefined) return [];
+    const buckets: RateLimitBucket[] = [];
+    if (policy.key !== 'credentials') {
+      buckets.push({
+        throttler: THROTTLER.ROUTE,
+        scope: policy.name,
+        tracker: policy.key === 'ip' ? this.ipTracker(subject.ip) : this.userTracker(subject),
+        limit: policy.limit,
+        ttlMs: policy.ttlMs,
+        blockMs: policy.blockMs ?? policy.ttlMs,
+      });
+    }
     const tenantId = authenticatedTenantId(subject.user);
-    if (policy?.tenant === undefined || tenantId === undefined) return undefined;
-    return {
-      throttler: THROTTLER.TENANT,
-      scope: policy.name,
-      tracker: `tenant:${tenantId}`,
-      limit: policy.tenant.limit,
-      ttlMs: policy.tenant.ttlMs,
-      blockMs: policy.tenant.blockMs ?? policy.tenant.ttlMs,
-    };
+    if (policy.tenant !== undefined && tenantId !== undefined) {
+      buckets.push({
+        throttler: THROTTLER.TENANT,
+        scope: policy.name,
+        tracker: `tenant:${tenantId}`,
+        limit: policy.tenant.limit,
+        ttlMs: policy.tenant.ttlMs,
+        blockMs: policy.tenant.blockMs ?? policy.tenant.ttlMs,
+      });
+    }
+    return buckets;
   }
 
   protected override async handleRequest(request: ThrottlerRequest): Promise<boolean> {
     const name = request.throttler.name ?? THROTTLER.USER;
     if (!this.enforced.has(name) || this.isIgnored(request.context)) return true;
     const subject = this.subjectOf(request.context);
-    const bucket = this.bucketFor(request, subject);
-    if (bucket !== undefined) await this.charge(request.context, bucket);
-    // The route throttler also charges the policy's tenant budget, once the member's bucket
-    // admitted the request (a member over their own limit never spends the tenant's).
-    if (name === THROTTLER.ROUTE) {
-      const tenantBucket = this.policyTenantBucket(request.context, subject);
-      if (tenantBucket !== undefined) await this.charge(request.context, tenantBucket);
+    // In order: `charge` throws on a refusal, so a member over their own limit never spends the
+    // tenant's budget.
+    for (const bucket of this.bucketsFor(request, subject)) {
+      await this.charge(request.context, bucket);
     }
     return true;
   }

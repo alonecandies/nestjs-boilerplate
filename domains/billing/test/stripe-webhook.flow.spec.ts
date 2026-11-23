@@ -30,6 +30,7 @@ import {
   API_VERSION_MISMATCH_METRIC,
   PAID_WITHOUT_AMOUNT_METRIC,
   PAID_WITHOUT_CURRENCY_METRIC,
+  PAID_WITHOUT_OWNER_METRIC,
 } from '../src/billing.constants.js';
 import { BILLING_RBAC } from '../src/billing.permissions.js';
 import { PaymentStatus } from '../src/domain/payment-status.enum.js';
@@ -124,6 +125,7 @@ describe('Stripe webhook flow (raw body → signature → exactly-once → outbo
         makeCounterProvider({ name: AMOUNT_MISMATCH_METRIC, help: 'test' }),
         makeCounterProvider({ name: API_VERSION_MISMATCH_METRIC, help: 'test' }),
         makeCounterProvider({ name: PAID_WITHOUT_AMOUNT_METRIC, help: 'test' }),
+        makeCounterProvider({ name: PAID_WITHOUT_OWNER_METRIC, help: 'test' }),
         { provide: StripeService, useValue: createTestStripeService() },
         { provide: PaymentsRepository, useValue: new InMemoryPaymentsRepository(store) },
         { provide: StripeEventsRepository, useValue: new InMemoryStripeEventsRepository(store) },

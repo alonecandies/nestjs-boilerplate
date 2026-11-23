@@ -91,6 +91,7 @@ describe('HandleStripeWebhookHandler', () => {
   let payment: Payment;
   let paidWithoutCurrency: { inc: Mock<() => void> };
   let paidWithoutAmount: { inc: Mock<() => void> };
+  let paidWithoutOwner: { inc: Mock<() => void> };
   let amountMismatch: { inc: Mock<() => void> };
   let apiVersionMismatch: { inc: Mock<() => void> };
   let kafka: FakeKafkaProducer;
@@ -154,6 +155,7 @@ describe('HandleStripeWebhookHandler', () => {
       amountMismatch,
       apiVersionMismatch,
       paidWithoutAmount,
+      paidWithoutOwner,
     );
   let eventBusOf: () => unknown;
   let runtimeEvents: InMemoryStripeEventsRepository;
@@ -182,6 +184,7 @@ describe('HandleStripeWebhookHandler', () => {
     eventBusOf = () => eventBus;
     paidWithoutCurrency = { inc: vi.fn<() => void>() };
     paidWithoutAmount = { inc: vi.fn<() => void>() };
+    paidWithoutOwner = { inc: vi.fn<() => void>() };
     amountMismatch = { inc: vi.fn<() => void>() };
     apiVersionMismatch = { inc: vi.fn<() => void>() };
     systemEvents = new InMemoryStripeEventsSystemRepository(
@@ -744,6 +747,72 @@ describe('HandleStripeWebhookHandler', () => {
       expect(store.payment(payment.id)?.status).toBe(PaymentStatus.Pending);
       expect(published).toEqual([]);
       await expect(deliver(nilUser('evt_nil_user_1'))).resolves.toMatchObject({ duplicate: true });
+    });
+
+    describe('paid checkout sessions recorded without an owner', () => {
+      const nilUserMetadata = () => ({
+        paymentId: payment.id,
+        userId: PLATFORM_TENANT_ID,
+        tenantId: TEST_TENANT_ID,
+      });
+
+      it('counts a paid completed session with a nil-UUID user once, not its duplicate delivery', async () => {
+        const first = completed({ metadata: nilUserMetadata() }, 'evt_nil_paid_1');
+
+        await deliver(first);
+        expect(paidWithoutOwner.inc).toHaveBeenCalledTimes(1);
+
+        await expect(deliver(first)).resolves.toMatchObject({ duplicate: true });
+        expect(paidWithoutOwner.inc).toHaveBeenCalledTimes(1);
+      });
+
+      it('counts a paid async_payment_succeeded session with a nil-UUID user', async () => {
+        await deliver(
+          signedEvent(
+            'checkout.session.async_payment_succeeded',
+            makeCheckoutSession({
+              id: 'cs_paid_1',
+              client_reference_id: payment.id,
+              payment_status: 'paid',
+              amount_total: 2_500,
+              currency: 'usd',
+              status: 'complete',
+              metadata: nilUserMetadata(),
+            }),
+            { id: 'evt_nil_async_1' },
+          ),
+        );
+        expect(paidWithoutOwner.inc).toHaveBeenCalledTimes(1);
+      });
+
+      it('does not count a user-less expired session', async () => {
+        await deliver(
+          signedEvent(
+            'checkout.session.expired',
+            makeCheckoutSession({
+              id: 'cs_paid_1',
+              status: 'expired',
+              metadata: nilUserMetadata(),
+            }),
+            { id: 'evt_nil_expired_1' },
+          ),
+        );
+        expect(systemEvents.events).toHaveLength(1);
+        expect(paidWithoutOwner.inc).not.toHaveBeenCalled();
+      });
+
+      it('does not count a completed session still unpaid (awaiting async payment)', async () => {
+        await deliver(
+          completed({ payment_status: 'unpaid', metadata: nilUserMetadata() }, 'evt_nil_unpaid_1'),
+        );
+        expect(systemEvents.events).toHaveLength(1);
+        expect(paidWithoutOwner.inc).not.toHaveBeenCalled();
+      });
+
+      it('does not count a paid session of a user-owned payment', async () => {
+        await deliver(completed({}, 'evt_owned_paid_1'));
+        expect(paidWithoutOwner.inc).not.toHaveBeenCalled();
+      });
     });
 
     it('records an event without tenant metadata for the platform tenant with a NULL user', async () => {

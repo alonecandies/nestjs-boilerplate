@@ -16,6 +16,7 @@ import {
   CHECKOUT_WITHOUT_IDEMPOTENCY_KEY_METRIC,
   PAID_WITHOUT_AMOUNT_METRIC,
   PAID_WITHOUT_CURRENCY_METRIC,
+  PAID_WITHOUT_OWNER_METRIC,
 } from './billing.constants.js';
 import { ledgerConfig } from './infrastructure/ledger/ledger.config.js';
 import { BILLING_OUTBOX, BillingOutbox } from './infrastructure/persistence/billing-outbox.js';
@@ -72,6 +73,10 @@ import { StripeModule } from './infrastructure/stripe/stripe.module.js';
     makeCounterProvider({
       name: PAID_WITHOUT_AMOUNT_METRIC,
       help: 'Paid Stripe Checkout Sessions left pending because no amount was known (no receipt sent)',
+    }),
+    makeCounterProvider({
+      name: PAID_WITHOUT_OWNER_METRIC,
+      help: 'Paid Stripe Checkout Sessions recorded without a user: the payment is left pending, no receipt sent',
     }),
     makeCounterProvider({
       name: AMOUNT_MISMATCH_METRIC,
