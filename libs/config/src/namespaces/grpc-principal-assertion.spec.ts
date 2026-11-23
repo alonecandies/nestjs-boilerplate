@@ -77,6 +77,15 @@ describe('grpc namespace: principal assertions', () => {
     ]);
   });
 
+  it('accepts enforce with the public keys it verifies with', () => {
+    const cfg = grpcConfig.parse({
+      GRPC_PRINCIPAL_ASSERTION: 'enforce',
+      GRPC_PRINCIPAL_PUBLIC_KEYS: `k1=${b64(edge.publicPem)}`,
+    }).principalAssertion;
+    expect(cfg.mode).toBe('enforce');
+    expect(cfg.publicKeys).toEqual([{ keyId: 'k1', pem: edge.publicPem }]);
+  });
+
   it('reads the public keys from a file (one entry per line, # comments skipped)', () => {
     const file = write(`# compose-generated\nk1=${b64(edge.publicPem)}\n`);
     expect(
@@ -89,6 +98,11 @@ describe('grpc namespace: principal assertions', () => {
     [
       'warn without a public key',
       { GRPC_PRINCIPAL_ASSERTION: 'warn' },
+      'GRPC_PRINCIPAL_PUBLIC_KEYS',
+    ],
+    [
+      'enforce without a public key',
+      { GRPC_PRINCIPAL_ASSERTION: 'enforce' },
       'GRPC_PRINCIPAL_PUBLIC_KEYS',
     ],
     [

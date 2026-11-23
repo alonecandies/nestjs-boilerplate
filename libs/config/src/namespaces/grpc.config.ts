@@ -6,8 +6,11 @@ import { defineConfigNamespace } from '../define-config-namespace.js';
 import { zBool, zEnum, zInt, zNodeEnv, zStr } from '../env/env.helpers.js';
 import { addKnownLocalSecretIssue, isKnownLocalSecret } from '../env/production-guards.js';
 
-/** `off`: the assertion header is ignored. `warn`: verified, logged and counted, never refused. */
-export const GRPC_PRINCIPAL_ASSERTION_MODES = ['off', 'warn'] as const;
+/**
+ * `off`: the assertion header is ignored. `warn`: verified, logged and counted, never refused.
+ * `enforce`: a call with a user needs a valid assertion, whose claims alone build the principal.
+ */
+export const GRPC_PRINCIPAL_ASSERTION_MODES = ['off', 'warn', 'enforce'] as const;
 export type GrpcPrincipalAssertionMode = (typeof GRPC_PRINCIPAL_ASSERTION_MODES)[number];
 
 /** One key of the principal assertion: its id (the JWS `kid`) and its PEM. */
@@ -159,7 +162,7 @@ export const grpcEnvSchema = z
     GRPC_ALLOW_INSECURE: zBool(false),
     // Server reflection (grpcurl/Postman). Default: on unless NODE_ENV=production.
     GRPC_REFLECTION: zBool(),
-    // Signed principal assertion (x-principal-assertion): off | warn.
+    // Signed principal assertion (x-principal-assertion): off | warn | enforce.
     GRPC_PRINCIPAL_ASSERTION: zEnum(GRPC_PRINCIPAL_ASSERTION_MODES, 'off'),
     // The edge's ES256 private key (base64 of a P-256 PEM), or a file holding it; edge only.
     GRPC_PRINCIPAL_SIGNING_KEY: zStr(),

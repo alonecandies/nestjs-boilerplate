@@ -12,9 +12,11 @@ import { CLS_ID, ClsService } from 'nestjs-cls';
 import { Observable, throwError } from 'rxjs';
 import { RPC_CLS_KEYS } from '../context/transport-context.js';
 import { type IncomingRpcContext, isGrpcMetadata, readIncomingMetadata } from './grpc-metadata.js';
-import { principalFromRpcCaller } from './grpc-principal.js';
+import { principalForRpcCall } from './grpc-principal.js';
 import {
-  checkPrincipalAssertion,
+  assessPrincipalAssertion,
+  type PrincipalAssertionCheck,
+  type PrincipalAssertionSettings,
   principalAssertionSettings,
   recordPrincipalAssertion,
 } from './grpc-principal-assertion.js';
@@ -29,10 +31,14 @@ import {
  * - `RPC_CLS_KEYS.CALLER`, the sanitized metadata (with the raw `x-principal-assertion`, which
  *   `callerContextFromCls` forwards unchanged on the service's own calls).
  *
- * With `GRPC_PRINCIPAL_ASSERTION=warn` it also verifies the edge's signed principal assertion: a
- * missing, expired, invalid or mismatching one is logged and counted in
- * `grpc_principal_assertions_total{outcome}` (`valid` too), and the plain headers still build the
- * principal. Nothing is refused in `warn`; `off` ignores the header.
+ * `GRPC_PRINCIPAL_ASSERTION` decides what the edge's signed principal assertion does:
+ * - `off` ignores the header;
+ * - `warn` verifies it: a missing, expired, invalid or mismatching one is logged and counted in
+ *   `grpc_principal_assertions_total{outcome}` (`valid` too), and the plain headers still build
+ *   the principal. Nothing is refused;
+ * - `enforce` counts the same way, but the principal comes from a valid assertion's claims only: a
+ *   call with `x-user-id` and no valid assertion fails `INVALID_PRINCIPAL`, before any handler
+ *   runs. A call without `x-user-id` and without an assertion stays anonymous (`principalForRpcCall`).
  *
  * nestjs-cls middleware only runs for HTTP, which is why gRPC needs this. The handler is
  * subscribed inside `cls.run()`, so the context follows every await in the handler. This is the
@@ -52,10 +58,11 @@ export class GrpcContextInterceptor implements NestInterceptor {
     if (!isGrpcMetadata(metadata)) return next.handle();
 
     const caller: IncomingRpcContext = readIncomingMetadata(metadata);
-    this.checkAssertion(caller, context);
-    let principal: ReturnType<typeof principalFromRpcCaller>;
+    const settings = principalAssertionSettings();
+    const check = this.checkAssertion(caller, settings, context);
+    let principal: ReturnType<typeof principalForRpcCall>;
     try {
-      principal = principalFromRpcCaller(caller);
+      principal = principalForRpcCall(caller, settings.mode, check);
     } catch (error) {
       // INVALID_PRINCIPAL → UNAUTHENTICATED through the controller's exception filter.
       return throwError(() => error);
@@ -75,18 +82,24 @@ export class GrpcContextInterceptor implements NestInterceptor {
     );
   }
 
-  /** `warn`: verify, count and log; the outcome never changes the call. */
-  private checkAssertion(caller: IncomingRpcContext, context: ExecutionContext): void {
-    const settings = principalAssertionSettings();
-    if (settings.mode === 'off') return;
-    const outcome = checkPrincipalAssertion(caller, settings.publicKeys);
-    if (outcome === undefined) return;
-    recordPrincipalAssertion(outcome);
-    if (outcome !== 'valid') {
+  /** `warn` and `enforce`: verify, count and log. `principalForRpcCall` acts on the result. */
+  private checkAssertion(
+    caller: IncomingRpcContext,
+    settings: PrincipalAssertionSettings,
+    context: ExecutionContext,
+  ): PrincipalAssertionCheck | undefined {
+    if (settings.mode === 'off') return undefined;
+    const check = assessPrincipalAssertion(caller, settings.publicKeys);
+    if (check === undefined) return undefined;
+    recordPrincipalAssertion(check.outcome);
+    if (check.outcome !== 'valid') {
       // Never the token or its claims: the outcome and the handler are enough to find the caller.
+      const effect =
+        settings.mode === 'enforce' ? 'the call is refused' : 'the plain caller headers are used';
       this.logger.warn(
-        `Principal assertion ${outcome} on ${context.getClass().name}.${context.getHandler().name}: the plain caller headers are used (GRPC_PRINCIPAL_ASSERTION=warn)`,
+        `Principal assertion ${check.outcome} on ${context.getClass().name}.${context.getHandler().name}: ${effect} (GRPC_PRINCIPAL_ASSERTION=${settings.mode})`,
       );
     }
+    return check;
   }
 }

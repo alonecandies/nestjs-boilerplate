@@ -243,8 +243,9 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   it. The private key goes into the `grpc-principal-key` volume, which only the gateway mounts
   (`GRPC_PRINCIPAL_SIGNING_KEY_FILE`, key id `compose-local`); `compose-local=<base64 public PEM>` goes into
   `grpc-principal-pub`, which the four services mount (`GRPC_PRINCIPAL_PUBLIC_KEYS_FILE`) to verify the signed
-  principal in `GRPC_PRINCIPAL_ASSERTION=warn`. Both files carry a `compose-local` marker that `NODE_ENV=production`
-  refuses unless `ALLOW_KNOWN_LOCAL_SECRETS`. See [`libs/transport/README.md`](../libs/transport/README.md).
+  principal in `GRPC_PRINCIPAL_ASSERTION=enforce`: a call with a user and no valid assertion is refused, so a gateway
+  run on the host (no key) needs the services set to `warn`. Both files carry a `compose-local` marker that
+  `NODE_ENV=production` refuses unless `ALLOW_KNOWN_LOCAL_SECRETS`. See [`libs/transport/README.md`](../libs/transport/README.md).
 - **immudb**: `immudb-init` only waits for readiness (the image has no shell, so no healthcheck; metrics and
   `/readyz` are on port 9497, in-network only; pg-wire is off). The
   database, the SELECT/INSERT-only application user and the tables come from the apps' migrate step

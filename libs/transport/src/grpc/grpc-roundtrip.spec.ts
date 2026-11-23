@@ -5,6 +5,8 @@ import {
   credentials,
   loadPackageDefinition,
   Metadata,
+  type ServiceError,
+  status,
 } from '@grpc/grpc-js';
 import { loadSync } from '@grpc/proto-loader';
 import { type INestMicroservice, Module } from '@nestjs/common';
@@ -22,6 +24,7 @@ import { type GrpcConfig, grpcConfig } from '@platform/config';
 import { protoPath as healthProtoPath } from 'grpc-health-check';
 import { ClsModule, ClsService } from 'nestjs-cls';
 import { register } from 'prom-client';
+import { lastValueFrom } from 'rxjs';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
@@ -38,6 +41,7 @@ import {
   UsersServiceControllerMethods,
 } from '../../test/fixtures/fixture.grpc-package.js';
 import { RPC_CLS_KEYS } from '../context/transport-context.js';
+import { createTestPrincipalSigner } from '../testing/test-principal-signer.js';
 import { GRPC_METADATA_KEYS } from './grpc.constants.js';
 import { grpcCall } from './grpc-call.js';
 import { callerContextFromCls } from './grpc-caller-context.js';
@@ -387,6 +391,70 @@ describe('gRPC round trip (in-process server + ClientGrpc)', () => {
 
       expect(await counts()).toEqual(before);
       expect(principals.at(-1)?.principal).toEqual(asPrincipal);
+    });
+  });
+
+  describe('principal assertion (enforce: only signed principals pass)', () => {
+    const signer = createTestPrincipalSigner('edge-1');
+    const caller = { userId: generateId(), tenantId: generateId(), roles: ['owner'], staff: true };
+
+    beforeAll(() => {
+      configurePrincipalAssertions({ mode: 'enforce', publicKeys: signer.publicKeys });
+    });
+    afterAll(() => configurePrincipalAssertions(undefined));
+
+    const count = async (outcome: string): Promise<number> => {
+      const metric = register.getSingleMetric(GRPC_PRINCIPAL_ASSERTIONS_TOTAL);
+      const values = metric === undefined ? [] : (await metric.get()).values;
+      return values.find((sample) => sample.labels['outcome'] === outcome)?.value ?? 0;
+    };
+    const failure = (metadata: Metadata): Promise<ServiceError> =>
+      lastValueFrom(users.getUsersByIds({ ids: [KNOWN_USER.id] }, metadata)).then(
+        () => {
+          throw new Error('expected the call to be refused');
+        },
+        (error: unknown) => error as ServiceError,
+      );
+    const expectRefused = (error: ServiceError): void => {
+      expect(error.code).toBe(status.UNAUTHENTICATED);
+      expect(error.metadata.get(GRPC_METADATA_KEYS.ERROR_CODE)).toEqual(['INVALID_PRINCIPAL']);
+    };
+
+    it('a signed call passes with the principal of its claims (valid)', async () => {
+      const before = await count('valid');
+      await call(users.getUsersByIds({ ids: [KNOWN_USER.id] }, signer.metadata(caller)));
+      expect(await count('valid')).toBe(before + 1);
+      expect(principals.at(-1)?.principal).toEqual(caller);
+    });
+
+    it('plain headers asserting staff and owner without an assertion are refused (missing)', async () => {
+      const before = await count('missing');
+      const calls = principals.length;
+      expectRefused(await failure(createOutgoingMetadata(caller)));
+      expect(await count('missing')).toBe(before + 1);
+      expect(principals).toHaveLength(calls);
+    });
+
+    it('an assertion signed by another key is refused (invalid)', async () => {
+      const before = await count('invalid');
+      const other = createTestPrincipalSigner('edge-1');
+      expectRefused(await failure(other.metadata(caller)));
+      expect(await count('invalid')).toBe(before + 1);
+    });
+
+    it('an expired assertion is refused (expired)', async () => {
+      const before = await count('expired');
+      const late = Date.now() - (signer.signingKey.ttlSec + 60) * 1000;
+      expectRefused(await failure(signer.metadata(caller, { nowMs: late })));
+      expect(await count('expired')).toBe(before + 1);
+    });
+
+    it('an anonymous call still passes, uncounted', async () => {
+      const before = await count('missing');
+      await expect(call(users.getUser({ id: KNOWN_USER.id }))).resolves.toMatchObject({
+        id: KNOWN_USER.id,
+      });
+      expect(await count('missing')).toBe(before);
     });
   });
 });

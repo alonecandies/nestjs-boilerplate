@@ -4,7 +4,9 @@
 // (register, then GET /v1/auth/me with the returned token, then one AI chat call: 503 AI_DISABLED
 // from the app that runs AI, or a conversation it creates when the stack enables AI), proves that
 // an app whose DATABASE_URL
-// is the superuser refuses to start (the boot guard in `enforce`), and removes the project.
+// is the superuser refuses to start (the boot guard in `enforce`), and removes the project. The
+// microservices services run GRPC_PRINCIPAL_ASSERTION=enforce (checked before the start), so the
+// journey's calls with a user pass only with the gateway's signed principal assertion.
 //
 //   node scripts/docker/check-topology.ts up <monolith|microservices>     # builds the images
 //   NO_BUILD=1 TAG=ci node scripts/docker/check-topology.ts up monolith    # CI: images loaded
@@ -129,6 +131,38 @@ export function threeRoleProblems(
     problems.push(`${name}: DATABASE_POOLER is not pgbouncer`);
   if (env.DATABASE_BOOT_GUARD !== 'enforce')
     problems.push(`${name}: DATABASE_BOOT_GUARD is not enforce`);
+  return problems;
+}
+
+/** The one app that holds the principal-assertion signing key (the edge) in the microservices topology. */
+export const PRINCIPAL_EDGE = 'gateway';
+
+/**
+ * The signed gRPC principal wiring of a topology's compose env (grpc-principal-unsigned): in
+ * microservices only the edge signs (`GRPC_PRINCIPAL_SIGNING_KEY*`), and every other app verifies
+ * in `enforce` with the public keys. The monolith makes no gRPC hop. Returns what is wrong.
+ */
+export function principalAssertionProblems(config: ComposeConfig, topology: Topology): string[] {
+  if (topology !== 'microservices') return [];
+  const problems: string[] = [];
+  for (const name of appServices(config, topology)) {
+    const env = config.services[name]?.environment ?? {};
+    const signs =
+      env.GRPC_PRINCIPAL_SIGNING_KEY != null || env.GRPC_PRINCIPAL_SIGNING_KEY_FILE != null;
+    if (name === PRINCIPAL_EDGE) {
+      if (!signs || env.GRPC_PRINCIPAL_SIGNING_KEY_ID == null) {
+        problems.push(`${name}: no GRPC_PRINCIPAL_SIGNING_KEY (or _FILE) and _KEY_ID`);
+      }
+      continue;
+    }
+    if (signs) problems.push(`${name}: holds the signing key (only ${PRINCIPAL_EDGE} may)`);
+    if (env.GRPC_PRINCIPAL_ASSERTION !== 'enforce') {
+      problems.push(`${name}: GRPC_PRINCIPAL_ASSERTION is not enforce`);
+    }
+    if (env.GRPC_PRINCIPAL_PUBLIC_KEYS == null && env.GRPC_PRINCIPAL_PUBLIC_KEYS_FILE == null) {
+      problems.push(`${name}: no GRPC_PRINCIPAL_PUBLIC_KEYS (or _FILE)`);
+    }
+  }
   return problems;
 }
 
@@ -363,6 +397,10 @@ async function up(topology: Topology): Promise<void> {
   );
   if (databaseServices.length === 0 || wiring.length > 0) {
     throw new Error(`three-role wiring of ${topology}: ${wiring.join('; ') || 'no database app'}`);
+  }
+  const principalWiring = principalAssertionProblems(config, topology);
+  if (principalWiring.length > 0) {
+    throw new Error(`signed principal wiring of ${topology}: ${principalWiring.join('; ')}`);
   }
   const apiPort = env.API_HOST_PORT || '3000';
   console.info(

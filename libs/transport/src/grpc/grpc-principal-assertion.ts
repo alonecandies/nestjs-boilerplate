@@ -6,7 +6,7 @@ import { z } from 'zod';
 import type { AssertedCaller, IncomingRpcContext } from './grpc-metadata.js';
 
 /**
- * The principal assertion (spec: grpc-principal-unsigned, warn mode). The edge (the gateway) signs
+ * The principal assertion (spec: grpc-principal-unsigned). The edge (the gateway) signs
  * the caller it forwards in plain metadata with an ES256 private key only it holds; services verify
  * it with the public keys (`GRPC_PRINCIPAL_PUBLIC_KEYS`) and forward the same bytes on their own
  * calls. Format: a compact JWS, `base64url(header).base64url(claims).base64url(signature)`, with
@@ -42,7 +42,10 @@ export interface PrincipalAssertionSigningKey {
 
 /** The process-wide settings, from the `grpc` namespace (`principalAssertionSettingsFrom`). */
 export interface PrincipalAssertionSettings {
-  /** Verifier side: `off` ignores the header, `warn` verifies, logs and counts. */
+  /**
+   * Verifier side: `off` ignores the header; `warn` verifies, logs and counts; `enforce` also
+   * refuses a call with a user and no valid assertion, and builds the principal from the claims.
+   */
   readonly mode: GrpcPrincipalAssertionMode;
   /** Edge only: present when this process may sign (`GRPC_PRINCIPAL_SIGNING_KEY`). */
   readonly signingKey?: PrincipalAssertionSigningKey | undefined;
@@ -154,21 +157,36 @@ const sameCaller = (signed: AssertedCaller, plain: IncomingRpcContext): boolean 
   signed.staff === plain.staff &&
   isEqual(sortBy(signed.roles), sortBy(plain.roles));
 
+/** One incoming call's assertion: the outcome, and for `valid` the signed claims. */
+export type PrincipalAssertionCheck =
+  | { readonly outcome: 'valid'; readonly caller: AssertedCaller }
+  | { readonly outcome: Exclude<PrincipalAssertionOutcome, 'valid'> };
+
 /**
- * The outcome for one incoming call, or `undefined` for an anonymous call without an assertion
- * (register, login, a signed webhook): those need none, so they are not counted.
+ * Checks one incoming call: `undefined` for an anonymous call without an assertion (register,
+ * login, a signed webhook), which needs none and is not counted; otherwise the outcome, with the
+ * signed caller when it is `valid` (signed by a known key, in date, equal to the plain headers).
  */
+export function assessPrincipalAssertion(
+  caller: IncomingRpcContext,
+  publicKeys: ReadonlyMap<string, KeyObject>,
+  nowMs: number = Date.now(),
+): PrincipalAssertionCheck | undefined {
+  if (caller.principalAssertion === undefined) {
+    return caller.userId === undefined ? undefined : { outcome: 'missing' };
+  }
+  const verification = verifyPrincipalAssertion(caller.principalAssertion, publicKeys, nowMs);
+  if (verification.outcome !== 'valid') return { outcome: verification.outcome };
+  return sameCaller(verification.caller, caller) ? verification : { outcome: 'mismatch' };
+}
+
+/** `assessPrincipalAssertion`'s outcome alone. */
 export function checkPrincipalAssertion(
   caller: IncomingRpcContext,
   publicKeys: ReadonlyMap<string, KeyObject>,
   nowMs: number = Date.now(),
 ): PrincipalAssertionOutcome | undefined {
-  if (caller.principalAssertion === undefined) {
-    return caller.userId === undefined ? undefined : 'missing';
-  }
-  const verification = verifyPrincipalAssertion(caller.principalAssertion, publicKeys, nowMs);
-  if (verification.outcome !== 'valid') return verification.outcome;
-  return sameCaller(verification.caller, caller) ? 'valid' : 'mismatch';
+  return assessPrincipalAssertion(caller, publicKeys, nowMs)?.outcome;
 }
 
 /** Counts one verified call in `grpc_principal_assertions_total{outcome}`. */

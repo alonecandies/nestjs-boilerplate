@@ -6,6 +6,7 @@ import {
   appServices,
   type ComposeConfig,
   databaseApps,
+  principalAssertionProblems,
   projectName,
   SMOKE_PASSWORD,
   shiftedHostPorts,
@@ -272,5 +273,60 @@ describe('three-role wiring of the compose apps', () => {
       'billing-service',
       'identity-service',
     ]);
+  });
+});
+
+describe('signed principal wiring of the compose apps', () => {
+  const verify = {
+    GRPC_PRINCIPAL_ASSERTION: 'enforce',
+    GRPC_PRINCIPAL_PUBLIC_KEYS_FILE: '/etc/grpc-principal-pub/public-keys',
+  };
+  const sign = {
+    GRPC_PRINCIPAL_SIGNING_KEY_FILE: '/etc/grpc-principal/signing.key',
+    GRPC_PRINCIPAL_SIGNING_KEY_ID: 'compose-local',
+  };
+  const microservices = (
+    overrides: Record<string, Record<string, string | null>> = {},
+  ): ComposeConfig => ({
+    services: {
+      monolith: { profiles: ['monolith'], environment: {} },
+      gateway: { profiles: ['microservices'], environment: overrides['gateway'] ?? sign },
+      'identity-service': {
+        profiles: ['microservices'],
+        environment: overrides['identity-service'] ?? verify,
+      },
+      'ai-service': { profiles: ['microservices'], environment: overrides['ai-service'] ?? verify },
+    },
+  });
+
+  it('accepts the edge signing and every service verifying in enforce', () => {
+    expect(principalAssertionProblems(microservices(), 'microservices')).toEqual([]);
+  });
+
+  it('checks nothing in the monolith (no gRPC hop)', () => {
+    expect(principalAssertionProblems(microservices(), 'monolith')).toEqual([]);
+  });
+
+  it('names a service in warn, one without public keys, a second signer and an edge without a key', () => {
+    const problems = principalAssertionProblems(
+      microservices({
+        gateway: {},
+        'identity-service': { ...verify, GRPC_PRINCIPAL_ASSERTION: 'warn' },
+        'ai-service': { ...sign, GRPC_PRINCIPAL_ASSERTION: 'enforce' },
+      }),
+      'microservices',
+    );
+    expect(problems).toEqual([
+      'ai-service: holds the signing key (only gateway may)',
+      'ai-service: no GRPC_PRINCIPAL_PUBLIC_KEYS (or _FILE)',
+      'gateway: no GRPC_PRINCIPAL_SIGNING_KEY (or _FILE) and _KEY_ID',
+      'identity-service: GRPC_PRINCIPAL_ASSERTION is not enforce',
+    ]);
+  });
+
+  it('docker-compose.yml runs the services in enforce', () => {
+    expect(COMPOSE).toMatch(
+      /x-env-grpc-principal-verify: &env-grpc-principal-verify\n {2}GRPC_PRINCIPAL_ASSERTION: enforce\n/,
+    );
   });
 });
