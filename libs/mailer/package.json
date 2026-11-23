@@ -21,6 +21,7 @@
   "dependencies": {
     "@platform/common": "workspace:*",
     "@platform/config": "workspace:*",
+    "@platform/observability": "workspace:*",
     "@nestjs-modules/mailer": "catalog:",
     "@nestjs/bullmq": "catalog:",
     "@nestjs/common": "catalog:",

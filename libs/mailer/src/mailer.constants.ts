@@ -5,6 +5,18 @@ import type { JobsOptions } from 'bullmq';
 export const MAIL_QUEUE = 'mail';
 
 /**
+ * Prometheus counter `mail_jobs_total{outcome}`, registered by `AppMailerModule` in processes that
+ * run the worker. One count per finished attempt: `sent` (delivered), `retried` (failed with
+ * attempts left) or `failed` (out of attempts or a permanent error: the mail is not sent).
+ */
+export const MAIL_JOBS_TOTAL = 'mail_jobs_total';
+
+export type MailJobOutcome = 'sent' | 'retried' | 'failed';
+
+/** Every outcome, so each series can be created at 0 (see `MailProcessor`). */
+export const MAIL_JOB_OUTCOMES: readonly MailJobOutcome[] = ['sent', 'retried', 'failed'];
+
+/**
  * The shared layout partials (`header`, `footer`, `button`), resolved next to this module. SWC
  * `copyFiles` mirrors `src/templates/partials/**` into `dist/templates/partials/**`, so the same
  * expression works from sources (dev/tests) and from the build. The mail templates belong to the

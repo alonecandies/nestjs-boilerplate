@@ -21,3 +21,127 @@ groups:
             x-error-* headers of the .dlq record name it), fix it, then replay the topic with
             dist/cli/dlq-replay.js before the .dlq retention deletes the records. See the dead-letter
             runbook in docs/OBSERVABILITY.md.
+
+      # A handler left messages to kafkajs for redelivery (a KafkaRetriableException, or a failed
+      # publish to `.dlq`) at a steady rate for 15 minutes. Nothing is lost yet, but the consumer keeps
+      # re-reading the same messages and lag follows. The `redelivery` series start at 0 for every
+      # subscribed topic (initKafkaTopicMetrics), so the first redelivery is an increase.
+      - alert: KafkaRedeliveries
+        expr: >-
+          sum by (service, topic)
+          (rate(kafka_consumer_messages_total{outcome="redelivery"}[5m])) > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.service }}: {{ $labels.topic }} messages keep being redelivered"
+          description: >-
+            {{ $value | humanize }} message(s) per second of {{ $labels.topic }} have been left for
+            redelivery on {{ $labels.service }} for 15 minutes. Look for the retriable error in that
+            service's logs (a dependency that is down, or the DLQ publish failing) and at the
+            consumer's lag.
+
+      # Lag above 1000 messages that also grew over the last 15 minutes: the consumer falls behind
+      # (slow handler, stuck partition, too few replicas). An idle partition holds its last value, so
+      # a high but flat lag does not fire.
+      - alert: KafkaConsumerLagGrowing
+        expr: >-
+          kafka_consumer_lag > 1000
+          and delta(kafka_consumer_lag[15m]) > 0
+        for: 15m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.service }}: group {{ $labels.group }} falls behind on {{ $labels.topic }}"
+          description: >-
+            Partition {{ $labels.partition }} of {{ $labels.topic }} is {{ $value | humanize }} messages
+            behind for group {{ $labels.group }} and the lag grew over 15 minutes. Check the handler's
+            latency, kafka_consumer_messages_total{outcome="redelivery"} and the replica count.
+
+      # A gRPC client circuit breaker has failed fast for 5 minutes: the upstream is down or too slow
+      # and every call to it is refused (CIRCUIT_OPEN), a 503 at the gateway.
+      - alert: GrpcCircuitBreakerOpen
+        expr: >-
+          max by (service, upstream)
+          (grpc_client_circuit_breaker_state{state="open"}) == 1
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.service }}: circuit breaker to {{ $labels.upstream }} is open"
+          description: >-
+            Calls from {{ $labels.service }} to {{ $labels.upstream }} have been refused for 5 minutes.
+            Check that service's health and logs, and grpc_client_handled_total{grpc_code="CIRCUIT_OPEN"}.
+
+      # A rate-limit budget let requests through unmetered because Redis was down or slow
+      # (THROTTLE_REDIS_TIMEOUT_MS). Abuse protection is off for that throttler until Redis recovers.
+      # The series of every throttler start at 0 when the module boots, so the first fail-open counts.
+      - alert: RateLimitFailOpen
+        expr: >-
+          sum by (service, throttler) (increase(rate_limit_fail_open_total[5m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.service }}: the {{ $labels.throttler }} rate limit failed open"
+          description: >-
+            {{ $value | humanize }} request(s) passed the {{ $labels.throttler }} throttler unlimited in
+            the last 5 minutes because Redis did not answer in time. Check Redis (latency, memory,
+            connections) and THROTTLE_REDIS_TIMEOUT_MS.
+
+      # Operations beyond the pool size waited for a connection for 10 minutes: the pool is
+      # saturated (slow queries, a leak, too small DATABASE_POOL_MAX), not a spike.
+      - alert: DbPoolSaturated
+        expr: max by (service, pool) (db_pool_operations_waiting) > 0
+        for: 10m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.service }}: the {{ $labels.pool }} database pool is saturated"
+          description: >-
+            {{ $value | humanize }} operation(s) have been waiting beyond the {{ $labels.pool }} pool size
+            for 10 minutes. Look for slow queries and long transactions, and compare
+            db_pool_connections_in_use with db_pool_connections_max.
+
+      # More than 5 % of a service's HTTP responses were 5xx for 10 minutes (rates over 5 minutes).
+      # Requests that fail because an upstream is down count too: that is what callers see.
+      - alert: HttpServerErrorRatio
+        expr: >-
+          sum by (service) (rate(http_request_duration_seconds_count{status_code=~"5.."}[5m]))
+          / sum by (service) (rate(http_request_duration_seconds_count[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "{{ $labels.service }}: {{ $value | humanizePercentage }} of responses are 5xx"
+          description: >-
+            More than 5 % of the responses of {{ $labels.service }} have been 5xx for 10 minutes. Group
+            http_request_duration_seconds_count{status_code=~"5.."} by route, then read that route's
+            error logs (requestId ties them to the request) and the circuit breaker state.
+
+      # The Redis behind the denylist, queues, locks and throttle counters can evict keys. Set once
+      # at boot from INFO memory; absent when the policy cannot be read, so this never fires on a guess.
+      - alert: RedisEvictionPolicyUnsafe
+        expr: min by (service) (redis_eviction_policy_safe) == 0
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.service }}: Redis can evict keys"
+          description: >-
+            The Redis of {{ $labels.service }} has a maxmemory-policy other than noeviction, so under
+            memory pressure it can drop revoked-token entries, queued jobs and locks. Set
+            maxmemory-policy to noeviction (docs/SECURITY.md, production checklist) and restart the
+            service so the check runs again.
+
+      # A mail job ran out of attempts (or hit a permanent error) and was dropped: the mail was not
+      # sent. `failed` starts at 0 in every process that runs the worker (MailProcessor).
+      - alert: MailJobsFailed
+        expr: sum by (service) (increase(mail_jobs_total{outcome="failed"}[15m])) > 0
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.service }}: {{ $value | humanize }} mail job(s) failed for good"
+          description: >-
+            Mail jobs failed after their last attempt or with a permanent error (template bug, SMTP
+            5xx rejection) in the last 15 minutes. The failed jobs stay in the `mail` queue for 7 days:
+            read the worker's "Giving up on" log lines (recipients are masked) and the SMTP settings.

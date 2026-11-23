@@ -48,6 +48,19 @@ const METRIC_NAMES: readonly string[] = [
   'ai_request_duration_seconds',
   // Audit fixes Task 4 (`libs/transport/src/kafka/kafka-metrics.ts`).
   'kafka_consumer_messages_total',
+  // Audit fixes Task 21: the series of the platform and billing rules and the mail job counter.
+  'kafka_consumer_lag',
+  'grpc_client_circuit_breaker_state',
+  'rate_limit_fail_open_total',
+  'db_pool_operations_waiting',
+  'http_request_duration_seconds',
+  'redis_eviction_policy_safe',
+  'billing_checkout_paid_without_currency_total',
+  'billing_checkout_paid_without_amount_total',
+  'billing_checkout_paid_without_owner_total',
+  'billing_checkout_amount_mismatch_total',
+  'billing_stripe_api_version_mismatch_total',
+  'mail_jobs_total',
 ];
 
 /** PromQL words that are not series: functions, aggregations, operators, modifiers. */
@@ -59,6 +72,7 @@ const PROMQL_WORDS = new Set([
   'bool',
   'by',
   'count',
+  'delta',
   'increase',
   'max',
   'min',
@@ -99,8 +113,40 @@ const EXPECTED: Readonly<Record<string, Readonly<Record<string, 'page' | 'ticket
   },
   'docker/prometheus/rules/platform.rules.yml': {
     KafkaDeadLetters: 'page',
+    KafkaRedeliveries: 'ticket',
+    KafkaConsumerLagGrowing: 'ticket',
+    GrpcCircuitBreakerOpen: 'page',
+    RateLimitFailOpen: 'ticket',
+    DbPoolSaturated: 'ticket',
+    HttpServerErrorRatio: 'page',
+    RedisEvictionPolicyUnsafe: 'ticket',
+    MailJobsFailed: 'ticket',
+  },
+  'docker/prometheus/rules/billing.rules.yml': {
+    BillingPaidWithoutCurrency: 'page',
+    BillingPaidWithoutAmount: 'page',
+    BillingPaidWithoutOwner: 'page',
+    BillingAmountMismatch: 'ticket',
+    BillingStripeApiVersionMismatch: 'ticket',
   },
 };
+
+/** The failures the audit lists (ARCH-3): each series is read by at least one rule. */
+const AUDIT_SERIES = [
+  'kafka_consumer_messages_total',
+  'kafka_consumer_lag',
+  'grpc_client_circuit_breaker_state',
+  'rate_limit_fail_open_total',
+  'db_pool_operations_waiting',
+  'http_request_duration_seconds',
+  'redis_eviction_policy_safe',
+  'billing_checkout_paid_without_currency_total',
+  'billing_checkout_paid_without_amount_total',
+  'billing_checkout_paid_without_owner_total',
+  'billing_checkout_amount_mismatch_total',
+  'billing_stripe_api_version_mismatch_total',
+  'mail_jobs_total',
+] as const;
 
 describe.each(Object.entries(EXPECTED))('%s', (file, alerts) => {
   const rules = load(file);
@@ -190,6 +236,82 @@ describe('the alert thresholds of the plan', () => {
     expect(rule).toContain('increase(kafka_consumer_messages_total{outcome="dead_letter"}[15m])');
     expect(rule).toMatch(/by \(service, topic\)/);
     expect(rule).toMatch(/> 0$/);
+  });
+});
+
+describe('the platform and billing rules of audit fixes Task 21', () => {
+  const byName = new Map(
+    Object.keys(EXPECTED).flatMap((file) => load(file).map((rule) => [rule.alert, rule] as const)),
+  );
+  const expr = (name: string): string => (byName.get(name)?.expr ?? '').replace(/\s+/g, ' ').trim();
+  const waits = (name: string): string | undefined => byName.get(name)?.for;
+
+  it('every series the audit lists is read by at least one rule', () => {
+    const read = new Set(
+      [...byName.values()].flatMap((rule) =>
+        seriesOf(rule.expr ?? '').map((name) => name.replace(/_(bucket|sum|count)$/, '')),
+      ),
+    );
+    for (const name of AUDIT_SERIES) expect(read, name).toContain(name);
+  });
+
+  it('KafkaRedeliveries: a sustained redelivery rate per service and topic', () => {
+    expect(expr('KafkaRedeliveries')).toMatch(
+      /rate\(kafka_consumer_messages_total\{outcome="redelivery"\}\[5m\]\).*> 0$/,
+    );
+    expect(waits('KafkaRedeliveries')).toBe('15m');
+  });
+
+  it('KafkaConsumerLagGrowing: lag above 1000 and still growing over 15 m', () => {
+    const rule = expr('KafkaConsumerLagGrowing');
+    expect(rule).toMatch(/kafka_consumer_lag > 1000/);
+    expect(rule).toContain('delta(kafka_consumer_lag[15m]) > 0');
+    expect(waits('KafkaConsumerLagGrowing')).toBe('15m');
+  });
+
+  it('GrpcCircuitBreakerOpen: a breaker in state open for 5 m', () => {
+    expect(expr('GrpcCircuitBreakerOpen')).toContain(
+      'grpc_client_circuit_breaker_state{state="open"}',
+    );
+    expect(expr('GrpcCircuitBreakerOpen')).toMatch(/== 1$/);
+    expect(waits('GrpcCircuitBreakerOpen')).toBe('5m');
+  });
+
+  it('RateLimitFailOpen: any fail-open increase, per throttler', () => {
+    expect(expr('RateLimitFailOpen')).toMatch(/increase\(rate_limit_fail_open_total\[5m\]\).*> 0$/);
+    expect(expr('RateLimitFailOpen')).toMatch(/by \(service, throttler\)/);
+  });
+
+  it('DbPoolSaturated: operations waiting for 10 m', () => {
+    expect(expr('DbPoolSaturated')).toMatch(/db_pool_operations_waiting\) > 0$/);
+    expect(waits('DbPoolSaturated')).toBe('10m');
+  });
+
+  it('HttpServerErrorRatio: 5xx above 5 % of the requests of a service for 10 m', () => {
+    const rule = expr('HttpServerErrorRatio');
+    expect(rule).toContain('http_request_duration_seconds_count{status_code=~"5.."}');
+    expect(rule).toMatch(/> 0\.05$/);
+    expect(waits('HttpServerErrorRatio')).toBe('10m');
+  });
+
+  it('RedisEvictionPolicyUnsafe: the gauge is 0', () => {
+    expect(expr('RedisEvictionPolicyUnsafe')).toMatch(/redis_eviction_policy_safe\) == 0$/);
+  });
+
+  it('MailJobsFailed: any job that ran out of attempts', () => {
+    expect(expr('MailJobsFailed')).toMatch(
+      /increase\(mail_jobs_total\{outcome="failed"\}\[15m\]\).*> 0$/,
+    );
+  });
+
+  it.each([
+    ['BillingPaidWithoutCurrency', 'billing_checkout_paid_without_currency_total'],
+    ['BillingPaidWithoutAmount', 'billing_checkout_paid_without_amount_total'],
+    ['BillingPaidWithoutOwner', 'billing_checkout_paid_without_owner_total'],
+    ['BillingAmountMismatch', 'billing_checkout_amount_mismatch_total'],
+    ['BillingStripeApiVersionMismatch', 'billing_stripe_api_version_mismatch_total'],
+  ])('%s: any increase of %s', (alert, series) => {
+    expect(expr(alert)).toMatch(new RegExp(`increase\\(${series}\\[15m\\]\\).*> 0$`));
   });
 });
 

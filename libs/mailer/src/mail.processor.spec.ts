@@ -6,6 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { MailProcessor } from './mail.processor.js';
 import type { MailService } from './mail.service.js';
 import type { MailJobData } from './mail.types.js';
+import { MAIL_JOBS_TOTAL, type MailJobOutcome } from './mailer.constants.js';
 
 const cfg = mailConfig.parse({ MAIL_QUEUE_CONCURRENCY: '12' });
 
@@ -13,7 +14,11 @@ function setup(sendNow: () => Promise<void> = async () => undefined) {
   const mail = { sendNow: vi.fn(sendNow) } as unknown as MailService & {
     sendNow: ReturnType<typeof vi.fn>;
   };
-  return { mail, processor: new MailProcessor(mail, cfg) };
+  const inc = vi.fn<(labels: { outcome: MailJobOutcome }, value?: number) => void>();
+  /** Increments by one, `{ outcome }` of each, as `mail_jobs_total` would see them. */
+  const counted = (): MailJobOutcome[] =>
+    inc.mock.calls.filter(([, value]) => value !== 0).map(([labels]) => labels.outcome);
+  return { mail, inc, counted, processor: new MailProcessor(mail, cfg, { inc }) };
 }
 
 function job(overrides: Partial<{ attemptsMade: number; attempts: number }> = {}) {
@@ -27,6 +32,10 @@ function job(overrides: Partial<{ attemptsMade: number; attempts: number }> = {}
 }
 
 describe('MailProcessor', () => {
+  it('names the counter mail_jobs_total', () => {
+    expect(MAIL_JOBS_TOTAL).toBe('mail_jobs_total');
+  });
+
   it('delivers the job payload via MailService.sendNow', async () => {
     const { mail, processor } = setup();
 
@@ -87,5 +96,66 @@ describe('MailProcessor', () => {
 
     expect(error).toHaveBeenCalledOnce();
     expect(String(error.mock.calls[0]?.[0])).toContain('connect ECONNREFUSED');
+  });
+
+  describe('mail_jobs_total{outcome}', () => {
+    it('creates every outcome at 0 at start, so the first failure is an increase for increase()', () => {
+      const { inc } = setup();
+
+      expect(inc.mock.calls).toEqual([
+        [{ outcome: 'sent' }, 0],
+        [{ outcome: 'retried' }, 0],
+        [{ outcome: 'failed' }, 0],
+      ]);
+    });
+
+    it('counts a delivered job as sent, once', async () => {
+      const { processor, counted } = setup();
+
+      await processor.process(job());
+
+      expect(counted()).toEqual(['sent']);
+    });
+
+    it('counts nothing when delivery throws (the failed event decides the outcome)', async () => {
+      const { processor, counted } = setup(() => Promise.reject(new Error('timeout')));
+
+      await expect(processor.process(job())).rejects.toThrow('timeout');
+
+      expect(counted()).toEqual([]);
+    });
+
+    it('counts a failed attempt with attempts left as retried, once', () => {
+      const { processor, counted } = setup();
+
+      processor.onFailed(job({ attemptsMade: 1 }), new Error('timeout'));
+
+      expect(counted()).toEqual(['retried']);
+    });
+
+    it('counts a job out of attempts as failed, once', () => {
+      const { processor, counted } = setup();
+
+      processor.onFailed(job({ attemptsMade: 7 }), new Error('timeout'));
+
+      expect(counted()).toEqual(['failed']);
+    });
+
+    it('counts a permanent error as failed on its first attempt', () => {
+      const { processor, counted } = setup();
+
+      processor.onFailed(job({ attemptsMade: 1 }), new UnrecoverableError('bad template'));
+
+      expect(counted()).toEqual(['failed']);
+    });
+
+    it('counts a failure without a job (a stalled job BullMQ gave up on) as failed', () => {
+      vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      const { processor, counted } = setup();
+
+      processor.onFailed(undefined, new Error('job stalled more than allowable limit'));
+
+      expect(counted()).toEqual(['failed']);
+    });
   });
 });
