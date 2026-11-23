@@ -345,3 +345,39 @@ describe('CI-2 and test-gap-statements-stale: the test docs describe the coverag
     expect(releasing).toContain('(TESTING.md');
   });
 });
+
+describe('DOC-1: only a database stopped part-way through the stacked history must be recreated', () => {
+  // The passage that describes the squash in each doc: from its anchor on, long enough for the bullet.
+  const passages = [
+    ['docs/DEVELOPMENT.md', '**Squashed baselines'],
+    ['README.md', '(SH-12)'],
+    ['domains/identity/README.md', 'Since the final squash'],
+    ['domains/billing/README.md', 'Since the final squash'],
+  ] as const;
+  const passage = (file: string, anchor: string): string => {
+    const text = flat(read(file));
+    const start = text.indexOf(anchor);
+    if (start === -1) throw new Error(`${file} has no "${anchor}"`);
+    return text.slice(start, start + 1600);
+  };
+
+  it.each(passages)('%s says a fully migrated database skips the baseline', (file, anchor) => {
+    const text = passage(file, anchor);
+    expect(text).toContain('fully migrated');
+    expect(text).toMatch(/skips? (the )?(squashed )?(baseline|`0000_init`)/);
+  });
+
+  it.each(passages)(
+    '%s limits "must be recreated" to a database stopped part-way',
+    (file, anchor) => {
+      const text = passage(file, anchor);
+      expect(text).toMatch(/part-way/);
+      for (const sentence of text.split(/(?<=[.:;])\s/).filter((s) => s.includes('recreated'))) {
+        expect(sentence).toContain('part-way');
+      }
+      expect(text).not.toContain('before the squash must be recreated');
+      expect(text).not.toContain('would run it on top of its old tables and fail');
+      expect(text).not.toContain('migrated before the squash would');
+    },
+  );
+});

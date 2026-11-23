@@ -309,8 +309,10 @@ drizzle-kit can load it. Identity owns its migration history: `drizzle.config.ts
 (SH-12) the history is one `0000_init.sql`: drizzle-kit's tables, enum, indexes and FKs, hand-edited into the sharding
 design's order (the tables in distribution order, each `app.*` call right after its `CREATE TABLE`, then its indexes;
 the FKs after every call; then forced RLS, the grants and the policies). The stacked files it replaced (`0000_init` ..
-`0010_outbox`) stay in `test/stacked-history/` as the fixture of `identity.squash.int-spec.ts`; a database migrated
-before the squash must be recreated
+`0010_outbox`) stay in `test/stacked-history/` as the fixture of `identity.squash.int-spec.ts`, which also upgrades a
+database at the stacked tip in place: the baseline keeps the tip's journal timestamp, so a fully migrated database
+skips `0000_init` and no file applies. Only a database stopped part-way through the stacked history must be
+recreated; the runner refuses it and says so
 ([docs/DEVELOPMENT.md](../../docs/DEVELOPMENT.md#database-migrations-postgres--drizzle)).
 
 **Citus distribution** (SH-5, in `0000_init`; `SELECT app.*` calls, no-ops without Citus):

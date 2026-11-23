@@ -134,9 +134,11 @@ Notes:
   `identity.membership-removed.v1`, each with a `.dlq`) appear. The reset gives a dev stack the new tables, topics and an
   empty bucket; an adopter who keeps real data follows [the files README](domains/files/README.md#data-model) and
   [docs/SECURITY.md](docs/SECURITY.md#tenant-isolation-outside-postgres).
-- **One more `docker compose --profile '*' down -v` after the final migration squash (SH-12).** identity's and
-  billing's histories are now one `0000_init` each; a database migrated before would run it on top of its old tables
-  and fail at boot ([docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#database-migrations-postgres--drizzle)).
+- **A database stopped part-way through the old stacked histories needs `docker compose --profile '*' down -v`
+  after the final migration squash (SH-12).** identity's and billing's histories are now one `0000_init` each. A
+  database fully migrated before the squash upgrades in place (the migrator skips the baseline); one stopped
+  part-way is refused at boot with the fix in the message
+  ([docs/DEVELOPMENT.md](docs/DEVELOPMENT.md#database-migrations-postgres--drizzle)).
 - The per-app settings that must differ between apps (`SERVICE_NAME`, `PORT`, `GRPC_URL`, `KAFKA_GROUP_ID`,
   `DATABASE_RUN_MIGRATIONS`) live **only** in `apps/*/.env`. Every root `dev*` script runs `bun run setup:env` first,
   so those files exist. If you start an app another way, run `bun run setup:env` once.

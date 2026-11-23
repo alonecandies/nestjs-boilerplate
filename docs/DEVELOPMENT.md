@@ -470,9 +470,13 @@ Notes:
   the order of the next section. `*.squash.int-spec.ts` in each domain proves on Citus that the baseline builds the
   same catalog as the stacked files, which stay under `domains/<x>/test/stacked-history/` as its fixture. The
   platform set, the Cassandra CQL files and the immudb ledger migrations keep their histories. **A database
-  migrated before the squash must be recreated**: the new `0000_init` is newer than the last row of its
-  bookkeeping table, so the migrator would run it on top of the old tables and fail. Locally: `docker compose down -v`, then `bun run docker:infra` (this
-  also empties the other volumes).
+  fully migrated before the squash upgrades in place.** Each new `0000_init` keeps the journal timestamp of the
+  stacked tip, so the migrator skips the baseline on a database at that tip and applies only the files added after
+  it (`billing`'s `0001_ledger_reanchors`; none for identity); `*.squash.int-spec.ts` pins this end to end.
+  **Only a database stopped part-way through the stacked history must be recreated**: its newest bookkeeping row
+  is older than the baseline, the runner refuses it and says so, because replaying `0000_init` on top of its old
+  tables would fail. Locally: `docker compose down -v`, then `bun run docker:infra` (this also empties the other
+  volumes).
 - SQL that belongs to no domain (extensions; grants and functions from B3) goes in the platform set: add `NNNN_name.sql` and its `meta/_journal.json` entry by hand ([libs/database/README.md](../libs/database/README.md#platform-migration-set)).
 - CI runs `bun run db:generate` and fails if it produces a diff or a new untracked file under `domains/*/src/infrastructure/persistence/migrations`. A `*.schema.ts` change without its migration cannot merge.
 - After merging branches that both generated migrations in one domain, run `bun run db:check`. It runs `drizzle-kit check` in every Postgres domain and fails when two snapshots share a parent; regenerate the later migration on top of the merged history. CI runs it too.

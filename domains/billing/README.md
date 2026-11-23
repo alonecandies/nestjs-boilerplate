@@ -457,8 +457,10 @@ Since the final squash (SH-12) the history starts with one `0000_init.sql`: driz
 hand-edited into the sharding design's order (each tenant table's `app.distribute_by_tenant` call right after its
 `CREATE TABLE`, then its indexes; then forced RLS, the grants and the policies); a table added later gets its own
 `NNNN` file in that order (`0001_ledger_reanchors.sql`, a coordinator-local table). The stacked files it replaced (`0000_init` .. `0008_ledger_trusted_state_read_at`) stay in
-`test/stacked-history/` as the fixture of `billing.squash.int-spec.ts`; a database migrated before the squash must be
-recreated ([docs/DEVELOPMENT.md](../../docs/DEVELOPMENT.md#database-migrations-postgres--drizzle)).
+`test/stacked-history/` as the fixture of `billing.squash.int-spec.ts`, which also upgrades a database at the stacked
+tip in place: the baseline keeps the tip's journal timestamp, so a fully migrated database skips `0000_init` and
+applies only `0001_ledger_reanchors`. Only a database stopped part-way through the stacked history must be recreated;
+the runner refuses it and says so ([docs/DEVELOPMENT.md](../../docs/DEVELOPMENT.md#database-migrations-postgres--drizzle)).
 `billingMigrations` applies the set after the platform set (the schema file imports only `drizzle-orm` and a
 dependency-free enum file, so drizzle-kit can load it). Every query carries `tenant_id` (`findById(tenantId, id)`, `findForCheckoutSession({ tenantId, … })`, `list({ tenantId, … })`).
 Every repository method runs in `inUnitOfWork` (`@platform/database`): it joins the active transaction or opens one that starts
