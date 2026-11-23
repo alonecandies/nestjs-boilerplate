@@ -1,4 +1,4 @@
-import { BILLING_GRPC_PACKAGE } from '@domain/billing-contracts';
+import { BILLING_GRPC_PACKAGE, BILLING_SERVICE_NAME } from '@domain/billing-contracts';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { RbacModule } from '@platform/auth';
@@ -10,6 +10,9 @@ import { billingGrpcClientConfig } from './infrastructure/adapters/grpc/billing-
 import { BillingLocalAdapter } from './infrastructure/adapters/local/billing-local.adapter.js';
 import { BillingResolver } from './presentation/graphql/billing.resolver.js';
 import { BillingController } from './presentation/http/billing.controller.js';
+
+/** The rpcs that wait on Stripe: the only ones with `BILLING_GRPC_STRIPE_DEADLINE_MS`. */
+const STRIPE_BACKED_METHODS = ['CreateCheckoutSession', 'HandleStripeWebhook'] as const;
 
 const presentation = (
   adapter: Type<BillingPort>,
@@ -45,16 +48,26 @@ export class BillingApiModule {
   /**
    * Gateway: ports → `billing.v1.BillingService` over gRPC (deadline + circuit breaker). The
    * client URL (`BILLING_GRPC_URL`) and the deadline of the Stripe-backed calls
-   * (`BILLING_GRPC_STRIPE_DEADLINE_MS`, also the channel's service-config deadline, so grpc-js does
-   * not end a checkout at `GRPC_DEADLINE_MS`) are read when `forRemote()` is called. The adapter
-   * still cuts `ListPayments` at `GRPC_DEADLINE_MS`.
+   * (`BILLING_GRPC_STRIPE_DEADLINE_MS`) are read when `forRemote()` is called. That deadline is
+   * also the service-config deadline of `CreateCheckoutSession` and `HandleStripeWebhook` only, so
+   * grpc-js does not end a checkout at `GRPC_DEADLINE_MS`; every other method (`ListPayments`)
+   * keeps `GRPC_DEADLINE_MS` at both layers, and billing-service sees that deadline.
    */
   static forRemote(): DynamicModule {
     // Read when the module is defined: a client target cannot come from DI.
     const client = billingGrpcClientConfig.parse();
+    const service = `${BILLING_GRPC_PACKAGE.package}.${BILLING_SERVICE_NAME}`;
     const grpc = GrpcClientsModule.register(
       { spec: BILLING_GRPC_PACKAGE, url: client.url },
-      { client: { deadlineMs: client.stripeDeadlineMs } },
+      {
+        client: {
+          methodDeadlines: STRIPE_BACKED_METHODS.map((method) => ({
+            service,
+            method,
+            deadlineMs: client.stripeDeadlineMs,
+          })),
+        },
+      },
     );
     return {
       module: BillingApiModule,

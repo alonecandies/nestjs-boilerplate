@@ -172,10 +172,11 @@ Payloads go through `ZodRpcValidationPipe` (`INVALID_ARGUMENT` + issues); `@Grpc
 errors to gRPC statuses and `x-error-code` trailers, and `BillingGrpcAdapter` maps them back to the same
 `DomainException`s (deadline = `GRPC_DEADLINE_MS`, circuit breaker `billing`). The calls that wait on Stripe,
 `CreateCheckoutSession` and `HandleStripeWebhook`, get `BILLING_GRPC_STRIPE_DEADLINE_MS` (default 30000, the
-monolith's `HTTP_HANDLER_TIMEOUT_MS`; also the channel's service-config deadline) and their own breaker,
-`billing-stripe`: slow Stripe calls neither time out at the generic deadline nor open the breaker `ListPayments`
-uses. The gateway's handler timeout still cuts the request at 30 s, as in the monolith; Stripe's own worst case
-(`STRIPE_TIMEOUT_MS` × (1 + `STRIPE_MAX_NETWORK_RETRIES`), 20 s × 3) is above both.
+monolith's `HTTP_HANDLER_TIMEOUT_MS`; also their own entries in the channel's service config) and their own
+breaker, `billing-stripe`: slow Stripe calls neither time out at the generic deadline nor open the breaker
+`ListPayments` uses. `ListPayments` keeps the channel's default deadline, `GRPC_DEADLINE_MS`, which billing-service
+also sees. The gateway's handler timeout still cuts the request at 30 s, as in the monolith; Stripe's own worst
+case (`STRIPE_TIMEOUT_MS` × (1 + `STRIPE_MAX_NETWORK_RETRIES`), 20 s × 3) is above both.
 
 ### Kafka (produced)
 
