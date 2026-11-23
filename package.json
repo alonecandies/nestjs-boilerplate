@@ -154,6 +154,7 @@
     "format": "biome format --write . && prettier --write --log-level=warn .",
     "check": "biome ci . && eslint . --max-warnings=0 && prettier --check . && tsc -p tsconfig.json && node scripts/check-boundaries.mjs && node scripts/check-api-subpaths.mjs --require-all",
     "check:boundaries": "node scripts/check-boundaries.mjs",
+    "check:audit": "node scripts/check-audit.mjs",
     "commit": "cz",
     "release": "lerna version --conventional-commits --yes --no-push",
     "clean": "lerna run clean && rimraf node_modules/.cache .nx",

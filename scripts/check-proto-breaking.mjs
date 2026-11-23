@@ -1,9 +1,9 @@
 // `buf breaking` for every gRPC contracts package (domains/<x>/contracts with a src/proto root)
-// against a git ref, normally the pull request's base. A deleted field, renamed RPC or changed
-// type fails; additions pass (policy: libs/contracts/buf.yaml, `breaking.use: [FILE]`, applied to
-// both sides). A package whose src/proto does not exist at the ref is new and is skipped. The
-// base protos are extracted with `git archive` (no buf git input: that needs branch names and
-// enough clone depth).
+// against a git ref: in CI the pull request's base, or on a push the commit before it
+// (github.event.before). A deleted field, renamed RPC or changed type fails; additions pass
+// (policy: libs/contracts/buf.yaml, `breaking.use: [FILE]`, applied to both sides). A package
+// whose src/proto does not exist at the ref is new and is skipped. The base protos are extracted
+// with `git archive` (no buf git input: that needs branch names and enough clone depth).
 //   node scripts/check-proto-breaking.mjs --against <git ref> [--root <dir>] [--buf <path>]
 //                                         [--error-format text|github-actions|json]
 // Exit: 0 no breaking change, 1 breaking change or error, 2 usage.
