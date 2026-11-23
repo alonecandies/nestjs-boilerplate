@@ -117,7 +117,7 @@ The services only serve `/health/live` and `/health/ready` over HTTP. Their API 
 Infra must be up first (`bun run docker:infra`). Other loops:
 
 - **Everything in Docker**: `bun run docker:monolith` or `bun run docker:microservices`, which build images. `docker compose --profile microservices watch` rebuilds an app on change.
-- **Hybrid**: services in Docker and one app on the host. The service containers publish 50051–50053 on the host, so `bun run dev:gateway` reaches them with its default `.env`.
+- **Hybrid**: services in Docker and one app on the host. The service containers publish 50051–50053 on the host, so `bun run dev:gateway` reaches them with its default `.env`. Set `DOCKER_GRPC_PRINCIPAL_ASSERTION=warn` in the root `.env` before starting them: they run in `enforce`, and the host gateway holds no signing key.
 - **Observability**: `bun run docker:observability` adds Jaeger (`16686`), Prometheus (`9090`) and Grafana on host port **`3300`**, because 3000 belongs to the API. For traces from host apps, set `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`. See [OBSERVABILITY.md](OBSERVABILITY.md).
 - `bun run docker:down` stops everything, every profile included.
 

@@ -161,13 +161,14 @@ x-env-ai: &env-ai
 # caller of every gRPC call; the services mount only the public key and run in enforce mode: a call
 # with a user and no valid assertion is refused (UNAUTHENTICATED INVALID_PRINCIPAL), anonymous calls
 # pass. A gateway run on the host (bun run dev:gateway) has no key, so its calls with a user are
-# refused: set the services to warn for that. Key id and both files carry a "compose-local" marker
-# that NODE_ENV=production refuses unless ALLOW_KNOWN_LOCAL_SECRETS.
+# refused: set DOCKER_GRPC_PRINCIPAL_ASSERTION=warn for that (the topology smoke requires enforce).
+# Key id and both files carry a "compose-local" marker that NODE_ENV=production refuses unless
+# ALLOW_KNOWN_LOCAL_SECRETS.
 x-env-grpc-principal-sign: &env-grpc-principal-sign
   GRPC_PRINCIPAL_SIGNING_KEY_FILE: /etc/grpc-principal/signing.key
   GRPC_PRINCIPAL_SIGNING_KEY_ID: compose-local
 x-env-grpc-principal-verify: &env-grpc-principal-verify
-  GRPC_PRINCIPAL_ASSERTION: enforce
+  GRPC_PRINCIPAL_ASSERTION: ${DOCKER_GRPC_PRINCIPAL_ASSERTION:-enforce}
   GRPC_PRINCIPAL_PUBLIC_KEYS_FILE: /etc/grpc-principal-pub/public-keys
 
 x-env-edge: &env-edge

@@ -146,7 +146,8 @@ Day-to-day workflow, scripts and debugging are in [DEVELOPMENT.md](DEVELOPMENT.m
    defaults (50051/50052/50053/50054 = the `IDENTITY/NOTIFICATIONS/BILLING/AI_GRPC_URL` defaults `localhost:5005x`),
    so `bun run dev:gateway` reaches them with the `.env` it creates. Start only the services you need
    (`docker compose --profile microservices up -d --build --wait identity-service notifications-service billing-service ai-service`)
-   so the containerised gateway does not also claim host port 3000.
+   so the containerised gateway does not also claim host port 3000. The services run in `enforce` and the host
+   gateway holds no signing key, so set `DOCKER_GRPC_PRINCIPAL_ASSERTION=warn` in the root `.env` first.
 
 Root `.env` vs. containers: Compose reads the root `.env` **only for `${VAR}` interpolation**. Containers get their
 environment from `docker-compose.yml` (plus an optional, gitignored **`.env.docker`**). Compose-only knobs are
@@ -194,6 +195,7 @@ Read by Compose for `${VAR}` interpolation (shell or root `.env`). They are comp
 | `DOCKER_OTEL_SDK_DISABLED` / `DOCKER_OTEL_SAMPLER_RATIO` | `true` / `1.0`                                                                        | tracing on/off, head-sampling ratio                                                                                                                                                    |
 | `DOCKER_DOCS_ENABLED` / `DOCKER_STORAGE_DRIVER`          | `true` / `s3`                                                                         | see table above                                                                                                                                                                        |
 | `DOCKER_JWT_ACCESS_SECRET` / `DOCKER_JWT_REFRESH_SECRET` | `compose-local-…`                                                                     | local JWT secrets (≥ 32 chars, not secret); the refresh one reaches only the token issuers (monolith, identity-service)                                                                |
+| `DOCKER_GRPC_PRINCIPAL_ASSERTION`                        | `enforce`                                                                             | the services' `GRPC_PRINCIPAL_ASSERTION`; `warn` for a gateway run on the host (hybrid)                                                                                                |
 | `DOCKER_TRUST_PROXY`                                     | `uniquelocal`                                                                         | edge apps' `TRUST_PROXY`                                                                                                                                                               |
 | `DOCKER_S3_CORS_ORIGINS`                                 | `http://localhost:3000,http://localhost:5173`                                         | RustFS `RUSTFS_CORS_ALLOWED_ORIGINS` (browser presigned PUT/GET)                                                                                                                       |
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB`    | `app` / `app` / `app`                                                                 | the Postgres superuser + database name (also in the containers' three `DATABASE_*URL`s) + postgres-exporter; the app roles' passwords are fixed in `docker/postgres/init/02-roles.sql` |
@@ -244,8 +246,9 @@ Signals, metric names and dashboards: [OBSERVABILITY.md](OBSERVABILITY.md).
   (`GRPC_PRINCIPAL_SIGNING_KEY_FILE`, key id `compose-local`); `compose-local=<base64 public PEM>` goes into
   `grpc-principal-pub`, which the four services mount (`GRPC_PRINCIPAL_PUBLIC_KEYS_FILE`) to verify the signed
   principal in `GRPC_PRINCIPAL_ASSERTION=enforce`: a call with a user and no valid assertion is refused, so a gateway
-  run on the host (no key) needs the services set to `warn`. Both files carry a `compose-local` marker that
-  `NODE_ENV=production` refuses unless `ALLOW_KNOWN_LOCAL_SECRETS`. See [`libs/transport/README.md`](../libs/transport/README.md).
+  run on the host (no key) needs the services set to `warn` (`DOCKER_GRPC_PRINCIPAL_ASSERTION=warn`). Both files
+  carry a `compose-local` marker that `NODE_ENV=production` refuses unless `ALLOW_KNOWN_LOCAL_SECRETS`. See
+  [`libs/transport/README.md`](../libs/transport/README.md).
 - **immudb**: `immudb-init` only waits for readiness (the image has no shell, so no healthcheck; metrics and
   `/readyz` are on port 9497, in-network only; pg-wire is off). The
   database, the SELECT/INSERT-only application user and the tables come from the apps' migrate step

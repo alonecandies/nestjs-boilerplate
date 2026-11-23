@@ -324,9 +324,9 @@ describe('signed principal wiring of the compose apps', () => {
     ]);
   });
 
-  it('docker-compose.yml runs the services in enforce', () => {
+  it('docker-compose.yml runs the services in enforce unless DOCKER_GRPC_PRINCIPAL_ASSERTION', () => {
     expect(COMPOSE).toMatch(
-      /x-env-grpc-principal-verify: &env-grpc-principal-verify\n {2}GRPC_PRINCIPAL_ASSERTION: enforce\n/,
+      /x-env-grpc-principal-verify: &env-grpc-principal-verify\n {2}GRPC_PRINCIPAL_ASSERTION: \$\{DOCKER_GRPC_PRINCIPAL_ASSERTION:-enforce\}\n/,
     );
   });
 });

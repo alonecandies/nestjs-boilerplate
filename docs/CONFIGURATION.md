@@ -815,22 +815,23 @@ What the containers get regardless of your `.env` (local-only conveniences):
 
 ### App container settings
 
-| Variable                    | Default                                                | Effect                                                                                                              |
-| --------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
-| `COMPOSE_PROFILES`          | —                                                      | Profiles to start without `--profile` (`monolith` \| `microservices`, `observability`, `logs`, `tools`, `loadtest`) |
-| `COMPOSE_PROJECT_NAME`      | `boilerplate` (the file's `name:`)                     | Standard compose variable; also handed to Alloy so only this project's container logs are shipped                   |
-| `APP_TARGET`                | `runtime`                                              | Image build target: `runtime` (distroless) \| `runtime-alpine` (shell) \| `dev`                                     |
-| `TAG`                       | `local`                                                | App image tag                                                                                                       |
-| `DOCKER_NODE_ENV`           | `production`                                           | → `NODE_ENV`                                                                                                        |
-| `DOCKER_LOG_LEVEL`          | `info`                                                 | → `LOG_LEVEL`                                                                                                       |
-| `DOCKER_OTEL_SDK_DISABLED`  | `true`                                                 | → `OTEL_SDK_DISABLED`; `false` sends traces to Jaeger (start the `observability` profile)                           |
-| `DOCKER_OTEL_SAMPLER_RATIO` | `1.0`                                                  | → `OTEL_TRACES_SAMPLER_ARG`                                                                                         |
-| `DOCKER_DOCS_ENABLED`       | `true`                                                 | → `DOCS_ENABLED`                                                                                                    |
-| `DOCKER_STORAGE_DRIVER`     | `s3`                                                   | → `STORAGE_DRIVER`                                                                                                  |
-| `DOCKER_TRUST_PROXY`        | `uniquelocal`                                          | → `TRUST_PROXY` (gateway, monolith)                                                                                 |
-| `DOCKER_JWT_ACCESS_SECRET`  | `compose-local-access-secret-not-for-production-0001`  | → `JWT_ACCESS_SECRET`                                                                                               |
-| `DOCKER_JWT_REFRESH_SECRET` | `compose-local-refresh-secret-not-for-production-0002` | → `JWT_REFRESH_SECRET` (monolith, identity-service)                                                                 |
-| `DOCKER_S3_CORS_ORIGINS`    | `http://localhost:3000,http://localhost:5173`          | Browser origins allowed by RustFS's S3 listener (presigned uploads from a frontend)                                 |
+| Variable                          | Default                                                | Effect                                                                                                               |
+| --------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `COMPOSE_PROFILES`                | —                                                      | Profiles to start without `--profile` (`monolith` \| `microservices`, `observability`, `logs`, `tools`, `loadtest`)  |
+| `COMPOSE_PROJECT_NAME`            | `boilerplate` (the file's `name:`)                     | Standard compose variable; also handed to Alloy so only this project's container logs are shipped                    |
+| `APP_TARGET`                      | `runtime`                                              | Image build target: `runtime` (distroless) \| `runtime-alpine` (shell) \| `dev`                                      |
+| `TAG`                             | `local`                                                | App image tag                                                                                                        |
+| `DOCKER_NODE_ENV`                 | `production`                                           | → `NODE_ENV`                                                                                                         |
+| `DOCKER_LOG_LEVEL`                | `info`                                                 | → `LOG_LEVEL`                                                                                                        |
+| `DOCKER_OTEL_SDK_DISABLED`        | `true`                                                 | → `OTEL_SDK_DISABLED`; `false` sends traces to Jaeger (start the `observability` profile)                            |
+| `DOCKER_OTEL_SAMPLER_RATIO`       | `1.0`                                                  | → `OTEL_TRACES_SAMPLER_ARG`                                                                                          |
+| `DOCKER_DOCS_ENABLED`             | `true`                                                 | → `DOCS_ENABLED`                                                                                                     |
+| `DOCKER_STORAGE_DRIVER`           | `s3`                                                   | → `STORAGE_DRIVER`                                                                                                   |
+| `DOCKER_GRPC_PRINCIPAL_ASSERTION` | `enforce`                                              | → `GRPC_PRINCIPAL_ASSERTION` (identity-, notifications-, billing-, ai-service); `warn` for a gateway run on the host |
+| `DOCKER_TRUST_PROXY`              | `uniquelocal`                                          | → `TRUST_PROXY` (gateway, monolith)                                                                                  |
+| `DOCKER_JWT_ACCESS_SECRET`        | `compose-local-access-secret-not-for-production-0001`  | → `JWT_ACCESS_SECRET`                                                                                                |
+| `DOCKER_JWT_REFRESH_SECRET`       | `compose-local-refresh-secret-not-for-production-0002` | → `JWT_REFRESH_SECRET` (monolith, identity-service)                                                                  |
+| `DOCKER_S3_CORS_ORIGINS`          | `http://localhost:3000,http://localhost:5173`          | Browser origins allowed by RustFS's S3 listener (presigned uploads from a frontend)                                  |
 
 ### Infra credentials and pass-throughs
 
