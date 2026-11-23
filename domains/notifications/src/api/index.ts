@@ -54,12 +54,12 @@ export {
   PUSH_DEDUPE_TTL_SEC,
 } from '../presentation/messaging/notification-push.consumer.js';
 export {
+  type NotificationsRateLimitConfig,
+  notificationsRateLimitConfig,
+} from '../presentation/rate-limit/notifications-rate-limit.config.js';
+export {
   NotificationsGateway,
   type NotificationsNamespace,
   type NotificationsSocket,
   type NotificationsSocketData,
 } from '../presentation/ws/notifications.gateway.js';
-export {
-  type NotificationsRateLimitConfig,
-  notificationsRateLimitConfig,
-} from '../presentation/ws/notifications-rate-limit.config.js';

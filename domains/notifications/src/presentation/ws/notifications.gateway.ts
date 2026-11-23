@@ -44,7 +44,7 @@ import {
 } from '../../notifications.constants.js';
 import { NotificationsPermission } from '../../notifications.permissions.js';
 import type { NotificationResponse } from '../http/notifications.dto.js';
-import { NOTIFICATIONS_RATE_LIMITS } from './notifications-rate-limit.js';
+import { NOTIFICATIONS_RATE_LIMITS } from '../rate-limit/notifications-rate-limit.js';
 import {
   type MarkReadAck,
   type MarkReadMessage,

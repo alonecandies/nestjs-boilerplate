@@ -473,7 +473,7 @@ gateway, monolith
 
 ### `notificationsRateLimit` — mark-read policy (notifications)
 
-[`notifications-rate-limit.config.ts`](../domains/notifications/src/presentation/ws/notifications-rate-limit.config.ts) ·
+[`notifications-rate-limit.config.ts`](../domains/notifications/src/presentation/rate-limit/notifications-rate-limit.config.ts) ·
 gateway, monolith
 
 | Variable                         | Default | Description                                                                           |
