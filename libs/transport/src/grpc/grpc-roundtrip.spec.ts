@@ -20,6 +20,7 @@ import {
   ExternalServiceException,
   generateId,
   markTokenVerified,
+  PLATFORM_TENANT_ID,
 } from '@platform/common';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
 import { protoPath as healthProtoPath } from 'grpc-health-check';
@@ -443,6 +444,18 @@ describe('gRPC round trip (in-process server + ClientGrpc)', () => {
       const late = Date.now() - (signer.signingKey.ttlSec + 60) * 1000;
       expectRefused(await failure(signer.metadata(caller, { nowMs: late })));
       expect(await count('expired')).toBe(before + 1);
+    });
+
+    it('signed claims createPrincipal rejects are refused with no details trailer', async () => {
+      const before = await count('valid');
+      const calls = principals.length;
+      const error = await failure(
+        signer.metadata({ userId: generateId(), tenantId: PLATFORM_TENANT_ID }),
+      );
+      expectRefused(error);
+      expect(error.metadata.get(GRPC_METADATA_KEYS.ERROR_DETAILS)).toEqual([]);
+      expect(await count('valid')).toBe(before + 1);
+      expect(principals).toHaveLength(calls);
     });
 
     it('an anonymous call still passes, uncounted', async () => {

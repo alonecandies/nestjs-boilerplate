@@ -446,14 +446,20 @@ bytes on their own calls (ai-service's chat tools), never signing. `GRPC_PRINCIP
 
 - `off` (default): the header is ignored; the plain metadata decides.
 - `warn`: the assertion is verified and counted in `grpc_principal_assertions_total{outcome}` (`valid`, `missing`,
-  `expired`, `invalid`, `mismatch`); every other outcome is logged, at most once a minute per outcome and handler
-  (in `enforce` too), with the number held back; the plain metadata still decides.
+  `expired`, `invalid`, `mismatch`); every other outcome is logged, throttled to one line a minute per outcome and
+  handler (in `enforce` too). The number held back appears on the next line for that outcome and handler, and a
+  burst that then stops leaves its count unlogged: `grpc_principal_assertions_total` is the source of truth, not the
+  log. The plain metadata still decides.
 - `enforce`: the principal comes from a valid assertion's claims only. A call with `x-user-id` and no valid assertion
   (missing, expired, signed by another key, or plain headers that differ from the claims), or with an assertion and
   no `x-user-id`, fails `UNAUTHENTICATED` `INVALID_PRINCIPAL` before any handler runs. The refusal carries no
   reason (it can reach a public 401 through the gateway); the outcome is in the service's log and counter. A call
   with neither `x-user-id` nor an assertion stays anonymous (register, login, the Stripe webhook). A mesh peer
   without the edge's private key cannot assert a user, a tenant, roles or the staff flag.
+
+In every mode, a principal that `createPrincipal` rejects (malformed plain headers, or the claims of a valid
+assertion, such as the platform tenant) also fails `INVALID_PRINCIPAL` with no reason; the reason goes to the
+service's log only, throttled like the outcome warnings.
 
 A process sends caller identity only for a principal it can vouch for: the one its own access-token verification
 wrote (`writePrincipal`), or, inside a gRPC call, the principal of that call. The edge signs exactly the claims it

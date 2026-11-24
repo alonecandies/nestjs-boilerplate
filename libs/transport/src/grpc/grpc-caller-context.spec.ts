@@ -281,6 +281,22 @@ describe('callerContextFromCls: one signature per principal, not per call', () =
     expect(sign).toHaveBeenCalledTimes(2);
   });
 
+  it('a clock that steps back signs again instead of reusing an assertion from the future', () => {
+    const principal = marked();
+    vi.setSystemTime(clock + 3_000);
+    const ahead = assertionFor(principal);
+    vi.setSystemTime(clock);
+    const [token] = assertionFor(principal);
+    expect(sign).toHaveBeenCalledTimes(2);
+    expect([token]).not.toEqual(ahead);
+    expect(
+      checkPrincipalAssertion(
+        { userId, tenantId, roles: ['admin'], staff: false, principalAssertion: String(token) },
+        signer.publicKeys,
+      ),
+    ).toBe('valid');
+  });
+
   it('an equal but distinct principal object gets its own assertion', () => {
     const one = marked();
     const first = assertionFor(one);

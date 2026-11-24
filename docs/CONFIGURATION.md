@@ -411,10 +411,11 @@ Stripe-backed calls.
 | `AI_GRPC_URL`              | `localhost:50054` | ai-service target (any grpc-js target syntax; compose: `ai-service:50051`).                                                                                                                                                                  |
 | `AI_GRPC_CHAT_DEADLINE_MS` | `70000`           | Deadline of a chat turn over gRPC (`SendMessage`, the whole `StreamMessage` stream), 1000-900000. Keep it above ai-service's `AI_REQUEST_TIMEOUT_MS` so the model's own 504 `AI_TIMEOUT` answers first. Other calls keep `GRPC_DEADLINE_MS`. |
 
-`SendMessage` and `StreamMessage` carry `AI_GRPC_CHAT_DEADLINE_MS` at both layers (the adapter's timeout and their
-own entries in the ai channel's service config); every other call, and the deadline ai-service sees for it, is
-`GRPC_DEADLINE_MS`. A gateway with `GRPC_PRINCIPAL_SIGNING_KEY` refuses to boot when
-`GRPC_PRINCIPAL_ASSERTION_TTL_SEC` minus the 5 s assertion reuse window is below this deadline (`grpc` above).
+`SendMessage` carries `AI_GRPC_CHAT_DEADLINE_MS` at both layers (the adapter's timeout and its entry in the ai
+channel's service config); `StreamMessage` carries it through its service-config entry only, for the whole stream.
+Every other call, and the deadline ai-service sees for it, is `GRPC_DEADLINE_MS`. A gateway with
+`GRPC_PRINCIPAL_SIGNING_KEY` refuses to boot when `GRPC_PRINCIPAL_ASSERTION_TTL_SEC` minus the 5 s assertion reuse
+window is below this deadline (`grpc` above).
 
 ### `auth` — access tokens (JWT)
 

@@ -50,6 +50,9 @@ interface WarningWindow {
  *   call with `x-user-id` and no valid assertion fails `INVALID_PRINCIPAL`, before any handler
  *   runs. A call without `x-user-id` and without an assertion stays anonymous (`principalForRpcCall`).
  *   The refusal carries no reason: the caller learns nothing, the log and the counter keep it.
+ * - in every mode, a principal `createPrincipal` rejects (malformed plain headers, or the claims of
+ *   a valid assertion) fails `INVALID_PRINCIPAL` with no `details` either; its reason is logged,
+ *   throttled the same way under `principal <handler>`.
  *
  * nestjs-cls middleware only runs for HTTP, which is why gRPC needs this. The handler is
  * subscribed inside `cls.run()`, so the context follows every await in the handler. This is the
@@ -60,8 +63,9 @@ interface WarningWindow {
 export class GrpcContextInterceptor implements NestInterceptor {
   private readonly logger = new Logger(GrpcContextInterceptor.name);
   /**
-   * By outcome and `Class.handler`: bounded by the handlers the app registers times four outcomes,
-   * so a peer that floods the port, under `warn` or `enforce`, cannot flood the log.
+   * By outcome (or `principal`, for a principal `createPrincipal` rejects) and `Class.handler`:
+   * bounded by the handlers the app registers times five keys, so a peer that floods the port
+   * cannot flood the log.
    */
   private readonly warningWindows = new Map<string, WarningWindow>();
 
@@ -78,7 +82,14 @@ export class GrpcContextInterceptor implements NestInterceptor {
     const check = this.checkAssertion(caller, settings, context);
     let principal: ReturnType<typeof principalForRpcCall>;
     try {
-      principal = principalForRpcCall(caller, settings.mode, check);
+      principal = principalForRpcCall(caller, settings.mode, check, (reason) => {
+        // The caller gets a bare INVALID_PRINCIPAL; the reason (a fixed string, no id) stays here.
+        const handler = handlerOf(context);
+        this.warnThrottled(
+          `principal ${handler}`,
+          `Principal refused on ${handler}: ${reason} (GRPC_PRINCIPAL_ASSERTION=${settings.mode})`,
+        );
+      });
     } catch (error) {
       // INVALID_PRINCIPAL → UNAUTHENTICATED through the controller's exception filter.
       return throwError(() => error);
@@ -110,7 +121,7 @@ export class GrpcContextInterceptor implements NestInterceptor {
     recordPrincipalAssertion(check.outcome);
     if (check.outcome !== 'valid') {
       // Never the token or its claims: the outcome and the handler are enough to find the caller.
-      const handler = `${context.getClass().name}.${context.getHandler().name}`;
+      const handler = handlerOf(context);
       const effect =
         settings.mode === 'enforce' ? 'the call is refused' : 'the plain caller headers are used';
       this.warnThrottled(
@@ -138,4 +149,9 @@ export class GrpcContextInterceptor implements NestInterceptor {
     this.warningWindows.set(key, { lastAt: now, suppressed: 0 });
     this.logger.warn(held === 0 ? message : `${message} (${held} more since the last one)`);
   }
+}
+
+/** `Class.handler`, to find the code path in a log line. */
+function handlerOf(context: ExecutionContext): string {
+  return `${context.getClass().name}.${context.getHandler().name}`;
 }
