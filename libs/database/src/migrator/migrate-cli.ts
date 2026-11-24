@@ -1,4 +1,5 @@
 import { parseArgs } from 'node:util';
+import { createCliLogger } from '@platform/common';
 import {
   appConfig,
   databaseConfig,
@@ -7,10 +8,11 @@ import {
   parseEnv,
 } from '@platform/config';
 import type { DatabaseMigrationSet } from '../database.types.js';
-import { createMigrateCliLogger } from './cli-logger.js';
 import { withPlatformMigrations } from './migration-sets.js';
 import { requireMigrationUrl } from './migration-url.js';
 import { runMigrations } from './run-migrations.js';
+
+const MIGRATE_LOGGER_CONTEXT = 'DatabaseMigrate';
 
 /**
  * The body of every app's `src/migrate.ts`: the one-off migration job for deploy pipelines
@@ -32,10 +34,11 @@ export async function runMigrationsCli(
   migrations: readonly DatabaseMigrationSet[],
   args: readonly string[] = process.argv.slice(2),
 ): Promise<void> {
-  let logger = createMigrateCliLogger(false);
+  let logger = createCliLogger(MIGRATE_LOGGER_CONTEXT, false);
   try {
     parseArgs({ args: [...args], options: {}, strict: true });
-    if (observabilityConfig.parse().logPretty) logger = createMigrateCliLogger(true);
+    if (observabilityConfig.parse().logPretty)
+      logger = createCliLogger(MIGRATE_LOGGER_CONTEXT, true);
     const sets = withPlatformMigrations(migrations);
     // The app's database rules, minus the system pool this job never opens (no DATABASE_SYSTEM_URL).
     const cfg = parseEnv(databaseConfig.namespace, databaseMigrationEnvSchema, process.env);

@@ -71,15 +71,16 @@ export interface OnlineStep {
   path: string;
   statement: string;
   /**
-   * The journal index of the transactional migration the step follows (the file's `NNNN`): it runs
-   * once the set's files up to that one are applied, before the next one.
+   * The journal index of the transactional migration the step follows (the file's `NNNN`, also that
+   * migration's number): it runs once the set's files up to that one are applied, before the next.
    */
   anchor: number;
 }
 
 /**
  * `NNNN_<name>.sql`: `NNNN` is the anchor, the 4-digit index of the transactional migration the
- * step follows (the number drizzle-kit gives that file); steps sharing an anchor run in name order.
+ * step follows (the number drizzle-kit gives that file, which its journal entry's tag must carry);
+ * steps sharing an anchor run in name order.
  */
 const ONLINE_STEP_FILE = /^(\d{4})_[\w-]+\.sql$/;
 
@@ -90,8 +91,9 @@ export const withoutComments = (text: string): string =>
 /**
  * The set's online steps in file order (anchor order), read without connecting: a declared folder
  * that is missing (or a set without a journal), a file that is not `NNNN_<name>.sql`, a file with no
- * statement or one anchored beyond the set's journal fails up front. One statement per file is enforced
- * by the server (the file is sent on the extended protocol, which refuses several commands).
+ * statement, one anchored beyond the set's journal or at an entry whose tag does not start with its
+ * `NNNN` (a hand-edited journal) fails up front. One statement per file is enforced by the server
+ * (the file is sent on the extended protocol, which refuses several commands).
  * `assertMigrationSets` and `runMigrations` call it for every set with an `onlineFolder`.
  */
 export function readOnlineSteps(set: DatabaseMigrationSet): OnlineStep[] {
@@ -134,6 +136,17 @@ export function readOnlineSteps(set: DatabaseMigrationSet): OnlineStep[] {
           `Migration set "${set.name}": online step ${name} (${path}) is anchored at ${number}, ` +
             `beyond the set's journal (${entries.length} file(s), the last is ` +
             `${entries.at(-1)?.tag ?? 'none'}): NNNN is the index of the migration it follows`,
+        );
+      }
+      // A journal edited by hand (an entry removed, two swapped) moves the file at index NNNN; the
+      // step must still follow the migration it was written with, so the entry must carry NNNN.
+      const tag = entries[anchor]?.tag ?? '';
+      const tagNumber = /^(\d+)_/.exec(tag)?.[1];
+      if (tagNumber === undefined || Number(tagNumber) !== anchor) {
+        throw new Error(
+          `Migration set "${set.name}": online step ${name} (${path}) is anchored at ${number}, ` +
+            `but the journal's entry ${number} is ${tag}: NNNN is the number of the migration ` +
+            'the step follows, and the journal must list that migration at that index',
         );
       }
       return { name, path, statement, anchor };

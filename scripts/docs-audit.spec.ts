@@ -381,3 +381,75 @@ describe('DOC-1: only a database stopped part-way through the stacked history mu
     },
   );
 });
+
+describe('B1-9, B1-10 and B1-14: the migration lock budget, the lock_timeout precedence and the callers', () => {
+  const grpcCallers = (): string[] => {
+    const packageReadmes = ['apps', 'domains', 'libs'].flatMap((folder) =>
+      readdirSync(join(root, folder))
+        .map((name) => `${folder}/${name}/README.md`)
+        .filter((file) => existsSync(join(root, file))),
+    );
+    const docs = readdirSync(join(root, 'docs'))
+      .filter((name) => name.endsWith('.md'))
+      .map((name) => `docs/${name}`);
+    return [
+      'README.md',
+      ...docs,
+      ...packageReadmes,
+      'domains/billing/src/presentation/grpc/billing-grpc.controller.ts',
+    ];
+  };
+
+  it('no doc or source comment says that only the gateway calls a service or reaches its port', () => {
+    const stale = /only the gateway (\([^)]*\) )?(calls it|can reach)/;
+    const hits = grpcCallers().flatMap((file) => {
+      const text = flat(read(file).replace(/^\s*(\/\*\*|\*\/|\*|\/\/) ?/gm, '')).toLowerCase();
+      return stale.test(text) ? [file] : [];
+    });
+    expect(hits).toEqual([]);
+  });
+
+  it('the gateway and ai-service are named as the callers where a doc says who calls the services', () => {
+    for (const [file, anchor] of [
+      ['apps/identity-service/README.md', 'no guards:'],
+      ['docs/DEVELOPMENT.md', 'Their API is gRPC'],
+      [
+        'domains/billing/src/presentation/grpc/billing-grpc.controller.ts',
+        'Authorization is the caller',
+      ],
+    ] as const) {
+      const text = flat(read(file).replace(/^\s*(\/\*\*|\*\/|\*) ?/gm, ''));
+      const start = text.indexOf(anchor);
+      expect(start, `${file} has "${anchor}"`).toBeGreaterThanOrEqual(0);
+      expect(text.slice(start, start + 200), file).toContain('the gateway and ai-service');
+    }
+  });
+
+  it('the database README names the 5-minute boot budget next to DATABASE_RUN_MIGRATIONS', () => {
+    const text = flat(read('libs/database/README.md'));
+    const at = text.search(/5[- ]minute/);
+    expect(at, 'libs/database/README.md names the 5-minute budget').toBeGreaterThanOrEqual(0);
+    const budget = text.slice(Math.max(0, at - 400), at + 400);
+    expect(budget).toContain('DATABASE_RUN_MIGRATIONS');
+    expect(budget).toContain('advisory');
+    expect(budget).toContain('release job');
+  });
+
+  it('the releasing doc says a long online step belongs in the release job, not at boot', () => {
+    const text = flat(read('docs/RELEASING.md'));
+    const at = text.search(/5[- ]minute/);
+    expect(at, 'docs/RELEASING.md names the 5-minute budget').toBeGreaterThanOrEqual(0);
+    const budget = text.slice(Math.max(0, at - 400), at + 400);
+    expect(budget).toContain('DATABASE_RUN_MIGRATIONS');
+    expect(budget).toContain('online');
+    expect(budget).toContain('release job');
+  });
+
+  it('the configuration doc says the role per-database lock_timeout takes precedence', () => {
+    const text = flat(read('docs/CONFIGURATION.md'));
+    const row = text.slice(text.indexOf('| `DATABASE_MIGRATION_LOCK_TIMEOUT_MS`'));
+    const cell = row.slice(0, row.indexOf(' | `DATABASE_MIGRATION_LOCK_RETRIES`'));
+    expect(cell).toMatch(/per-database/);
+    expect(cell).toMatch(/takes precedence|wins/);
+  });
+});

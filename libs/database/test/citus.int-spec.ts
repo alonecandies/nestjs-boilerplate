@@ -5,11 +5,16 @@ import { noop } from 'lodash-es';
 import postgres, { type Sql } from 'postgres';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { platformMigrations, runMigrations } from '../src/index.js';
-import { catalogMigrations } from './fixtures/fixture-sets.js';
+import {
+  catalogMigrations,
+  gizmosTablesMigrations,
+  gizmosWithOnline,
+} from './fixtures/fixture-sets.js';
 
 /*
- * The platform set's Citus helpers (0001_citus_helpers.sql) and the runner's sequential mode on
- * citusdata/citus:14.2.0 (single node, 4 shards). Database `app` has the citus extension; database
+ * The platform set's Citus helpers (0001_citus_helpers.sql), the runner's sequential mode and the
+ * retry of a failed online build on citusdata/citus:14.2.0 (single node, 4 shards; the cluster
+ * form is citus-cluster.int-spec.ts). Database `app` has the citus extension; database
  * `plain`, created here, has not, so it behaves as plain Postgres. The tests build on each other in
  * file order. Opt-in (needs Docker):
  *   INTEGRATION=1 bunx vitest run --project database:int
@@ -244,6 +249,77 @@ describe('Citus helpers and sequential migrations on Citus 14.2 (single node)', 
         'order_lines_order_fk',
         'order_lines_region_id_regions_id_fk',
       ]);
+    });
+
+    it('drops the invalid index a failed online build left on a distributed table, and builds it valid on every shard next run (B1-8)', async () => {
+      // The cluster form, with the shards on a worker, is in citus-cluster.int-spec.ts.
+      const tenant = '0190a0a0-0000-7000-8000-000000000001';
+      await runMigrations(pg.url, {
+        migrations: [platformMigrations, gizmosTablesMigrations],
+        logger: silent,
+      });
+      expect(await placement('gizmos.gizmos')).toMatchObject({ kind: 'hash:tenant_id', shards: 4 });
+      /** gizmos_code_key's validity on the distributed table (`table`) and per shard id. */
+      const validity = (): Promise<Record<string, boolean>> =>
+        citus.begin(async (tx) => {
+          await tx`set local citus.override_table_visibility to off`; // shards are hidden otherwise
+          const rows = await tx<{ place: string; valid: boolean }[]>`
+            select coalesce(substring(c.relname from '_([0-9]+)$'), 'table') as place,
+              i.indisvalid as valid from pg_index i
+            join pg_class c on c.oid = i.indexrelid
+            join pg_namespace n on n.oid = c.relnamespace
+            where n.nspname = 'gizmos' and c.relname ~ '^gizmos_code_key(_[0-9]+)?$'`;
+          return Object.fromEntries(rows.map((row) => [row.place, row.valid]));
+        });
+      const recorded = async (): Promise<string[]> => {
+        const rows = await citus<{ name: string }[]>`
+          select name from gizmos.__online_migrations order by name`;
+        return rows.map((row) => row.name);
+      };
+      // Two rows of one tenant share a code: the unique build fails on that tenant's shard.
+      await citus`
+        insert into gizmos.gizmos (tenant_id, id, name, code)
+        values (${tenant}, 1, 'gizmo 1', 'dup'), (${tenant}, 2, 'gizmo 2', 'dup')`;
+      const migrations = [platformMigrations, gizmosWithOnline('online-retry')];
+
+      const error: unknown = await runMigrations(pg.url, { migrations, logger: silent }).catch(
+        (caught: unknown) => caught,
+      );
+
+      expect((error as Error).message).toMatch(
+        /^Migration set "gizmos": online step 0000_gizmos_code_key\.sql \(.*\) failed; nothing was recorded for it/,
+      );
+      expect((error as Error).cause).toMatchObject({ code: '23505' });
+      expect(await recorded()).toEqual([]);
+      // Invalid on the table and on the shard that holds the duplicates. (The other shards' builds
+      // may run in parallel, so whether they finished, failed or never started is not pinned.)
+      const [duplicates] = await citus<{ shard: string }[]>`
+        select get_shard_id_for_distribution_column('gizmos.gizmos', ${tenant}::uuid)::text
+          as shard`;
+      expect(await validity()).toMatchObject({
+        table: false,
+        [duplicates?.shard ?? 'missing']: false,
+      });
+
+      await citus`delete from gizmos.gizmos where id = 2`;
+      const warnings: string[] = [];
+      const retry = await runMigrations(pg.url, {
+        migrations,
+        logger: { ...silent, warn: (message: unknown) => warnings.push(String(message)) },
+      });
+
+      expect(warnings).toEqual([
+        expect.stringMatching(/^gizmos: 0000_gizmos_code_key\.sql left the invalid index/),
+      ]);
+      expect(retry.online).toEqual({ total: 1, applied: 1 });
+      expect(await recorded()).toEqual(['0000_gizmos_code_key.sql']);
+      const shards = await citus<{ shard: string }[]>`
+        select shardid::text as shard from pg_dist_shard
+        where logicalrelid = 'gizmos.gizmos'::regclass`;
+      expect(await validity()).toEqual({
+        table: true,
+        ...Object.fromEntries(shards.map(({ shard }) => [shard, true])),
+      });
     });
   });
 });
