@@ -69,9 +69,10 @@ export interface GraphqlWsAuthOptions {
    */
   requireAuth?: boolean;
   /**
-   * Tracks each authenticated socket by its token's `jti`, so the sweep closes it (4401
-   * `Access token revoked`) once that token is on the denylist. Without it, the denylist is read
-   * only at `connection_init`.
+   * Tracks each authenticated socket by its token's `jti`, so it is closed (4401 `Access token
+   * revoked`) once that token is on the denylist: on the revocation announcement, on the check
+   * `track()` makes after registering it (a revocation during the handshake), or at the latest by
+   * the sweep. Without it, the denylist is read only at `connection_init`.
    */
   sweeper?: RevocationSweeper;
   /**
@@ -101,7 +102,8 @@ export interface GraphqlWsAuthHandlers {
  *   expires, and the client must reconnect with a fresh token, so pushes stop reaching a session
  *   that is no longer valid.
  * - With `options.sweeper`, the socket is tracked by its `jti` and closed (4401
- *   `Access token revoked`) by the sweep after that token is revoked; `onClose` untracks it.
+ *   `Access token revoked`) after that token is revoked: on the announcement, on the check after
+ *   tracking, or by the sweep; `onClose` untracks it.
  * - With `options.caps`, a connection over the per-IP handshake budget or the per-user socket cap
  *   returns `false` too, so to the client a cap refusal looks the same as an auth refusal (4403).
  *   `onClose` releases the socket's slot by its id.

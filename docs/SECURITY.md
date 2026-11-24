@@ -431,7 +431,8 @@ them as the caller). Keep reflection off. ai-service re-checks tenant and user o
 ### Signed principal assertion
 
 The gateway signs the principal it forwards: `x-principal-assertion`, a compact ES256 JWS (claims user, tenant, roles,
-staff, `iat`, `exp` = `iat` + `GRPC_PRINCIPAL_ASSERTION_TTL_SEC`, 120 s; keep it above `AI_GRPC_CHAT_DEADLINE_MS`).
+staff, `iat`, `exp` = `iat` + `GRPC_PRINCIPAL_ASSERTION_TTL_SEC`, 120 s; the TTL minus the 5 s reuse window must cover `AI_GRPC_CHAT_DEADLINE_MS`, or a signing gateway refuses to
+boot).
 A verifier refuses as `invalid` any assertion whose `exp - iat` exceeds 3600 s, the TTL's maximum, so even a leaked
 assertion was never minted for longer.
 Only the edge holds the private key (`GRPC_PRINCIPAL_SIGNING_KEY` / `_FILE`, `GRPC_PRINCIPAL_SIGNING_KEY_ID`); the

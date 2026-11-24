@@ -108,7 +108,9 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
  *   `exception` (TOKEN_EXPIRED) and disconnected when its access token expires. This replica's
  *   `RevocationSweeper` (`socket.io`) disconnects its sockets whose token was revoked (logout or
  *   tenant switch → denylist; `exception` TOKEN_REVOKED): at once on the denylist's revocation
- *   announcement, else at the next sweep (every `WS_REVOCATION_SWEEP_INTERVAL_MS`, `authConfig`).
+ *   announcement or, for a token revoked during the handshake, on the check `track()` makes after
+ *   registering the socket; else at the next sweep (every `WS_REVOCATION_SWEEP_INTERVAL_MS`,
+ *   `authConfig`).
  *   Clients reconnect with a fresh token, so pushes stop reaching a session that HTTP would
  *   already reject.
  * - Messages: the global guards run per message (`JwtAuthGuard` checks `socket.data.user` is

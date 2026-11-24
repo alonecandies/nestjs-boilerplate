@@ -181,7 +181,8 @@ export const grpcEnvSchema = z
     // The verifiers' public keys: kid=base64 PEM, comma-separated (or a file, one per line).
     GRPC_PRINCIPAL_PUBLIC_KEYS: zStr(),
     GRPC_PRINCIPAL_PUBLIC_KEYS_FILE: zStr(),
-    // Lifetime of a signed assertion; keep it above the longest gRPC deadline (AI_GRPC_CHAT_DEADLINE_MS).
+    // Lifetime of a signed assertion. Minus the 5 s reuse window it must cover the longest gRPC
+    // deadline (AI_GRPC_CHAT_DEADLINE_MS); a signing caller checks that at boot.
     GRPC_PRINCIPAL_ASSERTION_TTL_SEC: zInt(120, {
       min: 10,
       max: GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC,
