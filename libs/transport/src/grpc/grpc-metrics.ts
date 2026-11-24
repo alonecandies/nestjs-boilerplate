@@ -101,3 +101,34 @@ export function trackCircuitBreakerStates(states: () => Record<string, CircuitSt
     breakerSources.delete(states);
   };
 }
+
+export const GRPC_CIRCUIT_BREAKER_EVENTS_TOTAL = 'grpc_client_circuit_breaker_events_total';
+
+/**
+ * The opossum events `grpc_client_circuit_breaker_events_total` counts. `success` includes a caller
+ * error the `errorFilter` let through (a healthy upstream); `failure` is an upstream failure,
+ * including a failed half-open probe; `reject` is a call the breaker refused without sending it.
+ */
+export const CIRCUIT_BREAKER_EVENTS = ['success', 'failure', 'reject'] as const;
+export type CircuitBreakerEvent = (typeof CIRCUIT_BREAKER_EVENTS)[number];
+
+const breakerEvents = () =>
+  getOrCreateCounter({
+    name: GRPC_CIRCUIT_BREAKER_EVENTS_TOTAL,
+    help: 'gRPC client circuit breaker events per upstream: success, failure (an upstream failure) and reject (refused without sending)',
+    labelNames: ['upstream', 'event'],
+  });
+
+/**
+ * Starts the three event series of `upstream` at 0, so `increase()` and `rate()` see its first
+ * event. Never resets them: registries that share an upstream name share its series.
+ */
+export function initCircuitBreakerEvents(upstream: string): void {
+  const counter = breakerEvents();
+  for (const event of CIRCUIT_BREAKER_EVENTS) counter.inc({ upstream, event }, 0);
+}
+
+/** Counts one breaker event of `upstream`. */
+export function recordCircuitBreakerEvent(upstream: string, event: CircuitBreakerEvent): void {
+  breakerEvents().inc({ upstream, event });
+}

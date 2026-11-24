@@ -2,9 +2,9 @@
 # generated-artefact drift, commitlint and buf breaking), the integration tests against real Citus,
 # Cassandra, Kafka, immudb, object storage and Redis, one production image per app (built, scanned
 # for fixable HIGH/CRITICAL OS vulnerabilities, not pushed), a boot check of the docker compose infra
-# stack, and a smoke test that boots both app topologies from those images. A weekly scheduled run
-# reports new production advisories only. Every action is pinned to a commit SHA (tag in the
-# comment); .github/dependabot.yml proposes the bumps.
+# stack with promtool tests of the alert rules, and a smoke test that boots both app topologies from
+# those images. A weekly scheduled run reports new production advisories only. Every action is
+# pinned to a commit SHA (tag in the comment); .github/dependabot.yml proposes the bumps.
 name: CI
 
 on:
@@ -308,6 +308,9 @@ jobs:
 
       - name: docker compose config (every profile combination)
         run: scripts/docker/validate-compose.sh
+
+      - name: promtool check and test the alert rules (the compose Prometheus image)
+        run: scripts/docker/check-prometheus-rules.sh
 
       - name: Boot infra, assert topics / keyspace / buckets / extensions / roles / PgBouncer, tear down
         run: scripts/docker/check-infra.sh

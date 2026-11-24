@@ -52,6 +52,8 @@ const METRIC_NAMES: readonly string[] = [
   'kafka_consumer_lag',
   'grpc_client_circuit_breaker_state',
   'grpc_client_handled_total',
+  // Follow-ups Task 5 (`libs/transport/src/grpc/grpc-metrics.ts`).
+  'grpc_client_circuit_breaker_events_total',
   'rate_limit_fail_open_total',
   'db_pool_operations_waiting',
   'http_request_duration_seconds',
@@ -117,6 +119,7 @@ const EXPECTED: Readonly<Record<string, Readonly<Record<string, 'page' | 'ticket
     KafkaRedeliveries: 'ticket',
     KafkaConsumerLagGrowing: 'ticket',
     GrpcCircuitBreakerOpen: 'page',
+    GrpcUpstreamFailing: 'ticket',
     RateLimitFailOpen: 'ticket',
     DbPoolSaturated: 'ticket',
     HttpServerErrorRatio: 'page',
@@ -271,16 +274,31 @@ describe('the platform and billing rules of audit fixes Task 21', () => {
   });
 
   // The breaker cycles open and half_open against a hung upstream (5 s each, a 15 s scrape), so the
-  // rule reads "not closed", and only while calls are refused: an idle breaker stays half_open.
-  it('GrpcCircuitBreakerOpen: a breaker not closed for 5 m while its service refuses calls', () => {
+  // rule reads "not closed", and only while that upstream refuses or fails calls: an idle breaker
+  // stays half_open. The join is per (service, upstream), so an idle breaker next to a refusing one
+  // of the same service stays silent, and failed half-open probes count.
+  it('GrpcCircuitBreakerOpen: a breaker not closed for 5 m while its upstream refuses or fails calls', () => {
     const rule = expr('GrpcCircuitBreakerOpen');
     expect(rule).toContain('grpc_client_circuit_breaker_state{state!="closed"}) == 1');
     expect(rule).not.toContain('{state="open"}');
-    expect(rule).toContain(' and on (service) sum by (service) ');
+    expect(rule).toContain(' and on (service, upstream) sum by (service, upstream) ');
     expect(rule).toMatch(
-      /rate\(grpc_client_handled_total\{grpc_code="CIRCUIT_OPEN"\}\[2m\]\)\) > 0$/,
+      /rate\(grpc_client_circuit_breaker_events_total\{event=~"reject\|failure"\}\[2m\]\)\) > 0$/,
     );
+    expect(rule).not.toContain('grpc_client_handled_total');
     expect(waits('GrpcCircuitBreakerOpen')).toBe('5m');
+  });
+
+  it('GrpcUpstreamFailing: at least 3 failures in 15 m and more failures than successes, per upstream', () => {
+    const rule = expr('GrpcUpstreamFailing');
+    const failures =
+      'sum by (service, upstream) (increase(grpc_client_circuit_breaker_events_total{event="failure"}[15m]))';
+    const successes =
+      'sum by (service, upstream) (increase(grpc_client_circuit_breaker_events_total{event="success"}[15m]))';
+    expect(rule).toBe(`${failures} >= 3 and on (service, upstream) ${failures} > ${successes}`);
+    expect(rule).not.toContain('reject');
+    expect(rule).not.toContain('grpc_client_circuit_breaker_state');
+    expect(waits('GrpcUpstreamFailing')).toBe('5m');
   });
 
   it('RateLimitFailOpen: any fail-open increase, per throttler', () => {

@@ -3,7 +3,8 @@
 # @platform/redis (rate_limit_fail_open_total, redis_eviction_policy_safe), @platform/database
 # (db_pool_operations_waiting), @platform/observability (http_request_duration_seconds) and
 # @platform/mailer (mail_jobs_total); Prometheus adds `service` from the scrape target.
-# severity: page = wake someone; ticket = look at it in working hours.
+# severity: page = wake someone; ticket = look at it in working hours. promtool tests:
+# docker/prometheus/tests/platform.rules.test.yml (scripts/docker/check-prometheus-rules.sh).
 groups:
   - name: platform
     rules:
@@ -63,21 +64,23 @@ groups:
             behind for group {{ $labels.group }} and the lag grew over 15 minutes. Check the handler's
             latency, kafka_consumer_messages_total{outcome="redelivery"} and the replica count.
 
-      # A gRPC client circuit breaker has not been closed for 5 minutes while its service refuses calls
-      # (CIRCUIT_OPEN, a 503 at the gateway): the upstream is down or too slow. Against a hung upstream
-      # the breaker cycles open (5 s) and half_open (the probe waits out GRPC_DEADLINE_MS), so the rule
-      # reads "not closed" rather than "open". An idle breaker stays half_open until its next call
-      # (opossum), so refused calls in the last 2 minutes are required too. Limits: the refusal
-      # counter has no `upstream` label, so the join is per service (an idle half_open breaker fires
-      # alongside a refusing one of the same service); traffic too sparse to be refused (every call
-      # is the half_open probe and fails: DEADLINE_EXCEEDED for a hung upstream, UNAVAILABLE for one
-      # that refuses connections) does not fire here but shows in the 5xx ratio.
+      # A gRPC client circuit breaker has not been closed for 5 minutes while its upstream keeps
+      # refusing or failing calls: the upstream is down or too slow. Against a hung upstream the breaker
+      # cycles open (5 s) and half_open (the probe waits out GRPC_DEADLINE_MS), so the rule reads "not
+      # closed" rather than "open". An idle breaker stays half_open until its next call (opossum), so
+      # rejected or failed calls of that same (service, upstream) in the last 2 minutes are required
+      # too: an idle breaker next to a refusing one of the same service stays silent, and failed
+      # half-open probes of sparse traffic count. The 2 m window is shorter than the `for`, so one burst
+      # followed by silence never pages; it covers traffic of at least about one call a minute. Limit:
+      # a breaker is created by its first call, so `rate()` sees its first event only when a scrape saw
+      # the series at 0 first.
       - alert: GrpcCircuitBreakerOpen
         expr: >-
           max by (service, upstream)
           (grpc_client_circuit_breaker_state{state!="closed"}) == 1
-          and on (service)
-          sum by (service) (rate(grpc_client_handled_total{grpc_code="CIRCUIT_OPEN"}[2m])) > 0
+          and on (service, upstream)
+          sum by (service, upstream)
+          (rate(grpc_client_circuit_breaker_events_total{event=~"reject|failure"}[2m])) > 0
         for: 5m
         labels:
           severity: page
@@ -85,9 +88,36 @@ groups:
           summary: "{{ $labels.service }}: circuit breaker to {{ $labels.upstream }} refuses calls"
           description: >-
             The circuit breaker from {{ $labels.service }} to {{ $labels.upstream }} has not been closed
-            for 5 minutes and {{ $labels.service }} keeps refusing calls (CIRCUIT_OPEN). Check that
-            upstream's health, latency and logs, and grpc_client_handled_total{grpc_code="CIRCUIT_OPEN"}
-            by grpc_service.
+            for 5 minutes and keeps rejecting or failing calls to it. Check that upstream's health,
+            latency and logs, and
+            grpc_client_circuit_breaker_events_total{upstream="{{ $labels.upstream }}"} by event.
+
+      # Calls to an upstream fail on a path too quiet to open its breaker (it opens only once its 10 s
+      # window holds 10 calls): at least 3 failures in 15 minutes, and more failures than successes in
+      # the same window. Counts instead of a ratio, so one blip cannot fire it and nothing divides by
+      # zero. `failure` is an upstream failure (UNAVAILABLE, DEADLINE_EXCEEDED, INTERNAL, ...); a caller
+      # error the breaker's errorFilter lets through counts as `success`. Limits: fewer than 3 calls in
+      # 15 minutes raise nothing, and `reject` is left out (those calls never reached the upstream;
+      # GrpcCircuitBreakerOpen covers them).
+      - alert: GrpcUpstreamFailing
+        expr: >-
+          sum by (service, upstream)
+          (increase(grpc_client_circuit_breaker_events_total{event="failure"}[15m])) >= 3
+          and on (service, upstream)
+          sum by (service, upstream)
+          (increase(grpc_client_circuit_breaker_events_total{event="failure"}[15m]))
+          > sum by (service, upstream)
+          (increase(grpc_client_circuit_breaker_events_total{event="success"}[15m]))
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "{{ $labels.service }}: calls to {{ $labels.upstream }} keep failing"
+          description: >-
+            {{ $value | humanize }} call(s) from {{ $labels.service }} to {{ $labels.upstream }} failed
+            in the last 15 minutes, more than succeeded. Traffic this light may never open the circuit
+            breaker, so GrpcCircuitBreakerOpen can stay silent. Check that upstream's health and logs,
+            and grpc_client_handled_total by grpc_code for its grpc_service.
 
       # A rate-limit budget let requests through unmetered because Redis was down or slow
       # (THROTTLE_REDIS_TIMEOUT_MS). Abuse protection is off for that throttler until Redis recovers.
