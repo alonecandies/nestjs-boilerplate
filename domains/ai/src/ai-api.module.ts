@@ -1,4 +1,4 @@
-import { AI_GRPC_PACKAGE } from '@domain/ai-contracts';
+import { AI_GRPC_PACKAGE, AI_SERVICE_NAME } from '@domain/ai-contracts';
 import { type DynamicModule, Module, type Provider, type Type } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { RbacModule } from '@platform/auth';
@@ -14,6 +14,9 @@ import { AiLocalAdapter } from './infrastructure/adapters/local/ai-local.adapter
 import { AiResolver } from './presentation/graphql/ai.resolver.js';
 import { AiController } from './presentation/http/ai.controller.js';
 import { AiRateLimitModule } from './presentation/rate-limit/ai-rate-limit.js';
+
+/** The chat turns: the only rpcs with `AI_GRPC_CHAT_DEADLINE_MS`. */
+const CHAT_METHODS = ['SendMessage', 'StreamMessage'] as const;
 
 const presentation = (
   adapter: Type<AiPort>,
@@ -54,16 +57,25 @@ export class AiApiModule {
 
   /**
    * Gateway: the port → `ai.v1.AiService` over gRPC. The client URL (`AI_GRPC_URL`) and the chat
-   * deadline (`AI_GRPC_CHAT_DEADLINE_MS`, also the channel's service-config deadline, so a long
-   * streamed turn is not cut by `GRPC_DEADLINE_MS`) are read when `forRemote()` is called.
+   * deadline (`AI_GRPC_CHAT_DEADLINE_MS`) are read when `forRemote()` is called. That deadline is
+   * also the service-config deadline of `SendMessage` and `StreamMessage` only, so grpc-js does
+   * not cut a long streamed turn at `GRPC_DEADLINE_MS`; every other method keeps
+   * `GRPC_DEADLINE_MS` at both layers, and ai-service sees that deadline.
    */
   static forRemote(): DynamicModule {
     // Read when the module is defined: a client target cannot come from DI.
     const client = aiGrpcClientConfig.parse();
+    const service = `${AI_GRPC_PACKAGE.package}.${AI_SERVICE_NAME}`;
     const grpc = GrpcClientsModule.register(
       { spec: AI_GRPC_PACKAGE, url: client.url },
       {
-        client: { deadlineMs: client.chatDeadlineMs },
+        client: {
+          methodDeadlines: CHAT_METHODS.map((method) => ({
+            service,
+            method,
+            deadlineMs: client.chatDeadlineMs,
+          })),
+        },
         breaker: { errorFilter: isAiServiceAnswer },
       },
     );

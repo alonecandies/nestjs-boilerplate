@@ -137,8 +137,9 @@ send the same headers, so the edge also signs them:
 
 - **Format.** A compact ES256 JWS made with `node:crypto`: header `{ alg: "ES256", typ: "JWT", kid }`, claims `iss` (`edge`),
   `sub` (user), `tid` (tenant), `roles`, `staff`, `iat`, `exp`. `exp` is `iat` + `GRPC_PRINCIPAL_ASSERTION_TTL_SEC` (120 s);
-  keep that minus the 5 s reuse window (below) above the longest gRPC deadline (`AI_GRPC_CHAT_DEADLINE_MS`, 70 s), or a
-  tool call late in an AI turn carries an expired assertion. Verifiers allow 10 s of clock skew, and refuse as
+  that minus the 5 s reuse window (below) must cover the longest gRPC deadline (`AI_GRPC_CHAT_DEADLINE_MS`, 70 s), or a
+  tool call late in an AI turn carries an expired assertion: a gateway with a signing key refuses to boot otherwise
+  (`AiGrpcAdapter`, at module init). Verifiers allow 10 s of clock skew, and refuse as
   `invalid` an assertion whose `exp - iat` exceeds 3600 s (`GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC` from
   `@platform/config`, the TTL's maximum), however well signed: no gateway, old or new, signs one that long.
 - **Who is sent.** `callerContextFromCls` puts a user, tenant, roles and staff flag on an outgoing call only for a

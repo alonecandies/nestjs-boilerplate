@@ -43,7 +43,9 @@ that `@GrpcController()` adopted from the metadata (`TENANT_MISMATCH`, `PRINCIPA
 the repositories run under RLS as that caller. The chat codes travel as `x-error-code` trailers
 (`AI_DISABLED` 503, `AI_MODEL_NOT_ALLOWED` / `AI_INPUT_TOO_LARGE` 422, `AI_TIMEOUT` 504,
 `AI_UPSTREAM_ERROR` 502, `CONVERSATION_NOT_FOUND` 404, `IDEMPOTENCY_KEY_REUSED` 409), so the gateway
-answers exactly like the monolith.
+answers exactly like the monolith. The gateway sends `SendMessage` and `StreamMessage` with its
+`AI_GRPC_CHAT_DEADLINE_MS` (70 s) and every other call with `GRPC_DEADLINE_MS`, and each call's
+deadline is what a handler here sees.
 
 **Streaming and cancellation.** `StreamMessage` answers a refusal as the call's status, before any
 event, and otherwise sends `started`, the text deltas and one `done` (the stored reply and its
@@ -59,8 +61,9 @@ failed turn.
 
 **Signed principal.** ai-service holds no signing key. A tool call forwards the gateway's
 `x-principal-assertion` exactly as the turn received it, so an owner in
-`GRPC_PRINCIPAL_ASSERTION=enforce` accepts it while it is in date: keep
-`GRPC_PRINCIPAL_ASSERTION_TTL_SEC` (120 s) above the gateway's `AI_GRPC_CHAT_DEADLINE_MS` (70 s).
+`GRPC_PRINCIPAL_ASSERTION=enforce` accepts it while it is in date. A gateway with a signing key
+refuses to boot when its `GRPC_PRINCIPAL_ASSERTION_TTL_SEC` (120 s) minus the 5 s assertion reuse
+window is below its `AI_GRPC_CHAT_DEADLINE_MS` (70 s): such an assertion could expire during a turn.
 Under `enforce`, ai-service itself refuses a turn whose caller has no valid assertion
 (`UNAUTHENTICATED` `INVALID_PRINCIPAL`). An older ai-service drops the assertion on its tool calls,
 so identity-, notifications- and billing-service go to `enforce` only once every ai-service replica

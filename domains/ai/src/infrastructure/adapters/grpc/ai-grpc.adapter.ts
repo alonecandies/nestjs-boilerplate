@@ -19,6 +19,7 @@ import {
   grpcErrorToDomainException,
   isCallerError,
   isGrpcServiceError,
+  PRINCIPAL_ASSERTION_REUSE_WINDOW_MS,
   parseGrpcOperation,
   readErrorTrailers,
   recordGrpcCall,
@@ -73,6 +74,9 @@ export function isAiServiceAnswer(error: unknown): boolean {
  * `streamMessage` resolves on ai-service's `started` event (a refusal rejects it, before any event)
  * and then yields its events. Aborting the request's `signal`, or a consumer that stops reading,
  * cancels the call: ai-service aborts the model call and stores the reply so far as `incomplete`.
+ *
+ * At init, a gateway that signs principal assertions refuses to start when one would expire during
+ * a chat turn (`assertChatTurnCovered`).
  */
 @Injectable()
 export class AiGrpcAdapter implements AiPort, OnModuleInit {
@@ -87,7 +91,27 @@ export class AiGrpcAdapter implements AiPort, OnModuleInit {
   ) {}
 
   onModuleInit(): void {
+    this.assertChatTurnCovered();
     this.client = this.grpc.getService<AiServiceClient>(AI_SERVICE_NAME);
+  }
+
+  /**
+   * A chat turn's tool calls forward the turn's signed assertion (ai-service never signs), and the
+   * assertion may already be `PRINCIPAL_ASSERTION_REUSE_WINDOW_MS` old when the turn starts. So a
+   * signing gateway needs `GRPC_PRINCIPAL_ASSERTION_TTL_SEC` minus that window to cover
+   * `AI_GRPC_CHAT_DEADLINE_MS`, or a tool call late in a turn is refused `INVALID_PRINCIPAL` under
+   * `enforce`. The verifiers' 10 s clock skew is not counted. Without a signing key nothing is
+   * signed and nothing is checked.
+   */
+  private assertChatTurnCovered(): void {
+    const { signingKey, ttlSec } = this.config.principalAssertion;
+    if (signingKey === undefined) return;
+    const reuseWindowSec = PRINCIPAL_ASSERTION_REUSE_WINDOW_MS / 1000;
+    if ((ttlSec - reuseWindowSec) * 1000 >= this.ai.chatDeadlineMs) return;
+    const minimumSec = Math.ceil(this.ai.chatDeadlineMs / 1000) + reuseWindowSec;
+    throw new Error(
+      `GRPC_PRINCIPAL_ASSERTION_TTL_SEC (${ttlSec}) minus the ${reuseWindowSec} s assertion reuse window is below AI_GRPC_CHAT_DEADLINE_MS (${this.ai.chatDeadlineMs} ms): a signed assertion would expire during a chat turn. Set GRPC_PRINCIPAL_ASSERTION_TTL_SEC to at least ${minimumSec}, or lower AI_GRPC_CHAT_DEADLINE_MS.`,
+    );
   }
 
   async createConversation(input: CreateConversationRequest): Promise<Conversation> {
