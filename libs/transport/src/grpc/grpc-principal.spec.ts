@@ -1,6 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Metadata } from '@grpc/grpc-js';
-import type { CallHandler, ExecutionContext } from '@nestjs/common';
+import { type CallHandler, type ExecutionContext, Logger } from '@nestjs/common';
 import {
   CLS_PRINCIPAL,
   createPrincipal,
@@ -10,7 +10,7 @@ import {
 } from '@platform/common';
 import { CLS_REQ, ClsService } from 'nestjs-cls';
 import { defer, lastValueFrom, of } from 'rxjs';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 import { createTestPrincipalSigner } from '../testing/test-principal-signer.js';
 import { callerContextFromCls } from './grpc-caller-context.js';
 import { GrpcContextInterceptor } from './grpc-context.interceptor.js';
@@ -315,6 +315,70 @@ describe('GrpcContextInterceptor with GRPC_PRINCIPAL_ASSERTION=enforce', () => {
     configurePrincipalAssertions({ mode: 'warn', publicKeys: signer.publicKeys });
     await expect(seen(createOutgoingMetadata(caller))).resolves.toMatchObject({
       principal: { userId, tenantId, roles: ['owner'], staff: true },
+    });
+  });
+
+  describe('a principal createPrincipal rejects (the reason stays in the log)', () => {
+    let warn: MockInstance<Logger['warn']>;
+    beforeEach(() => {
+      warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    });
+    afterEach(() => vi.restoreAllMocks());
+
+    const refusal = async (metadata: Metadata): Promise<unknown> => {
+      // A fresh interceptor: no warning window carries over from another case.
+      const fresh = new GrpcContextInterceptor(cls);
+      const next: CallHandler = { handle: () => of(undefined) };
+      return lastValueFrom(fresh.intercept(rpcContext(metadata), next)).then(
+        () => {
+          throw new Error('expected the call to be refused');
+        },
+        (thrown: unknown) => thrown,
+      );
+    };
+    const platform = { userId, tenantId: PLATFORM_TENANT_ID };
+
+    it('enforce: a validly signed assertion whose claims are not a principal has no details', async () => {
+      enforce();
+      for (const claims of [platform, { userId: 'not-a-uuid', tenantId }]) {
+        const error = await refusal(signer.metadata(claims));
+        expect(error).toMatchObject(refused);
+        expect(error).not.toHaveProperty('details');
+      }
+    });
+
+    it.each(['off', 'warn'] as const)(
+      '%s: malformed plain headers are refused with no details',
+      async (mode) => {
+        configurePrincipalAssertions({ mode, publicKeys: signer.publicKeys });
+        for (const entries of [
+          { 'x-user-id': 'u-1', 'x-tenant-id': tenantId },
+          { 'x-user-id': userId, 'x-tenant-id': 'acme' },
+          { 'x-user-id': userId, 'x-tenant-id': PLATFORM_TENANT_ID },
+        ]) {
+          const error = await refusal(metadataOf(entries));
+          expect(error).toMatchObject(refused);
+          expect(error).not.toHaveProperty('details');
+        }
+      },
+    );
+
+    it('logs the reason once a minute per handler, without the caller ids', async () => {
+      configurePrincipalAssertions({ mode: 'off', publicKeys: signer.publicKeys });
+      const fresh = new GrpcContextInterceptor(cls);
+      const next: CallHandler = { handle: () => of(undefined) };
+      const metadata = metadataOf({ 'x-user-id': userId, 'x-tenant-id': PLATFORM_TENANT_ID });
+      for (let i = 0; i < 3; i += 1) {
+        await expect(
+          lastValueFrom(fresh.intercept(rpcContext(metadata), next)),
+        ).rejects.toMatchObject(refused);
+      }
+      expect(warn).toHaveBeenCalledTimes(1);
+      const line = String(warn.mock.calls[0]?.[0]);
+      expect(line).toMatch(/tenantId is the platform tenant/);
+      expect(line).toMatch(/UsersRpc\.getUser/);
+      expect(line).not.toContain(userId);
+      expect(line).not.toContain(PLATFORM_TENANT_ID);
     });
   });
 });

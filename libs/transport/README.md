@@ -174,8 +174,9 @@ send the same headers, so the edge also signs them:
   runs, with no `details`: the refusal can reach a public 401 through the gateway, so the outcome stays in the
   service's log and counter. A call without `x-user-id` and without an assertion stays anonymous (register, login, a
   signed webhook). A mesh peer without the edge's private key thus cannot assert a user, a tenant, roles or the staff
-  flag. The rollout (`off`, keys, `warn` until the counter shows only `valid`, then `enforce`) is in
-  `docs/SECURITY.md`.
+  flag. In every mode, a principal that `createPrincipal` rejects (malformed plain headers, or a valid assertion's
+  claims) fails `INVALID_PRINCIPAL` with no `details` either: its reason is logged, throttled per handler. The
+  rollout (`off`, keys, `warn` until the counter shows only `valid`, then `enforce`) is in `docs/SECURITY.md`.
 - **Kafka consumers.** None makes a gRPC call today. The envelope's actor (`actorId`, which anyone who can produce
   to the topic writes) is never sent, signed or plain, not even in a process that holds the key, so a consumer added
   later calls anonymously (a system method) in every mode.

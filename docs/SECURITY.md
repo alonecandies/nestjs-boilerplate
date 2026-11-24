@@ -450,6 +450,10 @@ bytes on their own calls (ai-service's chat tools), never signing. `GRPC_PRINCIP
   with neither `x-user-id` nor an assertion stays anonymous (register, login, the Stripe webhook). A mesh peer
   without the edge's private key cannot assert a user, a tenant, roles or the staff flag.
 
+In every mode, a principal that `createPrincipal` rejects (malformed plain headers, or the claims of a valid
+assertion, such as the platform tenant) also fails `INVALID_PRINCIPAL` with no reason; the reason goes to the
+service's log only, throttled like the outcome warnings.
+
 A process sends caller identity only for a principal it can vouch for: the one its own access-token verification
 wrote (`writePrincipal`), or, inside a gRPC call, the principal of that call. The edge signs exactly the claims it
 sends in plain headers, and a caller override can no longer change the tenant, roles or staff flag. The actor an event
