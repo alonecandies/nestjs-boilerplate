@@ -346,7 +346,9 @@ one-off job.
 default, no environment variable). While another run holds the lock, for example inside a long online step (a
 `CREATE INDEX CONCURRENTLY` on a big table), a booting replica gives up with `Timed out after 300000ms waiting for the
 migrations advisory lock` and fails its boot. Long online steps therefore belong in the release job, which runs before
-the rollout so that no replica waits for it.
+the rollout so that no replica waits for it. The release job waits on the same lock for the same 5 minutes, and every
+app's migrate job takes that one lock, so run the per-app migrate jobs one after another (the one with the long step
+alone).
 
 ## Environment (`database` namespace, plus `SERVICE_NAME` from `app`)
 
