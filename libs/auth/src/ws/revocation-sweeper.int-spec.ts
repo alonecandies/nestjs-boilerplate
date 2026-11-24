@@ -54,6 +54,25 @@ function session(jti: string): RevocableSession & { end: Mock<() => void> } {
   return { jti, end: vi.fn<() => void>() };
 }
 
+/**
+ * Tracks `sessions` on `replica` and waits for the denylist reads `track()` starts, so a write
+ * that follows cannot race them on another connection. Resolves the untrack functions.
+ */
+async function trackChecked(
+  replica: Replica,
+  ...sessions: RevocableSession[]
+): Promise<Array<() => void>> {
+  const isDenied = vi.spyOn(replica.denylist, 'isDenied');
+  try {
+    const untrackers = sessions.map((s) => replica.sweeper.track(s));
+    expect(isDenied).toHaveBeenCalledTimes(sessions.length);
+    await Promise.all(isDenied.mock.results.map(({ value }) => value as Promise<boolean>));
+    return untrackers;
+  } finally {
+    isDenied.mockRestore();
+  }
+}
+
 describe('RevocationSweeper on the revocation channel (real Redis, two replicas)', () => {
   let a: Replica;
   let b: Replica;
@@ -91,28 +110,43 @@ describe('RevocationSweeper on the revocation channel (real Redis, two replicas)
   });
 
   it('deny() on one replica closes the session on the other at once, not by a sweep', async () => {
-    const isDenied = vi.spyOn(b.denylist, 'isDenied');
     const revoked = session(generateId());
     const live = session(generateId());
-    b.sweeper.track(revoked);
-    const untrackLive = b.sweeper.track(live);
+    const [, untrackLive = (): void => undefined] = await trackChecked(b, revoked, live);
+    const isDenied = vi.spyOn(b.denylist, 'isDenied');
 
     await a.denylist.deny(revoked.jti, inAMinute());
 
     await vi.waitFor(() => expect(revoked.end).toHaveBeenCalledTimes(1), { timeout: 2_000 });
     expect(live.end).not.toHaveBeenCalled();
     expect(isDenied).not.toHaveBeenCalled();
+    isDenied.mockRestore();
     untrackLive();
+  });
+
+  it('a token revoked before track() (inside the handshake window) is closed without a sweep', async () => {
+    const sweep = vi.spyOn(b.sweeper, 'sweep');
+    const revoked = session(generateId());
+    // Denied with no announcement reaching b: the key alone, as after the handshake's own check.
+    await a.main.set(keys.key('auth', 'denylist', revoked.jti), '1', 'EX', 60);
+
+    const untrack = b.sweeper.track(revoked);
+
+    await vi.waitFor(() => expect(revoked.end).toHaveBeenCalledTimes(1), { timeout: 2_000 });
+    expect(sweep).not.toHaveBeenCalled();
+    expect(b.sweeper.size).toBe(0);
+    sweep.mockRestore();
+    untrack();
   });
 
   it('mixed versions: a key SET without a publish (an old replica) is closed by the next sweep', async () => {
     const revoked = session(generateId());
-    const untrack = b.sweeper.track(revoked);
+    const [untrack = (): void => undefined] = await trackChecked(b, revoked);
 
     await a.main.set(keys.key('auth', 'denylist', revoked.jti), '1', 'EX', 60);
     // A later publish on the same connection arrives after anything the SET could have caused.
     const marker = session(generateId());
-    b.sweeper.track(marker);
+    await trackChecked(b, marker); // closed by the announcement, not by its own check
     await a.denylist.deny(marker.jti, inAMinute());
     await vi.waitFor(() => expect(marker.end).toHaveBeenCalledTimes(1), { timeout: 2_000 });
     expect(revoked.end).not.toHaveBeenCalled();
@@ -124,14 +158,14 @@ describe('RevocationSweeper on the revocation channel (real Redis, two replicas)
 
   it('ignores a malformed message and keeps listening', async () => {
     const target = session(generateId());
-    const untrack = b.sweeper.track(target);
+    const [untrack = (): void => undefined] = await trackChecked(b, target);
 
     for (const garbage of [target.jti, `{"jti":["${target.jti}"]}`, '{"jti":', '']) {
       await a.main.publish(channel, garbage);
     }
     // Messages on one channel arrive in order: once this one is handled, the garbage was too.
     const marker = session(generateId());
-    b.sweeper.track(marker);
+    await trackChecked(b, marker); // closed by the announcement, not by its own check
     await a.denylist.deny(marker.jti, inAMinute());
     await vi.waitFor(() => expect(marker.end).toHaveBeenCalledTimes(1), { timeout: 2_000 });
     expect(target.end).not.toHaveBeenCalled();
