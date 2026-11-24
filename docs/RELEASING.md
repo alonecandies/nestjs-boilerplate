@@ -182,13 +182,13 @@ Moderate and low advisories are listed and do not fail. An ignore entry covers o
 
 ### Image gate
 
-The `image` job scans each built image with [`aquasecurity/trivy-action`](https://github.com/aquasecurity/trivy-action) v0.36.0, pinned to commit `ed142fd0673e97e23eac54620cfb913e5ce36c25`, with `scanners: vuln`, `vuln-type: os`, `severity: HIGH,CRITICAL`, `ignore-unfixed: true`, `exit-code: 1` and `version: v0.76.2` (the Trivy binary it installs; the action's own default is v0.70.0). A fixable high or critical vulnerability in the image's OS packages fails the job. `scanners: vuln` keeps Trivy's secret scanner out: it would flag the development Stripe key placeholder in the `billing-service` and `monolith` images. The npm packages belong to the advisory gate. The fix is usually a newer base image: bump the digest (below). To run the same scan locally on a built image, with the same Trivy (pinned by digest) reading a `docker save` tarball, so the Docker socket is not mounted:
+The `image` job scans each built image with [`aquasecurity/trivy-action`](https://github.com/aquasecurity/trivy-action) v0.36.0, pinned to commit `ed142fd0673e97e23eac54620cfb913e5ce36c25`, with `scanners: vuln,secret`, `vuln-type: os`, `severity: HIGH,CRITICAL`, `ignore-unfixed: true`, `exit-code: 1` and `version: v0.76.2` (the Trivy binary it installs; the action's own default is v0.70.0). A fixable high or critical vulnerability in the image's OS packages fails the job, and so does a high or critical secret anywhere in the image. The development Stripe placeholder (`sk_test_dev_placeholder`) is chosen so the secret scanner does not flag it: probe any new placeholder with `--scanners secret` before it ships. The npm packages belong to the advisory gate. The fix is usually a newer base image: bump the digest (below). To run the same scan locally on a built image, with the same Trivy (pinned by digest) reading a `docker save` tarball, so the Docker socket is not mounted:
 
 ```bash
 docker save boilerplate/gateway:local -o gateway.tar
 docker run --rm -v "$PWD/gateway.tar:/scan/image.tar:ro" \
   aquasec/trivy:0.76.2@sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb \
-  image --input /scan/image.tar --scanners vuln --pkg-types os --severity HIGH,CRITICAL \
+  image --input /scan/image.tar --scanners vuln,secret --pkg-types os --severity HIGH,CRITICAL \
   --ignore-unfixed --exit-code 1
 ```
 

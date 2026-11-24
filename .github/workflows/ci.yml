@@ -226,10 +226,10 @@ jobs:
       # Fixable HIGH and CRITICAL vulnerabilities in the image's OS packages fail the job (npm
       # dependencies are gated by scripts/check-audit.mjs in verify). An unfixed one cannot be acted
       # on and is skipped; a fixed one is resolved by bumping DISTROLESS_IMAGE (docs/RELEASING.md).
-      # The vulnerability scanner alone: Trivy's default adds the secret scanner, which flags the
-      # development Stripe key placeholder in the billing images. version pins the Trivy binary
-      # the action installs (its own default is v0.70.0).
-      - name: Scan ${{ matrix.app }} (OS packages, fixable HIGH and CRITICAL)
+      # The secret scanner runs too: a HIGH or CRITICAL secret anywhere in the image fails the job
+      # (the development Stripe placeholder is chosen so it is not flagged). version pins the Trivy
+      # binary the action installs (its own default is v0.70.0).
+      - name: Scan ${{ matrix.app }} (OS packages fixable HIGH and CRITICAL, secrets)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: boilerplate/${{ matrix.app }}:ci
@@ -237,7 +237,7 @@ jobs:
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"
-          scanners: vuln
+          scanners: vuln,secret
           version: v0.76.2
 
       # The runtime Node comes from the pinned distroless digest, not from NODE_VERSION.

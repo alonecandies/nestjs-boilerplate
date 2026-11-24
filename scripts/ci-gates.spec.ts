@@ -122,7 +122,7 @@ describe('.github/workflows/ci.yml and the Dockerfile (CI-1)', () => {
     expect(plain).toEqual([]);
   });
 
-  it('scans each built image for fixable high and critical OS vulnerabilities with Trivy', () => {
+  it('scans each built image for fixable high and critical OS vulnerabilities and for secrets with Trivy', () => {
     const steps = job('image').steps;
     const build = steps.findIndex((step) => step.uses?.startsWith('docker/build-push-action@'));
     const scan = steps.findIndex((step) => step.uses === TRIVY_V0_36_0);
@@ -141,9 +141,9 @@ describe('.github/workflows/ci.yml and the Dockerfile (CI-1)', () => {
       severity: 'HIGH,CRITICAL',
       'ignore-unfixed': 'true',
       'exit-code': '1',
-      // The OS-package vulnerability scanner alone: the default also runs the secret scanner,
-      // which flags the development Stripe key placeholder baked into the billing images.
-      scanners: 'vuln',
+      // OS-package vulnerabilities and secrets. The development Stripe placeholder was chosen so
+      // the secret scanner does not flag it (decision 1 of the audit follow-ups plan).
+      scanners: 'vuln,secret',
       // The Trivy binary the action installs, pinned (the action's own default moves with it).
       version: TRIVY_VERSION,
     });
@@ -214,7 +214,7 @@ describe('the docs describe the gates (CI-1)', () => {
   it('docs/RELEASING.md runs the image scan locally like CI: pinned Trivy, a tarball, no socket', () => {
     expect(releasing).toMatch(/aquasec\/trivy:0\.76\.2@sha256:[0-9a-f]{64}/);
     expect(releasing).toContain(`version: ${TRIVY_VERSION}`);
-    expect(releasing).toContain('--scanners vuln');
+    expect(releasing).toContain('--scanners vuln,secret');
     expect(releasing).toContain('--input');
     expect(releasing).not.toContain('/var/run/docker.sock');
   });
