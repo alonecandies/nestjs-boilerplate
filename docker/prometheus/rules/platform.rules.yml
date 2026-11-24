@@ -134,7 +134,9 @@ groups:
       # zero. `failure` is an upstream failure (UNAVAILABLE, DEADLINE_EXCEEDED, INTERNAL, ...); a caller
       # error the breaker's errorFilter lets through counts as `success`. Limits: fewer than 3 calls in
       # 15 minutes raise nothing, and `reject` is left out (those calls never reached the upstream;
-      # GrpcCircuitBreakerOpen covers them).
+      # GrpcCircuitBreakerOpen covers them). A call the bulkhead refused (`capacity` calls already
+      # running) never reached the upstream either but counts as `failure` (opossum), so a local
+      # concurrency spike can also fire this.
       - alert: GrpcUpstreamFailing
         expr: >-
           sum by (service, upstream)
