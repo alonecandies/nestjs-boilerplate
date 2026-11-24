@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { generateKeyPairSync, type KeyObject, sign } from 'node:crypto';
 import { Metadata } from '@grpc/grpc-js';
-import type { CallHandler, ExecutionContext } from '@nestjs/common';
+import { type CallHandler, type ExecutionContext, Logger } from '@nestjs/common';
 import {
   CLS_PRINCIPAL,
   createPrincipal,
@@ -12,7 +12,7 @@ import {
 import { ClsService, ClsServiceManager } from 'nestjs-cls';
 import { register } from 'prom-client';
 import { defer, lastValueFrom, of } from 'rxjs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 import { RPC_CLS_KEYS } from '../context/transport-context.js';
 import { GRPC_METADATA_KEYS } from './grpc.constants.js';
 import { callerContextFromCls } from './grpc-caller-context.js';
@@ -86,6 +86,21 @@ describe('signPrincipalAssertion / verifyPrincipalAssertion (compact ES256 JWS)'
       'expired',
     );
     expect(verifyPrincipalAssertion(token, publicKeys, NOW - 60_000).outcome).toBe('invalid');
+  });
+
+  it('refuses a correctly signed assertion that lives longer than 3600 s, the longest TTL', () => {
+    const twoHours = signPrincipalAssertion(caller, { ...signingKey, ttlSec: 7200 }, NOW);
+    expect(verifyPrincipalAssertion(twoHours, publicKeys, NOW).outcome).toBe('invalid');
+    const justOver = forge({ alg: 'ES256', kid: 'k1' }, claims({ exp: NOW / 1000 + 3601 }));
+    expect(verifyPrincipalAssertion(justOver, publicKeys, NOW).outcome).toBe('invalid');
+  });
+
+  // Mixed versions: whatever GRPC_PRINCIPAL_ASSERTION_TTL_SEC an old or a new gateway signs with.
+  it.each([10, 120, 3600])('verifies an assertion signed with a %i s TTL', (ttlSec) => {
+    const token = signPrincipalAssertion(caller, { ...signingKey, ttlSec }, NOW);
+    expect(verifyPrincipalAssertion(token, publicKeys, NOW + (ttlSec - 1) * 1000).outcome).toBe(
+      'valid',
+    );
   });
 
   it.each([
@@ -213,19 +228,21 @@ describe('callerContextFromCls: the edge signs, a service forwards', () => {
     });
   });
 
-  it('never signs a principal its own token verification did not write, even with a key', () => {
+  it('never signs or names a principal its own token verification did not write, even with a key', () => {
     configurePrincipalAssertions(signer);
     cls.run(() => {
-      // An event's actor (KafkaContextInterceptor) or a principal set by code: the plain headers
-      // still name the user, but nothing vouches for it.
+      // An event's actor (KafkaContextInterceptor) or a principal set by code: nothing vouches for
+      // it, so the call is anonymous, plain headers included.
       cls.set(CLS_PRINCIPAL, createPrincipal({ userId, tenantId, roles: ['admin'] }));
       const unsigned = callerContextFromCls(cls);
-      expect(unsigned).toMatchObject({ userId, tenantId, roles: ['admin'] });
+      expect(unsigned).not.toHaveProperty('userId');
+      expect(unsigned).not.toHaveProperty('tenantId');
+      expect(unsigned).not.toHaveProperty('roles');
       expect(unsigned).not.toHaveProperty('principalAssertion');
     });
   });
 
-  it('runWithPrincipal inside an edge request signs nothing for the principal it sets', () => {
+  it('runWithPrincipal inside an edge request signs and names nothing for the principal it sets', () => {
     configurePrincipalAssertions(signer);
     const store = ClsServiceManager.getClsService(); // the store runWithPrincipal uses
     store.run(() => {
@@ -234,7 +251,8 @@ describe('callerContextFromCls: the edge signs, a service forwards', () => {
       const inner = runWithPrincipal(createPrincipal({ userId, tenantId, roles: ['owner'] }), () =>
         callerContextFromCls(store),
       );
-      expect(inner).toMatchObject({ userId, roles: ['owner'] });
+      expect(inner).not.toHaveProperty('userId');
+      expect(inner).not.toHaveProperty('roles');
       expect(inner).not.toHaveProperty('principalAssertion');
     });
   });
@@ -243,13 +261,16 @@ describe('callerContextFromCls: the edge signs, a service forwards', () => {
     ['tenant', { tenantId: generateId() }],
     ['roles', { roles: ['owner'] }],
     ['staff flag', { staff: true }],
-  ])("signs the principal's own claims: an override of the %s is a mismatch", (_label, widened) => {
+  ])("signs the principal's own claims: an override of the %s is ignored", (_label, widened) => {
     configurePrincipalAssertions(signer);
     cls.run(() => {
       cls.set(CLS_PRINCIPAL, principal);
       const metadata = createOutgoingMetadata(callerContextFromCls(cls, { userId, ...widened }));
       expect(metadata.get(GRPC_METADATA_KEYS.PRINCIPAL_ASSERTION)).toHaveLength(1);
-      expect(checkPrincipalAssertion(readIncomingMetadata(metadata), publicKeys)).toBe('mismatch');
+      expect(metadata.get(GRPC_METADATA_KEYS.TENANT_ID)).toEqual([tenantId]);
+      expect(metadata.get(GRPC_METADATA_KEYS.USER_ROLES)).toEqual(['admin']);
+      expect(metadata.get(GRPC_METADATA_KEYS.STAFF)).toEqual([]);
+      expect(checkPrincipalAssertion(readIncomingMetadata(metadata), publicKeys)).toBe('valid');
     });
   });
 
@@ -319,6 +340,72 @@ describe('GrpcContextInterceptor in warn mode', () => {
     const before = await count('missing');
     await principalSeen(createOutgoingMetadata(caller));
     expect(await count('missing')).toBe(before);
+  });
+
+  describe('the warning for an outcome other than valid', () => {
+    let warn: MockInstance<Logger['warn']>;
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+      warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    /** A fresh interceptor per test, so no warning window carries over from another test. */
+    const callsOn = (handler: string) => {
+      const fresh = new GrpcContextInterceptor(cls);
+      return (metadata: Metadata) => {
+        const context = {
+          ...rpcContext(metadata),
+          getHandler: () => ({ name: handler }),
+        } as unknown as ExecutionContext;
+        const next: CallHandler = { handle: () => of(undefined) };
+        return lastValueFrom(fresh.intercept(context, next), { defaultValue: undefined });
+      };
+    };
+
+    it('100 missing calls to one handler log once and count 100', async () => {
+      configurePrincipalAssertions({ mode: 'warn', publicKeys });
+      const before = await count('missing');
+      const call = callsOn('getUser');
+      for (let i = 0; i < 100; i += 1) await call(createOutgoingMetadata(caller));
+      expect(await count('missing')).toBe(before + 100);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/missing on UsersController\.getUser/);
+
+      vi.setSystemTime(NOW + 61_000);
+      await call(createOutgoingMetadata(caller));
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(String(warn.mock.calls[1]?.[0])).toMatch(/99 more/);
+    });
+
+    it('is throttled per outcome and per handler', async () => {
+      configurePrincipalAssertions({ mode: 'warn', publicKeys });
+      const onGetUser = callsOn('getUser');
+      await onGetUser(createOutgoingMetadata(caller));
+      await onGetUser(createOutgoingMetadata(caller));
+      await onGetUser(createOutgoingMetadata({ ...caller, principalAssertion: 'x.y.z' }));
+      expect(warn).toHaveBeenCalledTimes(2);
+      const onListUsers = callsOn('listUsers');
+      await onListUsers(createOutgoingMetadata(caller));
+      expect(warn).toHaveBeenCalledTimes(3);
+    });
+
+    it('is throttled under enforce too, where every such call is refused', async () => {
+      configurePrincipalAssertions({ mode: 'enforce', publicKeys });
+      const before = await count('missing');
+      const call = callsOn('getUser');
+      for (let i = 0; i < 3; i += 1) {
+        await expect(call(createOutgoingMetadata(caller))).rejects.toMatchObject({
+          code: 'INVALID_PRINCIPAL',
+        });
+      }
+      expect(await count('missing')).toBe(before + 3);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/the call is refused/);
+    });
   });
 });
 

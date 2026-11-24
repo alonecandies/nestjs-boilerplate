@@ -1,7 +1,13 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { Metadata } from '@grpc/grpc-js';
 import type { CallHandler, ExecutionContext } from '@nestjs/common';
-import { CLS_PRINCIPAL, createPrincipal, generateId, PLATFORM_TENANT_ID } from '@platform/common';
+import {
+  CLS_PRINCIPAL,
+  createPrincipal,
+  generateId,
+  markTokenVerified,
+  PLATFORM_TENANT_ID,
+} from '@platform/common';
 import { CLS_REQ, ClsService } from 'nestjs-cls';
 import { defer, lastValueFrom, of } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -140,7 +146,11 @@ describe('GrpcContextInterceptor and callerContextFromCls', () => {
 
   it('forwards the CLS principal on outgoing calls; an override for the same user keeps it', () => {
     cls.run(() => {
-      cls.set(CLS_PRINCIPAL, createPrincipal({ userId, tenantId, roles: ['owner'], staff: false }));
+      // What the edge's own token verification writes (`writePrincipal` in @platform/auth).
+      cls.set(
+        CLS_PRINCIPAL,
+        markTokenVerified(createPrincipal({ userId, tenantId, roles: ['owner'], staff: false })),
+      );
       expect(callerContextFromCls(cls)).toMatchObject({ userId, tenantId, roles: ['owner'] });
       expect(callerContextFromCls(cls)).not.toHaveProperty('staff');
       expect(callerContextFromCls(cls, { userId })).toMatchObject({ userId, tenantId });
@@ -149,10 +159,14 @@ describe('GrpcContextInterceptor and callerContextFromCls', () => {
 
   it("never pairs another user's id with the principal's tenant, roles or staff flag", () => {
     cls.run(() => {
-      cls.set(CLS_PRINCIPAL, createPrincipal({ userId, tenantId, roles: ['owner'], staff: true }));
+      cls.set(
+        CLS_PRINCIPAL,
+        markTokenVerified(createPrincipal({ userId, tenantId, roles: ['owner'], staff: true })),
+      );
       const other = generateId();
       const caller = callerContextFromCls(cls, { userId: other });
-      expect(caller).toMatchObject({ userId: other });
+      // An override naming another user is vouched for by nobody: the call is anonymous.
+      expect(caller).not.toHaveProperty('userId');
       expect(caller).not.toHaveProperty('tenantId');
       expect(caller).not.toHaveProperty('roles');
       expect(caller).not.toHaveProperty('staff');
@@ -165,7 +179,10 @@ describe('GrpcContextInterceptor and callerContextFromCls', () => {
       cls.set(CLS_REQ, {
         headers: { 'x-user-id': generateId(), 'x-tenant-id': generateId(), 'x-staff': 'true' },
       });
-      cls.set(CLS_PRINCIPAL, createPrincipal({ userId, tenantId, roles: ['member'] }));
+      cls.set(
+        CLS_PRINCIPAL,
+        markTokenVerified(createPrincipal({ userId, tenantId, roles: ['member'] })),
+      );
       const metadata = createOutgoingMetadata(callerContextFromCls(cls));
       expect(metadata.get('x-user-id')).toEqual([userId]);
       expect(metadata.get('x-tenant-id')).toEqual([tenantId]);
@@ -213,6 +230,16 @@ describe('GrpcContextInterceptor with GRPC_PRINCIPAL_ASSERTION=enforce', () => {
   it('refuses plain headers without an assertion (UNAUTHENTICATED INVALID_PRINCIPAL)', async () => {
     enforce();
     await expect(seen(createOutgoingMetadata(caller))).rejects.toMatchObject(refused);
+  });
+
+  it('tells a refused caller nothing about why: the refusal carries no details', async () => {
+    enforce();
+    const expired = signer.metadata(caller, { nowMs: Date.now() - 600_000 });
+    for (const metadata of [createOutgoingMetadata(caller), expired]) {
+      const error: unknown = await seen(metadata).catch((thrown: unknown) => thrown);
+      expect(error).toMatchObject(refused);
+      expect(error).not.toHaveProperty('details');
+    }
   });
 
   it('lets an anonymous call through with no principal (register, login, a webhook)', async () => {

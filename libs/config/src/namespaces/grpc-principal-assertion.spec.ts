@@ -3,7 +3,7 @@ import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { errorOf } from '../../test/error-of.js';
-import { grpcConfig } from './grpc.config.js';
+import { GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC, grpcConfig } from './grpc.config.js';
 
 const b64 = (text: string): string => Buffer.from(text).toString('base64');
 
@@ -151,6 +151,19 @@ describe('grpc namespace: principal assertions', () => {
     ],
   ])('rejects %s', (_label, env, key) => {
     expect(issueKeys(env)).toContain(key);
+  });
+
+  it('accepts a TTL up to GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC (3600 s), the verifier cap', () => {
+    expect(GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC).toBe(3600);
+    const ttl = (value: number): Record<string, string> => ({
+      GRPC_PRINCIPAL_ASSERTION_TTL_SEC: String(value),
+    });
+    expect(
+      grpcConfig.parse(ttl(GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC)).principalAssertion.ttlSec,
+    ).toBe(3600);
+    expect(issueKeys(ttl(GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC + 1))).toContain(
+      'GRPC_PRINCIPAL_ASSERTION_TTL_SEC',
+    );
   });
 
   it('refuses a non-P-256 key (ES256 only)', () => {

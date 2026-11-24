@@ -1,7 +1,14 @@
 import { AI_GRPC_PACKAGE } from '@domain/ai-contracts';
-import { Metadata, status } from '@grpc/grpc-js';
-import { type INestMicroservice, Module } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
+import { Metadata, type ServerUnaryCall, status } from '@grpc/grpc-js';
+import {
+  type CallHandler,
+  type ExecutionContext,
+  type INestMicroservice,
+  Injectable,
+  Module,
+  type NestInterceptor,
+} from '@nestjs/common';
+import { APP_INTERCEPTOR, NestFactory } from '@nestjs/core';
 import { Test, type TestingModule } from '@nestjs/testing';
 import { AiDisabledError, AiUpstreamError } from '@platform/ai';
 import { RbacModule } from '@platform/auth';
@@ -12,6 +19,7 @@ import {
   EntityNotFoundException,
   generateId,
   getPrincipal,
+  markTokenVerified,
   type Principal,
   ServiceUnavailableException,
 } from '@platform/common';
@@ -19,6 +27,7 @@ import { AppConfigModule, grpcConfig } from '@platform/config';
 import { createGrpcServerStrategy, GRPC_METADATA_KEYS } from '@platform/transport';
 import { withBoundGrpcPort } from '@platform/transport/testing';
 import { ClsModule, ClsService } from 'nestjs-cls';
+import type { Observable } from 'rxjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AiApiModule } from '../../ai-api.module.js';
 import {
@@ -46,13 +55,35 @@ import { AiGrpcController } from './ai-grpc.controller.js';
  * Each test proves the remote port hands the presentation layer exactly what the local port
  * returns (Dates, nulls, JSON content), that the caller's principal travels in metadata, that
  * domain error codes survive the hop, and that the streamed turn keeps its order, its refusals
- * (before any event) and its cancellation (the client's abort reaches the service's signal).
+ * (before any event) and its cancellation (the client's abort reaches the service's signal), and
+ * that ai-service sees each call's own deadline: GRPC_DEADLINE_MS for the conversation calls,
+ * AI_GRPC_CHAT_DEADLINE_MS for a chat turn.
  */
 
 const TENANT_ID = '01920000-0000-7000-8000-0000000000a1';
 const USER_ID = '01920000-0000-7000-8000-0000000000b1';
 const CONVERSATION_ID = '01920000-0000-7000-8000-0000000000c1';
 const CALLER = { tenantId: TENANT_ID, userId: USER_ID };
+const GRPC_DEADLINE_MS = 3000;
+/** `AI_GRPC_CHAT_DEADLINE_MS`'s default: the spec leaves it unset. */
+const CHAT_DEADLINE_MS = 70_000;
+
+/** The time left until each call's deadline when ai-service's handler started (ms), by handler. */
+const deadlineLeftMs = new Map<string, number>();
+
+/** Records the deadline of every call ai-service serves, as its handlers would see it. */
+@Injectable()
+class DeadlineRecorder implements NestInterceptor {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
+    const call = context.getArgByIndex<ServerUnaryCall<unknown, unknown>>(2);
+    const deadline = call.getDeadline();
+    deadlineLeftMs.set(
+      context.getHandler().name,
+      (deadline instanceof Date ? deadline.getTime() : deadline) - Date.now(),
+    );
+    return next.handle();
+  }
+}
 
 const port = {
   createConversation: vi.fn(),
@@ -67,7 +98,10 @@ const port = {
 @Module({
   imports: [ClsModule.forRoot({ global: true })],
   controllers: [AiGrpcController],
-  providers: [{ provide: AiPort, useValue: port }],
+  providers: [
+    { provide: AiPort, useValue: port },
+    { provide: APP_INTERCEPTOR, useClass: DeadlineRecorder },
+  ],
 })
 class AiServiceTestModule {}
 
@@ -121,11 +155,15 @@ describe('ai over gRPC (forRemote adapter ↔ AiGrpcController)', () => {
   let gateway: TestingModule;
   let remote: AiPort;
   let cls: ClsService;
-  const principal: Principal = createPrincipal({
-    userId: USER_ID,
-    tenantId: TENANT_ID,
-    roles: ['member'],
-  });
+  // What the gateway's own token verification writes (`writePrincipal` in @platform/auth): only a
+  // principal marked token-verified leaves the process in caller metadata.
+  const principal: Principal = markTokenVerified(
+    createPrincipal({
+      userId: USER_ID,
+      tenantId: TENANT_ID,
+      roles: ['member'],
+    }),
+  );
   /** Runs `work` as the gateway does inside an authenticated request (the CLS principal). */
   const asCaller = <T>(work: () => Promise<T>): Promise<T> =>
     cls.run(() => {
@@ -144,7 +182,7 @@ describe('ai over gRPC (forRemote adapter ↔ AiGrpcController)', () => {
       await server.listen();
     });
     vi.stubEnv('AI_GRPC_URL', `127.0.0.1:${grpcPort}`);
-    vi.stubEnv('GRPC_DEADLINE_MS', '3000');
+    vi.stubEnv('GRPC_DEADLINE_MS', String(GRPC_DEADLINE_MS));
 
     gateway = await Test.createTestingModule({
       imports: [
@@ -172,10 +210,53 @@ describe('ai over gRPC (forRemote adapter ↔ AiGrpcController)', () => {
 
   beforeEach(() => {
     for (const fn of Object.values(port)) fn.mockReset();
+    deadlineLeftMs.clear();
   });
 
   it('forRemote() binds AiPort to the gRPC adapter', () => {
     expect(remote).toBeInstanceOf(AiGrpcAdapter);
+  });
+
+  describe('deadlines ai-service sees', () => {
+    const request = { ...CALLER, conversationId: CONVERSATION_ID, content: 'Hi' };
+
+    it('a conversation call carries GRPC_DEADLINE_MS, not the chat deadline', async () => {
+      port.listConversations.mockResolvedValue({ items: [], nextCursor: null });
+
+      await asCaller(() => remote.listConversations(CALLER));
+
+      const left = deadlineLeftMs.get('listConversations');
+      expect(left).toBeGreaterThan(0);
+      expect(left).toBeLessThanOrEqual(GRPC_DEADLINE_MS);
+    });
+
+    it('SendMessage carries AI_GRPC_CHAT_DEADLINE_MS', async () => {
+      port.sendMessage.mockResolvedValue({ message: message(), replayed: false });
+
+      await asCaller(() => remote.sendMessage(request));
+
+      const left = deadlineLeftMs.get('sendMessage');
+      expect(left).toBeGreaterThan(GRPC_DEADLINE_MS);
+      expect(left).toBeLessThanOrEqual(CHAT_DEADLINE_MS);
+    });
+
+    it('StreamMessage carries AI_GRPC_CHAT_DEADLINE_MS for the whole stream', async () => {
+      port.streamMessage.mockImplementation(async () =>
+        (async function* (): AsyncGenerator<ChatStreamEvent> {
+          yield { type: 'done', message: message(), replayed: false, usage: null };
+        })(),
+      );
+
+      await asCaller(async () => {
+        for await (const _event of await remote.streamMessage(request)) {
+          // drain
+        }
+      });
+
+      const left = deadlineLeftMs.get('streamMessage');
+      expect(left).toBeGreaterThan(GRPC_DEADLINE_MS);
+      expect(left).toBeLessThanOrEqual(CHAT_DEADLINE_MS);
+    });
   });
 
   describe('unary', () => {

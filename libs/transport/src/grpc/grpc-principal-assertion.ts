@@ -1,5 +1,10 @@
 import { createPrivateKey, createPublicKey, type KeyObject, sign, verify } from 'node:crypto';
-import { type GrpcConfig, type GrpcPrincipalAssertionMode, grpcConfig } from '@platform/config';
+import {
+  GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC,
+  type GrpcConfig,
+  type GrpcPrincipalAssertionMode,
+  grpcConfig,
+} from '@platform/config';
 import { getOrCreateCounter } from '@platform/observability';
 import { isEqual, sortBy } from 'lodash-es';
 import { z } from 'zod';
@@ -28,7 +33,8 @@ const COMPACT_JWS = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
  * - `valid`: signed by a known key, in date, and equal to the plain headers;
  * - `missing`: a user in plain headers and no assertion (an old gateway or ai-service);
  * - `expired`: a valid signature past `exp`;
- * - `invalid`: malformed, an unknown key id, a bad signature, another alg or issuer;
+ * - `invalid`: malformed, an unknown key id, a bad signature, another alg or issuer, or a lifetime
+ *   (`exp - iat`) above `GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC`;
  * - `mismatch`: valid, but the plain headers assert another user, tenant, roles or staff flag.
  */
 export type PrincipalAssertionOutcome = 'valid' | 'missing' | 'expired' | 'invalid' | 'mismatch';
@@ -106,7 +112,9 @@ export function signPrincipalAssertion(
 
 /**
  * Verifies a token: ES256 only, the key looked up by `kid` (never every key in turn), the signature
- * checked before any claim is read, then the issuer and the dates. Never throws.
+ * checked before any claim is read, then the issuer and the dates. A lifetime above
+ * `GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC` (3600 s, the longest TTL a gateway can be configured
+ * with) is `invalid`, however well signed. Never throws.
  */
 export function verifyPrincipalAssertion(
   token: string,
@@ -138,7 +146,8 @@ export function verifyPrincipalAssertion(
   if (!claims.success) return invalid;
   const { sub, tid, roles, staff, iat, exp } = claims.data;
   const now = nowMs / 1000;
-  if (exp <= iat || iat > now + CLOCK_SKEW_SEC) return invalid;
+  if (exp <= iat || exp - iat > GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC) return invalid;
+  if (iat > now + CLOCK_SKEW_SEC) return invalid;
   if (now > exp + CLOCK_SKEW_SEC) return { outcome: 'expired' };
   return {
     outcome: 'valid',
@@ -198,7 +207,31 @@ export function recordPrincipalAssertion(outcome: PrincipalAssertionOutcome): vo
   }).inc({ outcome });
 }
 
-/** Key objects for the `grpc` namespace's `principalAssertion` (PEMs validated at boot). */
+/** ES256 needs a P-256 (prime256v1) EC key: exactly the `grpc` schema's check. */
+const isP256 = (key: KeyObject): boolean =>
+  key.asymmetricKeyType === 'ec' && key.asymmetricKeyDetails?.namedCurve === 'prime256v1';
+
+/** `create(pem)` when it yields a P-256 key; otherwise throws naming `what`, never the PEM. */
+function p256KeyOf(create: (pem: string) => KeyObject, pem: string, what: string): KeyObject {
+  let key: KeyObject | undefined;
+  try {
+    key = create(pem);
+  } catch {
+    key = undefined;
+  }
+  if (key === undefined || !isP256(key)) {
+    throw new Error(
+      `${what} is not a P-256 (ES256) key: the gRPC principal assertion cannot start`,
+    );
+  }
+  return key;
+}
+
+/**
+ * Key objects for the `grpc` namespace's `principalAssertion`. Throws, naming the variable and the
+ * key id but never the key, when a PEM is not a P-256 key (the schema refuses those, so only a
+ * configuration built outside it gets here).
+ */
 export function principalAssertionSettingsFrom(
   config: GrpcConfig['principalAssertion'],
 ): PrincipalAssertionSettings {
@@ -210,30 +243,57 @@ export function principalAssertionSettingsFrom(
         ? undefined
         : {
             keyId: signingKey.keyId,
-            privateKey: createPrivateKey(signingKey.pem),
+            privateKey: p256KeyOf(
+              createPrivateKey,
+              signingKey.pem,
+              `GRPC_PRINCIPAL_SIGNING_KEY (key id "${signingKey.keyId}")`,
+            ),
             ttlSec: config.ttlSec,
           },
-    publicKeys: new Map(config.publicKeys.map((key) => [key.keyId, createPublicKey(key.pem)])),
+    publicKeys: new Map(
+      config.publicKeys.map((key) => [
+        key.keyId,
+        p256KeyOf(createPublicKey, key.pem, `GRPC_PRINCIPAL_PUBLIC_KEYS key "${key.keyId}"`),
+      ]),
+    ),
   };
 }
 
+/** Built at boot from the configuration the app validated (`applyPrincipalAssertionConfig`). */
+let fromConfiguration: PrincipalAssertionSettings | undefined;
+/** Parsed lazily from the environment, only for code that runs without either boot path. */
 let fromEnvironment: PrincipalAssertionSettings | undefined;
 let override: PrincipalAssertionSettings | undefined;
 
 /**
- * This process's settings: parsed once from the environment with the `grpc` namespace's schema
- * (every app validated it at boot), unless `configurePrincipalAssertions` replaced them. Read on
- * every call by `callerContextFromCls` (signing, edge) and `GrpcContextInterceptor` (verifying).
+ * Builds this process's settings from the `grpc` namespace the app validated and injected. Called
+ * at boot by `GrpcClientsModule` (module init) and `connectGrpcServer`, so a key that
+ * `createPrivateKey` or `createPublicKey` refuses stops the boot instead of failing the first call.
+ * The last call wins (every module of one process holds the same namespace); `undefined` forgets
+ * the settings, so the lazy parse from the environment applies again.
+ */
+export function applyPrincipalAssertionConfig(
+  config: GrpcConfig['principalAssertion'] | undefined,
+): void {
+  fromConfiguration = config === undefined ? undefined : principalAssertionSettingsFrom(config);
+}
+
+/**
+ * This process's settings, read on every call by `callerContextFromCls` (signing, edge) and
+ * `GrpcContextInterceptor` (verifying): `configurePrincipalAssertions`' while it is set, else the
+ * ones built at boot (`applyPrincipalAssertionConfig`), else parsed once from the environment with
+ * the `grpc` namespace's schema (unit specs that boot neither a client module nor a server).
  */
 export function principalAssertionSettings(): PrincipalAssertionSettings {
   if (override !== undefined) return override;
+  if (fromConfiguration !== undefined) return fromConfiguration;
   fromEnvironment ??= principalAssertionSettingsFrom(grpcConfig.parse().principalAssertion);
   return fromEnvironment;
 }
 
 /**
- * Replaces the settings for this process (tests, or one process playing several roles);
- * `undefined` returns to the environment's.
+ * Replaces the settings for this process (tests, or one process playing several roles), ahead of
+ * the ones built at boot; `undefined` returns to those.
  */
 export function configurePrincipalAssertions(
   settings: PrincipalAssertionSettings | undefined,

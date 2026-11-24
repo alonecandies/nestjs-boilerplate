@@ -13,6 +13,13 @@ import { addKnownLocalSecretIssue, isKnownLocalSecret } from '../env/production-
 export const GRPC_PRINCIPAL_ASSERTION_MODES = ['off', 'warn', 'enforce'] as const;
 export type GrpcPrincipalAssertionMode = (typeof GRPC_PRINCIPAL_ASSERTION_MODES)[number];
 
+/**
+ * The longest lifetime of a signed principal assertion (`GRPC_PRINCIPAL_ASSERTION_TTL_SEC`'s
+ * maximum). A verifier refuses a token whose `exp - iat` exceeds it, so no gateway, old or new, ever
+ * signs one that is refused, and a leaked assertion cannot have been minted for longer.
+ */
+export const GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC = 3600;
+
 /** One key of the principal assertion: its id (the JWS `kid`) and its PEM. */
 export interface GrpcPrincipalKey {
   readonly keyId: string;
@@ -175,12 +182,18 @@ export const grpcEnvSchema = z
     GRPC_PRINCIPAL_PUBLIC_KEYS: zStr(),
     GRPC_PRINCIPAL_PUBLIC_KEYS_FILE: zStr(),
     // Lifetime of a signed assertion; keep it above the longest gRPC deadline (AI_GRPC_CHAT_DEADLINE_MS).
-    GRPC_PRINCIPAL_ASSERTION_TTL_SEC: zInt(120, { min: 10, max: 3600 }),
+    GRPC_PRINCIPAL_ASSERTION_TTL_SEC: zInt(120, {
+      min: 10,
+      max: GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC,
+    }),
     ALLOW_KNOWN_LOCAL_SECRETS: zBool(false),
   })
-  .superRefine((env, ctx) => {
+  // One transform, not a refinement plus a transform: the key files are read and parsed once per
+  // parse, and that one result feeds both the checks and the value.
+  .transform((env, ctx) => {
     const signing = resolveSigningKey(env);
     const verifying = resolvePublicKeys(env);
+    const issuesBefore = ctx.issues.length;
     for (const resolved of [signing, verifying]) {
       if (resolved.kind === 'invalid') {
         ctx.addIssue({ code: 'custom', path: [resolved.key], message: resolved.message });
@@ -247,36 +260,37 @@ export const grpcEnvSchema = z
           'gRPC is plaintext and unauthenticated without TLS: set GRPC_TLS_CERT_PATH/GRPC_TLS_KEY_PATH/GRPC_TLS_CA_PATH in production, or GRPC_ALLOW_INSECURE=true when the network layer (mesh, NetworkPolicy) secures it',
       });
     }
-  })
-  .transform((env) => ({
-    /** Server bind address of THIS service. */
-    url: env.GRPC_URL,
-    /** Default per-call deadline; every client call MUST have one or a hung upstream pins resources. */
-    deadlineMs: env.GRPC_DEADLINE_MS,
-    maxMessageBytes: env.GRPC_MAX_MESSAGE_BYTES,
-    /**
-     * PEM file paths, or `undefined` for plaintext. Servers require a client certificate signed by
-     * `caPath` when `requireClientCert`; clients verify servers against `caPath` (system roots when
-     * unset) and present `certPath`/`keyPath`.
-     */
-    tls:
-      env.GRPC_TLS_CERT_PATH !== undefined && env.GRPC_TLS_KEY_PATH !== undefined
-        ? {
-            caPath: env.GRPC_TLS_CA_PATH,
-            certPath: env.GRPC_TLS_CERT_PATH,
-            keyPath: env.GRPC_TLS_KEY_PATH,
-            requireClientCert: env.GRPC_TLS_REQUIRE_CLIENT_CERT,
-          }
-        : undefined,
-    /** Attach gRPC server reflection. */
-    reflection: env.GRPC_REFLECTION ?? env.NODE_ENV !== 'production',
-    /**
-     * The signed principal assertion: `mode` (verifier side), `signingKey` (the edge only: the
-     * gateway signs for its authenticated principal), `publicKeys` (every key a verifier accepts,
-     * by key id) and `ttlSec`.
-     */
-    principalAssertion: principalAssertionOf(env),
-  }));
+    if (ctx.issues.length > issuesBefore) return z.NEVER;
+    return {
+      /** Server bind address of THIS service. */
+      url: env.GRPC_URL,
+      /** Default per-call deadline; every client call MUST have one or a hung upstream pins resources. */
+      deadlineMs: env.GRPC_DEADLINE_MS,
+      maxMessageBytes: env.GRPC_MAX_MESSAGE_BYTES,
+      /**
+       * PEM file paths, or `undefined` for plaintext. Servers require a client certificate signed by
+       * `caPath` when `requireClientCert`; clients verify servers against `caPath` (system roots when
+       * unset) and present `certPath`/`keyPath`.
+       */
+      tls:
+        env.GRPC_TLS_CERT_PATH !== undefined && env.GRPC_TLS_KEY_PATH !== undefined
+          ? {
+              caPath: env.GRPC_TLS_CA_PATH,
+              certPath: env.GRPC_TLS_CERT_PATH,
+              keyPath: env.GRPC_TLS_KEY_PATH,
+              requireClientCert: env.GRPC_TLS_REQUIRE_CLIENT_CERT,
+            }
+          : undefined,
+      /** Attach gRPC server reflection. */
+      reflection: env.GRPC_REFLECTION ?? env.NODE_ENV !== 'production',
+      /**
+       * The signed principal assertion: `mode` (verifier side), `signingKey` (the edge only: the
+       * gateway signs for its authenticated principal), `publicKeys` (every key a verifier accepts,
+       * by key id) and `ttlSec`.
+       */
+      principalAssertion: principalAssertionOf(env, signing, verifying),
+    };
+  });
 
 function principalAssertionOf(
   env: PrincipalEnv & {
@@ -284,14 +298,14 @@ function principalAssertionOf(
     readonly GRPC_PRINCIPAL_SIGNING_KEY_ID?: string | undefined;
     readonly GRPC_PRINCIPAL_ASSERTION_TTL_SEC: number;
   },
+  signing: Resolved<string>,
+  verifying: Resolved<GrpcPrincipalKey[]>,
 ): {
   mode: GrpcPrincipalAssertionMode;
   ttlSec: number;
   signingKey: GrpcPrincipalKey | undefined;
   publicKeys: GrpcPrincipalKey[];
 } {
-  const signing = resolveSigningKey(env);
-  const verifying = resolvePublicKeys(env);
   return {
     mode: env.GRPC_PRINCIPAL_ASSERTION,
     ttlSec: env.GRPC_PRINCIPAL_ASSERTION_TTL_SEC,

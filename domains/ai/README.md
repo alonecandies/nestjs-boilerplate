@@ -38,7 +38,7 @@ without it no tools are offered.
   messages (`application/mappers/ai-contract.mapper.ts`: content as JSON, Dates, absent optionals).
 - **The gateway** imports `AiApiModule.forRemote()`: the same controller and resolver, `AiPort` bound
   to `AiGrpcAdapter` (`AI_GRPC_URL`, deadline `GRPC_DEADLINE_MS`, or `AI_GRPC_CHAT_DEADLINE_MS` for
-  `SendMessage` / `StreamMessage`, also the channel's service-config deadline; the `ai` circuit
+  `SendMessage` / `StreamMessage`, at both layers: also those methods' service-config deadline; the `ai` circuit
   breaker, which does not count ai-service's own answers such as `AI_DISABLED` or `AI_TIMEOUT`).
   RBAC (`ai:chat`) and the `ai.chat` charge stay at the edge.
 - **Streaming.** `StreamMessage` is server-streaming: `started` once the turn began (a refusal is the

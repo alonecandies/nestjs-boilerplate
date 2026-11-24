@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import type { CustomStrategy } from '@nestjs/microservices';
 import { type GrpcConfig, grpcConfig, type KafkaConfig, kafkaConfig } from '@platform/config';
 import type { GrpcPackageSpec } from '@platform/contracts';
+import { applyPrincipalAssertionConfig } from '../grpc/grpc-principal-assertion.js';
 import {
   createGrpcServerStrategy,
   type GrpcServerOptionsExtras,
@@ -45,7 +46,9 @@ function resolveConfig<T extends object>(
 /**
  * Attaches the gRPC server for `packages` to a hybrid (HTTP + gRPC) app, configured from
  * `grpcConfig`, with `grpc.health.v1` (SERVING once listening, NOT_SERVING on close) and server
- * reflection.
+ * reflection. It first builds the principal assertion settings the server verifies with from that
+ * same namespace (`applyPrincipalAssertionConfig`), so a bad key stops the boot here, before
+ * anything listens, instead of failing the first call.
  *
  * `inheritAppConfig: true` makes global enhancers (`APP_*`, nestjs-cls, metrics) reach gRPC
  * handlers too, which is why every global enhancer must branch on `context.getType()`. Call it
@@ -57,6 +60,7 @@ export function connectGrpcServer(
   extras: GrpcServerOptionsExtras = {},
 ): INestMicroservice {
   const cfg = resolveConfig<GrpcConfig>(app, grpcConfig);
+  applyPrincipalAssertionConfig(cfg.principalAssertion);
   return app.connectMicroservice<CustomStrategy>(createGrpcServerStrategy(cfg, packages, extras), {
     inheritAppConfig: true,
   });

@@ -1,7 +1,7 @@
 import { ClsServiceManager } from 'nestjs-cls';
 import { describe, expect, it } from 'vitest';
 import { UnauthenticatedException } from '../errors/domain.exception.js';
-import { createPrincipal } from './principal.js';
+import { createPrincipal, type Principal } from './principal.js';
 import {
   CLS_PRINCIPAL,
   getPrincipal,
@@ -93,6 +93,19 @@ describe('token-verified principals (the only ones a gRPC principal assertion si
     // A frozen object whose roles array is not.
     const unfrozenRoles = Object.freeze({ ...principal, roles: [...principal.roles] });
     expect(() => markTokenVerified(unfrozenRoles)).toThrow(/frozen principal/);
+  });
+
+  it('refuses to mark a frozen object that is not a principal', () => {
+    const notAPrincipal = Object.freeze({
+      userId: 'u-1',
+      tenantId: null,
+      roles: Object.freeze([]),
+      staff: false,
+    });
+    expect(() => markTokenVerified(notAPrincipal as unknown as Principal)).toThrow(
+      /frozen principal/,
+    );
+    expect(isTokenVerified(notAPrincipal)).toBe(false);
   });
 
   it('the principal runWithPrincipal sets is unmarked, and the outer one keeps its mark', () => {
