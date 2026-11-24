@@ -394,6 +394,80 @@ describe('R5VerificationCheck (reconciliation R5: the trusted state and verified
     expect(verified).not.toContain(a.entryId);
   });
 
+  it('after a second re-anchor, a ref lost in the first and still unhealed is verified and reported, whatever its tx id', async () => {
+    const a = await post(1);
+    const lostFrom1 = new Date(NOW.getTime() - 30 * 60_000);
+    const b = await post(2, { postedAt: new Date(NOW.getTime() - 20 * 60_000) });
+    const c = await post(3, { postedAt: new Date(NOW.getTime() - 10 * 60_000) });
+    await reconcile();
+    const before = trusted() ?? expect.fail('no state');
+    expect(before.txId).toBe(3n);
+
+    /** Re-anchors to `restored` (its current state) and swaps R5 onto it, recording what it verifies. */
+    const reanchorOnto = async (restored: InMemoryLedger, id: string, lostFrom: Date) => {
+      const from = trusted() ?? expect.fail('no state');
+      const to = await restored.currentState();
+      await expect(
+        asSystem(() =>
+          store.system.reanchorTrustedState({
+            id,
+            database: DB,
+            from,
+            to,
+            lostFrom,
+            operator: 'ops',
+            reason: 'immudb restored from a backup',
+          }),
+        ),
+      ).resolves.toBe(true);
+      check = new R5VerificationCheck(restored, store.system, LedgerMetrics);
+      const verifyEntry = restored.verifyEntry.bind(restored);
+      vi.spyOn(restored, 'verifyEntry').mockImplementation(async (entryId, hash, state) => {
+        verified.push(entryId);
+        return verifyEntry(entryId, hash, state);
+      });
+    };
+
+    // First restore: A only, then one entry that takes tx 2 (B's old tx id). B and C are lost.
+    const first = new InMemoryLedger();
+    await first.post(draft(1));
+    await first.post(draft(9));
+    vi.setSystemTime(new Date(NOW.getTime() + HOUR));
+    await reanchorOnto(first, '0192f0c1-0000-7000-8000-00000000ae01', lostFrom1);
+    verified = [];
+    vi.setSystemTime(new Date(NOW.getTime() + 2 * HOUR));
+    await expect(reconcile()).resolves.toMatchObject({ found: { verification_failed: 2 } });
+    expect(verified.toSorted()).toEqual([b.entryId, c.entryId].toSorted());
+
+    // Second restore, B and C still not posted again: its state (tx 4) is above both their tx ids
+    // and its lost-from is after both were posted, so only the first re-anchor names them.
+    const second = new InMemoryLedger();
+    for (const n of [1, 9, 10, 11]) await second.post(draft(n));
+    expect((await second.currentState()).txId).toBe(4n);
+    vi.setSystemTime(new Date(NOW.getTime() + 3 * HOUR));
+    await reanchorOnto(
+      second,
+      '0192f0c1-0000-7000-8000-00000000ae02',
+      new Date(NOW.getTime() + 150 * 60_000),
+    );
+    verified = [];
+    vi.setSystemTime(new Date(NOW.getTime() + 4 * HOUR));
+    await expect(reconcile()).resolves.toMatchObject({ found: { verification_failed: 2 } });
+    expect(verified.toSorted()).toEqual([b.entryId, c.entryId].toSorted());
+    expect(lastRun()?.status).toBe('succeeded');
+
+    // Healed: the posting path posts both again; every later run still verifies them, and they hold.
+    await second.post(draft(2));
+    await second.post(draft(3));
+    for (const hours of [5, 6]) {
+      verified = [];
+      vi.setSystemTime(new Date(NOW.getTime() + hours * HOUR));
+      await expect(reconcile()).resolves.toEqual({ found: {}, appended: {} });
+      expect(verified.toSorted()).toEqual([b.entryId, c.entryId].toSorted());
+    }
+    expect(verified).not.toContain(a.entryId);
+  });
+
   it('a trusted state ahead of the store fails the same way', async () => {
     await post(1);
     const ahead = {

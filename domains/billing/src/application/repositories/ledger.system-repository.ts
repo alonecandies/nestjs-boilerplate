@@ -45,9 +45,9 @@ export type StoredTrustedState = LedgerTrustedState & {
 };
 
 /**
- * The latest re-anchor of a database (`billing.ledger_reanchors`, audit fixes OPS-1): R5 treats a
- * ref posted before `at` as possibly lost with the old history when its tx id is above `txId` or
- * it was posted since `lostFrom`.
+ * One re-anchor of a database (`billing.ledger_reanchors`, audit fixes OPS-1): R5 treats a ref
+ * posted before `at` as possibly lost with the old history when its tx id is above `txId` or it
+ * was posted since `lostFrom`.
  */
 export interface LedgerReanchorMark {
   /** The tx id of the state the re-anchor stored (the restored server's). */
@@ -58,10 +58,13 @@ export interface LedgerReanchorMark {
   readonly at: Date;
 }
 
-/** What `readTrustedState` returns: the stored state and its database's latest re-anchor. */
+/** What `readTrustedState` returns: the stored state and every re-anchor of its database. */
 export type TrustedStateRead = StoredTrustedState & {
-  /** The latest re-anchor of the database; null when it was never re-anchored. */
-  readonly reanchor: LedgerReanchorMark | null;
+  /**
+   * Every re-anchor of the database (one per restore), oldest first; empty when it was never
+   * re-anchored.
+   */
+  readonly reanchors: readonly LedgerReanchorMark[];
 };
 
 /** One re-anchor (`reanchorTrustedState`): the audit row's content. */
@@ -160,8 +163,8 @@ export abstract class LedgerSystemRepository {
 
   /**
    * `ledgerTrustedState.read`: the stored state of `database`, when it was verified and when R5
-   * read it (`null` for a state stored before migration 0008), with the database's latest
-   * re-anchor (`null` when none), or null.
+   * read it (`null` for a state stored before migration 0008), with every re-anchor of the
+   * database, oldest first (empty when none), or null.
    */
   abstract readTrustedState(database: string): Promise<TrustedStateRead | null>;
 

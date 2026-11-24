@@ -634,7 +634,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           txHash: new Uint8Array([0x03, 0x04]),
           verifiedAt: expect.any(Date),
           readAt: READ,
-          reanchor: null,
+          reanchors: [],
         });
         expect(Object.getPrototypeOf(read?.txHash)).toBe(Uint8Array.prototype);
         // An equal state re-verified: allowed (no new transaction since).
@@ -696,7 +696,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         await inSystem(() => system.advanceTrustedState('ledger', null, original, READ));
         await expect(inSystem(() => system.readTrustedState('ledger'))).resolves.toMatchObject({
           txId: 12n,
-          reanchor: null,
+          reanchors: [],
         });
 
         // A stale `from` (another hash at the same tx id): no state change and no audit row.
@@ -728,7 +728,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
           txHash: new Uint8Array([0x0a]),
           verifiedAt: expect.any(Date),
           readAt: lostFrom,
-          reanchor: { txId: 9n, lostFrom, at: expect.any(Date) },
+          reanchors: [{ txId: 9n, lostFrom, at: expect.any(Date) }],
         });
         // The same re-anchor again: its `from` is stale now, so the UPDATE matches nothing.
         await expect(inSystem(() => system.reanchorTrustedState(reanchor))).resolves.toBe(false);
@@ -745,12 +745,42 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
         expect(await trustedRows()).toEqual([{ database: 'ledger', tx_id: '9', hash: '0a' }]);
         expect(await reanchorRows()).toHaveLength(1);
         // R5 advances from the re-anchored state as from any other.
+        const advanced = state(10n, [0x0b]);
         await expect(
-          inSystem(() => system.advanceTrustedState('ledger', restored, state(10n, [0x0b]), READ)),
+          inSystem(() => system.advanceTrustedState('ledger', restored, advanced, READ)),
         ).resolves.toBe(true);
         await expect(inSystem(() => system.readTrustedState('ledger'))).resolves.toMatchObject({
           txId: 10n,
-          reanchor: { txId: 9n, lostFrom },
+          reanchors: [{ txId: 9n, lostFrom }],
+        });
+
+        // A second restore: both re-anchors are returned, oldest first (R5 checks each of them).
+        const lostFrom2 = new Date('2026-11-10T09:00:00.789Z');
+        await expect(
+          inSystem(() =>
+            system.reanchorTrustedState({
+              ...reanchor,
+              id: id('ae3'),
+              from: advanced,
+              to: state(7n, [0x0c]),
+              lostFrom: lostFrom2,
+            }),
+          ),
+        ).resolves.toBe(true);
+        expect(await reanchorRows()).toHaveLength(2);
+        await expect(inSystem(() => system.readTrustedState('ledger'))).resolves.toMatchObject({
+          txId: 7n,
+          readAt: lostFrom2,
+          reanchors: [
+            { txId: 9n, lostFrom, at: expect.any(Date) },
+            { txId: 7n, lostFrom: lostFrom2, at: expect.any(Date) },
+          ],
+        });
+        // Another database's re-anchors are not this one's.
+        const other = { ...state(3n, [0x01]), database: 'other' };
+        await inSystem(() => system.advanceTrustedState('other', null, other, READ));
+        await expect(inSystem(() => system.readTrustedState('other'))).resolves.toMatchObject({
+          reanchors: [],
         });
       });
 

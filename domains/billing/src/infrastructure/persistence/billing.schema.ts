@@ -266,7 +266,7 @@ export const ledgerReanchors = billingPgSchema.table(
   },
   (t) => [
     primaryKey({ name: 'ledger_reanchors_id_pk', columns: [t.id] }),
-    // R5 reads the latest re-anchor of its database.
+    // R5 reads every re-anchor of its database, oldest first.
     index('ledger_reanchors_database_created_at_idx').on(t.database, t.createdAt),
   ],
 );

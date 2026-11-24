@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectSystemDatabase, SystemDatabase } from '@platform/database';
 import type { OutboxRecord } from '@platform/outbox';
-import { and, asc, desc, eq, gt, gte, inArray, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray, isNull, lt, or, type SQL, sql } from 'drizzle-orm';
 import type { PgColumn } from 'drizzle-orm/pg-core';
 import { chunk } from 'lodash-es';
 import {
@@ -268,7 +268,8 @@ export class DrizzleLedgerSystemRepository implements LedgerSystemRepository {
         .from(ledgerTrustedState)
         .where(eq(ledgerTrustedState.database, database));
       if (row === undefined) return null;
-      const [latest] = await db
+      // Every re-anchor (one row per restore): R5 checks a ref against each of them.
+      const reanchors = await db
         .select({
           txId: ledgerReanchors.newTxId,
           lostFrom: ledgerReanchors.lostFrom,
@@ -276,10 +277,9 @@ export class DrizzleLedgerSystemRepository implements LedgerSystemRepository {
         })
         .from(ledgerReanchors)
         .where(eq(ledgerReanchors.database, database))
-        .orderBy(desc(ledgerReanchors.createdAt), desc(ledgerReanchors.id))
-        .limit(1);
+        .orderBy(asc(ledgerReanchors.createdAt), asc(ledgerReanchors.id));
       // postgres.js parses bytea as a Buffer: hand out a plain Uint8Array copy.
-      return { ...row, txHash: new Uint8Array(row.txHash), reanchor: latest ?? null };
+      return { ...row, txHash: new Uint8Array(row.txHash), reanchors };
     });
   }
 
