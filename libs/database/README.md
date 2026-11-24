@@ -333,6 +333,12 @@ Set `DATABASE_RUN_MIGRATIONS=true` (or `runMigrations: true`) to migrate at boot
 (`app_owner`), and the app then serves requests as `app_runtime`. In production, prefer each app's `dist/migrate.js` as a
 one-off job.
 
+**Boot-time budget.** A run started by `DATABASE_RUN_MIGRATIONS` waits at most 5 minutes for the advisory lock (a fixed
+default, no environment variable). While another run holds the lock, for example inside a long online step (a
+`CREATE INDEX CONCURRENTLY` on a big table), a booting replica gives up with `Timed out after 300000ms waiting for the
+migrations advisory lock` and fails its boot. Long online steps therefore belong in the release job, which runs before
+the rollout so that no replica waits for it.
+
 ## Environment (`database` namespace, plus `SERVICE_NAME` from `app`)
 
 `DATABASE_URL` (`app_runtime`), `DATABASE_SYSTEM_URL` (`app_system`; unset = no system pool, refused in production by config and by the `enforce` boot

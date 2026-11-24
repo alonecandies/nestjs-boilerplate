@@ -24,7 +24,8 @@ import {
  * `billing.v1.BillingService` (billing-service). Payloads are zod-validated (`INVALID_ARGUMENT`
  * with issues on failure) and mapped 1:1 onto the CQRS buses; `@GrpcController()` maps
  * DomainExceptions to gRPC statuses + `x-error-code` trailers. Authorization is the caller's job:
- * only the gateway (which enforces RBAC) can reach this port.
+ * only the gateway and ai-service can reach this port (the gateway enforces RBAC; ai-service
+ * forwards the caller's principal).
  */
 @GrpcController()
 @BillingServiceControllerMethods()

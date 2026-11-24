@@ -112,7 +112,7 @@ One codebase can run as two topologies. The REST, GraphQL and Socket.IO surface 
 | Microservices | `bun run dev:microservices` (all four with `concurrently`, prefixed `gateway`/`identity`/`notify`/`billing`) | gateway `3000` · identity-service `3001` / `50051` · notifications-service `3002` / `50052` · billing-service `3003` / `50053` |
 | Single app    | `bun run dev:gateway`, `dev:identity`, `dev:notifications`, `dev:billing`                                    | as above                                                                                                                       |
 
-The services only serve `/health/live` and `/health/ready` over HTTP. Their API is gRPC, and only the gateway calls it. Every app serves `/metrics` on its own listener, `METRICS_PORT` (9464 monolith and gateway, 9465 identity, 9466 notifications, 9467 billing on the host). Set `METRICS_BEARER_TOKEN` to require a bearer token. Run either the monolith or the gateway, never both, because both bind port 3000.
+The services only serve `/health/live` and `/health/ready` over HTTP. Their API is gRPC, and only the gateway and ai-service call it. Every app serves `/metrics` on its own listener, `METRICS_PORT` (9464 monolith and gateway, 9465 identity, 9466 notifications, 9467 billing on the host). Set `METRICS_BEARER_TOKEN` to require a bearer token. Run either the monolith or the gateway, never both, because both bind port 3000.
 
 Infra must be up first (`bun run docker:infra`). Other loops:
 

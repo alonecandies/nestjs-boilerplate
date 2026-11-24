@@ -17,17 +17,17 @@ composition root.
 
 ## Composition (`src/app.module.ts`)
 
-| Module                                                                                     | Why                                                                                                                                      |
-| ------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `AppConfigModule.forRoot()` + `ConfigModule.forFeature(grpcConfig)`                        | `app`/`observability` + the gRPC bind namespace `connectGrpcServer` reads, validated at boot                                             |
-| `ObservabilityModule.forRoot({ healthContributors: [postgres, redis] })`                   | pino JSON logs, request context, `/metrics`, `/health/*`; Kafka is not a readiness dependency (events wait in `identity.outbox`)         |
-| `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`                                         | command/query buses; `PurgeExpiredSessionsCron` (hourly, `@WithLock`)                                                                    |
-| `DatabaseModule.forRootAsync({ schema: identitySchema, migrations: DATABASE_MIGRATIONS })` | Drizzle + postgres.js pool, transactional CLS plugin, boot-time migrations (platform set + identity)                                     |
-| `RedisModule.forRootAsync()`                                                               | access-token denylist, distributed cron lock                                                                                             |
-| `KafkaProducerModule.forRootAsync()`                                                       | idempotent producer for the `identity.outbox` relay (`OutboxRelay`, `@platform/outbox`)                                                  |
-| `AuthModule.forRootAsync({ globalGuards: false })`                                         | `AccessTokenDenylist` (logout); no guards: only the gateway calls it (`PasswordHasher` and `TokenIssuer` come with `IdentityCoreModule`) |
-| `IdentityGrpcModule`                                                                       | `IdentityCoreModule` + `AuthGrpcController`, `UsersGrpcController`                                                                       |
-| `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`                              | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC too                                                        |
+| Module                                                                                     | Why                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `AppConfigModule.forRoot()` + `ConfigModule.forFeature(grpcConfig)`                        | `app`/`observability` + the gRPC bind namespace `connectGrpcServer` reads, validated at boot                                                           |
+| `ObservabilityModule.forRoot({ healthContributors: [postgres, redis] })`                   | pino JSON logs, request context, `/metrics`, `/health/*`; Kafka is not a readiness dependency (events wait in `identity.outbox`)                       |
+| `CqrsModule.forRoot()`, `ScheduleModule.forRoot()`                                         | command/query buses; `PurgeExpiredSessionsCron` (hourly, `@WithLock`)                                                                                  |
+| `DatabaseModule.forRootAsync({ schema: identitySchema, migrations: DATABASE_MIGRATIONS })` | Drizzle + postgres.js pool, transactional CLS plugin, boot-time migrations (platform set + identity)                                                   |
+| `RedisModule.forRootAsync()`                                                               | access-token denylist, distributed cron lock                                                                                                           |
+| `KafkaProducerModule.forRootAsync()`                                                       | idempotent producer for the `identity.outbox` relay (`OutboxRelay`, `@platform/outbox`)                                                                |
+| `AuthModule.forRootAsync({ globalGuards: false })`                                         | `AccessTokenDenylist` (logout); no guards: only the gateway and ai-service call it (`PasswordHasher` and `TokenIssuer` come with `IdentityCoreModule`) |
+| `IdentityGrpcModule`                                                                       | `IdentityCoreModule` + `AuthGrpcController`, `UsersGrpcController`                                                                                     |
+| `provideCommonEnhancersAsync(...)`, `CorrelationIdMiddleware`                              | problem+json on the ops port; with `inheritAppConfig` the enhancers wrap gRPC too                                                                      |
 
 `main.ts`: `createServiceApp(AppModule)` → `connectGrpcServer(app, [IDENTITY_GRPC_PACKAGE])` →
 `startAllMicroservices()` → `listen(app)`. The HTTP port opens last, so readiness probes only see
