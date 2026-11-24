@@ -213,7 +213,9 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       const [slow] = invocations;
       const startedAt = slow?.startedAt ?? 0;
       const endedAt = slow?.endedAt ?? 0;
-      expect(endedAt - startedAt).toBeGreaterThanOrEqual(SLOW_HANDLER_MS);
+      // Outlasted the session. Not `>= SLOW_HANDLER_MS`: a timer is due from the loop time libuv
+      // cached at the start of the iteration, so it can fire a few ms early against Date.now().
+      expect(endedAt - startedAt).toBeGreaterThan(SESSION_TIMEOUT_MS);
       const marks = [
         startedAt,
         ...heartbeats.filter((at) => at > startedAt && at < endedAt),
