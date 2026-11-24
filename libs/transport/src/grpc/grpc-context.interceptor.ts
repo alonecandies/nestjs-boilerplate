@@ -21,6 +21,14 @@ import {
   recordPrincipalAssertion,
 } from './grpc-principal-assertion.js';
 
+/** One warning line per minute at most for each outcome and handler. */
+const ASSERTION_WARNING_INTERVAL_MS = 60_000;
+
+interface WarningWindow {
+  lastAt: number;
+  suppressed: number;
+}
+
 /**
  * Opens a nestjs-cls context for each gRPC call and fills it from the incoming metadata:
  * - `CLS_ID` (`cls.getId()`) = the caller's `x-request-id`, or a new uuidv7. Logs from the gateway
@@ -35,10 +43,13 @@ import {
  * - `off` ignores the header;
  * - `warn` verifies it: a missing, expired, invalid or mismatching one is logged and counted in
  *   `grpc_principal_assertions_total{outcome}` (`valid` too), and the plain headers still build
- *   the principal. Nothing is refused;
+ *   the principal. Nothing is refused. The log line is throttled in both modes: at most one a
+ *   minute per outcome and handler, with the number held back, while the counter counts every
+ *   call;
  * - `enforce` counts the same way, but the principal comes from a valid assertion's claims only: a
  *   call with `x-user-id` and no valid assertion fails `INVALID_PRINCIPAL`, before any handler
  *   runs. A call without `x-user-id` and without an assertion stays anonymous (`principalForRpcCall`).
+ *   The refusal carries no reason: the caller learns nothing, the log and the counter keep it.
  *
  * nestjs-cls middleware only runs for HTTP, which is why gRPC needs this. The handler is
  * subscribed inside `cls.run()`, so the context follows every await in the handler. This is the
@@ -48,6 +59,11 @@ import {
 @Injectable()
 export class GrpcContextInterceptor implements NestInterceptor {
   private readonly logger = new Logger(GrpcContextInterceptor.name);
+  /**
+   * By outcome and `Class.handler`: bounded by the handlers the app registers times four outcomes,
+   * so a peer that floods the port, under `warn` or `enforce`, cannot flood the log.
+   */
+  private readonly warningWindows = new Map<string, WarningWindow>();
 
   constructor(@Optional() private readonly cls?: ClsService) {}
 
@@ -94,12 +110,32 @@ export class GrpcContextInterceptor implements NestInterceptor {
     recordPrincipalAssertion(check.outcome);
     if (check.outcome !== 'valid') {
       // Never the token or its claims: the outcome and the handler are enough to find the caller.
+      const handler = `${context.getClass().name}.${context.getHandler().name}`;
       const effect =
         settings.mode === 'enforce' ? 'the call is refused' : 'the plain caller headers are used';
-      this.logger.warn(
-        `Principal assertion ${check.outcome} on ${context.getClass().name}.${context.getHandler().name}: ${effect} (GRPC_PRINCIPAL_ASSERTION=${settings.mode})`,
+      this.warnThrottled(
+        `${check.outcome} ${handler}`,
+        `Principal assertion ${check.outcome} on ${handler}: ${effect} (GRPC_PRINCIPAL_ASSERTION=${settings.mode})`,
       );
     }
     return check;
+  }
+
+  /** Logs `message` unless `key` logged less than a minute ago; the next line says how many were held. */
+  private warnThrottled(key: string, message: string): void {
+    const now = Date.now();
+    const window = this.warningWindows.get(key);
+    // A clock that went back opens a new window instead of muting the warning until it catches up.
+    if (
+      window !== undefined &&
+      now >= window.lastAt &&
+      now - window.lastAt < ASSERTION_WARNING_INTERVAL_MS
+    ) {
+      window.suppressed += 1;
+      return;
+    }
+    const held = window?.suppressed ?? 0;
+    this.warningWindows.set(key, { lastAt: now, suppressed: 0 });
+    this.logger.warn(held === 0 ? message : `${message} (${held} more since the last one)`);
   }
 }

@@ -431,18 +431,22 @@ them as the caller). Keep reflection off. ai-service re-checks tenant and user o
 
 The gateway signs the principal it forwards: `x-principal-assertion`, a compact ES256 JWS (claims user, tenant, roles,
 staff, `iat`, `exp` = `iat` + `GRPC_PRINCIPAL_ASSERTION_TTL_SEC`, 120 s; keep it above `AI_GRPC_CHAT_DEADLINE_MS`).
+A verifier refuses as `invalid` any assertion whose `exp - iat` exceeds 3600 s, the TTL's maximum, so even a leaked
+assertion was never minted for longer.
 Only the edge holds the private key (`GRPC_PRINCIPAL_SIGNING_KEY` / `_FILE`, `GRPC_PRINCIPAL_SIGNING_KEY_ID`); the
 services verify with the public keys (`GRPC_PRINCIPAL_PUBLIC_KEYS` / `_FILE`, `kid=base64 PEM`) and forward the same
 bytes on their own calls (ai-service's chat tools), never signing. `GRPC_PRINCIPAL_ASSERTION` on each service:
 
 - `off` (default): the header is ignored; the plain metadata decides.
 - `warn`: the assertion is verified and counted in `grpc_principal_assertions_total{outcome}` (`valid`, `missing`,
-  `expired`, `invalid`, `mismatch`); every other outcome is logged; the plain metadata still decides.
+  `expired`, `invalid`, `mismatch`); every other outcome is logged, at most once a minute per outcome and handler
+  (in `enforce` too), with the number held back; the plain metadata still decides.
 - `enforce`: the principal comes from a valid assertion's claims only. A call with `x-user-id` and no valid assertion
   (missing, expired, signed by another key, or plain headers that differ from the claims), or with an assertion and
-  no `x-user-id`, fails `UNAUTHENTICATED` `INVALID_PRINCIPAL` before any handler runs; a call with neither
-  `x-user-id` nor an assertion stays anonymous (register, login, the Stripe webhook). A mesh peer without the edge's
-  private key cannot assert a user, a tenant, roles or the staff flag.
+  no `x-user-id`, fails `UNAUTHENTICATED` `INVALID_PRINCIPAL` before any handler runs. The refusal carries no
+  reason (it can reach a public 401 through the gateway); the outcome is in the service's log and counter. A call
+  with neither `x-user-id` nor an assertion stays anonymous (register, login, the Stripe webhook). A mesh peer
+  without the edge's private key cannot assert a user, a tenant, roles or the staff flag.
 
 A process sends caller identity only for a principal it can vouch for: the one its own access-token verification
 wrote (`writePrincipal`), or, inside a gRPC call, the principal of that call. The edge signs exactly the claims it

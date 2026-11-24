@@ -232,6 +232,16 @@ describe('GrpcContextInterceptor with GRPC_PRINCIPAL_ASSERTION=enforce', () => {
     await expect(seen(createOutgoingMetadata(caller))).rejects.toMatchObject(refused);
   });
 
+  it('tells a refused caller nothing about why: the refusal carries no details', async () => {
+    enforce();
+    const expired = signer.metadata(caller, { nowMs: Date.now() - 600_000 });
+    for (const metadata of [createOutgoingMetadata(caller), expired]) {
+      const error: unknown = await seen(metadata).catch((thrown: unknown) => thrown);
+      expect(error).toMatchObject(refused);
+      expect(error).not.toHaveProperty('details');
+    }
+  });
+
   it('lets an anonymous call through with no principal (register, login, a webhook)', async () => {
     enforce();
     await expect(seen(createOutgoingMetadata({ requestId: generateId() }))).resolves.toEqual({

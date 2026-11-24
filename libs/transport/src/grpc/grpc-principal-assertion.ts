@@ -1,5 +1,10 @@
 import { createPrivateKey, createPublicKey, type KeyObject, sign, verify } from 'node:crypto';
-import { type GrpcConfig, type GrpcPrincipalAssertionMode, grpcConfig } from '@platform/config';
+import {
+  GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC,
+  type GrpcConfig,
+  type GrpcPrincipalAssertionMode,
+  grpcConfig,
+} from '@platform/config';
 import { getOrCreateCounter } from '@platform/observability';
 import { isEqual, sortBy } from 'lodash-es';
 import { z } from 'zod';
@@ -28,7 +33,8 @@ const COMPACT_JWS = /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/;
  * - `valid`: signed by a known key, in date, and equal to the plain headers;
  * - `missing`: a user in plain headers and no assertion (an old gateway or ai-service);
  * - `expired`: a valid signature past `exp`;
- * - `invalid`: malformed, an unknown key id, a bad signature, another alg or issuer;
+ * - `invalid`: malformed, an unknown key id, a bad signature, another alg or issuer, or a lifetime
+ *   (`exp - iat`) above `GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC`;
  * - `mismatch`: valid, but the plain headers assert another user, tenant, roles or staff flag.
  */
 export type PrincipalAssertionOutcome = 'valid' | 'missing' | 'expired' | 'invalid' | 'mismatch';
@@ -106,7 +112,9 @@ export function signPrincipalAssertion(
 
 /**
  * Verifies a token: ES256 only, the key looked up by `kid` (never every key in turn), the signature
- * checked before any claim is read, then the issuer and the dates. Never throws.
+ * checked before any claim is read, then the issuer and the dates. A lifetime above
+ * `GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC` (3600 s, the longest TTL a gateway can be configured
+ * with) is `invalid`, however well signed. Never throws.
  */
 export function verifyPrincipalAssertion(
   token: string,
@@ -138,7 +146,8 @@ export function verifyPrincipalAssertion(
   if (!claims.success) return invalid;
   const { sub, tid, roles, staff, iat, exp } = claims.data;
   const now = nowMs / 1000;
-  if (exp <= iat || iat > now + CLOCK_SKEW_SEC) return invalid;
+  if (exp <= iat || exp - iat > GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC) return invalid;
+  if (iat > now + CLOCK_SKEW_SEC) return invalid;
   if (now > exp + CLOCK_SKEW_SEC) return { outcome: 'expired' };
   return {
     outcome: 'valid',

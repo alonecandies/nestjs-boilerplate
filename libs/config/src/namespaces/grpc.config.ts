@@ -13,6 +13,13 @@ import { addKnownLocalSecretIssue, isKnownLocalSecret } from '../env/production-
 export const GRPC_PRINCIPAL_ASSERTION_MODES = ['off', 'warn', 'enforce'] as const;
 export type GrpcPrincipalAssertionMode = (typeof GRPC_PRINCIPAL_ASSERTION_MODES)[number];
 
+/**
+ * The longest lifetime of a signed principal assertion (`GRPC_PRINCIPAL_ASSERTION_TTL_SEC`'s
+ * maximum). A verifier refuses a token whose `exp - iat` exceeds it, so no gateway, old or new, ever
+ * signs one that is refused, and a leaked assertion cannot have been minted for longer.
+ */
+export const GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC = 3600;
+
 /** One key of the principal assertion: its id (the JWS `kid`) and its PEM. */
 export interface GrpcPrincipalKey {
   readonly keyId: string;
@@ -175,7 +182,10 @@ export const grpcEnvSchema = z
     GRPC_PRINCIPAL_PUBLIC_KEYS: zStr(),
     GRPC_PRINCIPAL_PUBLIC_KEYS_FILE: zStr(),
     // Lifetime of a signed assertion; keep it above the longest gRPC deadline (AI_GRPC_CHAT_DEADLINE_MS).
-    GRPC_PRINCIPAL_ASSERTION_TTL_SEC: zInt(120, { min: 10, max: 3600 }),
+    GRPC_PRINCIPAL_ASSERTION_TTL_SEC: zInt(120, {
+      min: 10,
+      max: GRPC_PRINCIPAL_ASSERTION_MAX_TTL_SEC,
+    }),
     ALLOW_KNOWN_LOCAL_SECRETS: zBool(false),
   })
   .superRefine((env, ctx) => {

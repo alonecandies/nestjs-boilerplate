@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { generateKeyPairSync, type KeyObject, sign } from 'node:crypto';
 import { Metadata } from '@grpc/grpc-js';
-import type { CallHandler, ExecutionContext } from '@nestjs/common';
+import { type CallHandler, type ExecutionContext, Logger } from '@nestjs/common';
 import {
   CLS_PRINCIPAL,
   createPrincipal,
@@ -12,7 +12,7 @@ import {
 import { ClsService, ClsServiceManager } from 'nestjs-cls';
 import { register } from 'prom-client';
 import { defer, lastValueFrom, of } from 'rxjs';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 import { RPC_CLS_KEYS } from '../context/transport-context.js';
 import { GRPC_METADATA_KEYS } from './grpc.constants.js';
 import { callerContextFromCls } from './grpc-caller-context.js';
@@ -86,6 +86,21 @@ describe('signPrincipalAssertion / verifyPrincipalAssertion (compact ES256 JWS)'
       'expired',
     );
     expect(verifyPrincipalAssertion(token, publicKeys, NOW - 60_000).outcome).toBe('invalid');
+  });
+
+  it('refuses a correctly signed assertion that lives longer than 3600 s, the longest TTL', () => {
+    const twoHours = signPrincipalAssertion(caller, { ...signingKey, ttlSec: 7200 }, NOW);
+    expect(verifyPrincipalAssertion(twoHours, publicKeys, NOW).outcome).toBe('invalid');
+    const justOver = forge({ alg: 'ES256', kid: 'k1' }, claims({ exp: NOW / 1000 + 3601 }));
+    expect(verifyPrincipalAssertion(justOver, publicKeys, NOW).outcome).toBe('invalid');
+  });
+
+  // Mixed versions: whatever GRPC_PRINCIPAL_ASSERTION_TTL_SEC an old or a new gateway signs with.
+  it.each([10, 120, 3600])('verifies an assertion signed with a %i s TTL', (ttlSec) => {
+    const token = signPrincipalAssertion(caller, { ...signingKey, ttlSec }, NOW);
+    expect(verifyPrincipalAssertion(token, publicKeys, NOW + (ttlSec - 1) * 1000).outcome).toBe(
+      'valid',
+    );
   });
 
   it.each([
@@ -325,6 +340,72 @@ describe('GrpcContextInterceptor in warn mode', () => {
     const before = await count('missing');
     await principalSeen(createOutgoingMetadata(caller));
     expect(await count('missing')).toBe(before);
+  });
+
+  describe('the warning for an outcome other than valid', () => {
+    let warn: MockInstance<Logger['warn']>;
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'], now: NOW });
+      warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    });
+
+    /** A fresh interceptor per test, so no warning window carries over from another test. */
+    const callsOn = (handler: string) => {
+      const fresh = new GrpcContextInterceptor(cls);
+      return (metadata: Metadata) => {
+        const context = {
+          ...rpcContext(metadata),
+          getHandler: () => ({ name: handler }),
+        } as unknown as ExecutionContext;
+        const next: CallHandler = { handle: () => of(undefined) };
+        return lastValueFrom(fresh.intercept(context, next), { defaultValue: undefined });
+      };
+    };
+
+    it('100 missing calls to one handler log once and count 100', async () => {
+      configurePrincipalAssertions({ mode: 'warn', publicKeys });
+      const before = await count('missing');
+      const call = callsOn('getUser');
+      for (let i = 0; i < 100; i += 1) await call(createOutgoingMetadata(caller));
+      expect(await count('missing')).toBe(before + 100);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/missing on UsersController\.getUser/);
+
+      vi.setSystemTime(NOW + 61_000);
+      await call(createOutgoingMetadata(caller));
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(String(warn.mock.calls[1]?.[0])).toMatch(/99 more/);
+    });
+
+    it('is throttled per outcome and per handler', async () => {
+      configurePrincipalAssertions({ mode: 'warn', publicKeys });
+      const onGetUser = callsOn('getUser');
+      await onGetUser(createOutgoingMetadata(caller));
+      await onGetUser(createOutgoingMetadata(caller));
+      await onGetUser(createOutgoingMetadata({ ...caller, principalAssertion: 'x.y.z' }));
+      expect(warn).toHaveBeenCalledTimes(2);
+      const onListUsers = callsOn('listUsers');
+      await onListUsers(createOutgoingMetadata(caller));
+      expect(warn).toHaveBeenCalledTimes(3);
+    });
+
+    it('is throttled under enforce too, where every such call is refused', async () => {
+      configurePrincipalAssertions({ mode: 'enforce', publicKeys });
+      const before = await count('missing');
+      const call = callsOn('getUser');
+      for (let i = 0; i < 3; i += 1) {
+        await expect(call(createOutgoingMetadata(caller))).rejects.toMatchObject({
+          code: 'INVALID_PRINCIPAL',
+        });
+      }
+      expect(await count('missing')).toBe(before + 3);
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toMatch(/the call is refused/);
+    });
   });
 });
 
