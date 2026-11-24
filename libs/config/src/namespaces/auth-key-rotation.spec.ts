@@ -117,6 +117,27 @@ describe('auth key rotation settings', () => {
     ).toEqual([{ kid: 'k1', secret: known }]);
   });
 
+  it('name the entry of a publicly known value inside the verify list', () => {
+    const known = 'compose-local-access-secret-not-for-production-0001';
+    const error = errorOf(() =>
+      authConfig.parse({ ...PROD, JWT_ACCESS_VERIFY_SECRETS: `k1:${A},k2:${known}` }),
+    );
+    expect(error.message).toContain('JWT_ACCESS_VERIFY_SECRETS entry 2 is a publicly known value');
+    expectNoLeak(error.message, known, A, 'k1', 'k2');
+  });
+
+  it('refuse a secret listed twice under two key ids in every environment, naming both entries', () => {
+    for (const env of [{ NODE_ENV: 'test' }, PROD]) {
+      const error = errorOf(() =>
+        authConfig.parse({ ...env, JWT_ACCESS_VERIFY_SECRETS: `k1:${A},k2:${A}` }),
+      );
+      expect(error.message).toContain('→ at JWT_ACCESS_VERIFY_SECRETS');
+      expect(error.message).toContain('entry 1');
+      expect(error.message).toContain('entry 2');
+      expectNoLeak(error.message, A, 'k1', 'k2');
+    }
+  });
+
   it('accept strong verify-only secrets in production', () => {
     expect(
       authConfig.parse({

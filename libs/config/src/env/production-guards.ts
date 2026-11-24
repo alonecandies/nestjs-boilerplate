@@ -19,12 +19,19 @@ export function isKnownLocalSecret(value: string | undefined): boolean {
   return value !== undefined && KNOWN_LOCAL_SECRET.test(value);
 }
 
-/** Adds the one issue every namespace raises for a publicly known secret (never echoes the value). */
-export function addKnownLocalSecretIssue(ctx: z.RefinementCtx, key: string): void {
+/**
+ * Adds the one issue every namespace raises for a publicly known secret (never echoes the value).
+ * `subject` names the value when it is part of `key` (`JWT_ACCESS_VERIFY_SECRETS entry 2`).
+ */
+export function addKnownLocalSecretIssue(
+  ctx: z.RefinementCtx,
+  key: string,
+  subject: string = key,
+): void {
   ctx.addIssue({
     code: 'custom',
     path: [key],
-    message: `${key} is a publicly known value (a docker-compose fallback, the local RustFS key or a placeholder): set a real value in production, or ALLOW_KNOWN_LOCAL_SECRETS=true for the local compose stack only`,
+    message: `${subject} is a publicly known value (a docker-compose fallback, the local RustFS key or a placeholder): set a real value in production, or ALLOW_KNOWN_LOCAL_SECRETS=true for the local compose stack only`,
   });
 }
 

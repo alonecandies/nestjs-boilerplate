@@ -76,8 +76,9 @@ The signature, `iss`, `aud` and `exp` are then checked as before. Every listed s
 signing secret's guards: at least 32 characters in every environment; in production no
 development default (even with `ALLOW_KNOWN_LOCAL_SECRETS=true`), no publicly known value, and no
 refresh secret, signing or verify-only, equal to any access secret. Key ids are unique within a
-set. Configuration errors name an entry by its position, never by its secret or key id, and no
-key id is logged or returned in a 401.
+set, and a verify list holds each secret once, in every environment: a secret listed under two key
+ids would still verify after one of them is dropped. Configuration errors name an entry by its
+position, never by its secret or key id, and no key id is logged or returned in a 401.
 
 Rotate each secret in three phases, each one rolled out to every process that verifies that token
 before the next starts (access: every process that loads the `auth` namespace; refresh: the

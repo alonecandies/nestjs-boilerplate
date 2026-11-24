@@ -1,5 +1,12 @@
 import { JwtService } from '@nestjs/jwt';
-import { createJwtModuleOptions, defineRbacFeature, TokenService } from '@platform/auth';
+import {
+  createJwtModuleOptions,
+  defineRbacFeature,
+  JWT_ALGORITHM,
+  JWT_CLOCK_TOLERANCE_SEC,
+  parseRefreshTokenClaims,
+  TokenService,
+} from '@platform/auth';
 import { createTestRbacRegistry } from '@platform/auth/testing';
 import { isUuidV7, UnauthenticatedException } from '@platform/common';
 import { authConfig } from '@platform/config';
@@ -196,6 +203,27 @@ describe('TokenIssuer refresh key rotation (SEC-1)', () => {
       JWT_REFRESH_VERIFY_SECRETS: `r1:${OLD}`,
     });
     expect(await outcome(unknown, token)).toBe('INVALID_TOKEN');
+  });
+
+  it('a single-secret verifier of the previous version accepts a refresh token that carries a kid', async () => {
+    const { token } = await issuerWith({
+      JWT_REFRESH_SECRET: NEW,
+      JWT_REFRESH_KEY_ID: 'r2',
+    }).issueRefreshToken({ userId: user.id, sessionId: 's' });
+    expect(kidOf(token)).toBe('r2');
+    // The pre-rotation refresh verifier: its one secret passed straight to jsonwebtoken.
+    const claims = await new JwtService().verifyAsync<Record<string, unknown>>(token, {
+      secret: NEW,
+      algorithms: [JWT_ALGORITHM],
+      issuer: access.issuer,
+      audience: access.audience,
+      clockTolerance: JWT_CLOCK_TOLERANCE_SEC,
+    });
+    expect(parseRefreshTokenClaims(claims)).toMatchObject({
+      sub: user.id,
+      jti: 's',
+      typ: 'refresh',
+    });
   });
 
   it('writes the access kid from JWT_ACCESS_KEY_ID, which the edge verifier selects', async () => {
