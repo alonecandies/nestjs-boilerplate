@@ -135,7 +135,7 @@ describe('consumer timing (B3-6)', () => {
 
   it('keeps every consumer controller: budget + dead-letter deadline + 10 s <= rebalance timeout', () => {
     const controllers = consumerControllerOptions();
-    // The ledger posting, push and two notifications consumers, at least.
+    // Every @KafkaConsumerController in the repository: four at the time of writing.
     expect(controllers.length).toBeGreaterThanOrEqual(4);
     for (const { file, args } of controllers) {
       const literal = /\bbudgetMs:\s*([\d_]+)\s*[,}]/.exec(args)?.[1];
