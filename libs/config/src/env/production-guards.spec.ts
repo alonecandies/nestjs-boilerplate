@@ -17,7 +17,8 @@ describe('isKnownLocalSecret', () => {
       'rustfsadmin',
       // development defaults
       DEV_JWT_ACCESS_SECRET,
-      'sk_test_placeholder',
+      'sk_test_dev_placeholder',
+      'sk_test_placeholder', // the Stripe default before 2026-11
       'change-me-before-deploying',
       // the docs' "fill me in" forms (.env.example, CONFIGURATION.md production checklist)
       'whsec_...',

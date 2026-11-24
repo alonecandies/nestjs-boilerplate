@@ -34,7 +34,7 @@ export const PROTECTED_PROJECTS: readonly string[] = ['boilerplate'];
 /** In-network HTTP port of every app image (Dockerfile `ENV PORT=3000`). */
 export const APP_HTTP_PORT = 3000;
 /** Probes readiness from inside the compose network (busybox wget; already pulled by infra). */
-export const PROBE_IMAGE = 'redis:8.10.2-alpine3.23';
+export const PROBE_IMAGE = 'redis:8.10.3-alpine3.23';
 export const SMOKE_PASSWORD = 'a very long passphrase';
 
 const REPO_ROOT = join(import.meta.dirname, '..', '..');

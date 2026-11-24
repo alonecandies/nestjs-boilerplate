@@ -15,7 +15,7 @@
 //     - a declared runtime dependency that the filtered production install did not provide,
 //     - a workspace symlink that is dangling, or the app's dist/main.js / dist/instrument.js, or its
 //       dist/migrate.js when the app has a src/migrate.ts (the migration release job), or a
-//       dist/cli/<name>.js for each one-off CLI src/cli/<name>.ts (specs and .d.ts excluded);
+//       dist/cli/<name>.js for each one-off CLI src/cli/<name>.ts (the repo's spec suffixes and .d.ts excluded);
 //  4b. with --trace true (default), follows the static imports of dist/main.js, dist/instrument.js,
 //      dist/migrate.js and dist/cli/*.js through the closure's dist/ (workspace packages file by file, via
 //      their exports maps; third-party packages by name) and deletes every untraced JS file, every workspace
@@ -136,8 +136,9 @@ for (const { dir } of workspace.values()) {
 const entrypoints = ['main.js', 'instrument.js'];
 if (existsSync(join(build, appPackage.dir, 'src', 'migrate.ts'))) entrypoints.push('migrate.js');
 // One-off jobs run from the image (`node dist/cli/<name>.js …`, e.g. dist/cli/dlq-replay.js).
-// Declarations and every spec naming the repo uses (.spec, .test, .int-spec, .e2e-spec) are not.
-const CLI_SOURCE = /^[^.][^/]*(?<!\.d|[.-]spec|[.-]test)\.ts$/;
+// Declarations and the repo's spec suffixes (.d.ts, .spec.ts, .test.ts, .int-spec.ts, .e2e-spec.ts)
+// are not; a name that merely ends in -test or -spec (load-test.ts) is a CLI.
+const CLI_SOURCE = /^[^.][^/]*(?<!\.d|\.spec|\.test|\.int-spec|\.e2e-spec)\.ts$/;
 const cliDir = join(build, appPackage.dir, 'src', 'cli');
 const cliEntrypoints = existsSync(cliDir)
   ? readdirSync(cliDir, { withFileTypes: true })

@@ -98,7 +98,8 @@ because the rest counts as uncovered: read the package's own lines in the report
 service container with `REDIS_URL=redis://localhost:6379`. Before the specs run, the job pulls every image they
 start (`node scripts/int-images.mjs` prints the list: the testcontainers Ryuk reaper every fork starts first,
 then the image constants: Citus, Cassandra, Kafka, immudb, RustFS, fake-gcs-server and Redis), so no `beforeAll`
-spends its hook timeout on a download.
+spends its hook timeout on a download. The Ryuk entry is the value of `RYUK_CONTAINER_IMAGE` when that variable
+is set and non-empty (a mirror, say), else the testcontainers default.
 
 ## Writing tests
 

@@ -37,20 +37,20 @@ Budget: the stack is sized for **4 CPUs / 4 GB** of Docker Desktop memory (see [
 | `pgbouncer`             | `edoburu/pgbouncer:v1.26.1-p0`                    | 6432                         | —                   | transaction pooling for `app_runtime` and `app_system` (cap 5); mounted `docker/pgbouncer` |
 | `postgres-worker-1`     | `citusdata/citus:14.2.0` (amd64)                  | —                            | citus               | optional Citus worker, trusts the private network, no host port                            |
 | `citus-init`            | `citusdata/citus:14.2.0` (psql)                   | —                            | citus               | one-shot, idempotent: coordinator host, `citus_add_node`, drain the coordinator            |
-| `redis`                 | `redis:8.10.2-alpine3.23`                         | 6379                         | —                   | cache, locks, throttling, BullMQ, pub/sub                                                  |
+| `redis`                 | `redis:8.10.3-alpine3.23`                         | 6379                         | —                   | cache, locks, throttling, BullMQ, pub/sub                                                  |
 | `cassandra`             | `cassandra:5.0.9`                                 | 9042                         | —                   | notifications inbox (DC `datacenter1`)                                                     |
 | `cassandra-init`        | `cassandra:5.0.9` (cqlsh)                         | —                            | —                   | one-shot: keyspace `$CASSANDRA_KEYSPACE`                                                   |
 | `immudb`                | `codenotary/immudb:1.11.2` (distroless)           | 3322 (gRPC)                  | —                   | ledger store (append-only, verifiable SQL); pg-wire off; metrics 9497 in-network           |
 | `immudb-keygen`         | `apache/kafka:4.3.1` (openssl)                    | —                            | —                   | one-shot: development state-signing key pair into the `immudb-signing` volume (first run)  |
 | `grpc-principal-keygen` | `apache/kafka:4.3.1` (openssl)                    | —                            | —                   | one-shot: development gRPC principal key pair (ES256) into `grpc-principal-*` (first run)  |
-| `immudb-init`           | `redis:8.10.2-alpine3.23` (busybox)               | —                            | —                   | one-shot: waits for immudb `/readyz`                                                       |
+| `immudb-init`           | `redis:8.10.3-alpine3.23` (busybox)               | —                            | —                   | one-shot: waits for immudb `/readyz`                                                       |
 | `kafka`                 | `apache/kafka:4.3.1` (KRaft, single node)         | 9094 (EXTERNAL listener)     | —                   | integration events                                                                         |
 | `kafka-init`            | `apache/kafka:4.3.1` (CLI)                        | —                            | —                   | one-shot: topics from `docker/kafka/topics.txt`                                            |
 | `mailpit`               | `axllent/mailpit:v1.31.3`                         | 1025 (SMTP), 8025 (UI)       | —                   | catches every mail                                                                         |
 | `rustfs`                | `rustfs/rustfs:1.0.0`                             | 9000 (S3), 9001 (console)    | —                   | S3-compatible storage, `rustfsadmin`/`rustfsadmin`                                         |
 | `gcs`                   | `fsouza/fake-gcs-server:1.56.1`                   | 4443                         | —                   | GCS emulator (`STORAGE_DRIVER=gcs`)                                                        |
 | `storage-init`          | `rustfs/rustfs:1.0.0` (curl)                      | —                            | —                   | one-shot: bucket `uploads` in both                                                         |
-| `infra-ready`           | `redis:8.10.2-alpine3.23` (idle `sleep`)          | —                            | —                   | sentinel for `up --wait` (see below)                                                       |
+| `infra-ready`           | `redis:8.10.3-alpine3.23` (idle `sleep`)          | —                            | —                   | sentinel for `up --wait` (see below)                                                       |
 | `monolith`              | built (`APP=monolith`)                            | 3000                         | monolith            | everything in one process, alias `api`                                                     |
 | `gateway`               | built (`APP=gateway`)                             | 3000                         | microservices       | edge (REST/GraphQL/WS), alias `api`                                                        |
 | `identity-service`      | built (`APP=identity-service`)                    | 50051 (gRPC)                 | microservices       | AuthService + UsersService                                                                 |
@@ -689,7 +689,7 @@ least 8 GiB.
 12. zsh users: `docker build -t img/$app:local` expands `$app:l` (lowercase modifier) → quote as `"img/${app}:local"`.
 13. k6 threshold selectors cannot contain `:` or `,` in tag values (hence the `GET /v1/users/<id>` tag).
 14. Distroless has no shell: debug with `--target runtime-alpine`, `docker compose logs`, or
-    `docker run --rm --network <project>_backend redis:8.10.2-alpine3.23 wget -qO- http://gateway:9464/metrics`.
+    `docker run --rm --network <project>_backend redis:8.10.3-alpine3.23 wget -qO- http://gateway:9464/metrics`.
 15. **Citus is amd64-only.** Every `citusdata/citus:14.2*` tag is built for amd64; on Apple Silicon Docker
     Desktop runs `postgres` (and the int-spec containers) under emulation, with Rosetta when it is enabled.
     Expect slower first boots; nothing else differs. CI runners are amd64.

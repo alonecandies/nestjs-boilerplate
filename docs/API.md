@@ -315,7 +315,7 @@ import { readFileSync } from 'node:fs';
 import Stripe from 'stripe';
 const payload = readFileSync('payload.json', 'utf8');
 console.log(
-  new Stripe('sk_test_placeholder').webhooks.generateTestHeaderString({
+  new Stripe('sk_test_dev_placeholder').webhooks.generateTestHeaderString({
     payload,
     secret: process.env.STRIPE_WEBHOOK_SECRET,
   }),

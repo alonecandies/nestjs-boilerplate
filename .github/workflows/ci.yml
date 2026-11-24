@@ -154,7 +154,7 @@ jobs:
     # service container.
     services:
       redis:
-        image: redis:8.10.2-alpine3.23
+        image: redis:8.10.3-alpine3.23
         ports: ["6379:6379"]
         options: >-
           --health-cmd "redis-cli ping" --health-interval 2s --health-timeout 2s --health-retries 30

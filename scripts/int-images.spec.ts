@@ -12,13 +12,23 @@ const ROOT = join(import.meta.dirname, '..');
 const SCRIPT = join(import.meta.dirname, 'int-images.mjs');
 const CI = readFileSync(join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
 
-function run(...args: string[]): { status: number | null; stdout: string; output: string } {
-  const result = spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8' });
+/** Runs the script with `RYUK_CONTAINER_IMAGE` unset, or set to `ryukEnv` when that is given. */
+function runWithEnv(
+  ryukEnv: string | undefined,
+  ...args: string[]
+): { status: number | null; stdout: string; output: string } {
+  const { RYUK_CONTAINER_IMAGE: _ignored, ...env } = process.env;
+  if (ryukEnv !== undefined) env.RYUK_CONTAINER_IMAGE = ryukEnv;
+  const result = spawnSync(process.execPath, [SCRIPT, ...args], { encoding: 'utf8', env });
   return {
     status: result.status,
     stdout: result.stdout,
     output: `${result.stdout}${result.stderr}`,
   };
+}
+
+function run(...args: string[]): { status: number | null; stdout: string; output: string } {
+  return runWithEnv(undefined, ...args);
 }
 
 const images = (): string[] => run().stdout.split('\n').filter(Boolean);
@@ -85,6 +95,19 @@ describe('scripts/int-images.mjs', () => {
     expect(ryuk).toMatch(/^testcontainers\/ryuk:\d/);
     expect(images()).toContain(ryuk);
     expect(named().get('RYUK_IMAGE')).toBe(ryuk);
+  });
+
+  it('prints RYUK_CONTAINER_IMAGE instead of the default when it is set', () => {
+    const custom = 'registry.example.test/mirror/ryuk:9.9.9';
+    const list = runWithEnv(custom).stdout.split('\n').filter(Boolean);
+    expect(list).toContain(custom);
+    expect(list).not.toContain(images()[0]);
+    expect(runWithEnv(custom, '--names').stdout).toContain(`RYUK_IMAGE=${custom}\n`);
+  });
+
+  it('falls back to the default Ryuk image when RYUK_CONTAINER_IMAGE is empty', () => {
+    expect(runWithEnv('').stdout).toBe(run().stdout);
+    expect(runWithEnv('', '--names').stdout).toBe(run('--names').stdout);
   });
 
   it('names every container image a spec or helper starts, so a new one cannot be missed', () => {

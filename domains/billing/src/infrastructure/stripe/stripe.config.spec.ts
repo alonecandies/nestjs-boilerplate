@@ -1,4 +1,4 @@
-import { EnvValidationError } from '@platform/config';
+import { EnvValidationError, isKnownLocalSecret } from '@platform/config';
 import { describe, expect, it } from 'vitest';
 import {
   PLACEHOLDER_STRIPE_SECRET_KEY,
@@ -30,9 +30,18 @@ const errorOf = (fn: () => unknown): EnvValidationError => {
 describe('stripe namespace (owned by billing)', () => {
   it('works with an empty environment (dev placeholders)', () => {
     expect(stripeConfig.parse({})).toMatchObject({
-      secretKey: 'sk_test_placeholder',
+      secretKey: 'sk_test_dev_placeholder',
       maxNetworkRetries: 2,
     });
+  });
+
+  it('defaults to a key the image secret scan does not report, which production still refuses', () => {
+    // Trivy 0.76.2's stripe-secret-token rule (its other Stripe rule is for pk_ keys).
+    const trivyStripeSecretKey = /sk_(test|live)_[0-9a-z]{10,32}/i;
+    expect(PLACEHOLDER_STRIPE_SECRET_KEY).not.toMatch(trivyStripeSecretKey);
+    expect(PLACEHOLDER_STRIPE_SECRET_KEY).toMatch(/^(sk|rk)_(test|live)_/);
+    expect(isKnownLocalSecret(PLACEHOLDER_STRIPE_SECRET_KEY)).toBe(true);
+    expect(stripeConfig.parse({}).secretKey).toBe(PLACEHOLDER_STRIPE_SECRET_KEY);
   });
 
   it('keeps its Nest config token', () => {
@@ -65,6 +74,16 @@ describe('stripe production guards', () => {
     const error = errorOf(() => stripeConfig.parse({ ...PROD, ALLOW_KNOWN_LOCAL_SECRETS: 'true' }));
     expect(error.message).toContain('→ at STRIPE_SECRET_KEY');
     expect(error.message).toContain('→ at STRIPE_WEBHOOK_SECRET');
+  });
+
+  it('rejects the former placeholder sk_test_placeholder in production, with or without ALLOW_KNOWN_LOCAL_SECRETS', () => {
+    const former = { ...PROD, ...REAL, STRIPE_SECRET_KEY: 'sk_test_placeholder' };
+    for (const env of [former, { ...former, ALLOW_KNOWN_LOCAL_SECRETS: 'true' }]) {
+      const error = errorOf(() => stripeConfig.parse(env));
+      expect(error.message).toContain('→ at STRIPE_SECRET_KEY');
+      expect(error.message).toContain('the development placeholder is not allowed');
+      expect(error.message).not.toContain('→ at STRIPE_WEBHOOK_SECRET');
+    }
   });
 
   it('rejects the compose fallbacks and the docs placeholders unless ALLOW_KNOWN_LOCAL_SECRETS', () => {
