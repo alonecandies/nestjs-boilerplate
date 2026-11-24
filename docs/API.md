@@ -1023,7 +1023,7 @@ flowchart LR
   the identity or billing event that created the notification, which is retried and then dead-lettered.
 - **At least once.** The relay may publish a row twice (a crash between the broker's acknowledgement and the mark), so
   consumers are idempotent: notification ids are derived deterministically, the mail has its own idempotency key, push
-  dedupe uses `SET NX`, and a ledger posting's entry id derives from the Stripe transaction id. Redeliveries and replays
+  dedupe uses `SET NX` (for 10 minutes), and a ledger posting's entry id derives from the Stripe transaction id. Redeliveries and replays
   are therefore safe.
 - **Retry.** `KafkaRetryInterceptor` retries in process (`DEFAULT_KAFKA_RETRY_OPTIONS`: 4 attempts, exponential
   backoff from 250 ms capped at 2 s, so about 0.25 s, 0.5 s and 1 s between attempts) only for infrastructure errors and 5xx-class `DomainException`s. 4xx-class errors and `ZodError`s go

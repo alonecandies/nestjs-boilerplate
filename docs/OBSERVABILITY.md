@@ -357,10 +357,19 @@ Reading the series:
   `args: [dist/cli/dlq-replay.js, <topic>]`. Compose:
   `docker compose run --rm --no-deps notifications-service dist/cli/dlq-replay.js <topic>`.
   Exit codes: 0 replayed, 1 a record from another topic was skipped or the replay failed, 2 usage.
-  Progress is committed to `<topic>.dlq-replay`, so a second run replays only newer dead letters, and consumers deduplicate on the envelope id ([API.md](API.md#replaying-a-dead-letter-topic)). In notifications-service a dead-lettered `identity.user-registered.v1` or `billing.payment-succeeded.v1` may be a push-only failure (the inbox row and the mail were already written); replaying it within the 14-day `.dlq` retention sends no second mail, because the mail queue keeps a `mail-sent:<jobId>` marker for 14 days after it enqueued a keyed mail. The marker means enqueued, not delivered: if the mail job itself ran out of attempts (`MailJobsFailed`), retry that failed job, since a replay does not send it. The shipped
-  `docker/kafka/topics.txt` keeps `.dlq` records for **14 days** (`retention.ms=1209600000`); a dead letter not
-  replayed by then is deleted. In production, raise the `.dlq` retention on your cluster or archive the topics
-  elsewhere so an incident found late can still be replayed. The alert resolves 15 minutes after the last dead
+  Progress is committed to `<topic>.dlq-replay`, so a second run replays only newer dead letters, and consumers deduplicate on the envelope id ([API.md](API.md#replaying-a-dead-letter-topic)). In notifications-service a dead-lettered `identity.user-registered.v1` or `billing.payment-succeeded.v1` may be a push-only failure (the inbox row and the mail were already written); replaying it within 14 days of the mail sends no second mail, because the mail queue keeps a `mail-sent:<jobId>` marker for 14 days after it enqueued a keyed mail. The marker means enqueued, not delivered: if the mail job itself ran out of attempts (`MailJobsFailed`), retry that failed job, since a replay does not send it.
+  A dead letter whose `x-error-type` is `TIMEOUT` (the consumer's 40 s in-process budget ran out) may even be a full
+  success: the abandoned attempt is not cancelled and can finish after the message was dead-lettered, push included.
+  The push is deduplicated for only 10 minutes (`PUSH_DEDUPE_TTL_SEC`), so replaying it later pushes again.
+  The marker lasts a fixed 14 days from the enqueue, whatever the `.dlq` retention: a replay later than that (from a
+  `.dlq` kept longer, an archive, or a segment Kafka has not deleted yet) sends the mail again, so before such a
+  replay check the recipient or the mail job. Rollout: the marker covers only mails enqueued by a replica that runs
+  this version. For 14 days after the upgrade, and after a rollback, mails enqueued by the old version have only the
+  old 24 h dedupe (the job id), so a replay of an older backlog may send them again. The shipped
+  `docker/kafka/topics.txt` keeps `.dlq` records for **14 days** (`retention.ms=1209600000`); Kafka then deletes
+  them a closed segment at a time, so a dead letter can stay readable for up to `segment.ms` longer. In production,
+  raise the `.dlq` retention on your cluster or archive the topics elsewhere so an incident found late can still be
+  replayed (and mind the 14-day mail marker above). The alert resolves 15 minutes after the last dead
   letter, so it does not say whether the replay ran: check the replay's log line (`Replayed N record(s)`).
 - **Enabling the ledger later.** `LEDGER_ENABLED=false` writes no posting rows. After enabling it, backfill history with
   one `ReconcileLedgerCommand` with an explicit window (reconciliation R4 re-enqueues every Stripe balance
