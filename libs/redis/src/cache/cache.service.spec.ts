@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { redisConfig } from '@platform/config';
 import { type Cache, createCache } from 'cache-manager';
 import { Keyv } from 'keyv';
@@ -111,6 +112,33 @@ describe('AppCacheService', () => {
     await a.service.getOrSet(key, async () => 1);
     await a.service.getOrSet(key, async () => 1);
     expect(await a.series()).toEqual(['other/miss', 'other/hit']);
+  });
+
+  it('counts the 33rd distinct cache name under other and warns once', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    try {
+      const { a } = await cluster();
+      const names = Array.from({ length: 33 }, (_, i) => `tenant-${i + 1}`);
+      for (const name of names) await a.service.getOrSet(`${name}:k`, async () => 1, 30_000, name);
+      for (const name of names.slice(0, 32)) expect(await a.count(name, 'miss')).toBe(1);
+      expect(await a.count('tenant-33', 'miss')).toBe(0);
+      expect(await a.count('other', 'miss')).toBe(1);
+      // a name past the cap stays under other, a name already seen keeps its own label
+      await a.service.getOrSet('tenant-34:k', async () => 1, 30_000, 'tenant-34');
+      await a.service.getOrSet('tenant-1:k', async () => 1, 30_000, 'tenant-1');
+      await a.service.getOrSet('tenant-33:k', async () => 1, 30_000, 'tenant-33');
+      expect(await a.count('other', 'miss')).toBe(2);
+      expect(await a.count('other', 'hit')).toBe(1);
+      expect(await a.count('tenant-1', 'hit')).toBe(1);
+      // 32 named miss series, tenant-1/hit, other/miss, other/hit
+      expect(await a.series()).toHaveLength(35);
+      const capWarnings = warn.mock.calls.filter(([message]) =>
+        String(message).includes('distinct cache names'),
+      );
+      expect(capWarnings).toHaveLength(1);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it('counts a miss when the loader fails and rethrows', async () => {

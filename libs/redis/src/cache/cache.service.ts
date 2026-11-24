@@ -32,12 +32,15 @@ export interface CacheRequestCounter {
 /** The label when the caller gave no (safe) name and the key has no safe prefix. */
 const OTHER_CACHE = 'other';
 const SAFE_CACHE_NAME = /^[a-z][a-z0-9_-]{0,31}$/;
+/** Most distinct `cache` labels (besides `other`) one process uses; later new names are `other`. */
+const MAX_CACHE_LABELS = 32;
 
 /**
  * The `cache` label of one `getOrSet`: the caller's name, else the key's prefix before the first
  * `:`, each only when it is short and made of `[a-z0-9_-]`; anything else (a raw uuid, an id, free
- * text) is `other`. A key never reaches a label, which keeps the series count bounded only if callers
- * pass names and key prefixes from a small fixed set: never derive one from a tenant, user or id.
+ * text) is `other`. A key never reaches a label. Shape only: `AppCacheService` also caps how
+ * many distinct names it labels (`MAX_CACHE_LABELS`), so a caller that derives one from a tenant,
+ * user or id cannot create a series per value, but should still never do it.
  */
 export function cacheMetricName(key: string, name?: string): string {
   if (name !== undefined && SAFE_CACHE_NAME.test(name)) return name;
@@ -84,6 +87,9 @@ export class AppCacheService implements OnModuleInit, OnModuleDestroy {
   private readonly channel: string;
   private readonly onMessage: (channel: string, message: string) => void;
   private l1: BoundedTtlKeyv | undefined;
+  /** The distinct `cache` label values used so far (never `other`), at most `MAX_CACHE_LABELS`. */
+  private readonly cacheLabels = new Set<string>();
+  private cacheLabelCapWarned = false;
 
   constructor(
     @Inject(CACHE_MANAGER) private readonly cache: Cache,
@@ -127,7 +133,8 @@ export class AppCacheService implements OnModuleInit, OnModuleDestroy {
    * Cached value of `key`, or `loader()` stored for `ttlMs` (default `CACHE_TTL_MS`). Counts
    * `cache_requests_total`: a call that ran the loader is a `miss`, any other (a cache hit, or a
    * concurrent call that waited on another's loader) a `hit`. `cacheName` is the `cache` label; see
-   * `cacheMetricName` for the fallback.
+   * `cacheMetricName` for the fallback. A process labels at most `MAX_CACHE_LABELS` distinct names:
+   * a further one is counted as `other` (and warned about once).
    */
   async getOrSet<T>(
     key: string,
@@ -135,7 +142,7 @@ export class AppCacheService implements OnModuleInit, OnModuleDestroy {
     ttlMs?: number,
     cacheName?: string,
   ): Promise<T> {
-    const cache = cacheMetricName(key, cacheName);
+    const cache = this.cacheLabel(key, cacheName);
     let loaded = false;
     const value = await this.cache.wrap<T>(
       key,
@@ -165,6 +172,25 @@ export class AppCacheService implements OnModuleInit, OnModuleDestroy {
     if (unique.length === 0) return;
     await this.cache.mdel(unique);
     await this.broadcast(unique);
+  }
+
+  /** `cacheMetricName`, held to `MAX_CACHE_LABELS` distinct names per process. */
+  private cacheLabel(key: string, cacheName?: string): string {
+    const label = cacheMetricName(key, cacheName);
+    if (label === OTHER_CACHE || this.cacheLabels.has(label)) return label;
+    if (this.cacheLabels.size < MAX_CACHE_LABELS) {
+      this.cacheLabels.add(label);
+      return label;
+    }
+    if (!this.cacheLabelCapWarned) {
+      this.cacheLabelCapWarned = true;
+      this.logger.warn(
+        `more than ${MAX_CACHE_LABELS} distinct cache names: "${label}" and later new names ` +
+          `are counted as "${OTHER_CACHE}"; pass a static cache name, never one derived ` +
+          'from a tenant or an id',
+      );
+    }
+    return OTHER_CACHE;
   }
 
   private async broadcast(keys: string[]): Promise<void> {
