@@ -10,6 +10,7 @@ import {
   DomainValidationException,
   ExternalServiceException,
   getPrincipal,
+  OperationTimeoutException,
   PLATFORM_TENANT_ID,
   ServiceUnavailableException,
   SystemContext,
@@ -25,7 +26,7 @@ import {
 } from '@platform/transport';
 import { register } from 'prom-client';
 import { catchError, defer, lastValueFrom } from 'rxjs';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LEDGER_TEST_TENANT as TENANT_A } from '../../../test/ledger-fixtures.js';
 import { PostLedgerEntryCommand } from '../../application/commands/post-ledger-entry/post-ledger-entry.command.js';
 import { PostLedgerEntryHandler } from '../../application/commands/post-ledger-entry/post-ledger-entry.handler.js';
@@ -399,6 +400,68 @@ describe('LedgerPostingConsumer', () => {
         expect(store.discrepancies).toEqual([]);
       },
     );
+  });
+
+  describe('a spent in-process budget: redelivered, never dead-lettered (B3-6)', () => {
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('the consumer sets onBudgetExceeded: redeliver, and a hung posting becomes KafkaRetriableException', async () => {
+      vi.useFakeTimers();
+      vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+      vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      // The consumer's own interceptor, as `@KafkaConsumerController()` configured it.
+      const interceptors: unknown[] = Reflect.getMetadata(
+        INTERCEPTORS_METADATA,
+        LedgerPostingConsumer,
+      );
+      const retry = interceptors.find((i) => i instanceof KafkaRetryInterceptor);
+      expect(retry).toBeInstanceOf(KafkaRetryInterceptor);
+
+      // Stripe never answers (a hung connection): the posting outlasts the budget.
+      ledgerSource.mockReturnValue(new Promise<never>(() => undefined));
+      const sent: { topic: string }[] = [];
+      const message = envelope(payload());
+      const context = new KafkaContext([
+        { key: TENANT_A, value: message, headers: {}, offset: '9' } as never,
+        0,
+        LEDGER_POSTING_REQUESTED_EVENT.topic,
+        {} as never,
+        () => Promise.resolve(),
+        {
+          send: async (record: { topic: string }) => {
+            sent.push(record);
+            return [];
+          },
+        } as never,
+      ]);
+      const rpc = {
+        getType: () => 'rpc',
+        switchToRpc: () => ({ getContext: () => context, getData: () => message }),
+      } as unknown as ExecutionContext & ArgumentsHost;
+      let outcome: unknown;
+      void lastValueFrom(
+        (retry as KafkaRetryInterceptor)
+          .intercept(rpc, { handle: () => defer(() => consumer.onLedgerPosting(message)) })
+          .pipe(catchError((error: unknown) => new KafkaDeadLetterFilter().catch(error, rpc))),
+      ).then(
+        (value) => {
+          outcome = { value };
+        },
+        (error: unknown) => {
+          outcome = { error };
+        },
+      );
+
+      await vi.advanceTimersByTimeAsync(DEFAULT_KAFKA_RETRY_OPTIONS.budgetMs);
+
+      const { error } = outcome as { error?: unknown };
+      expect(error).toBeInstanceOf(KafkaRetriableException);
+      expect((error as Error).cause).toBeInstanceOf(OperationTimeoutException);
+      expect(sent).toEqual([]);
+      expect(ledgerSource).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('a Postgres outage after the post is retriable, and the redelivery records the ref as replayed', async () => {

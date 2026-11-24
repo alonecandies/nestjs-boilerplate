@@ -1,9 +1,15 @@
 import { type ArgumentsHost, Logger } from '@nestjs/common';
 import { KafkaContext, KafkaRetriableException } from '@nestjs/microservices';
 import { DomainValidationException } from '@platform/common';
+import { register } from 'prom-client';
 import { firstValueFrom, lastValueFrom, type Observable } from 'rxjs';
-import { beforeAll, describe, expect, it, vi } from 'vitest';
-import { buildDeadLetterRecord, errorTypeOf } from './dead-letter.js';
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  buildDeadLetterRecord,
+  errorTypeOf,
+  KAFKA_DEAD_LETTER_SEND_TIMEOUT_MS,
+  sendToDeadLetter,
+} from './dead-letter.js';
 import { InvalidEventException } from './kafka.errors.js';
 import { KafkaDeadLetterFilter } from './kafka-dead-letter.filter.js';
 
@@ -106,6 +112,74 @@ describe('KafkaDeadLetterFilter', () => {
     await expect(
       lastValueFrom(new KafkaDeadLetterFilter().catch(error, host('rpc', kafkaContext(send)))),
     ).rejects.toBe(error);
+  });
+});
+
+describe('KafkaDeadLetterFilter: a slow dead-letter send', () => {
+  beforeAll(() => {
+    Logger.overrideLogger(false);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const redeliveries = async (): Promise<number> => {
+    const metric = register.getSingleMetric('kafka_consumer_messages_total');
+    const values = metric === undefined ? [] : (await metric.get()).values;
+    return (
+      values.find(
+        ({ labels }) =>
+          labels['topic'] === 'fixture.user-registered.v1' && labels['outcome'] === 'redelivery',
+      )?.value ?? 0
+    );
+  };
+
+  /** The outcome of `promise`, readable synchronously once the fake clock has moved. */
+  function watch<T>(promise: Promise<T>): { settled: boolean; value?: T; error?: unknown } {
+    const state: { settled: boolean; value?: T; error?: unknown } = { settled: false };
+    promise.then(
+      (value) => Object.assign(state, { settled: true, value }),
+      (error: unknown) => Object.assign(state, { settled: true, error }),
+    );
+    return state;
+  }
+
+  it('waits 5 s for a send that never settles, then rethrows the original error and counts redelivery', async () => {
+    expect(KAFKA_DEAD_LETTER_SEND_TIMEOUT_MS).toBe(5_000);
+    vi.useFakeTimers();
+    const before = await redeliveries();
+    const send = vi.fn<Send>(() => new Promise<never>(() => undefined));
+    const error = new Error('handler failed');
+
+    const outcome = watch(
+      lastValueFrom(new KafkaDeadLetterFilter().catch(error, host('rpc', kafkaContext(send)))),
+    );
+    await vi.advanceTimersByTimeAsync(KAFKA_DEAD_LETTER_SEND_TIMEOUT_MS - 1);
+    expect(outcome.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome).toEqual({ settled: true, error });
+    expect(await redeliveries()).toBe(before + 1);
+    expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it('dead-letters a send that is slow but acknowledged within the deadline', async () => {
+    vi.useFakeTimers();
+    const send = vi.fn<Send>(() => new Promise((resolve) => setTimeout(() => resolve([]), 4_000)));
+    const outcome = watch(
+      lastValueFrom(
+        new KafkaDeadLetterFilter().catch(new Error('poison'), host('rpc', kafkaContext(send))),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(outcome).toEqual({ settled: true, value: null });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('sendToDeadLetter takes its deadline as a parameter', async () => {
+    const send = vi.fn<Send>(() => new Promise<never>(() => undefined));
+    await expect(
+      sendToDeadLetter(kafkaContext(send), new Error('x'), new Date(0), 10),
+    ).rejects.toMatchObject({ code: 'TIMEOUT', details: { timeoutMs: 10 } });
   });
 });
 

@@ -58,8 +58,12 @@ const POSTGRES_RETRIABLE_CODES: readonly string[] = ['57014', '55P03', '25P03'];
  * Stripe 404, `42501`) is thrown as is and `@KafkaConsumerController()` dead-letters it to
  * `billing.ledger-posting.v1.dlq` without a discrepancy (the interceptor retries only what
  * `isRetriableKafkaHandlerError` accepts).
+ * A posting that outlasts the in-process budget (`onBudgetExceeded: 'redeliver'`: Stripe's SDK
+ * retries, a hung immudb or Postgres) also becomes `KafkaRetriableException`, like the outages
+ * above: it is redelivered, never dead-lettered. The abandoned attempt may still finish next to its
+ * redelivery; the deterministic entry ids make one of them `replayed`.
  */
-@KafkaConsumerController()
+@KafkaConsumerController({ retry: { onBudgetExceeded: 'redeliver' } })
 export class LedgerPostingConsumer {
   constructor(private readonly commandBus: CommandBus) {}
 

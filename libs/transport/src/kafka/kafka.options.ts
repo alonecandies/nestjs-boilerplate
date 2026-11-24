@@ -73,6 +73,20 @@ const PRODUCER_OPTIONS = {
   send: { acks: -1, timeout: 30_000, compression: CompressionTypes.GZIP },
 } as const satisfies Pick<NonNullable<KafkaOptions['options']>, 'producer' | 'send'>;
 
+/**
+ * Consumer timing (B3-6). The broker evicts a member it has not heard from for `sessionTimeout`.
+ * kafkajs heartbeats between messages, and `KafkaRetryInterceptor` also heartbeats every
+ * `heartbeatInterval` while one message's work runs. kafkajs skips a heartbeat asked for less than
+ * one interval after the last one, so the last heartbeat is at most about two intervals old.
+ * One message's in-process work is bounded by `KafkaRetryOptions.budgetMs` plus the dead-letter
+ * send deadline (`KAFKA_DEAD_LETTER_SEND_TIMEOUT_MS`), which stays well below `rebalanceTimeout`, so
+ * a member always rejoins a rebalance in time. `kafka.options.spec.ts` checks both for every
+ * `@KafkaConsumerController()` in the repo.
+ */
+export const KAFKA_SESSION_TIMEOUT_MS = 30_000;
+export const KAFKA_HEARTBEAT_INTERVAL_MS = 3_000;
+export const KAFKA_REBALANCE_TIMEOUT_MS = 60_000;
+
 export interface KafkaServerOptionsExtras {
   /** Consumer group. Default `kafkaConfig.groupId` (`SERVICE_NAME`). */
   groupId?: string | undefined;
@@ -88,6 +102,7 @@ export interface KafkaServerOptionsExtras {
  * - `partitionsConsumedConcurrently` parallelises across partitions and keeps per-partition order.
  * - `autoCommit` stays on: Nest 12 awaits the handler before kafkajs resolves the offset, so it is
  *   at-least-once. Handlers must be idempotent (dedupe on the envelope id).
+ * - The session, heartbeat and rebalance timeouts are the exported constants above.
  */
 export function createKafkaServerOptions(
   cfg: KafkaNamespaceConfig,
@@ -101,9 +116,9 @@ export function createKafkaServerOptions(
       consumer: {
         groupId: extras.groupId ?? cfg.groupId,
         allowAutoTopicCreation: false,
-        sessionTimeout: 30_000,
-        heartbeatInterval: 3_000,
-        rebalanceTimeout: 60_000,
+        sessionTimeout: KAFKA_SESSION_TIMEOUT_MS,
+        heartbeatInterval: KAFKA_HEARTBEAT_INTERVAL_MS,
+        rebalanceTimeout: KAFKA_REBALANCE_TIMEOUT_MS,
         retry: { retries: 8 },
       },
       run: { partitionsConsumedConcurrently: cfg.partitionsConsumedConcurrently, autoCommit: true },

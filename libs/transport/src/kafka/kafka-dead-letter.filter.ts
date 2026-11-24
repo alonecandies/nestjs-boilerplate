@@ -24,9 +24,11 @@ import { recordKafkaOutcome } from './kafka-metrics.js';
  * - The returned observable EMITS once (`null`). `ServerKafka` awaits it with `lastValueFrom`, so
  *   `EMPTY` would fail with `EmptyError` and be treated as a handler error.
  * - `KafkaRetriableException` is rethrown on purpose: it is the explicit "let kafkajs retry" signal.
- * - If the dead-letter publish itself fails (broker unavailable), the ORIGINAL error is rethrown so
- *   kafkajs redelivers the message later. Nothing is lost; at worst it is processed twice, which
- *   handlers tolerate by deduplicating on the envelope id.
+ * - If the dead-letter publish itself fails (broker unavailable), or is not acknowledged within
+ *   `KAFKA_DEAD_LETTER_SEND_TIMEOUT_MS` (5 s, so the send cannot hold the consumer past its
+ *   rebalance timeout), the ORIGINAL error is rethrown so kafkajs redelivers the message later.
+ *   Nothing is lost; at worst it is processed twice, which handlers tolerate by deduplicating on
+ *   the envelope id.
  * - Non-Kafka contexts are rethrown untouched.
  * - Transient failures reach it only after `KafkaRetryInterceptor` (applied by
  *   `@KafkaConsumerController()`) has retried them; replay the dead-letter topic with

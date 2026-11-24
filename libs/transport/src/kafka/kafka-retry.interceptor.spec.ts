@@ -1,24 +1,38 @@
-import { type CallHandler, type ExecutionContext, Logger } from '@nestjs/common';
+import {
+  type ArgumentsHost,
+  type CallHandler,
+  type ExecutionContext,
+  Logger,
+} from '@nestjs/common';
 import { KafkaContext, KafkaRetriableException } from '@nestjs/microservices';
-import { DomainValidationException, ServiceUnavailableException } from '@platform/common';
-import { defer, lastValueFrom } from 'rxjs';
-import { describe, expect, it, vi } from 'vitest';
+import {
+  DomainValidationException,
+  OperationTimeoutException,
+  ServiceUnavailableException,
+} from '@platform/common';
+import { catchError, defer, lastValueFrom } from 'rxjs';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { InvalidEventException } from './kafka.errors.js';
+import { KAFKA_HEARTBEAT_INTERVAL_MS } from './kafka.options.js';
+import { KafkaDeadLetterFilter } from './kafka-dead-letter.filter.js';
 import {
   DEFAULT_KAFKA_RETRY_OPTIONS,
   isRetriableKafkaHandlerError,
   KafkaRetryInterceptor,
 } from './kafka-retry.interceptor.js';
 
-function kafkaContext(): KafkaContext {
+/** `heartbeat` is what kafkajs hands `eachMessage` (`undefined`: a context without one). */
+function kafkaContext(
+  heartbeat: (() => Promise<void>) | undefined = () => Promise.resolve(),
+): KafkaContext {
   const message = { key: 'k', value: {}, headers: {}, offset: '7' };
   return new KafkaContext([
     message as never,
     0,
     'fixture.user-registered.v1',
     {} as never,
-    () => Promise.resolve(),
+    heartbeat,
     {} as never,
   ]);
 }
@@ -119,6 +133,237 @@ describe('KafkaRetryInterceptor', () => {
   it('keeps the total default backoff far below the consumer session timeout', () => {
     const { attempts, maxDelayMs } = DEFAULT_KAFKA_RETRY_OPTIONS;
     expect((attempts - 1) * maxDelayMs).toBeLessThan(30_000 / 4);
+  });
+});
+
+describe('KafkaRetryInterceptor: one budget for all of a message, heartbeats meanwhile', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  /** The outcome of `promise`, readable synchronously once the fake clock has moved. */
+  function watch<T>(promise: Promise<T>): { settled: boolean; value?: T; error?: unknown } {
+    const state: { settled: boolean; value?: T; error?: unknown } = { settled: false };
+    promise.then(
+      (value) => Object.assign(state, { settled: true, value }),
+      (error: unknown) => Object.assign(state, { settled: true, error }),
+    );
+    return state;
+  }
+
+  const never = (): { next: CallHandler; calls: () => number } => {
+    const run = vi.fn(() => new Promise<never>(() => undefined));
+    return { next: { handle: () => defer(run) }, calls: () => run.mock.calls.length };
+  };
+  const after = (ms: number, outcome: () => Promise<unknown>) => () =>
+    new Promise((resolve) => setTimeout(resolve, ms)).then(outcome);
+
+  it('rejects a handler that never settles at budgetMs, heartbeating at the start and every 3 s', async () => {
+    const heartbeat = vi.fn(() => Promise.resolve());
+    const { next, calls } = never();
+    const { budgetMs } = DEFAULT_KAFKA_RETRY_OPTIONS;
+    expect(budgetMs).toBe(40_000);
+    expect(KAFKA_HEARTBEAT_INTERVAL_MS).toBe(3_000);
+
+    const outcome = watch(
+      lastValueFrom(
+        new KafkaRetryInterceptor().intercept(
+          executionContext('rpc', kafkaContext(heartbeat)),
+          next,
+        ),
+      ),
+    );
+    expect(heartbeat).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(KAFKA_HEARTBEAT_INTERVAL_MS);
+    expect(heartbeat).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(budgetMs - KAFKA_HEARTBEAT_INTERVAL_MS - 1);
+    expect(outcome.settled).toBe(false);
+    // 0 s, 3 s, …, 39 s.
+    expect(heartbeat).toHaveBeenCalledTimes(14);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(outcome.error).toBeInstanceOf(OperationTimeoutException);
+    expect((outcome.error as Error).message).toBe(
+      'fixture.user-registered.v1[0]@7 spent its in-process budget of 40000 ms (KafkaRetryInterceptor)',
+    );
+
+    // Nothing runs on: no further heartbeat, no further attempt, no timer left behind.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(heartbeat).toHaveBeenCalledTimes(14);
+    expect(calls()).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('starts no further attempt once the budget ends during a delay', async () => {
+    let attempts = 0;
+    const next: CallHandler = {
+      handle: () =>
+        defer(
+          after(500, () => {
+            attempts += 1;
+            return Promise.reject(new ServiceUnavailableException('cassandra down'));
+          }),
+        ),
+    };
+    const interceptor = new KafkaRetryInterceptor({
+      budgetMs: 1_000,
+      minDelayMs: 2_000,
+      maxDelayMs: 2_000,
+    });
+
+    const outcome = watch(
+      lastValueFrom(interceptor.intercept(executionContext('rpc', kafkaContext()), next)),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(attempts).toBe(1);
+    expect(outcome.error).toBeInstanceOf(OperationTimeoutException);
+    expect((outcome.error as Error).cause).toBeInstanceOf(ServiceUnavailableException);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(attempts).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('bounds a handler without retries (attempts: 1) too', async () => {
+    const { next } = never();
+    const outcome = watch(
+      lastValueFrom(
+        new KafkaRetryInterceptor({ attempts: 1, budgetMs: 1_000 }).intercept(
+          executionContext('rpc', kafkaContext()),
+          next,
+        ),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(outcome.error).toBeInstanceOf(OperationTimeoutException);
+  });
+
+  it("turns a spent budget into KafkaRetriableException with onBudgetExceeded: 'redeliver'", async () => {
+    const { next } = never();
+    const outcome = watch(
+      lastValueFrom(
+        new KafkaRetryInterceptor({ budgetMs: 1_000, onBudgetExceeded: 'redeliver' }).intercept(
+          executionContext('rpc', kafkaContext()),
+          next,
+        ),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(outcome.error).toBeInstanceOf(KafkaRetriableException);
+    expect((outcome.error as Error).cause).toBeInstanceOf(OperationTimeoutException);
+  });
+
+  it.each([
+    ['rejects', () => Promise.reject(new Error('coordinator not available'))],
+    [
+      'throws',
+      () => {
+        throw new Error('not a promise');
+      },
+    ],
+  ])(
+    'a heartbeat that %s changes no outcome and is tried again 3 s later',
+    async (_label, fail) => {
+      const debug = vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
+      const heartbeat = vi.fn<() => Promise<void>>(fail);
+      const ok: CallHandler = { handle: () => defer(after(7_000, () => Promise.resolve('ok'))) };
+      const outcome = watch(
+        lastValueFrom(
+          new KafkaRetryInterceptor().intercept(
+            executionContext('rpc', kafkaContext(heartbeat)),
+            ok,
+          ),
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(outcome).toEqual({ settled: true, value: 'ok' });
+      expect(heartbeat).toHaveBeenCalledTimes(3);
+      expect(debug).toHaveBeenCalledWith(
+        expect.stringMatching(/^Heartbeat during fixture\.user-registered\.v1\[0\]@7 failed: /),
+      );
+
+      const failure = new DomainValidationException('nope');
+      const failing: CallHandler = {
+        handle: () => defer(after(7_000, () => Promise.reject(failure))),
+      };
+      const failed = watch(
+        lastValueFrom(
+          new KafkaRetryInterceptor().intercept(
+            executionContext('rpc', kafkaContext(heartbeat)),
+            failing,
+          ),
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(7_000);
+      expect(failed).toEqual({ settled: true, error: failure });
+    },
+  );
+
+  it.each(['REBALANCE_IN_PROGRESS', 'NOT_COORDINATOR_FOR_GROUP', 'ILLEGAL_GENERATION'])(
+    'stops heartbeating after a %s rejection (kafkajs rejoins after the message)',
+    async (type) => {
+      vi.spyOn(Logger.prototype, 'debug').mockImplementation(() => undefined);
+      const heartbeat = vi.fn(() =>
+        Promise.reject(Object.assign(new Error('The group is rebalancing'), { type })),
+      );
+      const ok: CallHandler = { handle: () => defer(after(10_000, () => Promise.resolve('ok'))) };
+      const outcome = watch(
+        lastValueFrom(
+          new KafkaRetryInterceptor().intercept(
+            executionContext('rpc', kafkaContext(heartbeat)),
+            ok,
+          ),
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(outcome).toEqual({ settled: true, value: 'ok' });
+      expect(heartbeat).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('skips heartbeats for a context without the function (a unit fake), and leaves no timer', async () => {
+    const ok: CallHandler = { handle: () => defer(after(5_000, () => Promise.resolve('ok'))) };
+    const outcome = watch(
+      lastValueFrom(
+        new KafkaRetryInterceptor().intercept(executionContext('rpc', kafkaContext(undefined)), ok),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(outcome).toEqual({ settled: true, value: 'ok' });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('leaves a spent budget to the dead-letter filter by default', async () => {
+    expect(DEFAULT_KAFKA_RETRY_OPTIONS.onBudgetExceeded).toBe('dead-letter');
+    vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+    const send = vi.fn((_record: { messages: { headers: Record<string, unknown> }[] }) =>
+      Promise.resolve([]),
+    );
+    const context = new KafkaContext([
+      { key: 'k', value: {}, headers: {}, offset: '7' } as never,
+      0,
+      'fixture.user-registered.v1',
+      {} as never,
+      () => Promise.resolve(),
+      { send } as never,
+    ]);
+    const rpc = executionContext('rpc', context) as ExecutionContext & ArgumentsHost;
+    const { next } = never();
+    const outcome = watch(
+      lastValueFrom(
+        new KafkaRetryInterceptor({ budgetMs: 1_000 })
+          .intercept(rpc, next)
+          .pipe(catchError((error: unknown) => new KafkaDeadLetterFilter().catch(error, rpc))),
+      ),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(outcome).toEqual({ settled: true, value: null });
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send.mock.calls[0]?.[0].messages[0]?.headers['x-error-type']).toBe('TIMEOUT');
   });
 });
 
