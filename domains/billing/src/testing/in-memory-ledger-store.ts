@@ -225,7 +225,6 @@ export class InMemoryLedgerSystemRepository extends LedgerSystemRepository {
   override async readTrustedState(database: string): Promise<TrustedStateRead | null> {
     requireSystemContext('ledgerTrustedState.read');
     const stored = this.store.trustedStates.get(database);
-    const latest = this.store.reanchors.findLast((row) => row.database === database);
     return stored === undefined
       ? null
       : {
@@ -233,14 +232,13 @@ export class InMemoryLedgerSystemRepository extends LedgerSystemRepository {
           txHash: new Uint8Array(stored.txHash),
           verifiedAt: new Date(stored.verifiedAt),
           readAt: stored.readAt === null ? null : new Date(stored.readAt),
-          reanchor:
-            latest === undefined
-              ? null
-              : {
-                  txId: latest.to.txId,
-                  lostFrom: new Date(latest.lostFrom),
-                  at: new Date(latest.createdAt),
-                },
+          reanchors: this.store.reanchors
+            .filter((row) => row.database === database)
+            .map((row) => ({
+              txId: row.to.txId,
+              lostFrom: new Date(row.lostFrom),
+              at: new Date(row.createdAt),
+            })),
         };
   }
 

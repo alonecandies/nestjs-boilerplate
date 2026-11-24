@@ -132,7 +132,8 @@ the server **with the same key**: the apps pin the public key ([SECURITY.md](SEC
 
 **Restore.** UNTESTED end to end.
 
-1. Stop billing-service (or the monolith), so no posting or reconcile run races the restore.
+1. Stop billing-service (or the monolith), so no posting or reconcile run races the restore or the re-anchor. Keep it
+   stopped until the re-anchor (step 4) has committed: the CLI runs on its own.
 2. Start a fresh immudb with the same `--signingKey` and an empty data directory, create the ledger database, then
    check a file without writing it:
 
@@ -143,9 +144,10 @@ the server **with the same key**: the apps pin the public key ([SECURITY.md](SEC
 
    Or, from `immuadmin backup`, copy the saved data directory back with the server stopped.
 
-3. Start the apps. The next reconciliation reports `verification_failed` from R5 when the restored history is
-   shorter than the trusted state: that is the intended alarm, and it does not advance on its own. Do not clear or
-   edit `billing.ledger_trusted_state` by hand.
+3. Leave the apps stopped. Started before the re-anchor, a posting can fall on the wrong side of it (see "What R5
+   checks after a re-anchor" below), and the next reconciliation reports `verification_failed` from R5 when the
+   restored history is shorter than the trusted state: that is the intended alarm, and it does not advance on its
+   own. Do not clear or edit `billing.ledger_trusted_state` by hand.
 4. Re-anchor the trusted state with the audited command. It refuses without a pinned signing key, with an invalid
    state signature, with the ledger off, and when the restored state still extends the trusted one (nothing lost,
    nothing to re-anchor). `LEDGER_ALLOW_UNVERIFIED` does not bypass it.
@@ -169,8 +171,8 @@ the server **with the same key**: the apps pin the public key ([SECURITY.md](SEC
    the app's `REDIS_URL` and `REDIS_KEY_PREFIX`), so its run never overlaps the cron's; while the cron holds it,
    the CLI tries again every 5 seconds for up to 10 minutes.
 
-5. That first reconciliation reports the entries missing from the restored ledger as `verification_failed`
-   and re-enqueues them (R4), and the posting path posts each one once, so the ledger holds one entry per source
+5. Start the apps. That first reconciliation reports the entries missing from the restored ledger as
+   `verification_failed` and re-enqueues them (R4), and the posting path posts each one once, so the ledger holds one entry per source
    again. A lost charge whose payment was paid inside the window also shows an R3 `tenant_mismatch` for its ref
    until it is posted again. The next run is clean. Check `ledger_reconciliation_runs_total`, the
    `LedgerReconciliationStale` alert and the discrepancy rows
@@ -205,6 +207,19 @@ the server **with the same key**: the apps pin the public key ([SECURITY.md](SEC
 by default, `LEDGER_RECONCILE_LOOKBACK_HOURS`), so a loss older than that is not re-posted unless the window
 covers it. Set it to the time of the oldest entry the backup lacks, or earlier.
 
+**What R5 checks after a re-anchor.** A receipt posted before a re-anchor whose tx id is above the restored state's,
+or posted since its `--lost-from`, may name the lost history: R5 verifies it by its entry on every run that lists it,
+whatever its tx id. It checks every re-anchor of the database, so a receipt lost in an earlier restore and not posted
+again is still verified, and reported, after a later one; once posted again it verifies as before. Three limits stay:
+
+- The rule compares the app clock (the receipt's `posted_at`) with the database clock (the re-anchor row), so a
+  posting close to a re-anchor can fall on the wrong side of it when the clocks differ. That is why billing-service
+  (or the monolith) stays stopped from step 1 until the re-anchor has committed.
+- A lost-history receipt is verified on every run that lists it, posted again or not. That is by design.
+- Only the first run after a re-anchor lists receipts from `--lost-from`; later runs list their own window (72 hours
+  back by default). An older receipt that is still not posted again is reported by that first run and is then kept
+  only as its stored `verification_failed` finding.
+
 ## Restore order and loss windows
 
 Restore in this order, and stop at the first store that did not need it:
@@ -212,7 +227,7 @@ Restore in this order, and stop at the first store that did not need it:
 1. **Postgres and Citus first.** Every other store is read through Postgres state (payments, receipts, outbox).
    Bring up the database, the roles and PgBouncer, with the apps still stopped.
 2. **immudb second, then the re-anchor.** The ledger is checked against Postgres receipts, so Postgres comes first.
-   Restore the data, start billing-service, run the re-anchor, and let one reconciliation finish.
+   Restore the data, run the re-anchor and let its reconciliation finish, then start billing-service.
 3. **Cassandra at any time.** It shares no data with the others and can be restored before, after or in parallel.
 4. Start the rest of the apps and check `/health/ready`.
 

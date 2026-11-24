@@ -11,7 +11,7 @@ import {
   type PaymentList,
 } from '@domain/billing-contracts';
 import type { Metadata } from '@grpc/grpc-js';
-import { Inject, Injectable, type OnModuleInit, Optional } from '@nestjs/common';
+import { Inject, Injectable, Logger, type OnModuleInit, Optional } from '@nestjs/common';
 import type { ClientGrpc } from '@nestjs/microservices';
 import { type GrpcConfig, grpcConfig } from '@platform/config';
 import {
@@ -68,10 +68,12 @@ interface CallBudget {
  * The calls that wait on Stripe (`CreateCheckoutSession`, `HandleStripeWebhook`) get
  * `BILLING_GRPC_STRIPE_DEADLINE_MS` and the `billing-stripe` breaker; `ListPayments` keeps
  * `GRPC_DEADLINE_MS` and the `billing` breaker. Slow Stripe calls thus neither time out at the
- * generic deadline nor cut off payment listing.
+ * generic deadline nor cut off payment listing. A Stripe deadline below `GRPC_DEADLINE_MS` works but
+ * is almost certainly a mistake, so it is reported once at module init (a warning, not a refusal).
  */
 @Injectable()
 export class BillingGrpcAdapter implements BillingPort, OnModuleInit {
+  private readonly logger = new Logger(BillingGrpcAdapter.name);
   private client: BillingServiceClient;
 
   constructor(
@@ -84,6 +86,13 @@ export class BillingGrpcAdapter implements BillingPort, OnModuleInit {
 
   onModuleInit(): void {
     this.client = this.grpc.getService<BillingServiceClient>(BILLING_SERVICE_NAME);
+    if (this.billing.stripeDeadlineMs < this.config.deadlineMs) {
+      this.logger.warn(
+        `BILLING_GRPC_STRIPE_DEADLINE_MS (${this.billing.stripeDeadlineMs}) is below ` +
+          `GRPC_DEADLINE_MS (${this.config.deadlineMs}): the calls that wait on Stripe ` +
+          '(CreateCheckoutSession, HandleStripeWebhook) get less time than every other call',
+      );
+    }
   }
 
   createCheckoutSession(input: CreateCheckoutSessionRequest): Promise<CheckoutSession> {

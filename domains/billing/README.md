@@ -688,7 +688,8 @@ compare-and-set → the run `failed`, no finding; an entry that does not verify 
 tenant (`ledger_entries:<id>`), the state still advances. No row yet: the current state is taken on trust (its signature
 still checked), with a warning. After a re-anchor (below), a ref posted before it whose tx id is above the re-anchored
 state's, or posted since its lost-from time, may name the lost history: it is verified like a `replayed` ref, on every
-run that lists it, whatever its tx id. In production `LEDGER_ENABLED=true` refuses to start without `LEDGER_VERIFY=true` and a
+run that lists it, whatever its tx id. Every re-anchor counts (`readTrustedState` returns one per restore), so a later
+one does not clear a ref an earlier one named. In production `LEDGER_ENABLED=true` refuses to start without `LEDGER_VERIFY=true` and a
 pinned key, unless `LEDGER_ALLOW_UNVERIFIED=true`. Metrics: `ledger_reconciliation_runs_total{status}`,
 `ledger_reconciliation_last_success_timestamp_seconds`, `ledger_discrepancies_total{kind}` (new rows only),
 `ledger_verified_tx_id` and `ledger_unverified_tx_lag` (R5). Tests: one
@@ -734,9 +735,16 @@ re-anchor is then refused (`nothing-lost`), so `--reconcile-only` (same flags) d
 (`reanchor-needed`) while the current state does not extend the trusted one, and (`lost-from-in-grace`) while
 `--lost-from` is inside the last 15 minutes (nothing to reconcile yet). Exit codes: 0 done (or the run skipped), 1
 refused or failed
-(Redis unreachable too), 2 usage, 3 the run failed, 4 the lock stayed busy. R5 honours only the latest re-anchor: a ref lost in an earlier restore and not posted again can fall out of
-the lost-history rule after a second re-anchor and be skipped, so heal the previous run's `verification_failed` refs
-before re-anchoring again. Without arguments the CLI prints its usage and exits 2, reading no config and opening no connection (the image build's
+(Redis unreachable too), 2 usage, 3 the run failed, 4 the lock stayed busy. R5 checks a ref against every re-anchor of
+the database, so a ref lost in an earlier restore and not posted again is still verified, and reported, after a second
+re-anchor; once posted again it verifies by its entry id and payload hash, as before. What stays: (a) the rule compares
+the app clock (the ref's `posted_at`) with the database clock (the re-anchor row's `created_at`), so a posting close to
+a re-anchor can fall on the wrong side of it when the clocks differ: stop the posting consumers (billing-service, or the
+monolith) before a restore and start them again once the re-anchor has committed; (b) a lost-history ref is verified on
+every run that lists it, posted again or not, by design; (c) only the first run after a re-anchor lists refs from the
+lost-from time (the re-anchor stores it as the state's `read_at`), later runs list their own window (the 72 h lookback,
+`LEDGER_RECONCILE_LOOKBACK_HOURS`), so an older unhealed ref is reported by that first run and is then kept only as its
+stored finding. Without arguments the CLI prints its usage and exits 2, reading no config and opening no connection (the image build's
 load check). Tests: `reanchor-ledger.handler.spec.ts`, `ledger-reanchor-cli.spec.ts`, the R5 spec and
 `test/ledger-reanchor.int-spec.ts` (Citus + two immudb servers with one `--signingKey`: the restore fails R5; the CLI
 without a key and with another key writes nothing; with the right key one audit row and the state; B re-posted once;

@@ -1,5 +1,6 @@
 import type { BillingServiceClient, Payment } from '@domain/billing-contracts';
 import { Metadata, status } from '@grpc/grpc-js';
+import { Logger } from '@nestjs/common';
 import type { ClientGrpc } from '@nestjs/microservices';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
 import {
@@ -17,7 +18,10 @@ import { ClsServiceManager } from 'nestjs-cls';
 import { defer, NEVER, type Observable, of, throwError } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BillingGrpcAdapter, normalizePayment } from './billing-grpc.adapter.js';
-import type { BillingGrpcClientConfig } from './billing-grpc-client.config.js';
+import {
+  type BillingGrpcClientConfig,
+  billingGrpcClientConfig,
+} from './billing-grpc-client.config.js';
 
 /** The Stripe-backed calls' deadline here: shorter than GRPC_DEADLINE_MS keeps the specs fast. */
 const STRIPE_DEADLINE_MS = 100;
@@ -254,5 +258,42 @@ describe('BillingGrpcAdapter (port → billing.v1.BillingService)', () => {
       stripeCheckoutSessionId: 'cs_1',
     });
     expect(payment).toMatchObject({ amountTotal: '42', stripeCheckoutSessionId: 'cs_1' });
+  });
+});
+
+describe('BillingGrpcAdapter at module init: a Stripe deadline below GRPC_DEADLINE_MS', () => {
+  const init = (env: { GRPC_DEADLINE_MS?: string; BILLING_GRPC_STRIPE_DEADLINE_MS?: string }) => {
+    const breakers = new GrpcCircuitBreakers();
+    const grpc = { getService: vi.fn(() => ({})) } as unknown as ClientGrpc;
+    const adapter = new BillingGrpcAdapter(
+      grpc,
+      grpcConfig.parse(env),
+      billingGrpcClientConfig.parse(env),
+      breakers,
+    );
+    adapter.onModuleInit();
+    breakers.onApplicationShutdown();
+  };
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('logs one warning naming both variables and their values', () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+    init({ GRPC_DEADLINE_MS: '5000', BILLING_GRPC_STRIPE_DEADLINE_MS: '2000' });
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message] = warn.mock.calls[0] as [string];
+    expect(message).toContain('BILLING_GRPC_STRIPE_DEADLINE_MS (2000)');
+    expect(message).toContain('GRPC_DEADLINE_MS (5000)');
+  });
+
+  it('logs nothing with the defaults, or with the two deadlines equal', () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+
+    init({});
+    init({ GRPC_DEADLINE_MS: '5000', BILLING_GRPC_STRIPE_DEADLINE_MS: '5000' });
+
+    expect(warn).not.toHaveBeenCalled();
   });
 });
