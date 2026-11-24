@@ -46,8 +46,8 @@ import { DATABASE_MIGRATIONS } from './database.migrations.js';
     AppMailerModule.forRootAsync({ templateDirs: [], worker: false }),
     KafkaProducerModule.forRootAsync(),
     // AccessTokenDenylist for LogoutHandler (PasswordHasher and TokenIssuer come with
-    // IdentityCoreModule). No global guards: the service only answers the gateway, which
-    // authenticates and authorises every request.
+    // IdentityCoreModule). No global guards: only the gateway and ai-service call the service; the
+    // gateway authenticates and authorises every request, and ai-service forwards its caller.
     AuthModule.forRootAsync({ globalGuards: false }),
     IdentityGrpcModule,
   ],
