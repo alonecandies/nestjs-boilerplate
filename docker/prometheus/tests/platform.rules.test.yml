@@ -1,0 +1,429 @@
+# promtool unit tests for docker/prometheus/rules/platform.rules.yml (follow-ups Tasks 5 and 6),
+# run by scripts/docker/check-prometheus-rules.sh in the image the compose file pins. Breaker series
+# as @platform/transport exports them: grpc_client_circuit_breaker_state is one-hot per upstream,
+# grpc_client_circuit_breaker_events_total starts at 0 for its three events. `service` is the label
+# Prometheus adds from the scrape target. The kafka_consumergroup_* series are kafka-exporter's.
+# Sample index i is at i × interval.
+rule_files:
+  - ../rules/platform.rules.yml
+
+evaluation_interval: 15s
+
+tests:
+  # A hung upstream with traffic: the breaker cycles open and half_open for 10 minutes while calls
+  # are refused, then recovers (closed, no more refusals). Pages after 5 minutes, resolves on recovery.
+  - name: a hung upstream with traffic pages after 5 minutes and resolves on recovery
+    interval: 15s
+    input_series:
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="billing", state="closed"}'
+        values: "0x39 1x40"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="billing", state="open"}'
+        values: "1x9 0x9 1x9 0x9 0x40"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="billing", state="half_open"}'
+        values: "0x9 1x9 0x9 1x9 0x40"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="billing", event="reject"}'
+        values: "0+10x39 390x40"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="billing", event="failure"}'
+        values: "0+1x9 9x9 10+1x9 19x9 19x40"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="billing", event="success"}'
+        values: "0x39 0+20x40"
+      - series: 'grpc_client_handled_total{service="gateway", grpc_service="billing.v1.BillingService", grpc_method="GetSubscription", grpc_code="CIRCUIT_OPEN"}'
+        values: "0+10x39 390x40"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts:
+          - exp_labels: { severity: page, service: gateway, upstream: billing }
+            exp_annotations:
+              summary: "gateway: circuit breaker to billing refuses calls"
+              description: >-
+                The circuit breaker from gateway to billing has not been closed for 5 minutes and
+                keeps rejecting or failing calls to it. Check that upstream's health, latency and
+                logs, and grpc_client_circuit_breaker_events_total{upstream="billing"} by event.
+      - eval_time: 9m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts:
+          - exp_labels: { severity: page, service: gateway, upstream: billing }
+            exp_annotations:
+              summary: "gateway: circuit breaker to billing refuses calls"
+              description: >-
+                The circuit breaker from gateway to billing has not been closed for 5 minutes and
+                keeps rejecting or failing calls to it. Check that upstream's health, latency and
+                logs, and grpc_client_circuit_breaker_events_total{upstream="billing"} by event.
+      - eval_time: 11m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts: []
+
+  # Two upstreams of one service: identity's breaker went half_open and nothing has called it since
+  # (opossum keeps it half_open until the next call), billing's refuses every call. Only billing
+  # pages. The base rule joined on `service` alone and paged identity too.
+  - name: an idle half_open breaker stays silent next to a refusing one of the same service
+    interval: 15s
+    input_series:
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="identity", state="closed"}'
+        values: "0x80"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="identity", state="open"}'
+        values: "0x80"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="identity", state="half_open"}'
+        values: "1x80"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="identity", event="reject"}'
+        values: "12x80"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="identity", event="failure"}'
+        values: "15x80"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="identity", event="success"}'
+        values: "40x80"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="billing", state="closed"}'
+        values: "0x80"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="billing", state="open"}'
+        values: "1x80"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="billing", state="half_open"}'
+        values: "0x80"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="billing", event="reject"}'
+        values: "0+10x80"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="billing", event="failure"}'
+        values: "0x80"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="billing", event="success"}'
+        values: "0x80"
+      - series: 'grpc_client_handled_total{service="gateway", grpc_service="billing.v1.BillingService", grpc_method="GetSubscription", grpc_code="CIRCUIT_OPEN"}'
+        values: "0+10x80"
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts:
+          - exp_labels: { severity: page, service: gateway, upstream: billing }
+            exp_annotations:
+              summary: "gateway: circuit breaker to billing refuses calls"
+              description: >-
+                The circuit breaker from gateway to billing has not been closed for 5 minutes and
+                keeps rejecting or failing calls to it. Check that upstream's health, latency and
+                logs, and grpc_client_circuit_breaker_events_total{upstream="billing"} by event.
+      - eval_time: 20m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts:
+          - exp_labels: { severity: page, service: gateway, upstream: billing }
+            exp_annotations:
+              summary: "gateway: circuit breaker to billing refuses calls"
+              description: >-
+                The circuit breaker from gateway to billing has not been closed for 5 minutes and
+                keeps rejecting or failing calls to it. Check that upstream's health, latency and
+                logs, and grpc_client_circuit_breaker_events_total{upstream="billing"} by event.
+
+  # Traffic too sparse to be refused: every call is the half-open probe and fails (a hung upstream
+  # answers DEADLINE_EXCEEDED, a dead one UNAVAILABLE), one a minute. No CIRCUIT_OPEN is ever
+  # recorded, so the base rule never paged; the failed probes count now.
+  - name: probes failing once a minute page
+    interval: 1m
+    input_series:
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="ai", state="closed"}'
+        values: "0x20"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="ai", state="open"}'
+        values: "0x20"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="ai", state="half_open"}'
+        values: "1x20"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="ai", event="reject"}'
+        values: "0x20"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="ai", event="failure"}'
+        values: "0+1x20"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="ai", event="success"}'
+        values: "0x20"
+      - series: 'grpc_client_handled_total{service="gateway", grpc_service="ai.v1.AiService", grpc_method="ListConversations", grpc_code="CIRCUIT_OPEN"}'
+        values: "0x20"
+      - series: 'grpc_client_handled_total{service="gateway", grpc_service="ai.v1.AiService", grpc_method="ListConversations", grpc_code="DEADLINE_EXCEEDED"}'
+        values: "0+1x20"
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts:
+          - exp_labels: { severity: page, service: gateway, upstream: ai }
+            exp_annotations:
+              summary: "gateway: circuit breaker to ai refuses calls"
+              description: >-
+                The circuit breaker from gateway to ai has not been closed for 5 minutes and keeps
+                rejecting or failing calls to it. Check that upstream's health, latency and logs,
+                and grpc_client_circuit_breaker_events_total{upstream="ai"} by event.
+      - eval_time: 15m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts:
+          - exp_labels: { severity: page, service: gateway, upstream: ai }
+            exp_annotations:
+              summary: "gateway: circuit breaker to ai refuses calls"
+              description: >-
+                The circuit breaker from gateway to ai has not been closed for 5 minutes and keeps
+                rejecting or failing calls to it. Check that upstream's health, latency and logs,
+                and grpc_client_circuit_breaker_events_total{upstream="ai"} by event.
+
+  # One minute of refusals, then silence: the breaker stays half_open (nothing calls it), the 2 m
+  # rate drops to 0 before the 5 m `for` runs out, so it never pages. The monolith's identity breaker
+  # keeps refusing in the same group, so a mistyped label cannot pass this case by matching nothing.
+  - name: a burst then silence never pages
+    interval: 15s
+    input_series:
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="notifications", state="closed"}'
+        values: "0x80"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="notifications", state="open"}'
+        values: "1x4 0x76"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="notifications", state="half_open"}'
+        values: "0x4 1x76"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="notifications", event="reject"}'
+        values: "0+10x4 40x76"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="notifications", event="failure"}'
+        values: "0+3x4 12x76"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="notifications", event="success"}'
+        values: "0x80"
+      - series: 'grpc_client_handled_total{service="gateway", grpc_service="notifications.v1.NotificationsService", grpc_method="ListInbox", grpc_code="CIRCUIT_OPEN"}'
+        values: "0+10x4 40x76"
+      - series: 'grpc_client_circuit_breaker_state{service="monolith", upstream="identity", state="closed"}'
+        values: "0x80"
+      - series: 'grpc_client_circuit_breaker_state{service="monolith", upstream="identity", state="open"}'
+        values: "1x80"
+      - series: 'grpc_client_circuit_breaker_state{service="monolith", upstream="identity", state="half_open"}'
+        values: "0x80"
+      - series: 'grpc_client_circuit_breaker_events_total{service="monolith", upstream="identity", event="reject"}'
+        values: "0+10x80"
+      - series: 'grpc_client_circuit_breaker_events_total{service="monolith", upstream="identity", event="failure"}'
+        values: "0x80"
+      - series: 'grpc_client_circuit_breaker_events_total{service="monolith", upstream="identity", event="success"}'
+        values: "0x80"
+      - series: 'grpc_client_handled_total{service="monolith", grpc_service="identity.v1.IdentityService", grpc_method="GetUser", grpc_code="CIRCUIT_OPEN"}'
+        values: "0+10x80"
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts: []
+      - eval_time: 5m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts:
+          - exp_labels: { severity: page, service: monolith, upstream: identity }
+            exp_annotations:
+              summary: "monolith: circuit breaker to identity refuses calls"
+              description: >-
+                The circuit breaker from monolith to identity has not been closed for 5 minutes and
+                keeps rejecting or failing calls to it. Check that upstream's health, latency and
+                logs, and grpc_client_circuit_breaker_events_total{upstream="identity"} by event.
+      - eval_time: 10m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts:
+          - exp_labels: { severity: page, service: monolith, upstream: identity }
+            exp_annotations:
+              summary: "monolith: circuit breaker to identity refuses calls"
+              description: >-
+                The circuit breaker from monolith to identity has not been closed for 5 minutes and
+                keeps rejecting or failing calls to it. Check that upstream's health, latency and
+                logs, and grpc_client_circuit_breaker_events_total{upstream="identity"} by event.
+      - eval_time: 20m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts:
+          - exp_labels: { severity: page, service: monolith, upstream: identity }
+            exp_annotations:
+              summary: "monolith: circuit breaker to identity refuses calls"
+              description: >-
+                The circuit breaker from monolith to identity has not been closed for 5 minutes and
+                keeps rejecting or failing calls to it. Check that upstream's health, latency and
+                logs, and grpc_client_circuit_breaker_events_total{upstream="identity"} by event.
+
+  # Below the breaker's volume threshold (10 calls in 10 s) the breaker never opens, so the page
+  # cannot fire. identity fails 4 times in 4 minutes and nothing succeeds: the ticket fires once the
+  # count has held at 3 or more for 5 minutes, and clears when the failures leave the 15 m window.
+  # notifications fails once: nothing.
+  - name: 4 failures in 15 minutes below the volume threshold raise the ticket, one failure does not
+    interval: 1m
+    input_series:
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="identity", state="closed"}'
+        values: "1x30"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="identity", state="open"}'
+        values: "0x30"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="identity", state="half_open"}'
+        values: "0x30"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="identity", event="reject"}'
+        values: "0x30"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="identity", event="failure"}'
+        values: "0+1x4 4x26"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="identity", event="success"}'
+        values: "0x30"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="notifications", state="closed"}'
+        values: "1x30"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="notifications", state="open"}'
+        values: "0x30"
+      - series: 'grpc_client_circuit_breaker_state{service="gateway", upstream="notifications", state="half_open"}'
+        values: "0x30"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="notifications", event="reject"}'
+        values: "0x30"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="notifications", event="failure"}'
+        values: "0 1x29"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="notifications", event="success"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: GrpcUpstreamFailing
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: GrpcUpstreamFailing
+        exp_alerts:
+          - exp_labels: { severity: ticket, service: gateway, upstream: identity }
+            exp_annotations:
+              summary: "gateway: calls to identity keep failing"
+              description: >-
+                4 call(s) from gateway to identity failed in the last 15 minutes, more than
+                succeeded. Traffic this light may never open the circuit breaker, so
+                GrpcCircuitBreakerOpen can stay silent. Check that upstream's health and logs, and
+                grpc_client_handled_total by grpc_code for its grpc_service.
+      - eval_time: 14m
+        alertname: GrpcUpstreamFailing
+        exp_alerts:
+          - exp_labels: { severity: ticket, service: gateway, upstream: identity }
+            exp_annotations:
+              summary: "gateway: calls to identity keep failing"
+              description: >-
+                4 call(s) from gateway to identity failed in the last 15 minutes, more than
+                succeeded. Traffic this light may never open the circuit breaker, so
+                GrpcCircuitBreakerOpen can stay silent. Check that upstream's health and logs, and
+                grpc_client_handled_total by grpc_code for its grpc_service.
+      - eval_time: 25m
+        alertname: GrpcUpstreamFailing
+        exp_alerts: []
+      - eval_time: 9m
+        alertname: GrpcCircuitBreakerOpen
+        exp_alerts: []
+
+  # More successes than failures in the window: a flaky but mostly healthy upstream raises nothing.
+  - name: failures outnumbered by successes raise no ticket
+    interval: 1m
+    input_series:
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="billing", event="failure"}'
+        values: "0+1x4 4x26"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="billing", event="success"}'
+        values: "0+2x30"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="ai", event="failure"}'
+        values: "0+1x4 4x26"
+      - series: 'grpc_client_circuit_breaker_events_total{service="gateway", upstream="ai", event="success"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: GrpcUpstreamFailing
+        exp_alerts:
+          - exp_labels: { severity: ticket, service: gateway, upstream: ai }
+            exp_annotations:
+              summary: "gateway: calls to ai keep failing"
+              description: >-
+                4 call(s) from gateway to ai failed in the last 15 minutes, more than succeeded.
+                Traffic this light may never open the circuit breaker, so GrpcCircuitBreakerOpen can
+                stay silent. Check that upstream's health and logs, and grpc_client_handled_total by
+                grpc_code for its grpc_service.
+
+  # KafkaConsumerGroupStalled. kafka-exporter series as the probe showed them (labels
+  # consumergroup, topic, partition; members per consumergroup), plus the `service="kafka"` of the
+  # scrape job. A live group stops committing: the offset last moves between minutes 9 and 10, then
+  # stays flat while messages wait. delta() over 10 m is 0 from minute 19, so the alert is pending
+  # then and pages 5 minutes later, about 15 minutes after the last commit. It resolves once the
+  # offset moves again (minute 32).
+  - name: lag with a flat offset and a member pages after 15 minutes and resolves when it moves
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{service="kafka", consumergroup="notifications", topic="identity.membership-created.v1", partition="0"}'
+        values: "100+10x10 200x20 210+10x10"
+      - series: 'kafka_consumergroup_lag{service="kafka", consumergroup="notifications", topic="identity.membership-created.v1", partition="0"}'
+        values: "3x10 4+1x20 3x10"
+      - series: 'kafka_consumergroup_members{service="kafka", consumergroup="notifications"}'
+        values: "1x42"
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 23m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: kafka
+              consumergroup: notifications
+              topic: identity.membership-created.v1
+              partition: "0"
+            exp_annotations:
+              summary: "group notifications stopped committing on identity.membership-created.v1"
+              description: >-
+                Partition 0 of identity.membership-created.v1 is 18 messages behind for group
+                notifications, its committed offset has not moved for 15 minutes and the group has
+                members. Look for a hung handler or a message redelivered in a loop in the consuming
+                service's logs and kafka_consumer_messages_total. If the group no longer reads
+                identity.membership-created.v1, delete its offsets there with
+                kafka-consumer-groups.sh --delete-offsets.
+      - eval_time: 33m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+
+  # A consumer that keeps committing while messages wait (a busy group) never pages.
+  - name: a moving offset with lag stays silent
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{service="kafka", consumergroup="billing", topic="billing.checkout-completed.v1", partition="1"}'
+        values: "0+10x40"
+      - series: 'kafka_consumergroup_lag{service="kafka", consumergroup="billing", topic="billing.checkout-completed.v1", partition="1"}'
+        values: "50x40"
+      - series: 'kafka_consumergroup_members{service="kafka", consumergroup="billing"}'
+        values: "2x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+
+  # A group with lag and a flat offset but no member: its service is stopped, or the other
+  # topology left the group behind. That is not this alert (documented limit).
+  - name: a group without members stays silent
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{service="kafka", consumergroup="monolith", topic="identity.membership-created.v1", partition="0"}'
+        values: "100+10x10 200x40"
+      - series: 'kafka_consumergroup_lag{service="kafka", consumergroup="monolith", topic="identity.membership-created.v1", partition="0"}'
+        values: "3x10 4+1x40"
+      - series: 'kafka_consumergroup_members{service="kafka", consumergroup="monolith"}'
+        values: "0x50"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+
+  # An idle partition: the offset is flat because nothing waits. Only the partition with lag of a
+  # live group counts, so the idle one stays silent.
+  - name: a partition without lag stays silent
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{service="kafka", consumergroup="notifications", topic="billing.checkout-completed.v1", partition="2"}'
+        values: "200x50"
+      - series: 'kafka_consumergroup_lag{service="kafka", consumergroup="notifications", topic="billing.checkout-completed.v1", partition="2"}'
+        values: "0x50"
+      - series: 'kafka_consumergroup_members{service="kafka", consumergroup="notifications"}'
+        values: "1x50"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []

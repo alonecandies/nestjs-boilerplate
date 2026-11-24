@@ -233,8 +233,20 @@ describe('docs/OBSERVABILITY.md: the AI metrics and alert', () => {
   });
 
   it('documents the alert on the AI error rate and scrapes ai-service', () => {
-    expect(section(observability, '### Outbox, ledger and AI alerts')).toContain('`AiErrorRate`');
+    expect(section(observability, '### Alert rules')).toContain('`AiErrorRate`');
     expect(section(observability, '### Scrape configuration (local)')).toContain('`ai-service`');
+  });
+
+  it('keeps the old alerts anchor, which other docs link to, above the renamed heading', () => {
+    const lines = observability.split('\n');
+    const heading = lines.indexOf('### Alert rules');
+    expect(heading).toBeGreaterThan(1);
+    // prettier keeps one blank line between the anchor and the heading
+    expect(lines.slice(heading - 2, heading)).toEqual([
+      '<a id="outbox-ledger-and-ai-alerts"></a>',
+      '',
+    ]);
+    expect(observability).not.toContain('### Outbox, ledger and AI alerts');
   });
 });
 

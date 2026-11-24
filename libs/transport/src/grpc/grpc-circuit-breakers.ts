@@ -10,7 +10,11 @@ import { GrpcStatus } from '@nestjs/microservices';
 import { isDomainException } from '@platform/common';
 import CircuitBreaker from 'opossum';
 import { GRPC_CIRCUIT_BREAKER_OPTIONS } from './grpc.constants.js';
-import { trackCircuitBreakerStates } from './grpc-metrics.js';
+import {
+  initCircuitBreakerEvents,
+  recordCircuitBreakerEvent,
+  trackCircuitBreakerStates,
+} from './grpc-metrics.js';
 import { isGrpcServiceError } from './grpc-status.mapping.js';
 
 /** The unit of work a breaker runs: one upstream call. */
@@ -73,7 +77,9 @@ export const DEFAULT_GRPC_CIRCUIT_BREAKER_OPTIONS: Readonly<GrpcCircuitBreakerOp
 /**
  * Registry of circuit breakers, one per upstream name (e.g. `'orders'`), created lazily and
  * shared by every adapter that calls that upstream. Use it through `grpcCall(..., { breaker })`.
- * State changes are logged. All breakers shut down (timers cleared) on application shutdown.
+ * State changes are logged, and the `success`, `failure` and `reject` events are counted in
+ * `grpc_client_circuit_breaker_events_total{upstream, event}` from 0. All breakers shut down (timers
+ * cleared) on application shutdown.
  */
 @Injectable()
 export class GrpcCircuitBreakers implements OnApplicationShutdown {
@@ -102,6 +108,10 @@ export class GrpcCircuitBreakers implements OnApplicationShutdown {
     breaker.on('open', () => this.logger.warn(`Circuit "${name}" OPEN: failing fast`));
     breaker.on('halfOpen', () => this.logger.log(`Circuit "${name}" HALF-OPEN: probing upstream`));
     breaker.on('close', () => this.logger.log(`Circuit "${name}" CLOSED: upstream recovered`));
+    initCircuitBreakerEvents(name);
+    breaker.on('success', () => recordCircuitBreakerEvent(name, 'success'));
+    breaker.on('failure', () => recordCircuitBreakerEvent(name, 'failure'));
+    breaker.on('reject', () => recordCircuitBreakerEvent(name, 'reject'));
     this.breakers.set(name, breaker);
     return breaker;
   }

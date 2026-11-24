@@ -52,6 +52,8 @@ const METRIC_NAMES: readonly string[] = [
   'kafka_consumer_lag',
   'grpc_client_circuit_breaker_state',
   'grpc_client_handled_total',
+  // Follow-ups Task 5 (`libs/transport/src/grpc/grpc-metrics.ts`).
+  'grpc_client_circuit_breaker_events_total',
   'rate_limit_fail_open_total',
   'db_pool_operations_waiting',
   'http_request_duration_seconds',
@@ -62,6 +64,48 @@ const METRIC_NAMES: readonly string[] = [
   'billing_checkout_amount_mismatch_total',
   'billing_stripe_api_version_mismatch_total',
   'mail_jobs_total',
+];
+
+/**
+ * Follow-ups Task 6: the series kafka-exporter reports (`danielqsj/kafka-exporter`, compose service
+ * `kafka-exporter`, scrape job `kafka`). A rule may read them only while Prometheus scrapes that
+ * exporter and compose runs it; otherwise the rule would read a series nothing reports.
+ */
+const EXPORTER_SERIES: readonly string[] = [
+  'kafka_consumergroup_lag',
+  'kafka_consumergroup_current_offset',
+  'kafka_consumergroup_members',
+];
+
+interface ScrapeJob {
+  job_name: string;
+  static_configs?: { targets?: string[]; labels?: Record<string, string> }[];
+}
+interface ComposeService {
+  image?: string;
+  profiles?: string[];
+  networks?: string[] | Record<string, unknown>;
+  ports?: unknown[];
+  command?: string[];
+  depends_on?: Record<string, { condition?: string }>;
+  deploy?: { resources?: { limits?: { cpus?: string; memory?: string } } };
+}
+
+const kafkaJob = (
+  parse(read('docker/prometheus/prometheus.yml')) as { scrape_configs?: ScrapeJob[] }
+).scrape_configs?.find((job) => job.job_name === 'kafka');
+// The compose file is trusted input: its `<<` merges reuse a few anchors many times.
+const composeServices = (
+  parse(read('docker-compose.yml'), { merge: true, maxAliasCount: -1 }) as {
+    services: Record<string, ComposeService>;
+  }
+).services;
+const kafkaExporter = composeServices['kafka-exporter'];
+
+/** The series a rule may read: the code's, plus the exporter's while it is scraped and run. */
+const ADMITTED_SERIES: readonly string[] = [
+  ...METRIC_NAMES,
+  ...(kafkaJob !== undefined && kafkaExporter !== undefined ? EXPORTER_SERIES : []),
 ];
 
 /** PromQL words that are not series: functions, aggregations, operators, modifiers. */
@@ -116,7 +160,9 @@ const EXPECTED: Readonly<Record<string, Readonly<Record<string, 'page' | 'ticket
     KafkaDeadLetters: 'page',
     KafkaRedeliveries: 'ticket',
     KafkaConsumerLagGrowing: 'ticket',
+    KafkaConsumerGroupStalled: 'page',
     GrpcCircuitBreakerOpen: 'page',
+    GrpcUpstreamFailing: 'ticket',
     RateLimitFailOpen: 'ticket',
     DbPoolSaturated: 'ticket',
     HttpServerErrorRatio: 'page',
@@ -164,7 +210,7 @@ describe.each(Object.entries(EXPECTED))('%s', (file, alerts) => {
       const names = seriesOf(rule.expr ?? '');
       expect(names.length, `${String(rule.alert)} reads no series`).toBeGreaterThan(0);
       for (const name of names) {
-        expect(METRIC_NAMES, `${String(rule.alert)} reads ${name}`).toContain(
+        expect(ADMITTED_SERIES, `${String(rule.alert)} reads ${name}`).toContain(
           name.replace(/_(bucket|sum|count)$/, ''),
         );
       }
@@ -271,16 +317,31 @@ describe('the platform and billing rules of audit fixes Task 21', () => {
   });
 
   // The breaker cycles open and half_open against a hung upstream (5 s each, a 15 s scrape), so the
-  // rule reads "not closed", and only while calls are refused: an idle breaker stays half_open.
-  it('GrpcCircuitBreakerOpen: a breaker not closed for 5 m while its service refuses calls', () => {
+  // rule reads "not closed", and only while that upstream refuses or fails calls: an idle breaker
+  // stays half_open. The join is per (service, upstream), so an idle breaker next to a refusing one
+  // of the same service stays silent, and failed half-open probes count.
+  it('GrpcCircuitBreakerOpen: a breaker not closed for 5 m while its upstream refuses or fails calls', () => {
     const rule = expr('GrpcCircuitBreakerOpen');
     expect(rule).toContain('grpc_client_circuit_breaker_state{state!="closed"}) == 1');
     expect(rule).not.toContain('{state="open"}');
-    expect(rule).toContain(' and on (service) sum by (service) ');
+    expect(rule).toContain(' and on (service, upstream) sum by (service, upstream) ');
     expect(rule).toMatch(
-      /rate\(grpc_client_handled_total\{grpc_code="CIRCUIT_OPEN"\}\[2m\]\)\) > 0$/,
+      /rate\(grpc_client_circuit_breaker_events_total\{event=~"reject\|failure"\}\[2m\]\)\) > 0$/,
     );
+    expect(rule).not.toContain('grpc_client_handled_total');
     expect(waits('GrpcCircuitBreakerOpen')).toBe('5m');
+  });
+
+  it('GrpcUpstreamFailing: at least 3 failures in 15 m and more failures than successes, per upstream', () => {
+    const rule = expr('GrpcUpstreamFailing');
+    const failures =
+      'sum by (service, upstream) (increase(grpc_client_circuit_breaker_events_total{event="failure"}[15m]))';
+    const successes =
+      'sum by (service, upstream) (increase(grpc_client_circuit_breaker_events_total{event="success"}[15m]))';
+    expect(rule).toBe(`${failures} >= 3 and on (service, upstream) ${failures} > ${successes}`);
+    expect(rule).not.toContain('reject');
+    expect(rule).not.toContain('grpc_client_circuit_breaker_state');
+    expect(waits('GrpcUpstreamFailing')).toBe('5m');
   });
 
   it('RateLimitFailOpen: any fail-open increase, per throttler', () => {
@@ -318,6 +379,50 @@ describe('the platform and billing rules of audit fixes Task 21', () => {
     ['BillingStripeApiVersionMismatch', 'billing_stripe_api_version_mismatch_total'],
   ])('%s: any increase of %s', (alert, series) => {
     expect(expr(alert)).toMatch(new RegExp(`increase\\(${series}\\[15m\\]\\).*> 0$`));
+  });
+});
+
+describe('the broker-side lag source of follow-ups Task 6', () => {
+  const byName = new Map(
+    Object.keys(EXPECTED).flatMap((file) => load(file).map((rule) => [rule.alert, rule] as const)),
+  );
+  const expr = (name: string): string => (byName.get(name)?.expr ?? '').replace(/\s+/g, ' ').trim();
+
+  it('Prometheus scrapes kafka-exporter in the job `kafka`, labelled service="kafka"', () => {
+    expect(kafkaJob?.static_configs).toEqual([
+      { targets: ['kafka-exporter:9308'], labels: { service: 'kafka' } },
+    ]);
+  });
+
+  it('compose runs kafka-exporter in the observability profile, in-network only', () => {
+    expect(kafkaExporter?.image).toBe('danielqsj/kafka-exporter:v1.11.0');
+    expect(kafkaExporter?.profiles).toEqual(['observability']);
+    expect(kafkaExporter?.networks).toEqual(['backend']);
+    expect(kafkaExporter?.ports).toBeUndefined();
+    expect(kafkaExporter?.depends_on?.kafka?.condition).toBe('service_healthy');
+    expect(kafkaExporter?.deploy?.resources?.limits).toEqual({ cpus: '0.25', memory: '64M' });
+  });
+
+  it("kafka-exporter talks to kafka:9092 with the protocol version of the compose broker's tag", () => {
+    const brokerTag = /^apache\/kafka:(\d+\.\d+\.\d+)$/.exec(composeServices.kafka?.image ?? '');
+    expect(brokerTag?.[1]).toEqual(expect.any(String));
+    expect(kafkaExporter?.command).toEqual([
+      '--kafka.server=kafka:9092',
+      `--kafka.version=${brokerTag?.[1] ?? ''}`,
+    ]);
+  });
+
+  // Lag with a committed offset that has not moved for 10 minutes, in a group that has members:
+  // a live consumer that stopped committing (Task 2 commits during a batch). A group without
+  // members (a stopped service, a group the other topology left behind) is not this alert.
+  it('KafkaConsumerGroupStalled: lag, an offset flat for 10 m and live members, for 5 m', () => {
+    expect(expr('KafkaConsumerGroupStalled')).toBe(
+      'kafka_consumergroup_lag > 0' +
+        ' and on (consumergroup, topic, partition)' +
+        ' delta(kafka_consumergroup_current_offset[10m]) == 0' +
+        ' and on (consumergroup) kafka_consumergroup_members > 0',
+    );
+    expect(byName.get('KafkaConsumerGroupStalled')?.for).toBe('5m');
   });
 });
 

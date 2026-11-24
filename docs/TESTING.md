@@ -277,6 +277,11 @@ gateway's (the edge forwards the raw bytes and answers as billing-service does; 
 
 `scripts/prometheus-rules.spec.ts` parses `docker/prometheus/rules/*.rules.yml`: exactly the planned alerts with their
 severities, thresholds, and only series the code registers in every `expr`. It also fails when a doc still describes the outbox as missing or events as published after commit, except in the notifications note.
+`docker/prometheus/tests/*.test.yml` are promtool unit tests of those rules: series in, the alerts
+expected at each evaluation time out (every alert rule added or changed gets a case).
+`scripts/docker/check-prometheus-rules.sh` runs `promtool check rules` and `promtool test rules` in
+the Prometheus image `docker-compose.yml` pins (one throwaway container, so it needs Docker), as a
+step of CI's `compose` job.
 
 ### Real Socket.IO suites
 
