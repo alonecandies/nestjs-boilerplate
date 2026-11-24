@@ -227,6 +227,20 @@ tenants, members and invitations journeys in each topology. The gateway's identi
 `Fake*Port`s) do not cross-check the principal or the staff switch-in rule, so those rules are asserted only in the
 monolith journeys, where the real handlers run.
 
+Each service that serves a caller's data pins its rule under `GRPC_PRINCIPAL_ASSERTION=enforce` with a real gRPC
+call in `test/principal-assertion.e2e-spec.ts`. The spec boots the real `AppModule` with only the edge's public key
+and plays the gateway with `createTestPrincipalSigner` (`@platform/transport/testing`); the other e2e specs keep the
+default `off`.
+
+- identity-service: plain headers asserting the staff flag and `owner` are refused `INVALID_PRINCIPAL`; signed, the
+  rename runs; an expired assertion or another key is refused; register and login pass anonymously.
+- notifications-service: plain headers naming an inbox's tenant and user are refused before any CQL; signed, the
+  owner reads that inbox.
+- billing-service: plain headers asserting `admin` (which grants `billing:read-all`) are refused before any SQL;
+  signed, the admin lists the whole tenant, elevated; the Stripe-signed webhook passes anonymously; an expired
+  assertion is refused.
+- ai-service: a chat tool call forwards the caller's assertion unchanged to an identity stand-in that verifies it.
+
 ### Tenant isolation suites
 
 `tenant-isolation.e2e-spec.ts` exists in both `apps/monolith/test` and `apps/gateway/test` and runs the same four cases
