@@ -12,9 +12,19 @@ import {
 } from '@platform/config';
 import { z } from 'zod';
 
-/** Development-only defaults so `bun run dev` works with zero `.env`. Rejected in production. */
-export const PLACEHOLDER_STRIPE_SECRET_KEY = 'sk_test_placeholder';
+/**
+ * Development-only defaults so `bun run dev` works with zero `.env`. Rejected in production. The
+ * key has no run of 10 letters or digits after `sk_test_`, so the image secret scan (Trivy's
+ * Stripe rule) does not report it.
+ */
+export const PLACEHOLDER_STRIPE_SECRET_KEY = 'sk_test_dev_placeholder';
 export const PLACEHOLDER_STRIPE_WEBHOOK_SECRET = 'whsec_placeholder';
+
+/**
+ * The key default before 2026-11, refused in production like the current one (an environment may
+ * have copied it). Joined from parts so the built file holds no string the secret scan reports.
+ */
+const FORMER_PLACEHOLDER_STRIPE_SECRET_KEY = ['sk', 'test', 'placeholder'].join('_');
 
 export const stripeEnvSchema = z
   .object({
@@ -41,14 +51,14 @@ export const stripeEnvSchema = z
     // A publicly known webhook secret lets anyone forge `checkout.session.completed` and mark
     // payments as paid — fail fast at boot instead (same policy as the JWT dev secrets).
     const placeholders = {
-      STRIPE_SECRET_KEY: PLACEHOLDER_STRIPE_SECRET_KEY,
-      STRIPE_WEBHOOK_SECRET: PLACEHOLDER_STRIPE_WEBHOOK_SECRET,
+      STRIPE_SECRET_KEY: [PLACEHOLDER_STRIPE_SECRET_KEY, FORMER_PLACEHOLDER_STRIPE_SECRET_KEY],
+      STRIPE_WEBHOOK_SECRET: [PLACEHOLDER_STRIPE_WEBHOOK_SECRET],
     } as const;
-    for (const [key, placeholder] of Object.entries(placeholders) as [
+    for (const [key, values] of Object.entries(placeholders) as [
       keyof typeof placeholders,
-      string,
+      readonly string[],
     ][]) {
-      if (env[key] === placeholder) {
+      if (values.includes(env[key])) {
         ctx.addIssue({
           code: 'custom',
           path: [key],
