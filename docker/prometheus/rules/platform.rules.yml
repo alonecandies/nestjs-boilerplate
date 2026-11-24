@@ -76,11 +76,13 @@ groups:
       # `consumergroup`, not `group`. Limits: a group with no member for the whole 10 minutes (its
       # service is down, or the group was left behind by the other topology) fires nothing here; a
       # group that loses its last member when it stops committing stays silent too, as its offset
-      # is flat over 10 m only once no member is left in the window; the member count is per group,
-      # so a live group that keeps committed offsets on a topic it no longer reads pages until those
-      # offsets are deleted; and
-      # `delta()` needs only two samples, so after an exporter restart or on a new partition it can
-      # page before the full 15 minutes.
+      # is flat over 10 m only once no member is left in the window. But on a partition that was
+      # already idle when the last member left, messages that arrive within 5 minutes of that make
+      # all three hold for over 5 m: it pages until 10 minutes after the member left (for up to 5
+      # minutes). The member count is per group, so a live group that keeps committed offsets on a
+      # topic it no longer reads pages until those offsets are deleted. `delta()` needs only two
+      # samples, so after an exporter restart or on a new partition it can page before the full 15
+      # minutes.
       - alert: KafkaConsumerGroupStalled
         expr: >-
           kafka_consumergroup_lag > 0
