@@ -265,8 +265,13 @@ the ports, so both topologies behave the same. Endpoints: `GET`/`POST /v1/tenant
 `INVALID_ROLES` (422), `MEMBERSHIP_REVOKED` (401), `STAFF_ONLY` and `STAFF_TOKEN_NOT_ALLOWED` (403).
 
 **Testing.** `FakeTenancyState`, `FakeTenantsPort`, `FakeMembersPort` and `FakeInvitationsPort` (from
-`@domain/identity/testing`) stand behind the gateway (`FakeMembersPort.listMembers` withholds emails and roles as the
-handler does); `tenancy.repositories.int-spec.ts` covers the repositories, the
+`@domain/identity/testing`) stand behind the gateway. `FakeMembersPort.listMembers` answers as `ListMembersHandler`
+does: no principal is a 401 `PRINCIPAL_MISSING`, a principal acting in another tenant or without a membership a 403
+`TENANT_ACCESS_DENIED`, a staff switch-in takes its roles from the token, and co-members' emails and roles are withheld
+without `users:read`. `testing/members-port.contract.spec.ts` runs the same cases against the handler (in-memory
+tenancy) and the fake, so a gateway e2e that passes against the fake would pass against the service. The gRPC round
+trip carries one withheld member from `ListMembers` through the real controller, the gateway's gRPC adapter and the
+REST mapper (`null` email and roles). `tenancy.repositories.int-spec.ts` covers the repositories, the
 last-owner concurrency and the invitation accept against Citus.
 
 ## Events
@@ -410,7 +415,8 @@ locks, denylist and cache).
 - GraphQL through `AppGraphqlModule` (Apollo on Fastify): enum mapping, guards, validation,
   domain codes, `users` DataLoader batching;
 - gRPC round trip: `IdentityApiModule.forRemote()` adapters ↔ a real in-process gRPC server with
-  the identity controllers (validation, mapping, null normalisation, error codes across the hop);
+  the identity controllers (validation, mapping, null normalisation, error codes across the hop, a
+  withheld member from `ListMembers` to the REST response);
 - compositions: `IdentityApiModule.forLocal()` (real CQRS + handlers + repositories, fake
   Postgres/Redis/Kafka: register → SQL incl. the outbox rows, nothing on Kafka from the request,
   login with real argon2) and

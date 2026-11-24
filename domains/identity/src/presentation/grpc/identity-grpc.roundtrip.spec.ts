@@ -23,10 +23,13 @@ import { makeAuthTokens, makeUser } from '../../../test/fixtures.js';
 import { InMemoryAppCache } from '../../../test/in-memory-app-cache.js';
 import { LogoutCommand } from '../../application/commands/logout/logout.command.js';
 import { RegisterUserCommand } from '../../application/commands/register-user/register-user.command.js';
+import { memberForViewer } from '../../application/mappers/member.mapper.js';
 import { AuthPort } from '../../application/ports/auth.port.js';
+import { MembersPort } from '../../application/ports/members.port.js';
 import { UsersPort } from '../../application/ports/users.port.js';
 import { GetUserByIdQuery } from '../../application/queries/get-user-by-id/get-user-by-id.query.js';
 import { GetUsersByIdsQuery } from '../../application/queries/get-users-by-ids/get-users-by-ids.query.js';
+import { ListMembersQuery } from '../../application/queries/list-members/list-members.query.js';
 import { ListUsersQuery } from '../../application/queries/list-users/list-users.query.js';
 import {
   EmailAlreadyTakenException,
@@ -34,15 +37,19 @@ import {
 } from '../../domain/identity.errors.js';
 import { IdentityApiModule } from '../../identity-api.module.js';
 import { AuthGrpcAdapter } from '../../infrastructure/adapters/grpc/auth-grpc.adapter.js';
+import { MembersGrpcAdapter } from '../../infrastructure/adapters/grpc/members-grpc.adapter.js';
 import { UsersGrpcAdapter } from '../../infrastructure/adapters/grpc/users-grpc.adapter.js';
+import { MemberPageResponse } from '../http/responses/member.response.js';
 import { AuthGrpcController } from './auth-grpc.controller.js';
+import { TenantsGrpcController } from './tenants-grpc.controller.js';
 import { UsersGrpcController } from './users-grpc.controller.js';
 
 /*
  * In-process end-to-end test of the microservice topology, no infrastructure:
- *   gateway side: IdentityApiModule.forRemote() → AuthGrpcAdapter / UsersGrpcAdapter
- *     → (real gRPC, identity.v1 protos, loopback) →
- *   service side: AuthGrpcController / UsersGrpcController → (fake) CommandBus / QueryBus.
+ *   gateway side: IdentityApiModule.forRemote() → AuthGrpcAdapter / UsersGrpcAdapter /
+ *     MembersGrpcAdapter → (real gRPC, identity.v1 protos, loopback) →
+ *   service side: AuthGrpcController / UsersGrpcController / TenantsGrpcController → (fake)
+ *     CommandBus / QueryBus.
  * Covers payload validation, request→command mapping, null normalisation and the error hop
  * (DomainException → status + trailers → DomainException with the same code).
  */
@@ -54,7 +61,7 @@ const queryBus = { execute: vi.fn() };
 
 @Module({
   imports: [ClsModule.forRoot({ global: true })],
-  controllers: [AuthGrpcController, UsersGrpcController],
+  controllers: [AuthGrpcController, UsersGrpcController, TenantsGrpcController],
   providers: [
     { provide: CommandBus, useValue: commandBus },
     { provide: QueryBus, useValue: queryBus },
@@ -75,6 +82,7 @@ describe('identity over gRPC (forRemote adapters ↔ gRPC controllers)', () => {
   let gateway: TestingModule;
   let auth: AuthPort;
   let users: UsersPort;
+  let members: MembersPort;
 
   beforeAll(async () => {
     // Port 0: the server binds an OS-chosen port; the clients below learn it once it is bound.
@@ -101,6 +109,7 @@ describe('identity over gRPC (forRemote adapters ↔ gRPC controllers)', () => {
     await gateway.init();
     auth = gateway.get(AuthPort);
     users = gateway.get(UsersPort);
+    members = gateway.get(MembersPort);
   });
 
   afterAll(async () => {
@@ -117,6 +126,7 @@ describe('identity over gRPC (forRemote adapters ↔ gRPC controllers)', () => {
   it('forRemote() binds the ports to the gRPC adapters', () => {
     expect(auth).toBeInstanceOf(AuthGrpcAdapter);
     expect(users).toBeInstanceOf(UsersGrpcAdapter);
+    expect(members).toBeInstanceOf(MembersGrpcAdapter);
   });
 
   it('GetUser: query dispatched on the service; Timestamp → Date on the way back', async () => {
@@ -181,6 +191,48 @@ describe('identity over gRPC (forRemote adapters ↔ gRPC controllers)', () => {
     );
     expect(page).toEqual({ items: [a] });
     expect(page).not.toHaveProperty('nextCursor');
+  });
+
+  it('ListMembers: a withheld member crosses as "" and [] and reaches REST as null email and roles', async () => {
+    // What ListMembersHandler answers a caller without users:read: memberForViewer over the
+    // complete rows, so the controller, the wire, the gateway adapter and the REST mapper all run.
+    const [viewer, coMember] = [generateId(), generateId()];
+    const joinedAt = new Date('2026-11-01T00:00:00.000Z');
+    const row = (userId: string, roles: string[]) => ({
+      userId,
+      email: `${userId}@example.com`,
+      displayName: `User ${userId.slice(-4)}`,
+      roles,
+      joinedAt,
+    });
+    queryBus.execute.mockResolvedValue({
+      items: [row(coMember, ['owner']), row(viewer, ['member'])].map((member) =>
+        memberForViewer(member, viewer, false),
+      ),
+    });
+
+    const page = MemberPageResponse.from(await members.listMembers({ tenantId: TENANT, limit: 0 }));
+
+    expect(queryBus.execute).toHaveBeenCalledWith(new ListMembersQuery(TENANT, 0, undefined));
+    expect(page).toEqual({
+      items: [
+        {
+          userId: coMember,
+          email: null,
+          displayName: `User ${coMember.slice(-4)}`,
+          roles: null,
+          joinedAt: joinedAt.toISOString(),
+        },
+        {
+          userId: viewer,
+          email: `${viewer}@example.com`,
+          displayName: `User ${viewer.slice(-4)}`,
+          roles: ['member'],
+          joinedAt: joinedAt.toISOString(),
+        },
+      ],
+      nextCursor: null,
+    });
   });
 
   it('Register: payload validated + normalised, tokens (with nested user) normalised back', async () => {

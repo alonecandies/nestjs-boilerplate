@@ -21,6 +21,7 @@ import {
   generateId,
   getPrincipal,
   PermissionDeniedException,
+  requirePrincipal,
   satisfiesTenantRole,
   type TenantRole,
 } from '@platform/common';
@@ -168,14 +169,15 @@ export class FakeMembersPort extends MembersPort {
   }
 
   /**
-   * As `ListMembersHandler`: co-members' emails and roles only for a caller whose membership (a
-   * staff switch-in: its token) grants `users:read`; the caller's own row stays complete.
+   * As `ListMembersHandler` (`members-port.contract.spec.ts` runs the same cases on both): no
+   * principal is a 401 `PRINCIPAL_MISSING`; a principal acting in another tenant, or of this tenant
+   * without a membership, is a 403 `TENANT_ACCESS_DENIED`. Co-members' emails and roles only for a
+   * caller whose membership (a staff switch-in: its token) grants `users:read`; the caller's own
+   * row stays complete.
    */
   async listMembers({ tenantId }: ListMembersRequest): Promise<MemberPage> {
-    const viewer = getPrincipal();
-    if (viewer === undefined || viewer.tenantId !== tenantId) {
-      throw new TenantAccessDeniedException();
-    }
+    const viewer = requirePrincipal();
+    if (viewer.tenantId !== tenantId) throw new TenantAccessDeniedException();
     const directory = IDENTITY_REGISTRY.resolve(
       this.state.actorRoles(tenantId, viewer.userId),
     ).includes(IdentityPermission.UsersRead);

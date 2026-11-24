@@ -17,15 +17,16 @@ describe('gateway tenancy fakes', () => {
 
   beforeEach(() => {
     identity = new FakeIdentityState();
-    for (const [id, email] of [
-      [ada, 'ada@example.com'],
-      [bob, 'bob@example.com'],
+    // Display names differ from the emails, so an email leaking through the name would show.
+    for (const [id, email, displayName] of [
+      [ada, 'ada@example.com', 'Ada Lovelace'],
+      [bob, 'bob@example.com', 'Bob Babbage'],
     ] as const) {
       identity.users.set(id, {
         user: {
           id,
           email,
-          displayName: email,
+          displayName,
           roles: [],
           createdAt: new Date(),
           updatedAt: new Date(),
@@ -97,7 +98,8 @@ describe('gateway tenancy fakes', () => {
       );
     // Bob is a member; his token claims admin, but the membership decides.
     const asBob = new Map((await list(bob)).items.map((m) => [m.userId, m]));
-    expect(asBob.get(ada)).toMatchObject({ email: '', roles: [], displayName: 'ada@example.com' });
+    expect(asBob.get(ada)).toMatchObject({ email: '', roles: [], displayName: 'Ada Lovelace' });
+    expect(JSON.stringify(asBob.get(ada))).not.toContain('ada@example.com');
     expect(asBob.get(bob)).toMatchObject({ email: 'bob@example.com', roles: ['member'] });
     const asAda = new Map((await list(ada, ['owner'])).items.map((m) => [m.userId, m]));
     expect(asAda.get(bob)).toMatchObject({ email: 'bob@example.com', roles: ['member'] });
