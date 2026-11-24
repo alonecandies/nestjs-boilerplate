@@ -229,17 +229,17 @@ publishes it with the explicit option `tenantId: notification.tenantId` (the inb
 
 ## Commands and queries
 
-| Class                               | Effect                                                                                                                                                                           |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CreateNotificationCommand`         | `NotificationEntity.create()` → insert into the input's `(tenant, user)` inbox → `NotificationCreatedEvent`. With `idempotency: { key, occurredAt }` the id is derived (upsert). |
-| `MarkNotificationReadCommand`       | `requireInboxActor`, then `UPDATE … USING TTL <remaining> … IF EXISTS`; 404 `NOTIFICATION_NOT_FOUND` when not in the `(tenant, user)` inbox (or past its 90 days)                |
-| `PublishNotificationCreatedCommand` | Kafka publish (key = user id, envelope id = notification id, envelope tenant = inbox tenant). Rejects on failure, so the event that created the notification fails               |
-| `WelcomeUserCommand`                | Welcome notification (`welcome:{userId}`), welcome mail to the event's email (`welcome-{userId}`), then the push                                                                 |
-| `UpsertRecipientCommand`            | Upsert the `(tenant, user)` recipient row, `USING TIMESTAMP` = the membership's `createdAt`                                                                                      |
-| `RemoveRecipientCommand`            | Delete the `(tenant, user)` recipient row, `USING TIMESTAMP` = `removedAt`                                                                                                       |
-| `SendPaymentReceiptCommand`         | Receipt notification (`receipt:{paymentId}`), receipt mail (`receipt-{paymentId}`) when the user is a recipient in the payment's tenant, then the push                           |
-| `SendDailyDigestCommand`            | Bounded scan of `(tenant, user)` recipients, each pair's own unread items, one digest mail per pair (`digest-{tenantId}-{userId}-{yyyy-mm-dd}`)                                  |
-| `ListNotificationsQuery`            | `requireInboxActor`, then one `(tenant, user)` inbox page (`executePage`, driver paging state)                                                                                   |
+| Class                               | Effect                                                                                                                                                             |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CreateNotificationCommand`         | `NotificationEntity.create()` → insert into the input's `(tenant, user)` inbox. With `idempotency: { key, occurredAt }` the id is derived (upsert).                |
+| `MarkNotificationReadCommand`       | `requireInboxActor`, then `UPDATE … USING TTL <remaining> … IF EXISTS`; 404 `NOTIFICATION_NOT_FOUND` when not in the `(tenant, user)` inbox (or past its 90 days)  |
+| `PublishNotificationCreatedCommand` | Kafka publish (key = user id, envelope id = notification id, envelope tenant = inbox tenant). Rejects on failure, so the event that created the notification fails |
+| `WelcomeUserCommand`                | Welcome notification (`welcome:{userId}`), welcome mail to the event's email (`welcome-{userId}`), then the push                                                   |
+| `UpsertRecipientCommand`            | Upsert the `(tenant, user)` recipient row, `USING TIMESTAMP` = the membership's `createdAt`                                                                        |
+| `RemoveRecipientCommand`            | Delete the `(tenant, user)` recipient row, `USING TIMESTAMP` = `removedAt`                                                                                         |
+| `SendPaymentReceiptCommand`         | Receipt notification (`receipt:{paymentId}`), receipt mail (`receipt-{paymentId}`) when the user is a recipient in the payment's tenant, then the push             |
+| `SendDailyDigestCommand`            | Bounded scan of `(tenant, user)` recipients, each pair's own unread items, one digest mail per pair (`digest-{tenantId}-{userId}-{yyyy-mm-dd}`)                    |
+| `ListNotificationsQuery`            | `requireInboxActor`, then one `(tenant, user)` inbox page (`executePage`, driver paging state)                                                                     |
 
 `DailyDigestCron` runs at 09:00 UTC (`@Cron` + `@WithLock('notifications:daily-digest', 5 min)`,
 `waitForCompletion`), looking at up to 1,000 recipients and 50 notifications each.

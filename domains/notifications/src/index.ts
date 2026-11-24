@@ -24,7 +24,6 @@ export * from './application/mappers/notification.mapper.js';
 export * from './application/ports/notification-recipients.repository.js';
 export * from './application/ports/notifications.repository.js';
 export * from './application/queries/list-notifications/list-notifications.query.js';
-export * from './domain/events/notification-created.event.js';
 export * from './domain/notification.entity.js';
 export * from './domain/notification.errors.js';
 export * from './domain/notification.types.js';
