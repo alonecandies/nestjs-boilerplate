@@ -3,8 +3,13 @@ import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Test } from '@nestjs/testing';
 import { AccessTokenDenylist, AuthModule } from '@platform/auth';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
-import { AllExceptionsFilter, UnauthenticatedException } from '@platform/common';
+import {
+  AllExceptionsFilter,
+  UnauthenticatedException,
+  WsMaintenanceGuard,
+} from '@platform/common';
 import { AppConfigModule } from '@platform/config';
+import { WsThrottlerGuard } from '@platform/redis';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { FakeRedisModule } from '../../../test/support/edge-test-app.js';
 import { USER_ID } from '../../../test/support/fixtures.js';
@@ -47,8 +52,12 @@ describe('WsSessionGuard', () => {
     guard = new WsSessionGuard(denylist);
   });
 
-  it('guards every message of the notifications gateway, before throttling', () => {
-    expect(Reflect.getMetadata(GUARDS_METADATA, NotificationsGateway)?.[0]).toBe(WsSessionGuard);
+  it('guards every message of the notifications gateway, after the maintenance check and before throttling', () => {
+    expect(Reflect.getMetadata(GUARDS_METADATA, NotificationsGateway)).toEqual([
+      WsMaintenanceGuard,
+      WsSessionGuard,
+      WsThrottlerGuard,
+    ]);
   });
 
   it('the notifications gateway delivers errors through AllExceptionsFilter (ack / exception event)', () => {

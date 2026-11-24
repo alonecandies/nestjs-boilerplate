@@ -66,7 +66,12 @@ Conventions that apply to every HTTP response:
 - **Maintenance**: with `MAINTENANCE_MODE=true` every request except `/health*` and `/metrics` gets 503 problem+json
   with `Retry-After`. WebSockets are refused too: a Socket.IO handshake fails with `connect_error` whose `data` is the
   503 problem (`SERVICE_UNAVAILABLE`), a graphql-ws connection is closed (4403), and a subscription on a connection
-  opened earlier is answered with a `SERVICE_UNAVAILABLE` error.
+  opened earlier is answered with a `SERVICE_UNAVAILABLE` error. An app may set the switch in code as a function (a
+  feature flag, an admin toggle); every transport reads it at run time, so turning it on needs no restart. A socket
+  that was open when it turned on is not closed at once: every Socket.IO message on it, `ping` included, is answered
+  with the 503 problem (an ack, or an `exception` event), pushes to it stop, and a graphql-ws connection is closed
+  (4403) at its subscription's next event, which is not delivered. An idle socket stays open and inert until its next
+  message or event, or until its access token expires.
 
 ## API documentation pages
 

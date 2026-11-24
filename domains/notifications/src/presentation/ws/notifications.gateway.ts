@@ -1,4 +1,5 @@
 import { Inject, Logger, type OnModuleDestroy, Optional, UseGuards } from '@nestjs/common';
+import { ModuleRef } from '@nestjs/core';
 import {
   MessageBody,
   type OnGatewayConnection,
@@ -21,13 +22,14 @@ import {
   TokenService,
 } from '@platform/auth';
 import {
+  createMaintenanceModeReader,
   DEFAULT_PROBLEM_TYPE_BASE_URL,
-  isMaintenanceEnabled,
   maintenanceProblem,
   type ProblemDetails,
   toProblemDetails,
   UnauthenticatedException,
   UseWsExceptionFilter,
+  WsMaintenanceGuard,
 } from '@platform/common';
 import { type AppConfig, type AuthConfig, appConfig, authConfig } from '@platform/config';
 import {
@@ -84,9 +86,14 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
  *   `Authorization: Bearer`) once, including the revocation denylist, BEFORE the connection is
  *   accepted — so no message can race the authentication. A refused client gets `connect_error`
  *   whose `data` is the problem details (`code` MISSING_TOKEN / TOKEN_EXPIRED / …).
- * - Maintenance mode (`MAINTENANCE_MODE`, `appConfig`): the handshake is refused first, before
- *   the IP charge and the token, with `connect_error` whose `data` is the 503 problem
- *   (`SERVICE_UNAVAILABLE`), the same document REST clients get.
+ * - Maintenance mode (the app's `MAINTENANCE_MODE` switch, read at run time like the HTTP
+ *   middleware reads it, so a function switch is followed without a restart): the handshake is
+ *   refused first, before the IP charge and the token, with `connect_error` whose `data` is the
+ *   503 problem (`SERVICE_UNAVAILABLE`), the same document REST clients get. Every message,
+ *   `ping` included, is answered with that problem (`WsMaintenanceGuard`, first in this
+ *   gateway's guards), and `pushToUser` emits nothing. An open socket is not closed when the
+ *   switch turns on: it stays connected and inert until its next message, or until its token
+ *   expires.
  * - Connection caps (`ConnectionCaps`, when `AppThrottlerModule` is present): the handshake is
  *   charged to the client IP (`TRUST_PROXY` rules) before the token is read, and the user may hold
  *   `THROTTLE_WS_SOCKETS_PER_USER` sockets at once. Both refuse with `connect_error` whose `data`
@@ -105,8 +112,8 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
  *   Clients reconnect with a fresh token, so pushes stop reaching a session that HTTP would
  *   already reject.
  * - Messages: the global guards run per message (`JwtAuthGuard` checks `socket.data.user` is
- *   still unexpired, then RBAC), then `WsSessionGuard` (denylist, like HTTP) and per-message
- *   throttling (`WsThrottlerGuard`, Redis-backed).
+ *   still unexpired, then RBAC), then `WsMaintenanceGuard`, `WsSessionGuard` (denylist, like
+ *   HTTP) and per-message throttling (`WsThrottlerGuard`, Redis-backed).
  *   Errors (429 included) come back as `{ ok: false, error }` acks or `exception` events
  *   (`@UseWsExceptionFilter`).
  * - Pushes: `NotificationPushConsumer` calls `pushToUser(tenantId, userId, …)` with the envelope
@@ -114,7 +121,7 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
  *   replica.
  */
 @UseWsExceptionFilter()
-@UseGuards(WsSessionGuard, WsThrottlerGuard)
+@UseGuards(WsMaintenanceGuard, WsSessionGuard, WsThrottlerGuard)
 @WebSocketGateway({ namespace: NOTIFICATIONS_WS_NAMESPACE })
 export class NotificationsGateway
   implements
@@ -136,6 +143,13 @@ export class NotificationsGateway
   @Optional()
   @Inject(appConfig.KEY)
   private readonly app?: AppConfig;
+
+  /** Property-injected to read the maintenance switch at run time; unset in unit tests (off). */
+  @Optional()
+  @Inject(ModuleRef)
+  private readonly moduleRef?: ModuleRef;
+
+  private maintenanceReader: (() => boolean) | undefined;
 
   private clientIp: ReturnType<typeof createClientIpResolver> | undefined;
 
@@ -167,7 +181,7 @@ export class NotificationsGateway
   /** Resolves `undefined` (accept) or the error to refuse the handshake with. */
   async authenticate(socket: NotificationsSocket): Promise<ExtendedError | undefined> {
     // Before the IP charge and the token: a refused client must cost nothing during maintenance.
-    if (isMaintenanceEnabled(this.app?.maintenanceMode)) {
+    if (this.maintenanceOn()) {
       this.logger.debug(`Refused socket ${socket.id}: maintenance mode`);
       const problem = maintenanceProblem();
       return Object.assign(new Error(problem.detail ?? problem.title), { data: problem });
@@ -284,12 +298,25 @@ export class NotificationsGateway
 
   /**
    * Emits `notification.created` to every socket of `userId` signed in to `tenantId` (all tabs,
-   * all replicas); the same user's sockets in another tenant receive nothing.
+   * all replicas); the same user's sockets in another tenant receive nothing. While maintenance is
+   * on it emits nothing and returns: it never throws, because it runs inside the push consumer,
+   * where a throw would dead-letter the event.
    */
   pushToUser(tenantId: string, userId: string, notification: NotificationResponse): void {
+    if (this.maintenanceOn()) {
+      this.logger.debug(`Push ${notification.id} not emitted: maintenance mode`);
+      return;
+    }
     this.server
       .to(tenantUserRoom(tenantId, userId))
       .emit(NOTIFICATIONS_WS_EVENTS.CREATED, notification);
+  }
+
+  /** The app's maintenance switch, read now (`createMaintenanceModeReader`; no `ModuleRef`: off). */
+  private maintenanceOn(): boolean {
+    this.maintenanceReader ??=
+      this.moduleRef === undefined ? () => false : createMaintenanceModeReader(this.moduleRef);
+    return this.maintenanceReader();
   }
 
   /** A 429 handshake refusal, as a problem document in `connect_error` data. */

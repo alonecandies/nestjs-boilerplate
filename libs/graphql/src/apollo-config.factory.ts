@@ -25,6 +25,9 @@ import type { SubscriptionGuardRef } from './subscriptions/subscription-guard.js
 /** graphql-ws clients must send `connection_init` within this window, or the socket is closed. */
 export const GRAPHQL_WS_INIT_TIMEOUT_MS = 10_000;
 
+/** The close graphql-ws sends when `onConnect` refuses a connection (`CloseCode.Forbidden`). */
+const GRAPHQL_WS_CLOSE_FORBIDDEN = { code: 4403, reason: 'Forbidden' } as const;
+
 export interface ApolloConfigDeps {
   graphql: GraphqlConfig;
   app: AppConfig;
@@ -34,8 +37,9 @@ export interface ApolloConfigDeps {
   /** Filled at bootstrap with the graphql-ws complexity + cost check (C-6); unset → no check. */
   subscriptionGuard?: SubscriptionGuardRef | undefined;
   /**
-   * The maintenance switch (`app.maintenanceMode`, the value the HTTP middleware reads): on,
-   * graphql-ws refuses new connections and subscriptions. Unset → off.
+   * The maintenance switch the HTTP middleware reads (`AppGraphqlModule` passes the app's
+   * `MAINTENANCE_MODE`, read at run time): on, graphql-ws refuses new connections and operations
+   * and closes a connection at its next event. A function is read at every check. Unset → off.
    */
   maintenanceMode?: MaintenanceModeSwitch | undefined;
 }
@@ -53,7 +57,10 @@ export interface ApolloConfigDeps {
  *   (containers usually have read-only filesystems).
  * - **Subscriptions**: graphql-ws on the same path, authenticated once per connection. With
  *   maintenance mode on, `onConnect` closes the connection (4403) and `onSubscribe` answers a
- *   `SERVICE_UNAVAILABLE` error, like the 503 REST clients get.
+ *   `SERVICE_UNAVAILABLE` error, like the 503 REST clients get; a subscription opened before
+ *   maintenance began is closed (4403, as a refused `onConnect`) at its next event, which is not
+ *   delivered. An idle connection stays open until its next event or operation, or its token's
+ *   expiry.
  * - **Context**: a fresh set of DataLoaders per operation; over graphql-ws also the connection's
  *   `connectionSignal`, aborted when its socket closes.
  * - **Errors**: `formatGraphqlError`, for HTTP results and for subscription events (graphql-ws
@@ -120,10 +127,28 @@ export function createApolloDriverConfig(deps: ApolloConfigDeps): ApolloDriverCo
           });
         },
         // Same error format (and internals hiding) for subscription events as for HTTP.
-        onNext: (_ctx, _id, _payload, _args, result) => formatExecutionResult(result, formatError),
+        onNext: (ctx, _id, _payload, _args, result) => {
+          if (isMaintenanceEnabled(deps.maintenanceMode)) {
+            closeForMaintenance(ctx);
+            return undefined;
+          }
+          return formatExecutionResult(result, formatError);
+        },
       },
     },
   };
+}
+
+/**
+ * Ends a connection whose subscription has an event to send while maintenance is on, with the
+ * close a refused `onConnect` gets. graphql-ws then sends nothing: its `ws` socket is no longer
+ * open. Without a socket to close (not a graphql-ws context), throwing makes graphql-ws close the
+ * connection itself before the event is sent.
+ */
+function closeForMaintenance(ctx: unknown): void {
+  const socket = isWsContext(ctx) ? ctx.extra.socket : undefined;
+  if (socket === undefined) throw maintenanceError();
+  socket.close(GRAPHQL_WS_CLOSE_FORBIDDEN.code, GRAPHQL_WS_CLOSE_FORBIDDEN.reason);
 }
 
 /** The graphql-ws twin of the 503 problem: the same detail, `extensions.code` SERVICE_UNAVAILABLE. */

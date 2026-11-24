@@ -1,8 +1,10 @@
 import { ApolloDriver, type ApolloDriverConfig } from '@nestjs/apollo';
 import { type DynamicModule, Module, type ModuleMetadata } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { ModuleRef } from '@nestjs/core';
 import { type BuildSchemaOptions, GraphQLModule } from '@nestjs/graphql';
 import { AccessTokenDenylist, type RevocationSweeper, TokenService } from '@platform/auth';
+import { createMaintenanceModeReader } from '@platform/common';
 import {
   type AppConfig,
   appConfig,
@@ -57,6 +59,9 @@ export interface AppGraphqlModuleOptions {
  * closes those whose token was revoked (4401 `Access token revoked`): at once on the denylist's
  * revocation announcement, else at its next sweep (every `WS_REVOCATION_SWEEP_INTERVAL_MS`). It
  * starts on application bootstrap and stops on shutdown.
+ *
+ * Maintenance: graphql-ws reads the app's `MAINTENANCE_MODE` switch (provided in the root module by
+ * `provideCommonEnhancers*`) at run time, like the HTTP middleware; an app without one reads off.
  */
 @Module({})
 export class AppGraphqlModule {
@@ -86,6 +91,7 @@ export class AppGraphqlModule {
             AccessTokenDenylist,
             GRAPHQL_WS_REVOCATION_SWEEPER,
             { token: ConnectionCaps, optional: true },
+            ModuleRef,
           ],
           useFactory: (
             graphql: GraphqlConfig,
@@ -95,6 +101,7 @@ export class AppGraphqlModule {
             denylist: AccessTokenDenylist,
             sweeper: RevocationSweeper,
             caps: ConnectionCaps | undefined,
+            moduleRef: ModuleRef,
           ): ApolloDriverConfig =>
             createApolloDriverConfig({
               graphql,
@@ -111,7 +118,9 @@ export class AppGraphqlModule {
               ),
               buildSchemaOptions: options.buildSchemaOptions,
               subscriptionGuard,
-              maintenanceMode: app.maintenanceMode,
+              // The app's `MAINTENANCE_MODE` switch (root module), read at run time and not at
+              // boot, so a function switch is followed as the HTTP middleware follows it.
+              maintenanceMode: createMaintenanceModeReader(moduleRef),
             }),
         }),
       ],

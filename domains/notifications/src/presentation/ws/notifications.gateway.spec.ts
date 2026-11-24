@@ -1,13 +1,10 @@
+import { GUARDS_METADATA } from '@nestjs/common/constants';
+import type { ModuleRef } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import { AccessTokenDenylist, AuthModule, TokenService } from '@platform/auth';
 import { signTestAccessToken } from '@platform/auth/testing';
-import {
-  type AppConfig,
-  AppConfigModule,
-  type AuthConfig,
-  appConfig,
-  authConfig,
-} from '@platform/config';
+import { type MaintenanceModeSwitch, WsMaintenanceGuard } from '@platform/common';
+import { AppConfigModule, type AuthConfig, appConfig, authConfig } from '@platform/config';
 import type { ConnectionCaps } from '@platform/redis';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FakeRedisModule } from '../../../test/support/edge-test-app.js';
@@ -74,6 +71,10 @@ function authedSocket(
 /** `WS_REVOCATION_SWEEP_INTERVAL_MS` as the gateway reads it (`authConfig`). */
 const authWithSweepInterval = (intervalMs: number): AuthConfig =>
   authConfig.parse({ ...process.env, WS_REVOCATION_SWEEP_INTERVAL_MS: String(intervalMs) });
+
+/** The app's `MAINTENANCE_MODE` switch, as the gateway looks it up across modules (`ModuleRef`). */
+const withSwitch = (mode: MaintenanceModeSwitch): ModuleRef =>
+  ({ get: vi.fn(() => mode) }) as unknown as ModuleRef;
 
 /** A namespace whose `to(room).emit` reaches exactly the sockets that joined `room`. */
 function serveRooms(gateway: NotificationsGateway, ...sockets: FakeSocket[]) {
@@ -174,10 +175,14 @@ describe('NotificationsGateway', () => {
   });
 
   describe('maintenance mode', () => {
-    const maintenanceOn = (): AppConfig => appConfig.parse({ MAINTENANCE_MODE: 'true' });
+    it('runs WsMaintenanceGuard first among its own guards, so every message is refused first', () => {
+      expect(Reflect.getMetadata(GUARDS_METADATA, NotificationsGateway)?.[0]).toBe(
+        WsMaintenanceGuard,
+      );
+    });
 
     it('refuses the handshake with the 503 problem, before reading the token', async () => {
-      Object.assign(gateway, { app: maintenanceOn() });
+      Object.assign(gateway, { moduleRef: withSwitch(true) });
       const issued = await signTestAccessToken({ id: USER_ID, email: 'a@b.io', roles: ['member'] });
       const socket = fakeSocket({ auth: { token: issued.token } });
 
@@ -197,7 +202,7 @@ describe('NotificationsGateway', () => {
         authWithSweepInterval(30_000),
         { admitHandshake } as unknown as ConnectionCaps,
       );
-      Object.assign(capped, { app: maintenanceOn() });
+      Object.assign(capped, { moduleRef: withSwitch(true) });
 
       const error = await capped.authenticate(fakeSocket({}));
 
@@ -207,7 +212,41 @@ describe('NotificationsGateway', () => {
     });
 
     it('off: the handshake is authenticated as before', async () => {
-      Object.assign(gateway, { app: appConfig.parse({ MAINTENANCE_MODE: 'false' }) });
+      Object.assign(gateway, { moduleRef: withSwitch(false) });
+      const issued = await signTestAccessToken({ id: USER_ID, email: 'a@b.io', roles: ['member'] });
+
+      await expect(
+        gateway.authenticate(fakeSocket({ auth: { token: issued.token } })),
+      ).resolves.toBeUndefined();
+    });
+
+    it('follows a function switch at run time: on after a handshake was accepted, the next is refused', async () => {
+      let on = false;
+      Object.assign(gateway, { moduleRef: withSwitch(() => on) });
+      const issued = await signTestAccessToken({ id: USER_ID, email: 'a@b.io', roles: ['member'] });
+
+      await expect(
+        gateway.authenticate(fakeSocket({ auth: { token: issued.token } })),
+      ).resolves.toBeUndefined();
+      on = true;
+      const error = await gateway.authenticate(fakeSocket({ auth: { token: issued.token } }));
+
+      expect(error?.data).toMatchObject({ status: 503, code: 'SERVICE_UNAVAILABLE' });
+    });
+
+    it("reads the app's switch, not the boot boolean of appConfig", async () => {
+      Object.assign(gateway, {
+        app: appConfig.parse({ MAINTENANCE_MODE: 'true' }),
+        moduleRef: withSwitch(false),
+      });
+      const issued = await signTestAccessToken({ id: USER_ID, email: 'a@b.io', roles: ['member'] });
+
+      await expect(
+        gateway.authenticate(fakeSocket({ auth: { token: issued.token } })),
+      ).resolves.toBeUndefined();
+    });
+
+    it('without a switch in the app (no ModuleRef, a unit spec) reads off', async () => {
       const issued = await signTestAccessToken({ id: USER_ID, email: 'a@b.io', roles: ['member'] });
 
       await expect(
@@ -413,6 +452,26 @@ describe('NotificationsGateway', () => {
       expect(own.emit).toHaveBeenCalledWith(NOTIFICATIONS_WS_EVENTS.CREATED, notification);
       expect(ownInOtherTenant.emit).not.toHaveBeenCalled();
       expect(otherUser.emit).not.toHaveBeenCalled();
+    });
+
+    it('emits nothing while maintenance is on, and returns without throwing (the push consumer)', async () => {
+      let on = false;
+      Object.assign(gateway, { moduleRef: withSwitch(() => on) });
+      const own = authedSocket({ tenantId: TENANT_ID, userId: USER_ID });
+      const to = serveRooms(gateway, own);
+      await gateway.handleConnection(own);
+      const notification = { id: NOTIFICATION_ID } as NotificationResponse;
+      on = true;
+
+      expect(() => {
+        gateway.pushToUser(TENANT_ID, USER_ID, notification);
+      }).not.toThrow();
+
+      expect(to).not.toHaveBeenCalled();
+      expect(own.emit).not.toHaveBeenCalled();
+      on = false;
+      gateway.pushToUser(TENANT_ID, USER_ID, notification);
+      expect(own.emit).toHaveBeenCalledWith(NOTIFICATIONS_WS_EVENTS.CREATED, notification);
     });
   });
 });

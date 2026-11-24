@@ -47,7 +47,11 @@ import { AiModelProvider } from '@platform/ai';
 import { MockAiModelProvider, mockTextModel } from '@platform/ai/testing';
 import { buildFastifyOptions, configureHttpApp, setupApiDocs } from '@platform/bootstrap';
 import { CASSANDRA_CLIENT } from '@platform/cassandra';
-import { EXCEPTIONS_FILTER_OPTIONS } from '@platform/common';
+import {
+  EXCEPTIONS_FILTER_OPTIONS,
+  MAINTENANCE_MODE,
+  type MaintenanceModeSwitch,
+} from '@platform/common';
 import { appConfig } from '@platform/config';
 import { DRIZZLE, RlsElevation } from '@platform/database';
 import { GRAPHQL_PUB_SUB } from '@platform/graphql';
@@ -150,6 +154,11 @@ export interface MonolithE2eOptions {
    * the app's own, which sets none.
    */
   problemTypeBaseUrl?: string;
+  /**
+   * Replaces the `MAINTENANCE_MODE` switch (the root module's boot boolean, `app.maintenanceMode`),
+   * for example with a function the spec flips while the app runs.
+   */
+  maintenanceMode?: MaintenanceModeSwitch;
 }
 
 /** What the default mock model answers. */
@@ -256,6 +265,9 @@ export async function createMonolithE2eApp(options: MonolithE2eOptions = {}) {
       exposeInternal: !config.isProduction,
       typeBaseUrl: options.problemTypeBaseUrl,
     });
+  }
+  if (options.maintenanceMode !== undefined) {
+    builder.overrideProvider(MAINTENANCE_MODE).useValue(options.maintenanceMode);
   }
   if (options.immudb !== undefined) {
     builder.overrideProvider(ImmudbClient).useValue(options.immudb);
