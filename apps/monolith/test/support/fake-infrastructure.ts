@@ -87,15 +87,29 @@ export function createFakeCassandra() {
   return { client: client as unknown as CassandraClient, executed, state };
 }
 
-/** The BullMQ `mail` queue: records jobs instead of writing them to Redis. */
+/**
+ * The BullMQ `mail` queue: records jobs instead of writing them to Redis. `MailService` keeps the
+ * sent marker of a keyed mail in the queue's own Redis (`getBackend().client`, `toKey`), held here
+ * in a map.
+ */
 export function createFakeQueue() {
   const jobs: { name: string; data: unknown; opts: unknown }[] = [];
+  const keys = new Map<string, string>();
+  const client = {
+    get: async (key: string): Promise<string | null> => keys.get(key) ?? null,
+    set: async (key: string, value: string): Promise<'OK'> => {
+      keys.set(key, value);
+      return 'OK';
+    },
+  };
   return {
     jobs,
     add: async (name: string, data: unknown, opts?: unknown) => {
       jobs.push({ name, data, opts });
       return { id: `job-${jobs.length}`, name, data };
     },
+    toKey: (type: string): string => `bull:mail:${type}`,
+    getBackend: () => ({ client: Promise.resolve(client) }),
     close: async (): Promise<void> => undefined,
     // MailService attaches its connection-error logger at init.
     on: (): void => undefined,

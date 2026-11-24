@@ -101,8 +101,20 @@ const store = createFakeCassandra((cql, params) => {
   return {}; // inserts / upserts
 });
 
+const mailMarkers = new Map<string, string>();
 const mailQueue = {
   add: vi.fn(async () => ({ id: 'job-1' })),
+  // MailService keeps a keyed mail's sent marker in the queue's own Redis.
+  toKey: (type: string) => `bull:mail:${type}`,
+  getBackend: () => ({
+    client: Promise.resolve({
+      get: async (key: string) => mailMarkers.get(key) ?? null,
+      set: async (key: string, value: string) => {
+        mailMarkers.set(key, value);
+        return 'OK';
+      },
+    }),
+  }),
   // MailService attaches its connection-error logger at init.
   on: vi.fn(),
   close: vi.fn(async () => undefined),

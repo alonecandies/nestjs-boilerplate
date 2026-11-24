@@ -83,8 +83,14 @@ render. The Redis connection comes from `AppQueueModule` (`REDIS_URL`).
 
 - **`AppQueueModule.forRootAsync()` (from `@platform/redis`) must be imported at the app level.**
   `BullModule.registerQueue` needs the global BullMQ connection.
-- **Idempotency lasts 24h.** A custom `jobId` deduplicates only while the job exists. Completed
-  mail jobs are kept for 24h (`MAIL_JOB_OPTIONS.removeOnComplete`). Keys that BullMQ would reject
+- **Idempotency lasts 14 days, the `.dlq` retention.** A custom `jobId` deduplicates only while
+  the job exists: completed mail jobs are kept for 24h or the last 10,000
+  (`MAIL_JOB_OPTIONS.removeOnComplete`). So after adding a keyed mail, `enqueue` also sets
+  `mail-sent:<jobId>` in the queue's own Redis and key space (`bull:mail:mail-sent:<jobId>`,
+  `MAIL_SENT_MARKER_TTL_SEC`), and adds nothing while it exists. Check, add, then set: a crash
+  between the add and the set is covered by the job id. The marker means enqueued, not delivered:
+  a job that ran out of attempts is not sent by a replay either; retry the failed job (BullMQ
+  keeps it 7 days). Keys that BullMQ would reject
   (containing `:`, or integer strings) are hashed to `k-<sha256>` instead of being rejected.
 - **Strict Handlebars.** `{{unknown}}` throws, and the job fails as unrecoverable (no retries). Use
   `{{#if x}}` for optional values. Helper arguments are not checked by strict mode.
