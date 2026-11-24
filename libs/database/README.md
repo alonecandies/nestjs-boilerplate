@@ -264,7 +264,8 @@ is left alone, and it ships in `dist/` like the other migration files):
   file being `0004_…`). Several steps may share an anchor; they run in file-name order. The folder is read before
   connecting, by `assertMigrationSets` (so at module definition through `withPlatformMigrations`) and by the runner: a
   declared folder that is missing, another file, a file without a statement or an anchor beyond the set's journal
-  fail up front, and so does a `CREATE INDEX CONCURRENTLY` without `IF NOT EXISTS` and an explicit index name (the
+  fail up front, as does an anchor whose journal entry's tag does not start with the step's `NNNN` (a hand-edited
+  journal would otherwise move the step after another migration), and so does a `CREATE INDEX CONCURRENTLY` without `IF NOT EXISTS` and an explicit index name (the
   retry below finds a failed build by that name). A file goes to the server on the extended protocol, which refuses
   several statements (`42601`) instead of running them as one implicit transaction.
 - **When: at their place in the history.** Under the advisory lock, each pending step runs right after the
