@@ -93,11 +93,11 @@ render. The Redis connection comes from `AppQueueModule` (`REDIS_URL`).
   keeps it 7 days). The 14 days are fixed (the shipped `.dlq` retention), whatever retention the
   topics really have: an event replayed later than that (from a `.dlq` kept longer, an archive,
   or a log segment Kafka has not deleted yet) sends the mail again, so whoever raises the `.dlq`
-  retention or replays an archive checks the recipient or the job first.
+  retention or replays an archive checks the recipient or the job first. Keys that BullMQ would
+  reject (containing `:`, or integer strings) are hashed to `k-<sha256>` instead of being rejected.
 - **Rollout of the marker.** It covers only mails enqueued by a process that runs this version.
   For 14 days after the upgrade, and after a rollback, a mail enqueued by the old version has only
-  the old 24 h dedupe (the job id), so a replay of an older backlog may send it again. Keys that BullMQ would reject
-  (containing `:`, or integer strings) are hashed to `k-<sha256>` instead of being rejected.
+  the old 24 h dedupe (the job id), so a replay of an older backlog may send it again.
 - **Strict Handlebars.** `{{unknown}}` throws, and the job fails as unrecoverable (no retries). Use
   `{{#if x}}` for optional values. Helper arguments are not checked by strict mode.
 - `@nestjs-modules/mailer` quirks (see research integrations §3): its typings require the `imports`
