@@ -22,7 +22,7 @@ await vi.hoisted(async () => {
 
 import type { EventEmitter } from 'node:events';
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
-import { aiMessageStreamTrigger } from '@domain/ai/api';
+import { AiPort, aiMessageStreamTrigger } from '@domain/ai/api';
 import {
   mockFailingModel,
   mockHangingModel,
@@ -36,7 +36,6 @@ import {
   GraphqlWsClients,
   type GraphqlWsCollector,
   listenOnLoopback,
-  wait,
   waitUntil,
 } from '@platform/testing/realtime';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -75,8 +74,6 @@ interface StreamEvent {
   };
 }
 
-/** How long an event that must NOT arrive is awaited. */
-const QUIET_MS = 300;
 const SUBSCRIBE = `subscription Stream($id: UUID!) {
   aiMessageStream(conversationId: $id) {
     conversationId type delta replayed message { id text status }
@@ -103,6 +100,24 @@ function parseSse(body: string): SseEvent[] {
     });
 }
 
+/** Passes `events` through and calls `onEnd` once the consumer has read them to their end. */
+async function* untilEnd<T>(events: AsyncIterable<T>, onEnd: () => void): AsyncGenerator<T> {
+  try {
+    yield* events;
+  } finally {
+    onEnd();
+  }
+}
+
+/** A marker push as a subscriber receives it (see `pushMarker`). */
+const markerEvent = (conversationId: string, delta: string) => ({
+  conversationId,
+  type: 'DELTA',
+  delta,
+  replayed: null,
+  message: null,
+});
+
 describe('AI streaming (monolith)', () => {
   let e2e: MonolithE2e;
   let httpUrl = '';
@@ -111,6 +126,11 @@ describe('AI streaming (monolith)', () => {
   const clients = new GraphqlWsClients();
   let ada: Tokens;
   let bob: Tokens;
+  /**
+   * The conversations whose streamed turn the server has read to its end. A cut turn stores its
+   * reply and usage row before its stream settles, so a spec awaits this, not a pause.
+   */
+  const endedTurns: string[] = [];
   const inject = (...args: Parameters<MonolithE2e['app']['inject']>) => e2e.app.inject(...args);
 
   const register = async (email: string): Promise<Tokens> => {
@@ -191,8 +211,26 @@ describe('AI streaming (monolith)', () => {
       req.end(body);
     });
 
-  const pubSub = () => e2e.app.get<unknown>(GRAPHQL_PUB_SUB) as { ee: EventEmitter };
+  const pubSub = () =>
+    e2e.app.get<unknown>(GRAPHQL_PUB_SUB) as {
+      ee: EventEmitter;
+      publish(trigger: string, payload: unknown): Promise<void>;
+    };
   const listeners = (trigger: string): number => pubSub().ee.listenerCount(trigger);
+  /** A legitimate push of `delta` on the trigger of (tenant, user): it passes the filter. */
+  const pushMarker = (
+    tenantId: string,
+    userId: string,
+    conversationId: string,
+    delta: string,
+  ): Promise<void> =>
+    pubSub().publish(aiMessageStreamTrigger(tenantId, userId, conversationId), {
+      tenantId,
+      userId,
+      conversationId,
+      type: 'delta',
+      delta,
+    });
   /** Subscribes as `token` and, when `trigger` is given, waits until the server listens on it. */
   const subscribe = async (
     token: string,
@@ -221,6 +259,12 @@ describe('AI streaming (monolith)', () => {
   });
   beforeEach(async () => {
     await e2e.redis.flushall();
+    // Per test: `restoreMocks` restores every spy before each one.
+    const port = e2e.app.get(AiPort, { strict: false });
+    const streamMessage = port.streamMessage.bind(port);
+    vi.spyOn(port, 'streamMessage').mockImplementation(async (input) =>
+      untilEnd(await streamMessage(input), () => endedTurns.push(input.conversationId)),
+    );
   });
   afterAll(async () => {
     await clients.disposeAll();
@@ -283,8 +327,8 @@ describe('AI streaming (monolith)', () => {
         e2e.ai.persistence.store.messages.filter(
           (m) => m.conversationId === conversationId && m.role === 'assistant',
         );
-      await waitUntil(() => assistant().length > 0);
-      await wait(QUIET_MS);
+      // The server read the cut turn to its end: everything it stores is stored by then.
+      await waitUntil(() => endedTurns.includes(conversationId));
       expect(assistant().map((m) => [m.content, m.status])).toEqual([['partial ', 'incomplete']]);
       expect(
         e2e.ai.persistence.store.usage
@@ -411,20 +455,40 @@ describe('AI streaming (monolith)', () => {
       model = mockStreamModel(['Stre', 'amed']);
       const conversationId = await createConversation(ada);
       const adaToken = ada.accessToken;
-      const carolInA = await tokenFor(generateId(), ada.tenantId); // another member of A
-      const adaInB = await tokenFor(ada.user.id, bob.tenantId); // Ada acting in another tenant
-
-      const own = await subscribe(
-        adaToken,
-        conversationId,
-        aiMessageStreamTrigger(ada.tenantId, ada.user.id, conversationId),
-      );
-      const others = [
-        await subscribe(carolInA, conversationId),
-        await subscribe(adaInB, conversationId),
-        await subscribe(bob.accessToken, conversationId),
+      const carolId = generateId();
+      // Each subscriber listens on the trigger of its token's (tenant, user).
+      const subscribers = [
+        { token: adaToken, tenantId: ada.tenantId, userId: ada.user.id },
+        // another member of A
+        { token: await tokenFor(carolId, ada.tenantId), tenantId: ada.tenantId, userId: carolId },
+        // Ada acting in another tenant
+        {
+          token: await tokenFor(ada.user.id, bob.tenantId),
+          tenantId: bob.tenantId,
+          userId: ada.user.id,
+        },
+        { token: bob.accessToken, tenantId: bob.tenantId, userId: bob.user.id },
       ];
-      await wait(50);
+      const collectors: GraphqlWsCollector<StreamEvent>[] = [];
+      for (const { token, tenantId, userId } of subscribers) {
+        collectors.push(
+          await subscribe(
+            token,
+            conversationId,
+            aiMessageStreamTrigger(tenantId, userId, conversationId),
+          ),
+        );
+      }
+      const pushToAll = async (delta: string): Promise<void> => {
+        for (const { tenantId, userId } of subscribers) {
+          await pushMarker(tenantId, userId, conversationId, delta);
+        }
+      };
+      const last = (collector: GraphqlWsCollector<StreamEvent>) =>
+        collector.received.at(-1)?.aiMessageStream.delta;
+      // Every subscription delivers end to end before the turn runs: each receives a sentinel.
+      await pushToAll('sentinel');
+      await waitUntil(() => collectors.every((collector) => last(collector) === 'sentinel'));
 
       const res = await gql(adaToken, STREAM_MUTATION, {
         input: { conversationId, content: 'Stream it' },
@@ -435,9 +499,16 @@ describe('AI streaming (monolith)', () => {
       }>().data.streamAiMessage;
       expect(reply).toMatchObject({ replayed: false, message: { text: 'Streamed' } });
 
-      await waitUntil(() => own.received.length >= 3);
-      await wait(QUIET_MS);
+      // A fence on every trigger after the turn: a subscription delivers in order, so once the
+      // fence is in, any extra frame of the turn, or one that leaked to another trigger, is too.
+      await pushToAll('fence');
+      await waitUntil(() => collectors.every((collector) => last(collector) === 'fence'));
+      const [own, ...others] = collectors as [
+        GraphqlWsCollector<StreamEvent>,
+        ...GraphqlWsCollector<StreamEvent>[],
+      ];
       expect(own.received.map((r) => r.aiMessageStream)).toEqual([
+        markerEvent(conversationId, 'sentinel'),
         { conversationId, type: 'DELTA', delta: 'Stre', replayed: null, message: null },
         { conversationId, type: 'DELTA', delta: 'amed', replayed: null, message: null },
         {
@@ -447,9 +518,16 @@ describe('AI streaming (monolith)', () => {
           replayed: false,
           message: { id: reply.message.id, text: 'Streamed', status: 'COMPLETE' },
         },
+        markerEvent(conversationId, 'fence'),
       ]);
       expect(own.errors).toEqual([]);
-      for (const other of others) expect(other.received).toEqual([]);
+      for (const other of others) {
+        expect(other.received.map((r) => r.aiMessageStream)).toEqual([
+          markerEvent(conversationId, 'sentinel'),
+          markerEvent(conversationId, 'fence'),
+        ]);
+        expect(other.errors).toEqual([]);
+      }
     });
 
     it('closing the graphql-ws socket aborts a streamAiMessage turn; the partial reply is stored as incomplete', async () => {
@@ -486,8 +564,8 @@ describe('AI streaming (monolith)', () => {
         e2e.ai.persistence.store.messages.filter(
           (m) => m.conversationId === conversationId && m.role === 'assistant',
         );
-      await waitUntil(() => assistant().length > 0);
-      await wait(QUIET_MS);
+      // The server read the cut turn to its end: everything it stores is stored by then.
+      await waitUntil(() => endedTurns.includes(conversationId));
       expect(assistant().map((m) => [m.content, m.status])).toEqual([['partial ', 'incomplete']]);
       expect(
         e2e.ai.persistence.store.usage
@@ -501,18 +579,20 @@ describe('AI streaming (monolith)', () => {
       const trigger = aiMessageStreamTrigger(ada.tenantId, ada.user.id, conversationId);
       const own = await subscribe(ada.accessToken, conversationId, trigger);
 
-      await e2e.app
-        .get<{ publish(trigger: string, payload: unknown): Promise<void> }>(GRAPHQL_PUB_SUB)
-        .publish(trigger, {
-          tenantId: bob.tenantId,
-          userId: ada.user.id,
-          conversationId,
-          type: 'delta',
-          delta: 'leak',
-        });
-      await wait(QUIET_MS);
+      await pubSub().publish(trigger, {
+        tenantId: bob.tenantId,
+        userId: ada.user.id,
+        conversationId,
+        type: 'delta',
+        delta: 'leak',
+      });
+      // The legitimate push right behind it proves the foreign one was filtered, not just slow.
+      await pushMarker(ada.tenantId, ada.user.id, conversationId, 'fence');
+      await waitUntil(() => own.received.length > 0);
 
-      expect(own.received).toEqual([]);
+      expect(own.received.map((r) => r.aiMessageStream)).toEqual([
+        markerEvent(conversationId, 'fence'),
+      ]);
     });
   });
 });

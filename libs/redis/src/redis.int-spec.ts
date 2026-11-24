@@ -11,8 +11,9 @@ import { Redlock } from '@sesamecare-oss/redlock';
 import { type Cache, createCache } from 'cache-manager';
 import type { Redis } from 'ioredis';
 import type { Keyv } from 'keyv';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { createCacheOptions } from './cache/app-cache.module.js';
+import { CACHE_INVALIDATION_CHANNEL } from './cache/cache.constants.js';
 import { AppCacheService } from './cache/cache.service.js';
 import { RedisKeyService } from './keys/redis-key.service.js';
 import { DistributedLockService, REDLOCK_SETTINGS } from './lock/distributed-lock.service.js';
@@ -263,6 +264,12 @@ describe('DistributedLockService (real redlock)', () => {
 
 describe('two-tier cache (real Redis L2 + pub/sub invalidation)', () => {
   const replicas: { service: AppCacheService; cache: Cache; subscriber: Redis }[] = [];
+  /** Whether `replica`'s L1 (the in-process tier) holds `key`. */
+  const inL1 = (replica: (typeof replicas)[0], key: string): Promise<boolean> => {
+    const [l1] = replica.cache.stores;
+    if (l1 === undefined) throw new Error('no L1 store');
+    return l1.has(key);
+  };
 
   beforeAll(async () => {
     const cacheCfg = cacheConfig.parse({ CACHE_TTL_MS: '30000', CACHE_L1_TTL_MS: '10000' });
@@ -282,7 +289,15 @@ describe('two-tier cache (real Redis L2 + pub/sub invalidation)', () => {
       service.onModuleInit();
       replicas.push({ service, cache, subscriber });
     }
-    await sleep(200); // subscriptions established
+    // Both replicas listen on the invalidation channel before any test publishes on it.
+    const channel = keys.key(CACHE_INVALIDATION_CHANNEL);
+    await vi.waitFor(
+      async () => {
+        const [, count] = (await redis.pubsub('NUMSUB', channel)) as [string, number];
+        expect(Number(count)).toBe(replicas.length);
+      },
+      { timeout: 10_000, interval: 20 },
+    );
   });
 
   afterAll(async () => {
@@ -298,12 +313,21 @@ describe('two-tier cache (real Redis L2 + pub/sub invalidation)', () => {
     expect(await redis.get(`${prefix}:cache:user:1`)).toContain('"v":1');
     await expect(b.service.getOrSet('user:1', async () => ({ v: -1 }))).resolves.toEqual({ v: 1 });
 
+    // b holds the old value in its L1: only a's broadcast can make b read the new one.
+    expect(await inL1(b, 'user:1')).toBe(true);
     await a.service.set('user:1', { v: 2 });
-    await sleep(100); // pub/sub delivery
+    await vi.waitFor(async () => expect(await inL1(b, 'user:1')).toBe(false), {
+      timeout: 10_000,
+      interval: 20,
+    });
     await expect(b.service.getOrSet('user:1', async () => ({ v: -1 }))).resolves.toEqual({ v: 2 });
 
+    expect(await inL1(a, 'user:1')).toBe(true);
     await b.service.del('user:1');
-    await sleep(100);
+    await vi.waitFor(async () => expect(await inL1(a, 'user:1')).toBe(false), {
+      timeout: 10_000,
+      interval: 20,
+    });
     await expect(a.service.get('user:1')).resolves.toBeUndefined();
   });
 });
