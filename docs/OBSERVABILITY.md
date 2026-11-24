@@ -337,6 +337,14 @@ Reading the series:
   `rate_limit_fail_open_total` (every throttler, at boot) and the `kafka_consumer_messages_total` series of each
   subscribed topic are created at 0 when the process starts. A new alert on a labelled counter must do the same
   (the billing counters have no labels, so registering them is enough).
+- **Rollout order.** Roll out the apps before the new rule files. `GrpcCircuitBreakerOpen` and `GrpcUpstreamFailing`
+  read only `grpc_client_circuit_breaker_events_total`, which older versions do not export, so neither fires for a
+  calling service whose replicas all run an older version or were rolled back. Keep the previous
+  `GrpcCircuitBreakerOpen` rule (joined per `service` on `grpc_client_handled_total{grpc_code="CIRCUIT_OPEN"}`) loaded
+  next to the new one while any calling service runs the old version. Do not add a fallback on the old series to the
+  new rule: it would page again for an idle `half_open` breaker whenever another upstream of the same service
+  refuses calls. Older consumers also commit their offsets only at the end of a batch, so `KafkaConsumerGroupStalled`
+  can page while one of their batches runs longer than about 15 minutes.
 - **Platform and billing rules.** `platform.rules.yml` covers Kafka, gRPC breakers, rate limiting, the database pool,
   the HTTP 5xx ratio, the Redis eviction check and mail; `billing.rules.yml` covers money that Stripe reported paid
   but the platform did not apply or that differs from the quote. Alerts on series that only the process owning the
