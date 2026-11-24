@@ -70,7 +70,8 @@ groups:
       # (opossum), so refused calls in the last 2 minutes are required too. Limits: the refusal
       # counter has no `upstream` label, so the join is per service (an idle half_open breaker fires
       # alongside a refusing one of the same service); traffic too sparse to be refused (every call
-      # is the probe and ends DEADLINE_EXCEEDED) does not fire here but shows in the 5xx ratio.
+      # is the half_open probe and fails: DEADLINE_EXCEEDED for a hung upstream, UNAVAILABLE for one
+      # that refuses connections) does not fire here but shows in the 5xx ratio.
       - alert: GrpcCircuitBreakerOpen
         expr: >-
           max by (service, upstream)

@@ -628,7 +628,8 @@ pinned to a commit SHA. The gates: [RELEASING.md](RELEASING.md#ci-pipeline). Tes
 - **integration**: `bun run test:int` (`INTEGRATION=1`, every `<package>:int` project). The specs start their own
   stores with testcontainers: Citus (Postgres), Cassandra, Kafka, immudb, RustFS and fake-gcs-server. Redis comes from a
   job service container (`REDIS_URL=redis://localhost:6379`). A step first pulls every image the specs start
-  (`node scripts/int-images.mjs` lists them from the image constants), so no hook timeout is spent on a download.
+  (`node scripts/int-images.mjs` lists them: the image constants plus the testcontainers Ryuk reaper, read from the
+  installed `testcontainers`, so it runs after `bun install`), so no hook timeout is spent on a download.
 - **image** (matrix of the 6 apps): `docker buildx` of the `runtime` target, not pushed, GitHub Actions cache per app,
   then a Trivy scan of its OS packages (fixable HIGH and CRITICAL fail the job) and the runtime `node --version`.
 - **topology** (matrix `monolith`, `microservices`; needs `image`): loads the images the `image` job saved as
