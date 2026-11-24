@@ -95,7 +95,9 @@ group has already moved past the events that created them. They are not rebuilt 
 offsets to the snapshot time (`kafka-consumer-groups.sh --reset-offsets --to-datetime …`) while the notifications
 consumers are stopped; the consumers deduplicate on the envelope id, and Kafka retention bounds how far back this
 works. UNTESTED. Pushes for those events are sent again by such a replay; a mail is not when it was enqueued in
-the last 14 days (the mail queue's `mail-sent:<jobId>` marker, see `libs/mailer/README.md`). Postgres and immudb
+the last 14 days by a replica that runs the version with the mail queue's `mail-sent:<jobId>` marker (see
+`libs/mailer/README.md`). A mail enqueued earlier than that, or by an older version (for 14 days after the upgrade
+and after a rollback only the old 24 h dedupe applies), is sent again: check the recipients first. Postgres and immudb
 do not depend on this store.
 
 ## immudb

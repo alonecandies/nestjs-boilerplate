@@ -376,7 +376,8 @@ flowchart LR
 ```
 
 A failing handler must never throw out of the consumer: a thrown error is redelivered forever and
-blocks the partition. `@KafkaConsumerController()` retries transient failures **in process**
+blocks the partition, and a `TypeError`, `RangeError`, `ReferenceError` or `SyntaxError` that
+reaches kafkajs stops the consumer for good. `@KafkaConsumerController()` retries transient failures **in process**
 (`DEFAULT_KAFKA_RETRY_OPTIONS`: 4 attempts, jittered exponential backoff of at most 0.25, 0.5 and
 1 s) and then publishes the message to `<topic>.dlq` with error headers and commits, so the
 partition keeps moving. Errors that would fail the same way again (4xx `DomainException`s such as
@@ -387,8 +388,12 @@ All of one message's work, every attempt and delay, shares one budget (`budgetMs
 consumer heartbeats while it runs. A spent budget abandons the running attempt (it is not
 cancelled, and handlers are idempotent) and is dead-lettered as a transient failure, or redelivered
 with `retry: { onBudgetExceeded: 'redeliver' }` (`LedgerPostingConsumer`). The dead-letter send
-waits at most 5 s; after that the message is left for redelivery. After fixing the cause, replay
-the DLQ:
+waits at most 5 s; after that the message is left for redelivery. A dead letter whose
+`x-error-type` is `TIMEOUT` (a spent budget) may therefore be a full success: the abandoned attempt
+can finish after the dead-letter send. Replaying it is safe for rows and ledger entries, but the push
+is deduplicated for only 10 minutes (`PUSH_DEDUPE_TTL_SEC`), so a later replay pushes again, and
+the mail for only 14 days from its enqueue (see the dead-letter runbook in
+[OBSERVABILITY.md](OBSERVABILITY.md#alert-rules)). After fixing the cause, replay the DLQ:
 
 ```bash
 bun run build

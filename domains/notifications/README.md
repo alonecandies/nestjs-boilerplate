@@ -253,7 +253,8 @@ Delivery is at-least-once, so every consumer path is idempotent:
   redelivered event upserts the same row. Inserts never write `read`, so a replay cannot mark a
   read notification unread.
 - Mails use business idempotency keys (the BullMQ job id, plus a `mail-sent:<jobId>` marker kept
-  14 days, the `.dlq` retention). Keys are derived from the
+  a fixed 14 days from the enqueue, the shipped `.dlq` retention; see the redelivery bullet below
+  for replays later than that). Keys are derived from the
   user or payment id rather than the envelope id, so a re-published event with a fresh envelope id
   is still deduplicated. The digest key names the tenant too, so one user's digests in two tenants
   are two mails.
@@ -336,11 +337,18 @@ paged and capped.
   `notifications.notification-created.v1` last, after the inbox row and the mail, and a failed
   publish fails their event: the consumer retries it in process, then dead-letters it
   (`KafkaDeadLetters` pages; replay with `dlq-replay`). The redelivery rewrites the same row,
-  enqueues the same mail job (a no-op for 14 days, the `.dlq` retention: the mail queue's
+  enqueues the same mail job (a no-op for a fixed 14 days from the enqueue: the mail queue's
   `mail-sent:<jobId>` marker outlives the job, which BullMQ keeps 24 h or until 10,000 newer mail
   jobs have completed) and publishes again. The trade-off: a persistent publish failure
   dead-letters an event whose row and mail were already written; a replay within the 14 days
-  sends no second mail.
+  sends no second mail. A replay later than 14 days after the mail (from a `.dlq` kept longer, an
+  archive, or a log segment Kafka has not deleted yet) sends it again, so an operator who raises
+  the `.dlq` retention or replays an archive checks the recipient or the mail job first. For 14
+  days after the upgrade that added the marker, and after a rollback, mails enqueued by the old
+  version have only the old 24 h dedupe, so a replay of an older backlog may send them again. The
+  push is deduplicated for 10 minutes only (`PUSH_DEDUPE_TTL_SEC`): a later replay pushes again,
+  also for a dead letter whose `x-error-type` is `TIMEOUT`, which may be a full success (the
+  abandoned attempt can finish after the dead-letter send).
 - `executePage` can return a page state at the exact end of a partition. The next page is then
   empty with a `null` state, so clients must treat that as the end.
 - Recipients are only known after a `membership-created` event for that `(tenant, user)`. A receipt

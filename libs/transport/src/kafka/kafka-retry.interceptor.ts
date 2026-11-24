@@ -18,6 +18,7 @@ import { z } from 'zod';
 import { errorTypeOf } from './dead-letter.js';
 import { KAFKA_HEARTBEAT_INTERVAL_MS } from './kafka.options.js';
 import { recordKafkaRetry } from './kafka-metrics.js';
+import { toKafkaRedelivery } from './kafka-redelivery.js';
 
 /**
  * What a spent budget becomes: `'dead-letter'` lets the `OperationTimeoutException` reach
@@ -202,8 +203,6 @@ export class KafkaRetryInterceptor implements NestInterceptor {
     this.logger.warn(
       `${timeout.message}; the running attempt is abandoned and the message goes to ${onBudgetExceeded === 'redeliver' ? 'redelivery' : 'the dead-letter filter'}`,
     );
-    if (onBudgetExceeded === 'dead-letter') return timeout;
-    // RpcException takes no options: the timeout rides along as `cause` for the logs.
-    return Object.assign(new KafkaRetriableException(timeout.message), { cause: timeout });
+    return onBudgetExceeded === 'dead-letter' ? timeout : toKafkaRedelivery(timeout);
   }
 }

@@ -10,6 +10,7 @@ import { isDomainException } from '@platform/common';
 import { defer, map, type Observable, throwError } from 'rxjs';
 import { errorTypeOf, sendToDeadLetter } from './dead-letter.js';
 import { recordKafkaOutcome } from './kafka-metrics.js';
+import { toKafkaRedelivery } from './kafka-redelivery.js';
 
 /**
  * Controller-scoped catch-all for Kafka consumers (`@UseFilters(KafkaDeadLetterFilter)`, or the
@@ -26,9 +27,13 @@ import { recordKafkaOutcome } from './kafka-metrics.js';
  * - `KafkaRetriableException` is rethrown on purpose: it is the explicit "let kafkajs retry" signal.
  * - If the dead-letter publish itself fails (broker unavailable), or is not acknowledged within
  *   `KAFKA_DEAD_LETTER_SEND_TIMEOUT_MS` (5 s, so the send cannot hold the consumer past its
- *   rebalance timeout), the ORIGINAL error is rethrown so kafkajs redelivers the message later.
- *   Nothing is lost; at worst it is processed twice, which handlers tolerate by deduplicating on
- *   the envelope id.
+ *   rebalance timeout), the offset is not committed and the error is handed back to kafkajs as
+ *   `KafkaRetriableException` (`toKafkaRedelivery`, the original as `cause`). kafkajs does not
+ *   redeliver every error: it stops the consumer for good on a `TypeError`, `RangeError`,
+ *   `ReferenceError` or `SyntaxError`, or on `retriable: false`. The wrapper it retries, and
+ *   restarts the consumer once those retries run out, so the message is redelivered. Nothing is
+ *   lost; at worst it is processed again, which handlers tolerate by deduplicating on the
+ *   envelope id.
  * - Non-Kafka contexts are rethrown untouched.
  * - Transient failures reach it only after `KafkaRetryInterceptor` (applied by
  *   `@KafkaConsumerController()`) has retried them; replay the dead-letter topic with
@@ -66,7 +71,7 @@ export class KafkaDeadLetterFilter implements RpcExceptionFilter<unknown> {
         exception instanceof Error ? exception.stack : undefined,
       );
       recordKafkaOutcome(context.getTopic(), 'redelivery');
-      throw exception;
+      throw toKafkaRedelivery(exception);
     }
   }
 }

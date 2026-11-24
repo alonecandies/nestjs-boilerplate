@@ -83,14 +83,20 @@ render. The Redis connection comes from `AppQueueModule` (`REDIS_URL`).
 
 - **`AppQueueModule.forRootAsync()` (from `@platform/redis`) must be imported at the app level.**
   `BullModule.registerQueue` needs the global BullMQ connection.
-- **Idempotency lasts 14 days, the `.dlq` retention.** A custom `jobId` deduplicates only while
+- **Idempotency lasts 14 days from the enqueue.** A custom `jobId` deduplicates only while
   the job exists: completed mail jobs are kept for 24h or the last 10,000
   (`MAIL_JOB_OPTIONS.removeOnComplete`). So after adding a keyed mail, `enqueue` also sets
   `mail-sent:<jobId>` in the queue's own Redis and key space (`bull:mail:mail-sent:<jobId>`,
   `MAIL_SENT_MARKER_TTL_SEC`), and adds nothing while it exists. Check, add, then set: a crash
   between the add and the set is covered by the job id. The marker means enqueued, not delivered:
   a job that ran out of attempts is not sent by a replay either; retry the failed job (BullMQ
-  keeps it 7 days). Keys that BullMQ would reject
+  keeps it 7 days). The 14 days are fixed (the shipped `.dlq` retention), whatever retention the
+  topics really have: an event replayed later than that (from a `.dlq` kept longer, an archive,
+  or a log segment Kafka has not deleted yet) sends the mail again, so whoever raises the `.dlq`
+  retention or replays an archive checks the recipient or the job first.
+- **Rollout of the marker.** It covers only mails enqueued by a process that runs this version.
+  For 14 days after the upgrade, and after a rollback, a mail enqueued by the old version has only
+  the old 24 h dedupe (the job id), so a replay of an older backlog may send it again. Keys that BullMQ would reject
   (containing `:`, or integer strings) are hashed to `k-<sha256>` instead of being rejected.
 - **Strict Handlebars.** `{{unknown}}` throws, and the job fails as unrecoverable (no retries). Use
   `{{#if x}}` for optional values. Helper arguments are not checked by strict mode.
