@@ -1,14 +1,28 @@
-import { type ExecutionContext, Inject, Injectable, Module, Optional } from '@nestjs/common';
+import {
+  type ExecutionContext,
+  Inject,
+  Injectable,
+  Logger,
+  Module,
+  Optional,
+} from '@nestjs/common';
 import { ModuleRef } from '@nestjs/core';
+import { UnknownElementException } from '@nestjs/core/errors/exceptions/unknown-element.exception.js';
 import { Test } from '@nestjs/testing';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from 'vitest';
 import { MAINTENANCE_MODE } from '../constants/tokens.constants.js';
 import { ServiceUnavailableException } from '../errors/domain.exception.js';
 import { toProblemDetails } from '../errors/problem-details.js';
-import { provideCommonEnhancers } from '../providers/common-enhancers.js';
+import {
+  provideCommonEnhancers,
+  provideCommonEnhancersAsync,
+} from '../providers/common-enhancers.js';
 import type { MaintenanceModeSwitch } from './maintenance-mode.middleware.js';
 import { maintenanceProblem } from './maintenance-mode.middleware.js';
-import { createMaintenanceModeReader } from './maintenance-mode.reader.js';
+import {
+  createMaintenanceModeReader,
+  MAINTENANCE_SWITCH_FAULT_LOG_INTERVAL_MS,
+} from './maintenance-mode.reader.js';
 import { WsMaintenanceGuard } from './ws-maintenance.guard.js';
 
 /** A provider of a feature module, which is where the WebSocket entry points live. */
@@ -43,6 +57,16 @@ async function appWithSwitch(mode: MaintenanceModeSwitch | undefined) {
 
 const context = (type: string): ExecutionContext =>
   ({ getType: () => type }) as unknown as ExecutionContext;
+
+let logError: MockInstance<Logger['error']>;
+
+beforeEach(() => {
+  logError = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('createMaintenanceModeReader', () => {
   it("reads the root module's switch from another module, where @Optional() injection sees none", async () => {
@@ -80,25 +104,120 @@ describe('createMaintenanceModeReader', () => {
     expect(get).toHaveBeenCalledWith(MAINTENANCE_MODE, { strict: false });
   });
 
-  it('a switch not built yet reads off and is looked up again at the next read', () => {
-    const get = vi.fn<() => MaintenanceModeSwitch | undefined>(() => undefined);
+  it.each([
+    ['undefined', undefined],
+    ['null (what Nest returns for a provider not instantiated yet)', null],
+  ])(
+    'a switch not built yet (%s) reads off and is looked up again at the next read',
+    (_, notBuilt) => {
+      const get = vi.fn<() => MaintenanceModeSwitch | null | undefined>(() => notBuilt);
+      const read = createMaintenanceModeReader({ get } as unknown as ModuleRef);
+
+      expect(read()).toBe(false);
+      get.mockReturnValue(true);
+      expect(read()).toBe(true);
+      expect(get).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it('a read while the app is still being built reads off, and the built switch is read later', async () => {
+    /** Reads in its constructor, beside a switch whose (async) options are not resolved yet. */
+    @Injectable()
+    class EarlyReader {
+      readonly read: () => boolean;
+      readonly duringBuild: boolean;
+
+      constructor(@Inject(ModuleRef) moduleRef: ModuleRef) {
+        this.read = createMaintenanceModeReader(moduleRef);
+        this.duringBuild = this.read();
+      }
+    }
+    @Module({
+      providers: [
+        EarlyReader,
+        ...provideCommonEnhancersAsync({
+          useFactory: async () => {
+            await Promise.resolve();
+            return { maintenanceMode: true };
+          },
+        }),
+      ],
+    })
+    class RootModule {}
+
+    const app = await Test.createTestingModule({ imports: [RootModule] }).compile();
+    const early = app.get(EarlyReader);
+
+    expect(early.duringBuild).toBe(false);
+    expect(early.read()).toBe(true);
+  });
+
+  it('a switch in no module ("not found") reads off for good, without logging', () => {
+    const get = vi.fn(() => {
+      throw new UnknownElementException('MAINTENANCE_MODE');
+    });
     const read = createMaintenanceModeReader({ get } as unknown as ModuleRef);
 
     expect(read()).toBe(false);
-    get.mockReturnValue(true);
-    expect(read()).toBe(true);
-    expect(get).toHaveBeenCalledTimes(2);
+    expect(read()).toBe(false);
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(logError).not.toHaveBeenCalled();
   });
 
-  it('rethrows a lookup failure other than "not found" instead of reading off', () => {
-    const fault = new Error('scope fault');
-    const read = createMaintenanceModeReader({
-      get: () => {
-        throw fault;
-      },
-    } as unknown as ModuleRef);
+  describe('fails closed: a switch it cannot read answers on', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
 
-    expect(() => read()).toThrow(fault);
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('a switch that throws reads on, never throws, and is logged once per window', async () => {
+      const { reader } = await appWithSwitch(() => {
+        throw new Error('flag store down');
+      });
+
+      for (let i = 0; i < 50; i += 1) expect(reader.read()).toBe(true);
+      expect(logError).toHaveBeenCalledTimes(1);
+      expect(String(logError.mock.calls[0]?.[0])).toContain('flag store down');
+
+      vi.advanceTimersByTime(MAINTENANCE_SWITCH_FAULT_LOG_INTERVAL_MS - 1);
+      expect(reader.read()).toBe(true);
+      expect(logError).toHaveBeenCalledTimes(1);
+
+      vi.advanceTimersByTime(1);
+      expect(reader.read()).toBe(true);
+      expect(logError).toHaveBeenCalledTimes(2);
+    });
+
+    it('follows the switch again once it stops throwing', async () => {
+      let fault = true;
+      const { reader } = await appWithSwitch(() => {
+        if (fault) throw new Error('flag store down');
+        return false;
+      });
+
+      expect(reader.read()).toBe(true);
+      fault = false;
+      expect(reader.read()).toBe(false);
+    });
+
+    it('a lookup failure other than "not found" reads on, is logged, and is looked up again', () => {
+      const get = vi.fn((): MaintenanceModeSwitch => {
+        throw new Error('scope fault');
+      });
+      const read = createMaintenanceModeReader({ get } as unknown as ModuleRef);
+
+      expect(read()).toBe(true);
+      expect(read()).toBe(true);
+      expect(logError).toHaveBeenCalledTimes(1);
+      expect(String(logError.mock.calls[0]?.[0])).toContain('scope fault');
+
+      get.mockReturnValue(false);
+      expect(read()).toBe(false);
+      expect(get).toHaveBeenCalledTimes(3);
+    });
   });
 });
 
@@ -140,5 +259,13 @@ describe('WsMaintenanceGuard', () => {
     const { guard } = await appWithSwitch(undefined);
 
     expect(guard.canActivate(context('ws'))).toBe(true);
+  });
+
+  it('refuses with the maintenance 503, not the raw error, while the switch throws', async () => {
+    const { guard } = await appWithSwitch(() => {
+      throw new Error('flag store down');
+    });
+
+    expect(() => guard.canActivate(context('ws'))).toThrow(ServiceUnavailableException);
   });
 });

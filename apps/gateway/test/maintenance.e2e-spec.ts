@@ -5,8 +5,10 @@
  * subscription connect and receive a push. Once it turns on, with no restart: `markRead` is
  * answered with the 503 problem and marks nothing, a push reaches no socket while the push
  * consumer's handler still resolves, the open subscription is closed (4403) at its next event,
- * and new connections are refused. No Kafka is connected: a push is driven by calling the push
- * consumer, as the Kafka server would.
+ * and new connections are refused. While the switch throws (a feature-flag store that is down) it
+ * fails closed on the sockets, with no unhandled rejection: a handshake and a message get the 503
+ * problem, a push reaches no socket and its handler resolves, and graphql-ws refuses (4403). No
+ * Kafka is connected: a push is driven by calling the push consumer, as the Kafka server would.
  */
 await vi.hoisted(async () => {
   const { GATEWAY_E2E_ENV } = await import('./support/e2e-env.js');
@@ -54,7 +56,12 @@ interface Created {
 const SUBSCRIBE = 'subscription { notificationCreated { id title } }';
 
 describe('maintenance switched at run time on the WebSocket transports (gateway)', () => {
-  const maintenance = { on: false };
+  const maintenance = { on: false, fault: false };
+  /** The app's switch: a function, as a feature flag would be, whose read can fail. */
+  const maintenanceSwitch = (): boolean => {
+    if (maintenance.fault) throw new Error('flag store down');
+    return maintenance.on;
+  };
   let e2e: GatewayE2e;
   let wsUrl = '';
   let session: Tokens;
@@ -114,7 +121,7 @@ describe('maintenance switched at run time on the WebSocket transports (gateway)
     e2e.app.get(NotificationPushConsumer).onNotificationCreated(event);
 
   beforeAll(async () => {
-    e2e = await createGatewayE2eApp({ maintenanceMode: () => maintenance.on });
+    e2e = await createGatewayE2eApp({ maintenanceMode: maintenanceSwitch });
     ({ wsUrl } = await listenOnLoopback(e2e.app));
     const res = await e2e.app.inject({
       method: 'POST',
@@ -213,6 +220,40 @@ describe('maintenance switched at run time on the WebSocket transports (gateway)
       const response = await e2e.app.inject({ method: 'GET', url: '/v1/notifications' });
 
       expect(response.statusCode).toBe(503);
+    });
+  });
+
+  describe('while the switch throws (fails closed), with no restart', () => {
+    beforeAll(() => {
+      maintenance.on = false;
+      maintenance.fault = true;
+    });
+
+    it('refuses a new Socket.IO handshake with the 503 problem, and the process stays up', async () => {
+      const refusal = await refused(sockets.open(wsUrl, { token: session.accessToken }));
+
+      expect(refusal.data).toMatchObject({ status: 503, code: 'SERVICE_UNAVAILABLE' });
+    });
+
+    it('answers a message on an open socket with the 503 problem', async () => {
+      const reply = await fence();
+
+      expect(reply.event).toBe('exception');
+      expect(reply.payload).toMatchObject({ status: 503, code: 'SERVICE_UNAVAILABLE' });
+      expect(socket.connected).toBe(true);
+    });
+
+    it("pushes to no socket, and the push consumer's handler still resolves", async () => {
+      await expect(deliver(envelope())).resolves.toBeUndefined();
+      await fence();
+
+      expect(pushes.received).toHaveLength(1); // only the push from before the switch
+    });
+
+    it('refuses a new graphql-ws connection (4403)', async () => {
+      const fresh = graphqlWs.open(wsUrl, bearerParams());
+
+      expect(await fresh.closedWithin()).toMatchObject({ code: 4403 });
     });
   });
 });

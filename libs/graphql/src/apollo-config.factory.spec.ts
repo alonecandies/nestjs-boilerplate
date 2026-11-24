@@ -1,7 +1,10 @@
 import type { ApolloDriverConfig } from '@nestjs/apollo';
+import { Logger } from '@nestjs/common';
+import type { ModuleRef } from '@nestjs/core';
+import { createMaintenanceModeReader } from '@platform/common';
 import { appConfig, graphqlConfig } from '@platform/config';
 import { GraphQLError } from 'graphql';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, onTestFinished, vi } from 'vitest';
 import { createApolloDriverConfig } from './apollo-config.factory.js';
 import type { GraphqlWsAuthHandlers } from './auth/subscription-auth.js';
 import type { GqlContext } from './context/gql-context.js';
@@ -219,6 +222,30 @@ describe('createApolloDriverConfig', () => {
         expect(wsAuth.onConnect).toHaveBeenCalledTimes(1);
         expect(run).toHaveBeenCalledTimes(1);
       }
+    });
+
+    it("fails closed on the app's switch read as AppGraphqlModule reads it, when that switch throws", async () => {
+      const logError = vi.spyOn(Logger.prototype, 'error').mockImplementation(() => undefined);
+      onTestFinished(() => {
+        logError.mockRestore();
+      });
+      const throwing = (): boolean => {
+        throw new Error('flag store down');
+      };
+      const moduleRef = { get: () => throwing } as unknown as ModuleRef;
+      const { ws, wsAuth, run } = maintenanceConfig(createMaintenanceModeReader(moduleRef));
+      const close = vi.fn();
+      const live = { ...ctx, extra: { ...ctx.extra, socket: { close } } };
+
+      expect(await ws.onConnect(ctx)).toBe(false);
+      const errors = (await ws.onSubscribe(ctx, '1', subscribe)) as GraphQLError[];
+      expect(ws.onNext(live, '1', subscribe, {}, { data: { tick: 1 } })).toBeUndefined();
+
+      expect(wsAuth.onConnect).not.toHaveBeenCalled();
+      expect(errors[0]?.extensions).toMatchObject({ code: 'SERVICE_UNAVAILABLE' });
+      expect(run).not.toHaveBeenCalled();
+      expect(close).toHaveBeenCalledExactlyOnceWith(4403, 'Forbidden');
+      expect(logError).toHaveBeenCalledTimes(1); // one reader, one throttle window
     });
 
     describe('an event of a subscription opened before maintenance began (onNext)', () => {

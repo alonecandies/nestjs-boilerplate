@@ -76,6 +76,11 @@ const authWithSweepInterval = (intervalMs: number): AuthConfig =>
 const withSwitch = (mode: MaintenanceModeSwitch): ModuleRef =>
   ({ get: vi.fn(() => mode) }) as unknown as ModuleRef;
 
+/** A function switch whose read fails (a feature-flag store that is down). */
+const throwingSwitch = (): boolean => {
+  throw new Error('flag store down');
+};
+
 /** A namespace whose `to(room).emit` reaches exactly the sockets that joined `room`. */
 function serveRooms(gateway: NotificationsGateway, ...sockets: FakeSocket[]) {
   const to = vi.fn((room: string) => ({
@@ -244,6 +249,56 @@ describe('NotificationsGateway', () => {
       await expect(
         gateway.authenticate(fakeSocket({ auth: { token: issued.token } })),
       ).resolves.toBeUndefined();
+    });
+
+    it('a switch that throws refuses the handshake with the 503 problem and never rejects', async () => {
+      Object.assign(gateway, { moduleRef: withSwitch(throwingSwitch) });
+      const issued = await signTestAccessToken({ id: USER_ID, email: 'a@b.io', roles: ['member'] });
+      const socket = fakeSocket({ auth: { token: issued.token } });
+
+      const error = await gateway.authenticate(socket);
+
+      expect(error?.data).toMatchObject({ status: 503, code: 'SERVICE_UNAVAILABLE' });
+      expect(socket.data.user).toBeUndefined();
+    });
+
+    it('a lookup that fails (not "not found") refuses the handshake too', async () => {
+      const failingLookup = {
+        get: vi.fn(() => {
+          throw new Error('scope fault');
+        }),
+      } as unknown as ModuleRef;
+      Object.assign(gateway, { moduleRef: failingLookup });
+
+      const error = await gateway.authenticate(fakeSocket({}));
+
+      expect(error?.data).toMatchObject({ status: 503, code: 'SERVICE_UNAVAILABLE' });
+    });
+
+    it('a maintenance read that throws (defence in depth) refuses the handshake and never rejects', async () => {
+      Object.assign(gateway, { maintenanceReader: throwingSwitch });
+
+      const error = await gateway.authenticate(fakeSocket({}));
+
+      expect(error).toBeInstanceOf(Error);
+      expect(error?.data).toMatchObject({ status: 500 });
+    });
+
+    it('the namespace middleware hands a rejected authentication to next as an error', async () => {
+      const use = vi.fn();
+      gateway.afterInit({ use } as unknown as NotificationsNamespace);
+      const middleware = use.mock.calls[0]?.[0] as (
+        s: unknown,
+        next: (e?: unknown) => void,
+      ) => void;
+      vi.spyOn(gateway, 'authenticate').mockRejectedValue(new Error('unexpected'));
+      const next = vi.fn();
+
+      middleware(fakeSocket({}), next);
+      await vi.waitFor(() => expect(next).toHaveBeenCalled());
+
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(next.mock.calls[0]?.[0]).toBeInstanceOf(Error);
     });
 
     it('without a switch in the app (no ModuleRef, a unit spec) reads off', async () => {
@@ -472,6 +527,26 @@ describe('NotificationsGateway', () => {
       on = false;
       gateway.pushToUser(TENANT_ID, USER_ID, notification);
       expect(own.emit).toHaveBeenCalledWith(NOTIFICATIONS_WS_EVENTS.CREATED, notification);
+    });
+
+    it.each([
+      ['the switch throws', { moduleRef: withSwitch(() => throwingSwitch()) }],
+      [
+        'the maintenance read throws (defence in depth)',
+        { maintenanceReader: () => throwingSwitch() },
+      ],
+    ])('emits nothing and never throws when %s (the push consumer)', async (_, wiring) => {
+      Object.assign(gateway, wiring);
+      const own = authedSocket({ tenantId: TENANT_ID, userId: USER_ID });
+      const to = serveRooms(gateway, own);
+      await gateway.handleConnection(own);
+
+      expect(() => {
+        gateway.pushToUser(TENANT_ID, USER_ID, { id: NOTIFICATION_ID } as NotificationResponse);
+      }).not.toThrow();
+
+      expect(to).not.toHaveBeenCalled();
+      expect(own.emit).not.toHaveBeenCalled();
     });
   });
 });
