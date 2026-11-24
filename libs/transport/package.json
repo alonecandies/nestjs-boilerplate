@@ -51,6 +51,7 @@
     "@types/lodash-es": "catalog:",
     "@types/opossum": "catalog:",
     "protobufjs": "catalog:",
+    "testcontainers": "catalog:",
     "ts-proto": "catalog:"
   }
 }
