@@ -36,6 +36,10 @@ export {
 export { type LockResult, type LockSkipReason, MIN_LOCK_TTL_MS } from './lock/lock.types.js';
 export { WithLock } from './lock/with-lock.decorator.js';
 export {
+  type ChannelSubscriptionOptions,
+  subscribeToChannel,
+} from './pubsub/channel-subscription.js';
+export {
   AppQueueModule,
   type AppQueueModuleOptions,
   createQueueOptions,

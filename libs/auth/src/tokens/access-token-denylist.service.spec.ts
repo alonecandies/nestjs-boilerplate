@@ -95,6 +95,7 @@ describe('AccessTokenDenylist revocation channel ({prefix}:auth:revoked)', () =>
     warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
   });
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -105,7 +106,9 @@ describe('AccessTokenDenylist revocation channel ({prefix}:auth:revoked)', () =>
     return { denylist, subscriber };
   }
 
-  it('publishes {"jti"} on the channel after the SET', async () => {
+  it('sets the key and publishes {"jti"} in one pipeline, with no separate command', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-01-01T00:00:00.400Z'));
     const redis = new InMemoryRedis();
     const listener = redis.duplicate();
     await listener.subscribe(CHANNEL);
@@ -116,8 +119,55 @@ describe('AccessTokenDenylist revocation channel ({prefix}:auth:revoked)', () =>
     await denylist.deny('jti-1', inAMinute());
     await delivered();
 
-    expect(redis.calls).toEqual(['set', 'publish']);
-    expect(messages).toEqual([[CHANNEL, JSON.stringify({ jti: 'jti-1' })]]);
+    // One round trip; the key, the TTL and the message bytes are the wire contract between
+    // replicas of different versions.
+    expect(redis.pipelines).toEqual([
+      [
+        ['set', 'svc:auth:denylist:jti-1', '1', 'EX', 65],
+        ['publish', CHANNEL, '{"jti":"jti-1"}'],
+      ],
+    ]);
+    expect(redis.calls).toEqual(['set', 'publish']); // the pipeline's two, nothing else
+    expect(messages).toEqual([[CHANNEL, '{"jti":"jti-1"}']]);
+  });
+
+  it('rejects with the SET error, whatever the PUBLISH beside it did', async () => {
+    const redis = new InMemoryRedis();
+    const error = new Error('OOM command not allowed');
+    vi.spyOn(redis, 'set').mockRejectedValue(error);
+    const denylist = new AccessTokenDenylist(redis.asRedis(), keys, enabled);
+
+    await expect(denylist.deny('jti-1', inAMinute())).rejects.toBe(error);
+
+    expect(redis.calls).toEqual(['publish']); // the spied SET bypasses the call log
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('rejects while Redis is down', async () => {
+    const redis = new InMemoryRedis();
+    redis.simulateOutage();
+    const denylist = new AccessTokenDenylist(redis.asRedis(), keys, enabled);
+
+    await expect(denylist.deny('jti-1', inAMinute())).rejects.toThrow('connection is reconnecting');
+  });
+
+  it('rejects when the pipeline fails or brings back no reply for the SET', async () => {
+    const outcomes: (() => Promise<unknown>)[] = [
+      () => Promise.reject(new Error('Connection is closed.')),
+      () => Promise.resolve(null),
+      () => Promise.resolve([]),
+    ];
+    for (const exec of outcomes) {
+      const redis = new InMemoryRedis();
+      const pipeline = redis.pipeline.bind(redis);
+      const spy = vi
+        .spyOn(redis, 'pipeline')
+        .mockImplementation(() => Object.assign(pipeline(), { exec }));
+      const denylist = new AccessTokenDenylist(redis.asRedis(), keys, enabled);
+
+      await expect(denylist.deny('jti-1', inAMinute())).rejects.toThrow();
+      expect(spy).toHaveBeenCalledOnce();
+    }
   });
 
   it('publishes nothing for a hopeless token or when the denylist is disabled', async () => {
@@ -134,6 +184,9 @@ describe('AccessTokenDenylist revocation channel ({prefix}:auth:revoked)', () =>
 
     await expect(denylist.deny('jti-secret', inAMinute())).resolves.toBeUndefined();
 
+    expect(redis.pipelines.map((commands) => commands.map(([name]) => name))).toEqual([
+      ['set', 'publish'],
+    ]);
     await expect(denylist.isDenied('jti-secret')).resolves.toBe(true);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(String(warn.mock.calls[0]?.[0])).toContain('READONLY replica');
@@ -198,6 +251,41 @@ describe('AccessTokenDenylist revocation channel ({prefix}:auth:revoked)', () =>
     expect(kept).toHaveBeenCalledExactlyOnceWith('jti-1');
     expect(dropped).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a failed SUBSCRIBE, stops listening, and subscribes again for the next listener', async () => {
+    const redis = new InMemoryRedis();
+    const own = replicaOn(redis);
+    const other = replicaOn(redis.duplicate());
+    vi.spyOn(own.subscriber, 'subscribe').mockRejectedValueOnce(new Error('Connection is closed.'));
+    const first = vi.fn<(jti: string) => void>();
+    const second = vi.fn<(jti: string) => void>();
+
+    own.denylist.onRevoked(first);
+    await delivered();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      'cannot subscribe to svc:auth:revoked: Connection is closed.',
+    );
+    expect(own.subscriber.listenerCount('message')).toBe(0);
+
+    own.denylist.onRevoked(second);
+    await other.denylist.deny('jti-1', inAMinute());
+    await delivered();
+
+    expect(own.subscriber.listenerCount('message')).toBe(1);
+    expect(first).toHaveBeenCalledExactlyOnceWith('jti-1');
+    expect(second).toHaveBeenCalledExactlyOnceWith('jti-1');
+  });
+
+  it('stops listening on module destroy, without unsubscribing the shared connection', () => {
+    const { denylist, subscriber } = replicaOn(new InMemoryRedis());
+    denylist.onRevoked(() => undefined);
+    expect(subscriber.listenerCount('message')).toBe(1);
+
+    denylist.onModuleDestroy();
+
+    expect(subscriber.listenerCount('message')).toBe(0);
+    expect(subscriber.calls).toEqual(['subscribe']);
   });
 
   it('does not listen without a subscriber connection or when disabled (deny still publishes)', async () => {
