@@ -163,9 +163,14 @@ denylist) before the connection is accepted, so no message can race authenticati
 maintenance is on (the app's `MAINTENANCE_MODE` switch, read at run time, so a function switch is
 followed without a restart) it refuses first, with the 503 problem (`SERVICE_UNAVAILABLE`); every
 message, `ping` included, is answered with that problem (`WsMaintenanceGuard`), and `pushToUser`
-emits nothing (it never throws, so the push consumer does not dead-letter the event). A socket open
-when maintenance began stays connected and inert until its next message or its token expires. Each
-socket joins exactly one room, `t:{tenantId}:u:{userId}` (`tenantUserRoom`), both from the token it
+emits nothing (it never throws, so the push consumer does not dead-letter the event). A switch that
+cannot be read (a function that throws, a failed lookup) counts as on: the sockets fail closed, and
+the fault is logged at most once a minute per reader. The push is gated on the switch of the
+replica that consumes the event, not of the replica that holds the socket (the Redis adapter
+carries the emit to it), so a function switch must give the same answer on every replica. A socket
+open when maintenance began stays connected until its token expires or the client closes it; every
+message on it is answered with the 503 problem and no push reaches it. Each socket joins exactly
+one room, `t:{tenantId}:u:{userId}` (`tenantUserRoom`), both from the token it
 authenticated with, and never changes room: another tenant needs a new connection with that
 tenant's token. `NotificationPushConsumer` takes the tenant from the envelope
 (`requireEventTenant`, before the dedupe claim) and calls `pushToUser(tenantId, userId, …)`, so a

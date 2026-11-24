@@ -77,6 +77,15 @@ export type NotificationsNamespace = Namespace<
   NotificationsSocketData
 >;
 
+/**
+ * A handshake refusal for `error`: `connect_error` sends its `message` and `data` to the client,
+ * so both come from the problem document, internals hidden.
+ */
+function problemRefusal(error: unknown): Error & { data: ProblemDetails } {
+  const problem = toProblemDetails(error, { exposeInternal: false });
+  return Object.assign(new Error(problem.detail ?? problem.title), { data: problem });
+}
+
 /** `setTimeout` fires at once beyond this delay (~24.8 days), so longer expiries are capped. */
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
@@ -91,9 +100,10 @@ const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
  *   refused first, before the IP charge and the token, with `connect_error` whose `data` is the
  *   503 problem (`SERVICE_UNAVAILABLE`), the same document REST clients get. Every message,
  *   `ping` included, is answered with that problem (`WsMaintenanceGuard`, first in this
- *   gateway's guards), and `pushToUser` emits nothing. An open socket is not closed when the
- *   switch turns on: it stays connected and inert until its next message, or until its token
- *   expires.
+ *   gateway's guards), and `pushToUser` emits nothing. A switch that cannot be read (a function
+ *   that throws) counts as on. An open socket is not closed when the switch turns on: it stays
+ *   connected until its token expires or the client closes it, every message on it is answered
+ *   with the 503 problem, and no push reaches it.
  * - Connection caps (`ConnectionCaps`, when `AppThrottlerModule` is present): the handshake is
  *   charged to the client IP (`TRUST_PROXY` rules) before the token is read, and the user may hold
  *   `THROTTLE_WS_SOCKETS_PER_USER` sockets at once. Both refuse with `connect_error` whose `data`
@@ -171,7 +181,12 @@ export class NotificationsGateway
 
   afterInit(namespace: NotificationsNamespace): void {
     namespace.use((socket, next) => {
-      void this.authenticate(socket).then(next);
+      // authenticate() resolves a refusal rather than rejecting; the second handler is defence in
+      // depth, so a bug there refuses this handshake (internals hidden) instead of crashing.
+      void this.authenticate(socket).then(next, (error: unknown) => {
+        this.logger.error(`Socket ${socket.id} handshake failed: ${String(error)}`);
+        next(problemRefusal(error));
+      });
     });
     this.sweeper.start();
   }
@@ -182,13 +197,13 @@ export class NotificationsGateway
 
   /** Resolves `undefined` (accept) or the error to refuse the handshake with. */
   async authenticate(socket: NotificationsSocket): Promise<ExtendedError | undefined> {
-    // Before the IP charge and the token: a refused client must cost nothing during maintenance.
-    if (this.maintenanceOn()) {
-      this.logger.debug(`Refused socket ${socket.id}: maintenance mode`);
-      const problem = maintenanceProblem();
-      return Object.assign(new Error(problem.detail ?? problem.title), { data: problem });
-    }
     try {
+      // Before the IP charge and the token: a refused client must cost nothing during maintenance.
+      if (this.maintenanceOn()) {
+        this.logger.debug(`Refused socket ${socket.id}: maintenance mode`);
+        const problem = maintenanceProblem();
+        return Object.assign(new Error(problem.detail ?? problem.title), { data: problem });
+      }
       this.clientIp ??= createClientIpResolver(this.app?.trustProxy ?? false);
       const ip = this.clientIp(socket.request) ?? socket.handshake?.address;
       const verdict = (await this.caps?.admitHandshake(ip)) ?? { ok: true as const };
@@ -223,9 +238,9 @@ export class NotificationsGateway
       }
       return undefined;
     } catch (error) {
-      const problem = toProblemDetails(error, { exposeInternal: false });
-      this.logger.debug(`Refused socket ${socket.id}: ${problem.code}`);
-      return Object.assign(new Error(problem.detail ?? problem.title), { data: problem });
+      const refusal = problemRefusal(error);
+      this.logger.debug(`Refused socket ${socket.id}: ${refusal.data.code}`);
+      return refusal;
     }
   }
 
@@ -301,11 +316,19 @@ export class NotificationsGateway
   /**
    * Emits `notification.created` to every socket of `userId` signed in to `tenantId` (all tabs,
    * all replicas); the same user's sockets in another tenant receive nothing. While maintenance is
-   * on it emits nothing and returns: it never throws, because it runs inside the push consumer,
-   * where a throw would dead-letter the event.
+   * on, or when the switch cannot be read, it emits nothing and returns: it never throws, because
+   * it runs inside the push consumer, where a throw would dead-letter the event.
    */
   pushToUser(tenantId: string, userId: string, notification: NotificationResponse): void {
-    if (this.maintenanceOn()) {
+    let maintenance: boolean;
+    try {
+      maintenance = this.maintenanceOn();
+    } catch (error) {
+      // The shared reader never throws; fail closed all the same.
+      this.logger.error(`Push ${notification.id} not emitted: ${String(error)}`);
+      return;
+    }
+    if (maintenance) {
       this.logger.debug(`Push ${notification.id} not emitted: maintenance mode`);
       return;
     }

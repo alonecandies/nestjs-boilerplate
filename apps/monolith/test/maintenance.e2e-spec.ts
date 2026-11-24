@@ -12,7 +12,9 @@
  * `markRead` is answered with the 503 problem and marks nothing, a push reaches no socket while
  * the Kafka push consumer's handler still resolves (through the real RPC pipeline, no dead
  * letter), the open subscription is closed (4403) at its next event, and new connections are
- * refused.
+ * refused. While the switch throws (a feature-flag store that is down) it fails closed on the
+ * sockets, with no unhandled rejection: a handshake and a message get the 503 problem, a push
+ * reaches no socket and its handler resolves, and graphql-ws refuses (4403).
  */
 await vi.hoisted(async () => {
   const { MONOLITH_E2E_ENV } = await import('./support/e2e-env.js');
@@ -122,7 +124,12 @@ interface Created {
 const SUBSCRIBE = 'subscription { notificationCreated { id title } }';
 
 describe('maintenance switched at run time on the WebSocket transports (monolith)', () => {
-  const maintenance = { on: false };
+  const maintenance = { on: false, fault: false };
+  /** The app's switch: a function, as a feature flag would be, whose read can fail. */
+  const maintenanceSwitch = (): boolean => {
+    if (maintenance.fault) throw new Error('flag store down');
+    return maintenance.on;
+  };
   let e2e: MonolithE2e;
   let wsUrl = '';
   let session: Tokens;
@@ -188,7 +195,7 @@ describe('maintenance switched at run time on the WebSocket transports (monolith
     vi.stubEnv('MAINTENANCE_MODE', 'false');
     e2e = await createMonolithE2eApp({
       kafkaConsumers: true,
-      maintenanceMode: () => maintenance.on,
+      maintenanceMode: maintenanceSwitch,
     });
     ({ wsUrl } = await listenOnLoopback(e2e.app));
     const res = await e2e.app.inject({
@@ -294,6 +301,41 @@ describe('maintenance switched at run time on the WebSocket transports (monolith
       const response = await e2e.app.inject({ method: 'GET', url: '/v1/notifications' });
 
       expect(response.statusCode).toBe(503);
+    });
+  });
+
+  describe('while the switch throws (fails closed), with no restart', () => {
+    beforeAll(() => {
+      maintenance.on = false;
+      maintenance.fault = true;
+    });
+
+    it('refuses a new Socket.IO handshake with the 503 problem, and the process stays up', async () => {
+      const refusal = await refused(sockets.open(wsUrl, { token: session.accessToken }));
+
+      expect(refusal.data).toMatchObject({ status: 503, code: 'SERVICE_UNAVAILABLE' });
+    });
+
+    it('answers a message on an open socket with the 503 problem', async () => {
+      const reply = await fence();
+
+      expect(reply.event).toBe('exception');
+      expect(reply.payload).toMatchObject({ status: 503, code: 'SERVICE_UNAVAILABLE' });
+      expect(socket.connected).toBe(true);
+    });
+
+    it("pushes to no socket, and the Kafka push consumer's handler still resolves", async () => {
+      await expect(deliver(envelope())).resolves.toBeUndefined();
+      await fence();
+
+      expect(pushes.received).toHaveLength(1); // only the push from before the switch
+      expect(e2e.consumers.deadLetters()).toEqual([]);
+    });
+
+    it('refuses a new graphql-ws connection (4403)', async () => {
+      const fresh = graphqlWs.open(wsUrl, bearerParams());
+
+      expect(await fresh.closedWithin()).toMatchObject({ code: 4403 });
     });
   });
 });
