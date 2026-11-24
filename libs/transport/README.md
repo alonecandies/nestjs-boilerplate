@@ -27,7 +27,7 @@ consumers never block a partition, and every event is a validated, versioned env
 | `signPrincipalAssertion`, `verifyPrincipalAssertion`, `assessPrincipalAssertion`, `checkPrincipalAssertion`, `principalAssertionSettings`, `configurePrincipalAssertions`, `GRPC_PRINCIPAL_ASSERTIONS_TOTAL` | The edge-signed principal assertion (see below).                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `x-user-id`, `x-tenant-id`, `x-user-roles`, `x-staff`                                                                                                                                                        | The principal metadata the gateway forwards on every call. `x-tenant-id` is a UUID; `x-staff` is `true` only for a staff switch-in principal and absent otherwise (anything but the exact string `true` reads as false). Built only from the CLS principal, never from request headers.                                                                                                                                                                             |
 | `principalFromRpcCaller(caller)`, `principalForRpcCall(caller, mode, check)`, `rpcCallerOf(principal)`                                                                                                       | Rebuild the caller's principal from incoming metadata (`undefined` without `x-user-id`; malformed values fail closed with `UNAUTHENTICATED` `INVALID_PRINCIPAL`); under `GRPC_PRINCIPAL_ASSERTION=enforce`, from a valid assertion's claims only. And the outgoing caller context of a principal.                                                                                                                                                                   |
-| `callerContextFromCls(cls, overrides?)`                                                                                                                                                                      | Caller context for an outgoing call, built from nestjs-cls: request id, correlation id and the CLS principal (user, tenant, roles, staff). An override naming another user drops the tenant, roles and staff.                                                                                                                                                                                                                                                       |
+| `callerContextFromCls(cls, overrides?)`                                                                                                                                                                      | Caller context for an outgoing call, built from nestjs-cls: request id, correlation id and, only for a principal the process can vouch for, its user, tenant, roles, staff flag and assertion. An override sets only the ids; one naming another user makes the call anonymous.                                                                                                                                                                                     |
 | `GrpcMetricsInterceptor`, `recordGrpcCall(side, target, code, seconds)`, `parseGrpcOperation`, `grpcClientCode`                                                                                              | `grpc_server_*` and `grpc_client_*` call counters and histograms (see OBSERVABILITY.md). `@GrpcController()` applies the interceptor; `grpcCall` records client calls itself. `grpc_client_handled_total` has no `upstream` label; the breaker counters carry it.                                                                                                                                                                                                   |
 | `@GrpcController()`                                                                                                                                                                                          | Composite decorator: `Controller()` + `UseFilters(DomainToGrpcExceptionFilter)` + `UseInterceptors(GrpcContextInterceptor, GrpcMetricsInterceptor)`.                                                                                                                                                                                                                                                                                                                |
 | `@GrpcServerCall()`                                                                                                                                                                                          | Injects the raw grpc-js call (`call.cancelled`, `getDeadline()`).                                                                                                                                                                                                                                                                                                                                                                                                   |
@@ -139,15 +139,21 @@ send the same headers, so the edge also signs them:
   `sub` (user), `tid` (tenant), `roles`, `staff`, `iat`, `exp`. `exp` is `iat` + `GRPC_PRINCIPAL_ASSERTION_TTL_SEC` (120 s);
   keep that above the longest gRPC deadline (`AI_GRPC_CHAT_DEADLINE_MS`, 70 s), or a tool call late in an AI turn carries an
   expired assertion. Verifiers allow 10 s of clock skew.
-- **Signer.** `callerContextFromCls` signs at the edge: a process with `GRPC_PRINCIPAL_SIGNING_KEY` (or `_FILE`) and
-  `GRPC_PRINCIPAL_SIGNING_KEY_ID` signs the principal its own access-token verification wrote (`writePrincipal` marks
-  it; `isTokenVerified` in `@platform/common`), with that principal's claims. They equal the plain headers, unless an
-  override changes the tenant, roles or staff flag, which verifiers then refuse as a `mismatch`. A principal taken from
-  an event envelope or set with `runWithPrincipal` is never signed. Only the gateway gets the private key.
+- **Who is sent.** `callerContextFromCls` puts a user, tenant, roles and staff flag on an outgoing call only for a
+  principal the process can vouch for: the one its own access-token verification wrote (`writePrincipal` marks it;
+  `isTokenVerified` in `@platform/common`), or, inside a gRPC call, the principal of that call (it names the incoming
+  caller's user). Any other principal (an event's actor, one set with `runWithPrincipal`) makes the call anonymous in
+  every mode, so what travels in plain headers is exactly what could be signed. The claims are computed once and used
+  for the headers and the assertion. An override sets only the request and correlation ids: its tenant, roles, staff
+  flag and assertion are ignored, and a `userId` other than the vouched principal's makes the call anonymous. Each
+  dropped principal or override logs a warning, at most once a minute per reason and without the user.
+- **Signer.** At the edge, a process with `GRPC_PRINCIPAL_SIGNING_KEY` (or `_FILE`) and `GRPC_PRINCIPAL_SIGNING_KEY_ID`
+  signs the principal its own access-token verification wrote, with exactly the claims of the plain headers. A
+  principal taken from an event envelope or set with `runWithPrincipal` is never signed, nor sent. Only the gateway
+  gets the private key.
 - **Forwarding.** Inside a gRPC call (ai-service's tools, any service-to-service hop) the received bytes are forwarded
-  unchanged, and the process never signs, even with a key: a principal adopted from metadata is never turned into a
-  signature. An override naming another user drops the assertion, as it drops the tenant and roles. Forwarding does not
-  depend on the local mode.
+  unchanged with the call's principal, and the process never signs, even with a key: a principal adopted from metadata
+  is never turned into a signature. Forwarding does not depend on the local mode.
 - **Verifier.** `GrpcContextInterceptor` reads `GRPC_PRINCIPAL_ASSERTION`. `off` (default) ignores the header. `warn`
   and `enforce` verify it against `GRPC_PRINCIPAL_PUBLIC_KEYS` (`kid=base64 PEM`, comma-separated, so keys rotate: list the new key
   everywhere, then sign with it, then drop the old one): ES256 only, the key chosen by `kid`, the signature checked before
@@ -162,8 +168,8 @@ send the same headers, so the edge also signs them:
   peer without the edge's private key thus cannot assert a user, a tenant, roles or the staff flag. The rollout (`off`,
   keys, `warn` until the counter shows only `valid`, then `enforce`) is in `docs/SECURITY.md`.
 - **Kafka consumers.** None makes a gRPC call today. The envelope's actor (`actorId`, which anyone who can produce
-  to the topic writes) is never signed, not even in a process that holds the key, so a consumer added later calls
-  anonymously (a system method): under `enforce` a call with the actor in plain headers is refused.
+  to the topic writes) is never sent, signed or plain, not even in a process that holds the key, so a consumer added
+  later calls anonymously (a system method) in every mode.
 - **Mixed versions.** An old gateway sends no assertion (`missing`; refused under `enforce`); an old or `off` server
   ignores the header; unknown claims are ignored, so a newer edge may add some. An old ai-service drops the assertion on
   its tool calls, so the services it calls go to `enforce` only once every ai-service replica runs the new code.

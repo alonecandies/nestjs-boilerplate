@@ -12,6 +12,7 @@ import {
   EntityNotFoundException,
   generateId,
   getPrincipal,
+  markTokenVerified,
   type Principal,
   ServiceUnavailableException,
 } from '@platform/common';
@@ -121,11 +122,15 @@ describe('ai over gRPC (forRemote adapter ↔ AiGrpcController)', () => {
   let gateway: TestingModule;
   let remote: AiPort;
   let cls: ClsService;
-  const principal: Principal = createPrincipal({
-    userId: USER_ID,
-    tenantId: TENANT_ID,
-    roles: ['member'],
-  });
+  // What the gateway's own token verification writes (`writePrincipal` in @platform/auth): only a
+  // principal marked token-verified leaves the process in caller metadata.
+  const principal: Principal = markTokenVerified(
+    createPrincipal({
+      userId: USER_ID,
+      tenantId: TENANT_ID,
+      roles: ['member'],
+    }),
+  );
   /** Runs `work` as the gateway does inside an authenticated request (the CLS principal). */
   const asCaller = <T>(work: () => Promise<T>): Promise<T> =>
     cls.run(() => {

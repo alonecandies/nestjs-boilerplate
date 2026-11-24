@@ -213,19 +213,21 @@ describe('callerContextFromCls: the edge signs, a service forwards', () => {
     });
   });
 
-  it('never signs a principal its own token verification did not write, even with a key', () => {
+  it('never signs or names a principal its own token verification did not write, even with a key', () => {
     configurePrincipalAssertions(signer);
     cls.run(() => {
-      // An event's actor (KafkaContextInterceptor) or a principal set by code: the plain headers
-      // still name the user, but nothing vouches for it.
+      // An event's actor (KafkaContextInterceptor) or a principal set by code: nothing vouches for
+      // it, so the call is anonymous, plain headers included.
       cls.set(CLS_PRINCIPAL, createPrincipal({ userId, tenantId, roles: ['admin'] }));
       const unsigned = callerContextFromCls(cls);
-      expect(unsigned).toMatchObject({ userId, tenantId, roles: ['admin'] });
+      expect(unsigned).not.toHaveProperty('userId');
+      expect(unsigned).not.toHaveProperty('tenantId');
+      expect(unsigned).not.toHaveProperty('roles');
       expect(unsigned).not.toHaveProperty('principalAssertion');
     });
   });
 
-  it('runWithPrincipal inside an edge request signs nothing for the principal it sets', () => {
+  it('runWithPrincipal inside an edge request signs and names nothing for the principal it sets', () => {
     configurePrincipalAssertions(signer);
     const store = ClsServiceManager.getClsService(); // the store runWithPrincipal uses
     store.run(() => {
@@ -234,7 +236,8 @@ describe('callerContextFromCls: the edge signs, a service forwards', () => {
       const inner = runWithPrincipal(createPrincipal({ userId, tenantId, roles: ['owner'] }), () =>
         callerContextFromCls(store),
       );
-      expect(inner).toMatchObject({ userId, roles: ['owner'] });
+      expect(inner).not.toHaveProperty('userId');
+      expect(inner).not.toHaveProperty('roles');
       expect(inner).not.toHaveProperty('principalAssertion');
     });
   });
@@ -243,13 +246,16 @@ describe('callerContextFromCls: the edge signs, a service forwards', () => {
     ['tenant', { tenantId: generateId() }],
     ['roles', { roles: ['owner'] }],
     ['staff flag', { staff: true }],
-  ])("signs the principal's own claims: an override of the %s is a mismatch", (_label, widened) => {
+  ])("signs the principal's own claims: an override of the %s is ignored", (_label, widened) => {
     configurePrincipalAssertions(signer);
     cls.run(() => {
       cls.set(CLS_PRINCIPAL, principal);
       const metadata = createOutgoingMetadata(callerContextFromCls(cls, { userId, ...widened }));
       expect(metadata.get(GRPC_METADATA_KEYS.PRINCIPAL_ASSERTION)).toHaveLength(1);
-      expect(checkPrincipalAssertion(readIncomingMetadata(metadata), publicKeys)).toBe('mismatch');
+      expect(metadata.get(GRPC_METADATA_KEYS.TENANT_ID)).toEqual([tenantId]);
+      expect(metadata.get(GRPC_METADATA_KEYS.USER_ROLES)).toEqual(['admin']);
+      expect(metadata.get(GRPC_METADATA_KEYS.STAFF)).toEqual([]);
+      expect(checkPrincipalAssertion(readIncomingMetadata(metadata), publicKeys)).toBe('valid');
     });
   });
 

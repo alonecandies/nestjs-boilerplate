@@ -3,13 +3,17 @@ import { Metadata, status } from '@grpc/grpc-js';
 import type { ClientGrpc } from '@nestjs/microservices';
 import { TEST_TENANT_ID } from '@platform/auth/testing';
 import {
+  CLS_PRINCIPAL,
+  createPrincipal,
   EntityNotFoundException,
   generateId,
+  markTokenVerified,
   OperationTimeoutException,
   ServiceUnavailableException,
 } from '@platform/common';
 import { grpcConfig } from '@platform/config';
 import { GRPC_METADATA_KEYS, GrpcCircuitBreakers } from '@platform/transport';
+import { ClsServiceManager } from 'nestjs-cls';
 import { defer, NEVER, type Observable, of, throwError } from 'rxjs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BillingGrpcAdapter, normalizePayment } from './billing-grpc.adapter.js';
@@ -66,6 +70,7 @@ describe('BillingGrpcAdapter (port → billing.v1.BillingService)', () => {
       grpcConfig.parse({ GRPC_DEADLINE_MS: '500' }),
       billing,
       breakers,
+      ClsServiceManager.getClsService(),
     );
     adapter.onModuleInit();
   });
@@ -85,7 +90,16 @@ describe('BillingGrpcAdapter (port → billing.v1.BillingService)', () => {
       priceId: 'price_1',
       quantity: 1,
     };
-    await expect(adapter.createCheckoutSession(request)).resolves.toEqual({
+    // As the gateway calls it: inside a request whose principal its own token verification wrote.
+    const cls = ClsServiceManager.getClsService();
+    const checkout = cls.run(() => {
+      cls.set(
+        CLS_PRINCIPAL,
+        markTokenVerified(createPrincipal({ userId, tenantId: TEST_TENANT_ID })),
+      );
+      return adapter.createCheckoutSession(request);
+    });
+    await expect(checkout).resolves.toEqual({
       id: 'cs_1',
       url: 'https://x.test',
       paymentId: 'p',
@@ -95,6 +109,7 @@ describe('BillingGrpcAdapter (port → billing.v1.BillingService)', () => {
     expect(sent).toBe(request);
     expect(metadata).toBeInstanceOf(Metadata);
     expect(metadata.get(GRPC_METADATA_KEYS.USER_ID)).toEqual([userId]);
+    expect(metadata.get(GRPC_METADATA_KEYS.TENANT_ID)).toEqual([TEST_TENANT_ID]);
   });
 
   it('forwards the webhook bytes as-is', async () => {

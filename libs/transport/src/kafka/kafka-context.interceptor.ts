@@ -52,9 +52,9 @@ function actorPrincipal(data: unknown): Principal | undefined {
  *   `correlationId`, else the id above. Events the handler publishes (`KafkaProducer`) and gRPC
  *   calls it makes (`callerContextFromCls`) carry it on.
  * - `CLS_PRINCIPAL` = `{ userId: actorId, tenantId }` of the envelope (B2-24): a consumer that
- *   touches Postgres runs as the actor; system maintenance runs in `SystemContext` (B3-12). It is
- *   never signed into a gRPC principal assertion (`callerContextFromCls`), even in a process that
- *   holds the key: anyone who can produce to the topic writes `actorId`.
+ *   touches Postgres runs as the actor; system maintenance runs in `SystemContext` (B3-12). It
+ *   never leaves on a gRPC call (`callerContextFromCls`), signed or in plain headers, even in a
+ *   process that holds the key: anyone who can produce to the topic writes `actorId`.
  * Only unvalidated fields that pass the safe-id check are used, because they end up in logs.
  */
 @Injectable()

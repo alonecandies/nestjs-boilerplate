@@ -444,12 +444,13 @@ bytes on their own calls (ai-service's chat tools), never signing. `GRPC_PRINCIP
   `x-user-id` nor an assertion stays anonymous (register, login, the Stripe webhook). A mesh peer without the edge's
   private key cannot assert a user, a tenant, roles or the staff flag.
 
-The edge signs only the principal its own access-token verification wrote (`writePrincipal`), with that principal's
-claims, so an override that changes the tenant, roles or staff flag is a `mismatch`. It never signs the actor an event
-envelope names (anyone who can produce to Kafka writes `actorId`) or a principal set in code with `runWithPrincipal`,
-even in the gateway. No Kafka consumer makes a gRPC call; one added later calls anonymously (a system method), since
-under `enforce` a call with the actor in plain headers is refused. The compose microservices stack and its topology
-smoke (`check-topology.ts`) run in `enforce`.
+A process sends caller identity only for a principal it can vouch for: the one its own access-token verification
+wrote (`writePrincipal`), or, inside a gRPC call, the principal of that call. The edge signs exactly the claims it
+sends in plain headers, and a caller override can no longer change the tenant, roles or staff flag. The actor an event
+envelope names (anyone who can produce to Kafka writes `actorId`) and a principal set in code with `runWithPrincipal`
+are neither signed nor sent, even in the gateway: such a call is anonymous in every mode, so it is not trusted under
+`off` and refused under `enforce`. No Kafka consumer makes a gRPC call; one added later calls anonymously (a system
+method). The compose microservices stack and its topology smoke (`check-topology.ts`) run in `enforce`.
 
 Rollout, for a running deployment (mixed versions keep working at every step):
 
@@ -1025,7 +1026,10 @@ At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) pu
 
 - Under `GRPC_PRINCIPAL_ASSERTION=off` (the default) and `warn`, internal gRPC trusts unsigned principal metadata: a mesh
   peer that reaches a service's port can assert any user, tenant, roles or staff flag. Only `enforce` closes this
-  ([rollout](#signed-principal-assertion)); anonymous calls stay possible in every mode.
+  ([rollout](#signed-principal-assertion)); anonymous calls stay possible in every mode. The platform's own processes
+  send identity only for a principal they verified from a token or received on the call they serve, so none of their
+  calls relies on that trust: an event's actor or a `runWithPrincipal` principal travels as an anonymous call, and a
+  warning (at most once a minute) reports each call that dropped one.
 - `notifications.notification-created.v1` has no outbox (the notifications context has no Postgres store). The
   welcome and receipt handlers publish it last, and a failed publish fails their event, which is retried and then
   dead-lettered, so a persistent broker failure dead-letters an event whose inbox row and mail were already written

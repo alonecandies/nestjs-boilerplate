@@ -1,6 +1,6 @@
 import { ClsServiceManager } from 'nestjs-cls';
 import { UnauthenticatedException } from '../errors/domain.exception.js';
-import { type Principal, TenancyErrorCode } from './principal.js';
+import { isPrincipal, type Principal, TenancyErrorCode } from './principal.js';
 
 /** CLS key of the request principal (spec §7). */
 export const CLS_PRINCIPAL: unique symbol = Symbol('app:principal');
@@ -44,9 +44,10 @@ export function runWithPrincipal<T>(principal: Principal, fn: () => T): T {
 
 /**
  * The principals this process's own access-token verification wrote (`writePrincipal` in
- * `@platform/auth`). Only such a principal is signed into a gRPC principal assertion
- * (`@platform/transport`): one adopted from an event envelope or from gRPC metadata, or set with
- * `runWithPrincipal`, is never marked, so the edge never vouches for it. The mark is on the object
+ * `@platform/auth`). Outside a gRPC call, only such a principal leaves on a gRPC call
+ * (`@platform/transport`), in plain headers and in a signed principal assertion: one adopted from
+ * an event envelope or from gRPC metadata, or set with `runWithPrincipal`, is never marked, so the
+ * edge never vouches for it. The mark is on the object
  * itself, so an equal copy is unmarked.
  */
 const tokenVerified = new WeakSet<Principal>();
@@ -54,11 +55,12 @@ const tokenVerified = new WeakSet<Principal>();
 /**
  * Marks `principal` as written by this process's own token verification, and returns it. Only a
  * frozen principal (`createPrincipal`) can be marked: a mark on a mutable object would vouch for
- * whatever it later holds.
+ * whatever it later holds, and one on a frozen object that is not a principal would vouch for
+ * something no principal check accepts.
  * @throws TypeError for an object that is not a frozen principal
  */
 export function markTokenVerified(principal: Principal): Principal {
-  if (!Object.isFrozen(principal) || !Object.isFrozen(principal.roles)) {
+  if (!isPrincipal(principal) || !Object.isFrozen(principal) || !Object.isFrozen(principal.roles)) {
     throw new TypeError('Only a frozen principal (createPrincipal) can be marked token-verified');
   }
   tokenVerified.add(principal);

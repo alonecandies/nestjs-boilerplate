@@ -208,7 +208,8 @@ describe('correlationIdFromCls / requestIdFromCls / callerContextFromCls', () =>
     expect(correlationIdFromCls(undefined)).toBeUndefined();
     expect(requestIdFromCls(cls)).toBeUndefined();
     expect(callerContextFromCls(cls)).toEqual({});
-    expect(callerContextFromCls(undefined, { userId: 'u1' })).toEqual({ userId: 'u1' });
+    // No principal vouches for an override's user outside a context: the call is anonymous.
+    expect(callerContextFromCls(undefined, { userId: 'u1' })).toEqual({});
   });
 
   it('prefers the adopted correlation id, then the HTTP header, then the request id', () => {
@@ -223,12 +224,13 @@ describe('correlationIdFromCls / requestIdFromCls / callerContextFromCls', () =>
     });
   });
 
-  it('builds the outgoing caller from the incoming gRPC caller, with overrides winning', () => {
+  it('builds the outgoing caller from the incoming gRPC caller; an override never changes its roles', () => {
     const cls = newCls();
     const userId = generateId();
     const tenantId = generateId();
     cls.run(() => {
       cls.set(CLS_ID, 'req-2');
+      cls.set(RPC_CLS_KEYS.CALLER, { userId, tenantId, roles: ['admin'], staff: false });
       cls.set(CLS_PRINCIPAL, createPrincipal({ userId, tenantId, roles: ['admin'] }));
       expect(callerContextFromCls(cls)).toEqual({
         requestId: 'req-2',
@@ -240,7 +242,7 @@ describe('correlationIdFromCls / requestIdFromCls / callerContextFromCls', () =>
       expect(callerContextFromCls(cls, { userId, roles: ['member'] })).toMatchObject({
         userId,
         tenantId,
-        roles: ['member'],
+        roles: ['admin'],
       });
     });
   });

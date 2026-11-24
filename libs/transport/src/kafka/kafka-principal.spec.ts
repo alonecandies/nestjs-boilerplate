@@ -106,9 +106,10 @@ describe('KafkaContextInterceptor restores the actor principal', () => {
     await expect(seen(envelope(extra))).resolves.toBeUndefined();
   });
 
-  it('the actor is never signed into a gRPC principal assertion, even where a key is held', async () => {
+  it('the actor never leaves in a gRPC call, signed or plain, even where a key is held', async () => {
     // Anyone who can produce to Kafka writes actorId: a consumer in the edge process (which holds
-    // the signing key) must not turn it into a principal the services accept as verified.
+    // the signing key) must not turn it into a principal the services accept as verified, and its
+    // plain headers would be trusted under GRPC_PRINCIPAL_ASSERTION=off.
     const signer = createTestPrincipalSigner();
     configurePrincipalAssertions({
       mode: 'off',
@@ -120,7 +121,8 @@ describe('KafkaContextInterceptor restores the actor principal', () => {
       const caller = await lastValueFrom(
         interceptor.intercept(kafkaContext(envelope({ tenantId, actorId: userId })), next),
       );
-      expect(caller).toMatchObject({ userId, tenantId });
+      expect(caller).not.toHaveProperty('userId');
+      expect(caller).not.toHaveProperty('tenantId');
       expect(caller).not.toHaveProperty('principalAssertion');
     } finally {
       configurePrincipalAssertions(undefined);

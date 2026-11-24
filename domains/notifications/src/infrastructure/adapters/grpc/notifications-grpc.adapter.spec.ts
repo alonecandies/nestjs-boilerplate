@@ -1,6 +1,9 @@
 import type { NotificationsServiceClient } from '@domain/notifications-contracts';
 import type { Metadata } from '@grpc/grpc-js';
+import type { ExecutionContext } from '@nestjs/common';
 import type { ClientGrpc } from '@nestjs/microservices';
+import { PrincipalContextInterceptor } from '@platform/auth';
+import { makeAuthUser } from '@platform/auth/testing';
 import {
   EntityNotFoundException,
   ServiceUnavailableException,
@@ -9,12 +12,17 @@ import {
 import { grpcConfig } from '@platform/config';
 import { createMock } from '@platform/testing';
 import {
+  checkPrincipalAssertion,
+  configurePrincipalAssertions,
   createErrorTrailers,
   GRPC_METADATA_KEYS,
   type GrpcCircuitBreakers,
+  readIncomingMetadata,
 } from '@platform/transport';
-import { type Observable, of, throwError } from 'rxjs';
-import { describe, expect, it } from 'vitest';
+import { createTestPrincipalSigner } from '@platform/transport/testing';
+import { ClsServiceManager } from 'nestjs-cls';
+import { defer, lastValueFrom, type Observable, of, throwError } from 'rxjs';
+import { afterEach, describe, expect, it } from 'vitest';
 import { asClass, CREATED_AT, TENANT_ID, USER_ID } from '../../../../test/support/fixtures.js';
 import { NotificationsGrpcAdapter } from './notifications-grpc.adapter.js';
 
@@ -32,9 +40,31 @@ function setup(
     asClass(grpc),
     grpcConfig.parse({}),
     asClass(breakers),
+    ClsServiceManager.getClsService(),
   );
   adapter.onModuleInit();
   return { adapter, client, grpc };
+}
+
+/**
+ * Runs `work` in the context the gateway gives a Socket.IO message: the CLS context
+ * RequestContextInterceptor opened, where PrincipalContextInterceptor wrote the socket's
+ * authenticated user as the (token-verified) principal.
+ */
+function asSocketMessage<T>(work: () => Promise<T>): Promise<T> {
+  const user = makeAuthUser({ id: USER_ID, tenantId: TENANT_ID });
+  const socket = { id: 'sock-1', handshake: { headers: {} }, data: { user } };
+  const context = {
+    getType: () => 'ws',
+    switchToWs: () => ({ getClient: () => socket, getData: () => ({}) }),
+  } as unknown as ExecutionContext;
+  const cls = ClsServiceManager.getClsService();
+  return cls.run(
+    () =>
+      lastValueFrom(
+        new PrincipalContextInterceptor().intercept(context, { handle: () => defer(work) }),
+      ) as Promise<T>,
+  );
 }
 
 describe('NotificationsGrpcAdapter', () => {
@@ -60,7 +90,9 @@ describe('NotificationsGrpcAdapter', () => {
         }),
     });
 
-    const page = await adapter.list({ tenantId: TENANT_ID, userId: USER_ID, limit: 2 });
+    const page = await asSocketMessage(() =>
+      adapter.list({ tenantId: TENANT_ID, userId: USER_ID, limit: 2 }),
+    );
 
     expect(grpc.getService).toHaveBeenCalledWith('NotificationsService');
     expect(page).toEqual({
@@ -94,6 +126,45 @@ describe('NotificationsGrpcAdapter', () => {
     // The caller's user id travels as metadata (the service trusts the edge).
     const metadata = client.listNotifications.mock.calls[0]?.[1] as Metadata;
     expect(metadata.get(GRPC_METADATA_KEYS.USER_ID)).toEqual([USER_ID]);
+  });
+
+  describe('markRead in the context a Socket.IO message runs in', () => {
+    afterEach(() => configurePrincipalAssertions(undefined));
+    const markRead = async (): Promise<Metadata> => {
+      const { adapter, client } = setup({ markNotificationRead: () => of({}) });
+      await asSocketMessage(() =>
+        adapter.markRead({
+          tenantId: TENANT_ID,
+          userId: USER_ID,
+          notificationId: NOTIFICATION_ID,
+        }),
+      );
+      return client.markNotificationRead.mock.calls[0]?.[1] as Metadata;
+    };
+
+    it('sends the user and the tenant', async () => {
+      configurePrincipalAssertions({ mode: 'off', publicKeys: new Map() });
+      const metadata = await markRead();
+      expect(metadata.get(GRPC_METADATA_KEYS.USER_ID)).toEqual([USER_ID]);
+      expect(metadata.get(GRPC_METADATA_KEYS.TENANT_ID)).toEqual([TENANT_ID]);
+      expect(metadata.get(GRPC_METADATA_KEYS.PRINCIPAL_ASSERTION)).toEqual([]);
+    });
+
+    it('with a signing key, also the assertion of exactly that caller', async () => {
+      const signer = createTestPrincipalSigner();
+      configurePrincipalAssertions({
+        mode: 'off',
+        signingKey: signer.signingKey,
+        publicKeys: signer.publicKeys,
+      });
+      const metadata = await markRead();
+      expect(metadata.get(GRPC_METADATA_KEYS.USER_ID)).toEqual([USER_ID]);
+      expect(metadata.get(GRPC_METADATA_KEYS.TENANT_ID)).toEqual([TENANT_ID]);
+      expect(metadata.get(GRPC_METADATA_KEYS.PRINCIPAL_ASSERTION)).toHaveLength(1);
+      expect(checkPrincipalAssertion(readIncomingMetadata(metadata), signer.publicKeys)).toBe(
+        'valid',
+      );
+    });
   });
 
   it('keeps a non-empty next page state', async () => {
