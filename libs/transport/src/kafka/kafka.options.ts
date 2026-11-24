@@ -102,6 +102,10 @@ export interface KafkaServerOptionsExtras {
  * - `partitionsConsumedConcurrently` parallelises across partitions and keeps per-partition order.
  * - `autoCommit` stays on: Nest 12 awaits the handler before kafkajs resolves the offset, so it is
  *   at-least-once. Handlers must be idempotent (dedupe on the envelope id).
+ * - `autoCommitInterval` 5 s: kafkajs also commits the resolved offsets after a message once 5 s
+ *   have passed since the last commit, not only at the end of a batch. A healthy consumer's
+ *   committed offset then moves during a long batch (a flat one means a stalled consumer), and a
+ *   crash replays less. Only resolved offsets are committed, so it stays at-least-once.
  * - The session, heartbeat and rebalance timeouts are the exported constants above.
  */
 export function createKafkaServerOptions(
@@ -121,7 +125,11 @@ export function createKafkaServerOptions(
         rebalanceTimeout: KAFKA_REBALANCE_TIMEOUT_MS,
         retry: { retries: 8 },
       },
-      run: { partitionsConsumedConcurrently: cfg.partitionsConsumedConcurrently, autoCommit: true },
+      run: {
+        partitionsConsumedConcurrently: cfg.partitionsConsumedConcurrently,
+        autoCommit: true,
+        autoCommitInterval: 5_000,
+      },
       subscribe: { fromBeginning: false },
       ...PRODUCER_OPTIONS,
     },

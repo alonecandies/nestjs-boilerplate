@@ -71,7 +71,7 @@ describe('createKafkaServerOptions', () => {
         rebalanceTimeout: 60_000,
         retry: { retries: 8 },
       },
-      run: { partitionsConsumedConcurrently: 6, autoCommit: true },
+      run: { partitionsConsumedConcurrently: 6, autoCommit: true, autoCommitInterval: 5_000 },
       subscribe: { fromBeginning: false },
       producer: {
         idempotent: true,

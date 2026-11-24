@@ -11,13 +11,17 @@ import { createKafkaServerOptions } from '../src/kafka/kafka.options.js';
 import { KafkaConsumerController } from '../src/kafka/kafka-consumer.decorator.js';
 import { KafkaEventPattern } from '../src/kafka/kafka-event-pattern.decorator.js';
 import type { KafkaConsumerLike } from '../src/kafka/kafka-metrics.js';
-import { FIXTURE_USER_REGISTERED_EVENT } from './fixtures/fixture.events.js';
+import {
+  FIXTURE_ORDER_PLACED_EVENT,
+  FIXTURE_USER_REGISTERED_EVENT,
+} from './fixtures/fixture.events.js';
 import { type StartedKafka, startKafka } from './support/kafka-container.js';
 
 /*
  * The Nest consumer stack (`InstrumentedServerKafka`, `@KafkaConsumerController()`) on a real
- * broker, for what only a broker can show: the consumer session and its heartbeats. Opt-in (needs
- * Docker; the Kafka image is the one of docker-compose.yml):
+ * broker, for what only a broker can show: the consumer session and its heartbeats, and when the
+ * group's offsets are committed. Opt-in (needs Docker; the Kafka image is the one of
+ * docker-compose.yml):
  *   INTEGRATION=1 bunx vitest run --project transport:int
  *
  * The session is 10 s here (30 s in production) so the slow handler outlasts it in a short test.
@@ -55,6 +59,40 @@ class SessionConsumer {
 @Module({ controllers: [SessionConsumer] })
 class SessionConsumerModule {}
 
+/*
+ * The batch case: its own topic, consumer group and app, so the session case's records (and its
+ * still-running consumer) stay apart.
+ */
+const BATCH_TOPIC = FIXTURE_ORDER_PLACED_EVENT.topic;
+const BATCH_SIZE = 4;
+/** Each record's handling; four of them outlast the production commit interval (5 s). */
+const BATCH_HANDLER_MS = 3_000;
+
+/** One entry per handler invocation of the batch consumer, in order. */
+const batchInvocations: { seq: number; committedAtStart: string | undefined }[] = [];
+/** The batches kafkajs handed the batch consumer (`START_BATCH_PROCESS`), by first offset. */
+const batchStarts: string[] = [];
+/** Reads the batch group's committed offset of partition 0; set by the suite once it has an admin. */
+let readBatchCommittedOffset: (() => Promise<string | undefined>) | undefined;
+
+@KafkaConsumerController()
+class BatchConsumer {
+  @KafkaEventPattern(FIXTURE_ORDER_PLACED_EVENT)
+  async onRecord(@Payload() payload: { seq: number }): Promise<void> {
+    // What the group had committed when this record's handling began: kafkajs awaits an interim
+    // commit before it hands over the next record, so there is no race with it.
+    batchInvocations.push({
+      seq: payload.seq,
+      committedAtStart: await readBatchCommittedOffset?.(),
+    });
+    // The workload itself, not a wait in the test.
+    await new Promise<void>((resolve) => setTimeout(resolve, BATCH_HANDLER_MS));
+  }
+}
+
+@Module({ controllers: [BatchConsumer] })
+class BatchConsumerModule {}
+
 /** The production server, plus a record of the group joins and heartbeats of its consumer. */
 class ObservedServerKafka extends InstrumentedServerKafka {
   override async bindEvents(consumer: KafkaConsumerLike): Promise<void> {
@@ -64,22 +102,38 @@ class ObservedServerKafka extends InstrumentedServerKafka {
   }
 }
 
+/** The production server, plus a record of the batches its consumer was handed. */
+class BatchObservedServerKafka extends InstrumentedServerKafka {
+  override async bindEvents(consumer: KafkaConsumerLike): Promise<void> {
+    consumer.on(consumer.events.START_BATCH_PROCESS, (event) => {
+      batchStarts.push(event.payload.firstOffset);
+    });
+    await super.bindEvents(consumer);
+  }
+}
+
 describe.skipIf(process.env['INTEGRATION'] !== '1')(
-  'A Nest Kafka consumer on a real broker: session and heartbeats',
+  'A Nest Kafka consumer on a real broker: session, heartbeats and offset commits',
   () => {
     let kafka: StartedKafka | undefined;
     let admin: ReturnType<Kafka['admin']> | undefined;
     let producer: ReturnType<Kafka['producer']> | undefined;
     let app: INestMicroservice | undefined;
+    let batchApp: INestMicroservice | undefined;
     const groupId = `transport-session-${generateId()}`;
+    const batchGroupId = `transport-batch-${generateId()}`;
 
-    const committedOffset = async (): Promise<string | undefined> => {
+    const committedOffsetOf = async (
+      group: string,
+      topicName: string,
+    ): Promise<string | undefined> => {
       const [topic] = await (admin as ReturnType<Kafka['admin']>).fetchOffsets({
-        groupId,
-        topics: [TOPIC],
+        groupId: group,
+        topics: [topicName],
       });
       return topic?.partitions.find(({ partition }) => partition === 0)?.offset;
     };
+    const committedOffset = (): Promise<string | undefined> => committedOffsetOf(groupId, TOPIC);
 
     beforeAll(async () => {
       kafka = await startKafka();
@@ -93,17 +147,21 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       // Auto-creation is off for consumers: the topic and its dead-letter topic exist first.
       await admin.createTopics({
         waitForLeaders: true,
-        topics: [TOPIC, `${TOPIC}${DEAD_LETTER_SUFFIX}`].map((topic) => ({
-          topic,
-          numPartitions: 1,
-          replicationFactor: 1,
-        })),
+        topics: [TOPIC, BATCH_TOPIC]
+          .flatMap((name) => [name, `${name}${DEAD_LETTER_SUFFIX}`])
+          .map((topic) => ({
+            topic,
+            numPartitions: 1,
+            replicationFactor: 1,
+          })),
       });
       producer = client.producer();
       await producer.connect();
+      readBatchCommittedOffset = () => committedOffsetOf(batchGroupId, BATCH_TOPIC);
     });
 
     afterAll(async () => {
+      await batchApp?.close();
       await app?.close();
       await producer?.disconnect();
       await admin?.disconnect();
@@ -164,6 +222,47 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       const gaps = marks.slice(1).map((at, index) => at - (marks[index] ?? at));
       expect(marks.length).toBeGreaterThan(2);
       expect(Math.max(...gaps)).toBeLessThan(SESSION_TIMEOUT_MS);
+    });
+
+    it('commits the offsets of a long batch while it is processed, not only at its end', async () => {
+      // What a group that never committed reads back, before any record exists.
+      const uncommitted = await committedOffsetOf(batchGroupId, BATCH_TOPIC);
+      // All records in one send before the consumer starts: one partition, one fetch, one batch.
+      await producer?.send({
+        topic: BATCH_TOPIC,
+        messages: Array.from({ length: BATCH_SIZE }, (_, index) => ({
+          key: 'batch',
+          value: JSON.stringify({ seq: index + 1 }),
+        })),
+      });
+
+      const cfg = kafkaConfig.parse({
+        SERVICE_NAME: 'transport-batch-int',
+        KAFKA_BROKERS: kafka?.broker,
+      });
+      // The production `run` options, untouched: only the group and the start offset differ.
+      const { options } = createKafkaServerOptions(cfg, { groupId: batchGroupId });
+      options.subscribe = { fromBeginning: true };
+      batchApp = await NestFactory.createMicroservice<CustomStrategy>(BatchConsumerModule, {
+        strategy: new BatchObservedServerKafka(options),
+        logger: false,
+      });
+      await batchApp.listen();
+
+      await vi.waitFor(
+        async () =>
+          expect(await committedOffsetOf(batchGroupId, BATCH_TOPIC)).toBe(String(BATCH_SIZE)),
+        { timeout: 60_000, interval: 250 },
+      );
+      expect(batchInvocations.map(({ seq }) => seq)).toEqual([1, 2, 3, 4]);
+      // The four records arrived as one batch, so a commit before the last one is an interim one.
+      expect(batchStarts).toEqual(['0']);
+      // Nothing was committed when the batch began, and something was before its last record.
+      expect(batchInvocations[0]?.committedAtStart).toBe(uncommitted);
+      const atLast = batchInvocations[BATCH_SIZE - 1]?.committedAtStart;
+      expect(atLast).not.toBe(uncommitted);
+      expect(Number(atLast)).toBeGreaterThan(0);
+      expect(Number(atLast)).toBeLessThan(BATCH_SIZE);
     });
   },
 );
