@@ -233,6 +233,28 @@ describe('assemble-image one-off CLIs (src/cli/*.ts)', () => {
     expect(kept('apps/api/dist/cli/x.e2e-spec.js')).toBe(false);
   });
 
+  it('ships a CLI whose name ends in -test or -spec, and still skips the repo spec suffixes', () => {
+    const dirs = fixture();
+    withCli(dirs, 'load-test', replayCli);
+    withCli(dirs, 'smoke-spec', 'export {};\n');
+    withCli(dirs, 'x', 'export {};\n');
+    withCli(dirs, 'x.spec', 'export {};\n');
+    withCli(dirs, 'x.test', 'export {};\n');
+    withCli(dirs, 'x.int-spec', 'export {};\n');
+    withCli(dirs, 'x.e2e-spec', 'export {};\n');
+    write(dirs.build, { 'apps/api/src/cli/types.d.ts': '' });
+    const { status, output } = assemble(dirs);
+    expect(output).toContain('[assemble] traced');
+    expect(status).toBe(0);
+    const kept = (path: string) => existsSync(join(dirs.out, path));
+    expect(kept('apps/api/dist/cli/load-test.js')).toBe(true);
+    expect(kept('apps/api/dist/cli/smoke-spec.js')).toBe(true);
+    expect(kept('node_modules/heavy-orm/index.js')).toBe(true);
+    for (const spec of ['x.spec', 'x.test', 'x.int-spec', 'x.e2e-spec']) {
+      expect(kept(`apps/api/dist/cli/${spec}.js`)).toBe(false);
+    }
+  });
+
   it('fails when a src/cli/<name>.ts was not compiled to dist/cli/<name>.js', () => {
     const dirs = fixture();
     withCli(dirs, 'replay', undefined);
