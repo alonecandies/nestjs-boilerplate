@@ -150,6 +150,11 @@ session of the given `refreshToken`, or **every** session when the body omits it
   `WS_REVOCATION_SWEEP_INTERVAL_MS` (30 s by default, at most 300 s), closes whatever a message did
   not reach: a replica that only writes the key (an older version), a failed publish, or a
   subscriber that was reconnecting.
+- The `SET` and the `PUBLISH` go in one pipeline (one round trip), not a `MULTI`, so a `SET` that
+  Redis refuses (`OOM` under `noeviction`, `READONLY` during a failover) may still be announced:
+  the token's sockets on every replica close early (`TOKEN_REVOKED`, 4401) while the token stays
+  valid and the logout or tenant switch fails, since `deny()` rejects. The client may reconnect
+  with that token. It fails toward closing, so no revoked session is left open.
 - WebSockets authenticate at the handshake (the denylist is checked there). Per message,
   `WsSessionGuard` re-checks the denylist; each replica disconnects its sockets whose token was
   revoked (`TOKEN_REVOKED`) as above, and a per-socket timer disconnects a socket when its access
