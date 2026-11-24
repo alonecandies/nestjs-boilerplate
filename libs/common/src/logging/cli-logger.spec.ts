@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createCliLogger } from './cli-logger.js';
 
 describe('createCliLogger', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
 
   const capture = () => vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
   const captureErr = () => vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
@@ -32,6 +35,8 @@ describe('createCliLogger', () => {
   });
 
   it('writes coloured, human-readable text when pretty', () => {
+    // Nest drops colours whenever NO_COLOR is set, whatever `colors` says.
+    vi.stubEnv('NO_COLOR', '');
     const out = capture();
     createCliLogger('OneOffJob', true).log('hello');
 
