@@ -977,6 +977,7 @@
       },
       "devDependencies": {
         "@bufbuild/buf": "catalog:",
+        "@nestjs/testing": "catalog:",
         "@types/lodash-es": "catalog:",
         "@types/opossum": "catalog:",
         "protobufjs": "catalog:",
