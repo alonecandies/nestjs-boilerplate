@@ -55,9 +55,10 @@ export interface JwtVerifySecretsRules {
 
 /**
  * The guards of a signing secret, applied to every entry of a verify-only list: a well-formed and
- * unique `kid`, at least `MIN_JWT_SECRET_LENGTH` characters (every environment), and in production
- * no development default and no publicly known value. Messages name the entry by position: they
- * never echo a secret or a key id.
+ * unique `kid`, a secret listed once and at least `MIN_JWT_SECRET_LENGTH` characters (every
+ * environment), and in production no development default and no publicly known value. A secret
+ * under two key ids would outlive dropping one of them, so it is refused. Messages name the entry
+ * by position: they never echo a secret or a key id.
  */
 export function checkJwtVerifySecrets(
   ctx: z.RefinementCtx,
@@ -68,6 +69,7 @@ export function checkJwtVerifySecrets(
     ctx.addIssue({ code: 'custom', path: [rules.key], message: `${rules.key} ${message}` });
   };
   const seen = new Set<string>();
+  const secretEntries = new Map<string, number>();
   splitJwtVerifySecrets(raw).forEach(({ kid, secret }, index) => {
     const entry = `entry ${index + 1}`;
     if (!JWT_KEY_ID_PATTERN.test(kid) || secret.length === 0) {
@@ -80,6 +82,12 @@ export function checkJwtVerifySecrets(
       issue(`${entry} repeats the key id of an earlier entry`);
     }
     seen.add(kid);
+    const first = secretEntries.get(secret);
+    if (first === undefined) {
+      secretEntries.set(secret, index + 1);
+    } else {
+      issue(`${entry} repeats the secret of entry ${first}: list each secret once`);
+    }
     if (secret.length < MIN_JWT_SECRET_LENGTH) {
       issue(`${entry}: the secret must be at least ${MIN_JWT_SECRET_LENGTH} characters`);
     }
@@ -87,7 +95,7 @@ export function checkJwtVerifySecrets(
     if (rules.devDefaults.includes(secret)) {
       issue(`${entry} is a development default, which is not allowed in production`);
     } else if (!rules.allowKnownLocalSecrets && isKnownLocalSecret(secret)) {
-      addKnownLocalSecretIssue(ctx, rules.key);
+      addKnownLocalSecretIssue(ctx, rules.key, `${rules.key} ${entry}`);
     }
   });
 }

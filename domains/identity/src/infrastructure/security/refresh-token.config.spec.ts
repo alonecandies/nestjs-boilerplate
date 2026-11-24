@@ -175,6 +175,27 @@ describe('refreshToken key rotation settings (SEC-1)', () => {
     expect(error.message).not.toContain(known);
   });
 
+  it('names the entry of a publicly known value inside the verify list', () => {
+    const known = 'compose-local-refresh-secret-not-for-production-0002';
+    const error = errorOf(() =>
+      refreshTokenConfig.parse({ ...PROD, JWT_REFRESH_VERIFY_SECRETS: `r1:${OLD},r2:${known}` }),
+    );
+    expect(error.message).toContain('JWT_REFRESH_VERIFY_SECRETS entry 2 is a publicly known value');
+    expect(error.message).not.toContain(known);
+  });
+
+  it('refuses a secret listed twice under two key ids in every environment, naming both entries', () => {
+    for (const env of [{ NODE_ENV: 'test' }, PROD]) {
+      const error = errorOf(() =>
+        refreshTokenConfig.parse({ ...env, JWT_REFRESH_VERIFY_SECRETS: `r1:${OLD},r2:${OLD}` }),
+      );
+      expect(error.message).toContain('→ at JWT_REFRESH_VERIFY_SECRETS');
+      expect(error.message).toContain('entry 1');
+      expect(error.message).toContain('entry 2');
+      for (const value of [OLD, 'r1', 'r2']) expect(error.message).not.toContain(value);
+    }
+  });
+
   it('keeps the access and refresh sets disjoint in production, verify-only keys included', () => {
     const cases = [
       // A verify-only refresh secret equal to the access signing secret.
