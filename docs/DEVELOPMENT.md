@@ -403,7 +403,7 @@ constructor(@Inject(forwardRef(() => UsersService)) private readonly users: Wrap
 **Context-aware enhancers.** Hybrid apps attach gRPC and Kafka servers with `inheritAppConfig: true`, so every global `APP_GUARD`/`APP_INTERCEPTOR`/`APP_PIPE`/`APP_FILTER` also wraps RPC handlers. Every enhancer must branch on the transport with `getContextType(ctx)`, which returns `'http' | 'graphql' | 'ws' | 'rpc'` (`libs/common/src/context/execution-context.util.ts`). It is a typed `getType()` that knows `'graphql'` without importing `@nestjs/graphql`. Use `getRequest(ctx)` to get the platform request. It returns `undefined` for `rpc`, so never assume `switchToHttp()`. The `provideCommonEnhancers*()` helpers (`libs/common/src/providers/common-enhancers.ts`) already do this. Transport-specific error mapping is controller-scoped:
 
 - `@GrpcController()` for gRPC,
-- `@KafkaConsumerController()` for Kafka. It includes `KafkaDeadLetterFilter`. A Kafka handler must not let an error escape that filter: it would be redelivered forever.
+- `@KafkaConsumerController()` for Kafka. It includes `KafkaDeadLetterFilter`. A Kafka handler must not let an error escape that filter: it would be redelivered forever, and a `TypeError`, `RangeError`, `ReferenceError` or `SyntaxError` that reaches kafkajs stops the consumer for good (readiness stays green).
 
 **Errors.** Domain and application code throw `DomainException` subclasses (`libs/common/src/errors/domain.exception.ts`), never `HttpException`. Each transport maps them:
 

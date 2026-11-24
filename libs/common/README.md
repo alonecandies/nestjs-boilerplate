@@ -95,7 +95,9 @@ None — this package never reads `process.env`. Values come from `@platform/con
 - `AllExceptionsFilter` already **logs** (5xx → `error` with stack, 4xx → `debug`) for every transport —
   don't log again in `formatError` or RPC filters.
 - For RPC it only rethrows: gRPC controllers need `@GrpcController()` (controller-scoped filter) and Kafka
-  consumers `@UseFilters(KafkaDeadLetterFilter)` — a throwing Kafka handler is redelivered forever.
+  consumers `@KafkaConsumerController()` (`KafkaDeadLetterFilter` plus in-process retries, the budget and
+  heartbeats). An error that escapes it is redelivered forever, and a `TypeError`, `RangeError`,
+  `ReferenceError` or `SyntaxError` that reaches kafkajs stops the consumer for good.
 - Problem bodies never contain `statusCode` (FastifyAdapter would rewrite the content type to JSON).
 - On Fastify, Nest middleware receives the **raw** Node `req`/`res`; use `RawRequest` and `requestPath()`
   (`originalUrl`, query stripped). Headers set on the raw response survive the Fastify reply.
