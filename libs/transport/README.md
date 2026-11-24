@@ -137,8 +137,8 @@ send the same headers, so the edge also signs them:
 
 - **Format.** A compact ES256 JWS made with `node:crypto`: header `{ alg: "ES256", typ: "JWT", kid }`, claims `iss` (`edge`),
   `sub` (user), `tid` (tenant), `roles`, `staff`, `iat`, `exp`. `exp` is `iat` + `GRPC_PRINCIPAL_ASSERTION_TTL_SEC` (120 s);
-  keep that above the longest gRPC deadline (`AI_GRPC_CHAT_DEADLINE_MS`, 70 s), or a tool call late in an AI turn carries an
-  expired assertion. Verifiers allow 10 s of clock skew.
+  keep that minus the 5 s reuse window (below) above the longest gRPC deadline (`AI_GRPC_CHAT_DEADLINE_MS`, 70 s), or a
+  tool call late in an AI turn carries an expired assertion. Verifiers allow 10 s of clock skew.
 - **Who is sent.** `callerContextFromCls` puts a user, tenant, roles and staff flag on an outgoing call only for a
   principal the process can vouch for: the one its own access-token verification wrote (`writePrincipal` marks it;
   `isTokenVerified` in `@platform/common`), or, inside a gRPC call, the principal of that call (it names the incoming
@@ -150,7 +150,10 @@ send the same headers, so the edge also signs them:
 - **Signer.** At the edge, a process with `GRPC_PRINCIPAL_SIGNING_KEY` (or `_FILE`) and `GRPC_PRINCIPAL_SIGNING_KEY_ID`
   signs the principal its own access-token verification wrote, with exactly the claims of the plain headers. A
   principal taken from an event envelope or set with `runWithPrincipal` is never signed, nor sent. Only the gateway
-  gets the private key.
+  gets the private key. One signature serves a principal for up to 5 s (`PRINCIPAL_ASSERTION_REUSE_WINDOW_MS`, from its
+  `iat`), so a GraphQL operation that fans out to several calls signs once. The reuse is keyed by the frozen principal
+  object and the signing key, so it never crosses principals or a key swap, and a reused assertion has at least
+  `GRPC_PRINCIPAL_ASSERTION_TTL_SEC` minus 5 s left.
 - **Forwarding.** Inside a gRPC call (ai-service's tools, any service-to-service hop) the received bytes are forwarded
   unchanged with the call's principal, and the process never signs, even with a key: a principal adopted from metadata
   is never turned into a signature. Forwarding does not depend on the local mode.

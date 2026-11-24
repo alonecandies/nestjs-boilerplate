@@ -14,16 +14,27 @@ import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } fr
 import { RPC_CLS_KEYS } from '../context/transport-context.js';
 import { createTestPrincipalSigner } from '../testing/test-principal-signer.js';
 import { GRPC_METADATA_KEYS } from './grpc.constants.js';
-import { callerContextFromCls } from './grpc-caller-context.js';
+import {
+  callerContextFromCls,
+  PRINCIPAL_ASSERTION_REUSE_WINDOW_MS,
+} from './grpc-caller-context.js';
 import {
   createOutgoingMetadata,
   type RpcCallerContext,
   readIncomingMetadata,
 } from './grpc-metadata.js';
+import type * as PrincipalAssertion from './grpc-principal-assertion.js';
 import {
   checkPrincipalAssertion,
   configurePrincipalAssertions,
+  signPrincipalAssertion,
 } from './grpc-principal-assertion.js';
+
+// The real signer behind a spy, so a test can count the signatures a call makes.
+vi.mock('./grpc-principal-assertion.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof PrincipalAssertion>();
+  return { ...actual, signPrincipalAssertion: vi.fn(actual.signPrincipalAssertion) };
+});
 
 const userId = generateId();
 const tenantId = generateId();
@@ -205,5 +216,99 @@ describe('callerContextFromCls: a caller leaves only for a principal the process
       expect(other).toEqual(anonymous);
     });
     expect(warn).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('callerContextFromCls: one signature per principal, not per call', () => {
+  const cls = new ClsService(new AsyncLocalStorage());
+  const marked = (): Principal =>
+    markTokenVerified(createPrincipal({ userId, tenantId, roles: ['admin'] }));
+  const sign = vi.mocked(signPrincipalAssertion);
+  /** The assertion an outgoing call for `principal` carries. */
+  const assertionFor = (principal: Principal): unknown[] =>
+    cls.run(() => {
+      cls.set(CLS_PRINCIPAL, principal);
+      return createOutgoingMetadata(callerContextFromCls(cls)).get(
+        GRPC_METADATA_KEYS.PRINCIPAL_ASSERTION,
+      );
+    });
+
+  beforeEach(() => {
+    clock += 3_600_000;
+    vi.useFakeTimers({ toFake: ['Date'], now: clock });
+    configurePrincipalAssertions({
+      mode: 'off',
+      signingKey: signer.signingKey,
+      publicKeys: signer.publicKeys,
+    });
+    sign.mockClear();
+  });
+  afterEach(() => {
+    configurePrincipalAssertions(undefined);
+    vi.useRealTimers();
+  });
+
+  it('two calls for one principal within 5 s carry the same bytes and sign once', () => {
+    const principal = marked();
+    const first = assertionFor(principal);
+    vi.setSystemTime(clock + 5_000);
+    const second = assertionFor(principal);
+    expect(first).toHaveLength(1);
+    expect(second).toEqual(first);
+    expect(sign).toHaveBeenCalledTimes(1);
+    expect(PRINCIPAL_ASSERTION_REUSE_WINDOW_MS).toBe(5_000);
+  });
+
+  it('a call 6 s later carries a new assertion, which verifies', () => {
+    const principal = marked();
+    const first = assertionFor(principal);
+    vi.setSystemTime(clock + 5_000);
+    expect(assertionFor(principal)).toEqual(first);
+    vi.setSystemTime(clock + 6_000);
+    const later = assertionFor(principal);
+    expect(later).toHaveLength(1);
+    expect(later).not.toEqual(first);
+    expect(sign).toHaveBeenCalledTimes(2);
+    expect(
+      checkPrincipalAssertion(
+        { userId, tenantId, roles: ['admin'], staff: false, principalAssertion: String(later[0]) },
+        signer.publicKeys,
+      ),
+    ).toBe('valid');
+    // The new one is reused in turn.
+    vi.setSystemTime(clock + 11_000);
+    expect(assertionFor(principal)).toEqual(later);
+    expect(sign).toHaveBeenCalledTimes(2);
+  });
+
+  it('an equal but distinct principal object gets its own assertion', () => {
+    const one = marked();
+    const first = assertionFor(one);
+    const other = assertionFor(marked());
+    expect(other).toHaveLength(1);
+    expect(other).not.toEqual(first);
+    // Each object keeps its own: the first is still served for the first principal.
+    expect(assertionFor(one)).toEqual(first);
+    expect(sign).toHaveBeenCalledTimes(2);
+  });
+
+  it('an assertion is reused only with the signing key that made it', () => {
+    const principal = marked();
+    const first = assertionFor(principal);
+    expect(assertionFor(principal)).toEqual(first);
+    const rotated = createTestPrincipalSigner('edge-cc-2');
+    configurePrincipalAssertions({
+      mode: 'off',
+      signingKey: rotated.signingKey,
+      publicKeys: rotated.publicKeys,
+    });
+    const [token] = assertionFor(principal);
+    expect(sign).toHaveBeenCalledTimes(2);
+    expect(
+      checkPrincipalAssertion(
+        { userId, tenantId, roles: ['admin'], staff: false, principalAssertion: String(token) },
+        rotated.publicKeys,
+      ),
+    ).toBe('valid');
   });
 });

@@ -18,7 +18,11 @@ import {
   type RpcCallerContext,
 } from './grpc-metadata.js';
 import { rpcCallerOf } from './grpc-principal.js';
-import { principalAssertionSettings, signPrincipalAssertion } from './grpc-principal-assertion.js';
+import {
+  type PrincipalAssertionSigningKey,
+  principalAssertionSettings,
+  signPrincipalAssertion,
+} from './grpc-principal-assertion.js';
 
 /**
  * Caller context for an outgoing gRPC call, built from the current nestjs-cls context:
@@ -66,7 +70,7 @@ export function callerContextFromCls(
   // Computed once: the plain headers and the claims an edge signs are the same value.
   const claims = rpcCallerOf(principal);
   Object.assign(caller, claims);
-  const assertion = principalAssertionFor(claims, incoming);
+  const assertion = principalAssertionFor(principal, claims, incoming);
   if (assertion !== undefined) caller.principalAssertion = assertion;
   return caller;
 }
@@ -88,24 +92,67 @@ function isVouchable(principal: Principal, incoming: IncomingRpcContext | undefi
 }
 
 /**
+ * How long, in milliseconds, the edge reuses a principal's signed assertion before it signs
+ * again. A GraphQL operation that fans out to N gRPC calls signs once. A reused assertion thus
+ * has at least `GRPC_PRINCIPAL_ASSERTION_TTL_SEC` minus this window left, which must cover the
+ * longest gRPC deadline (a graphql-ws operation keeps one principal for hours).
+ */
+export const PRINCIPAL_ASSERTION_REUSE_WINDOW_MS = 5_000;
+
+interface SignedAssertion {
+  readonly token: string;
+  /** The key that signed it: after `configurePrincipalAssertions` swaps keys, sign again. */
+  readonly signingKey: PrincipalAssertionSigningKey;
+  /** Its `iat` in milliseconds: the age is measured from what the verifier reads. */
+  readonly issuedAtMs: number;
+}
+
+/**
+ * The last assertion signed for each marked principal. The key is the frozen object the claims are
+ * computed from, so an entry is never served for another principal, and it dies with the request
+ * (or the graphql-ws connection) that holds the principal.
+ */
+const signedAssertions = new WeakMap<Principal, SignedAssertion>();
+
+/**
  * The signed assertion of a vouchable principal's `claims`, sent as `x-principal-assertion`:
  * - inside a gRPC call: the bytes the caller sent, unchanged. Such a process never signs: a
  *   principal adopted from metadata must not be laundered into a signature, even where a key is
  *   present;
- * - at the edge, with `GRPC_PRINCIPAL_SIGNING_KEY`: a new assertion of exactly the claims that
- *   travel in plain headers; without a key (an old gateway's setup), none.
+ * - at the edge, with `GRPC_PRINCIPAL_SIGNING_KEY`: an assertion of exactly the claims that
+ *   travel in plain headers: the one issued (`iat`) for this `principal` at most
+ *   `PRINCIPAL_ASSERTION_REUSE_WINDOW_MS` ago with the current key, or a new one; without a key
+ *   (an old gateway's setup), none.
  * The local `GRPC_PRINCIPAL_ASSERTION` mode plays no part: it only governs verification.
  */
 function principalAssertionFor(
+  principal: Principal,
   claims: RpcCallerContext,
   incoming: IncomingRpcContext | undefined,
 ): string | undefined {
   if (incoming !== undefined) return incoming.principalAssertion;
   const signingKey = principalAssertionSettings().signingKey;
   const asserted = assertedCallerOf(claims);
-  return signingKey === undefined || asserted === undefined
-    ? undefined
-    : signPrincipalAssertion(asserted, signingKey);
+  if (signingKey === undefined || asserted === undefined) return undefined;
+  const now = Date.now();
+  const last = signedAssertions.get(principal);
+  // A clock that went back signs again rather than stretching the window.
+  if (
+    last !== undefined &&
+    last.signingKey === signingKey &&
+    now >= last.issuedAtMs &&
+    now - last.issuedAtMs <= PRINCIPAL_ASSERTION_REUSE_WINDOW_MS
+  ) {
+    return last.token;
+  }
+  const token = signPrincipalAssertion(asserted, signingKey, now);
+  // `iat` is whole seconds (`signPrincipalAssertion`), so the window starts at the second it names.
+  signedAssertions.set(principal, {
+    token,
+    signingKey,
+    issuedAtMs: Math.floor(now / 1000) * 1000,
+  });
+  return token;
 }
 
 /** One warning line per minute at most for each reason, with the number held back. */
