@@ -1,6 +1,6 @@
 import { parseArgs } from 'node:util';
 import {
-  ConsoleLogger,
+  type ConsoleLogger,
   type DynamicModule,
   type INestApplicationContext,
   Module,
@@ -8,7 +8,7 @@ import {
 } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { CommandBus, CqrsModule } from '@nestjs/cqrs';
-import { SystemContext } from '@platform/common';
+import { createCliLogger, SystemContext } from '@platform/common';
 import { AppConfigModule, observabilityConfig } from '@platform/config';
 import { type DatabaseMigrationSet, DatabaseModule } from '@platform/database';
 import { ImmudbModule } from '@platform/immudb';
@@ -53,6 +53,8 @@ export const LEDGER_REANCHOR_EXIT = {
 export const LEDGER_REANCHOR_LOCK_WAIT_MS = 10 * 60_000;
 /** How often it tries the lock again while waiting. */
 export const LEDGER_REANCHOR_LOCK_POLL_MS = 5_000;
+
+const LOGGER_CONTEXT = 'LedgerReanchor';
 
 const USAGE =
   'usage: ledger-reanchor --database <db> --lost-from <ISO time> --operator <name> --reason <text>\n' +
@@ -136,10 +138,10 @@ export async function runLedgerReanchorCli(options: LedgerReanchorCliOptions): P
     return;
   }
 
-  let logger = createLogger(false);
+  let logger = createCliLogger(LOGGER_CONTEXT, false);
   let context: INestApplicationContext | undefined;
   try {
-    if (observabilityConfig.parse().logPretty) logger = createLogger(true);
+    if (observabilityConfig.parse().logPretty) logger = createCliLogger(LOGGER_CONTEXT, true);
     const root = createLedgerReanchorModule(options.migrations, ledgerConfig.parse().enabled);
     context = await (options.createContext ?? createContext(logger))(root);
     const commands = context.get(CommandBus);
@@ -314,11 +316,4 @@ function parseInvocation(args: readonly string[]): LedgerReanchorInvocation | un
     // An unknown flag or a missing option value: the usage says what is accepted.
     return undefined;
   }
-}
-
-function createLogger(pretty: boolean): ConsoleLogger {
-  return new ConsoleLogger(
-    'LedgerReanchor',
-    pretty ? { colors: true } : { json: true, colors: false },
-  );
 }

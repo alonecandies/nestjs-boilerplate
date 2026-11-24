@@ -1,10 +1,12 @@
 import { parseArgs } from 'node:util';
-import { ConsoleLogger } from '@nestjs/common';
+import { createCliLogger } from '@platform/common';
 import { kafkaConfig, observabilityConfig } from '@platform/config';
 import { isEventTopic } from '@platform/contracts';
 import { Kafka, type KafkaConfig } from 'kafkajs';
 import { replayDeadLetters } from './dead-letter-replay.js';
 import { createKafkaClientConfig } from './kafka.options.js';
+
+const LOGGER_CONTEXT = 'DeadLetterReplay';
 
 const USAGE =
   'usage: dlq-replay <topic> [--dry-run] [--group <id>]\n' +
@@ -60,9 +62,9 @@ export async function runDlqReplayCli(
     return;
   }
 
-  let logger = createLogger(false);
+  let logger = createCliLogger(LOGGER_CONTEXT, false);
   try {
-    if (observabilityConfig.parse().logPretty) logger = createLogger(true);
+    if (observabilityConfig.parse().logPretty) logger = createCliLogger(LOGGER_CONTEXT, true);
     const clientConfig = createKafkaClientConfig(kafkaConfig.parse(), 'dlq-replay');
     const kafka = (options.createKafka ?? ((config: KafkaConfig) => new Kafka(config)))(
       clientConfig,
@@ -79,11 +81,4 @@ export async function runDlqReplayCli(
     logger.error(error instanceof Error ? error : String(error));
     process.exitCode = 1;
   }
-}
-
-function createLogger(pretty: boolean): ConsoleLogger {
-  return new ConsoleLogger(
-    'DeadLetterReplay',
-    pretty ? { colors: true } : { json: true, colors: false },
-  );
 }

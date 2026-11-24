@@ -320,8 +320,8 @@ bun run --filter @app/<x>-service db:migrate           # an app's dist/migrate.j
 bun run db:studio                                      # Drizzle Studio per domain, each on its own port
 ```
 
-`runMigrationsCli` logs one JSON object per line (`ConsoleLogger({ json: true })`, what log shippers ingest from
-deploy jobs); `LOG_PRETTY=true` (default in development) switches to coloured text. Exit code 0 = schema current,
+`runMigrationsCli` logs one JSON object per line (`createCliLogger` from `@platform/common`, what log shippers
+ingest from deploy jobs); `LOG_PRETTY=true` (default in development) switches to coloured text. Exit code 0 = schema current,
 1 = failure (an unknown flag included).
 
 A domain's first migration comes from `bun run --filter @domain/<x> db:generate --name init`. drizzle-kit writes

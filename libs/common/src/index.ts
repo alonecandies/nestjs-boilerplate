@@ -21,6 +21,7 @@ export * from './errors/validation-issue.js';
 export * from './filters/all-exceptions.filter.js';
 export * from './filters/ws-exception-filter.decorator.js';
 export * from './interceptors/timeout.interceptor.js';
+export * from './logging/cli-logger.js';
 export * from './middlewares/correlation-id.middleware.js';
 export * from './middlewares/maintenance-mode.middleware.js';
 export * from './middlewares/maintenance-mode.reader.js';
