@@ -283,7 +283,9 @@ Containers never publish `9464`, so the `host-apps` targets cannot duplicate the
 `KafkaConsumerGroupStalled` reads the `kafka` job's series, so a production cluster needs the same
 exporter (or another source of `kafka_consumergroup_*`) for that alert to fire.
 
-### Outbox, ledger and AI alerts
+<a id="outbox-ledger-and-ai-alerts"></a>
+
+### Alert rules
 
 [`docker/prometheus/rules/`](../docker/prometheus/rules) holds five rule files (`outbox`, `ledger`, `ai`, `platform`, `billing`), loaded through `rule_files` in
 `prometheus.yml` and mounted by the compose `prometheus` service. Prometheus only evaluates them: compose runs no
