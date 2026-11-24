@@ -291,14 +291,19 @@ describe('NotificationsGateway', () => {
         s: unknown,
         next: (e?: unknown) => void,
       ) => void;
-      vi.spyOn(gateway, 'authenticate').mockRejectedValue(new Error('unexpected'));
+      vi.spyOn(gateway, 'authenticate').mockRejectedValue(new Error('db password in a stack'));
       const next = vi.fn();
 
       middleware(fakeSocket({}), next);
       await vi.waitFor(() => expect(next).toHaveBeenCalled());
 
       expect(next).toHaveBeenCalledTimes(1);
-      expect(next.mock.calls[0]?.[0]).toBeInstanceOf(Error);
+      const refusal = next.mock.calls[0]?.[0] as Error & { data?: unknown };
+      expect(refusal).toBeInstanceOf(Error);
+      // connect_error carries `message` and `data` to an unauthenticated client: no internals.
+      expect(refusal.message).not.toContain('db password');
+      expect(refusal.data).toMatchObject({ status: 500 });
+      expect(JSON.stringify(refusal.data)).not.toContain('db password');
     });
 
     it('without a switch in the app (no ModuleRef, a unit spec) reads off', async () => {

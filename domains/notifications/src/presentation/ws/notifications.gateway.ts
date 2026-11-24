@@ -77,6 +77,15 @@ export type NotificationsNamespace = Namespace<
   NotificationsSocketData
 >;
 
+/**
+ * A handshake refusal for `error`: `connect_error` sends its `message` and `data` to the client,
+ * so both come from the problem document, internals hidden.
+ */
+function problemRefusal(error: unknown): Error & { data: ProblemDetails } {
+  const problem = toProblemDetails(error, { exposeInternal: false });
+  return Object.assign(new Error(problem.detail ?? problem.title), { data: problem });
+}
+
 /** `setTimeout` fires at once beyond this delay (~24.8 days), so longer expiries are capped. */
 const MAX_TIMER_DELAY_MS = 2 ** 31 - 1;
 
@@ -173,10 +182,10 @@ export class NotificationsGateway
   afterInit(namespace: NotificationsNamespace): void {
     namespace.use((socket, next) => {
       // authenticate() resolves a refusal rather than rejecting; the second handler is defence in
-      // depth, so a bug there refuses this handshake instead of crashing the process.
+      // depth, so a bug there refuses this handshake (internals hidden) instead of crashing.
       void this.authenticate(socket).then(next, (error: unknown) => {
         this.logger.error(`Socket ${socket.id} handshake failed: ${String(error)}`);
-        next(error instanceof Error ? error : new Error('Handshake failed'));
+        next(problemRefusal(error));
       });
     });
     this.sweeper.start();
@@ -229,9 +238,9 @@ export class NotificationsGateway
       }
       return undefined;
     } catch (error) {
-      const problem = toProblemDetails(error, { exposeInternal: false });
-      this.logger.debug(`Refused socket ${socket.id}: ${problem.code}`);
-      return Object.assign(new Error(problem.detail ?? problem.title), { data: problem });
+      const refusal = problemRefusal(error);
+      this.logger.debug(`Refused socket ${socket.id}: ${refusal.data.code}`);
+      return refusal;
     }
   }
 
