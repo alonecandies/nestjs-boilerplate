@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module';
 import { type ArgumentsHost, Logger } from '@nestjs/common';
 import { KafkaContext, KafkaRetriableException } from '@nestjs/microservices';
 import { DomainValidationException } from '@platform/common';
@@ -39,6 +40,34 @@ function kafkaContext(send: Send): KafkaContext {
     () => Promise.resolve(),
     producer as never,
   ]);
+}
+
+/**
+ * kafkajs' own consumer retrier (2.2.4, `retries: 0`), the one around `eachMessage`: the name of
+ * the error it gives up with. `KafkaJSNumberOfRetriesExceeded` restarts the consumer (`onCrash`),
+ * which redelivers the message; `KafkaJSNonRetriableError` (a `TypeError`, `RangeError`,
+ * `ReferenceError` or `SyntaxError`, or `retriable: false`) stops it for good.
+ */
+async function kafkajsGivesUpWith(error: unknown): Promise<string> {
+  const createRetry = createRequire(import.meta.url)('kafkajs/src/retry/index.js') as (options: {
+    retries: number;
+  }) => (fn: () => Promise<never>) => Promise<unknown>;
+  const outcome = await createRetry({ retries: 0 })(() => Promise.reject(error as Error)).then(
+    () => undefined,
+    (crash: unknown) => crash,
+  );
+  return (outcome as Error).name;
+}
+
+const UNRECOVERABLE_IN_KAFKAJS = ['TypeError', 'RangeError', 'ReferenceError', 'SyntaxError'];
+
+/** What the filter hands back to kafkajs when it cannot dead-letter: retriable, original as cause. */
+function expectRedelivery(rethrown: unknown, original: unknown): void {
+  expect(UNRECOVERABLE_IN_KAFKAJS).not.toContain((rethrown as Error).name);
+  expect((rethrown as { retriable?: unknown }).retriable).not.toBe(false);
+  expect((rethrown as Error).cause).toBe(original);
+  expect(rethrown).toBeInstanceOf(KafkaRetriableException);
+  expect((rethrown as Error).message).toBe((original as Error).message);
 }
 
 function host(type: string, context: unknown): ArgumentsHost {
@@ -106,12 +135,54 @@ describe('KafkaDeadLetterFilter', () => {
     ).rejects.toBe(error);
   });
 
-  it('rethrows the original error when the dead-letter publish fails (redelivery, nothing lost)', async () => {
+  it('hands kafkajs a KafkaRetriableException (cause: the original) when the dead-letter publish fails', async () => {
     const send = vi.fn<Send>(() => Promise.reject(new Error('broker down')));
     const error = new Error('handler failed');
-    await expect(
-      lastValueFrom(new KafkaDeadLetterFilter().catch(error, host('rpc', kafkaContext(send)))),
-    ).rejects.toBe(error);
+    const rethrown = await lastValueFrom(
+      new KafkaDeadLetterFilter().catch(error, host('rpc', kafkaContext(send))),
+    ).then(
+      () => undefined,
+      (failure: unknown) => failure,
+    );
+    expectRedelivery(rethrown, error);
+  });
+
+  it.each([
+    new TypeError("Cannot read properties of undefined (reading 'id')"),
+    new RangeError('Invalid time value'),
+    new ReferenceError('x is not defined'),
+    new SyntaxError('Unexpected token'),
+  ])(
+    'a $name whose dead-letter send rejects at once: kafkajs retries, then restarts',
+    async (error) => {
+      expect(await kafkajsGivesUpWith(error)).toBe('KafkaJSNonRetriableError');
+      const send = vi.fn<Send>(() => Promise.reject(new Error('broker down')));
+      const rethrown = await lastValueFrom(
+        new KafkaDeadLetterFilter().catch(error, host('rpc', kafkaContext(send))),
+      ).then(
+        () => undefined,
+        (failure: unknown) => failure,
+      );
+      expectRedelivery(rethrown, error);
+      expect(await kafkajsGivesUpWith(rethrown)).toBe('KafkaJSNumberOfRetriesExceeded');
+    },
+  );
+
+  it('an error with retriable: false is wrapped too, so kafkajs retries it and then restarts', async () => {
+    const error = Object.assign(new Error('Number of retries exceeded'), {
+      name: 'KafkaJSNumberOfRetriesExceeded',
+      retriable: false,
+    });
+    expect(await kafkajsGivesUpWith(error)).toBe('KafkaJSNonRetriableError');
+    const send = vi.fn<Send>(() => Promise.reject(new Error('broker down')));
+    const rethrown = await lastValueFrom(
+      new KafkaDeadLetterFilter().catch(error, host('rpc', kafkaContext(send))),
+    ).then(
+      () => undefined,
+      (failure: unknown) => failure,
+    );
+    expectRedelivery(rethrown, error);
+    expect(await kafkajsGivesUpWith(rethrown)).toBe('KafkaJSNumberOfRetriesExceeded');
   });
 });
 
@@ -144,23 +215,31 @@ describe('KafkaDeadLetterFilter: a slow dead-letter send', () => {
     return state;
   }
 
-  it('waits 5 s for a send that never settles, then rethrows the original error and counts redelivery', async () => {
-    expect(KAFKA_DEAD_LETTER_SEND_TIMEOUT_MS).toBe(5_000);
-    vi.useFakeTimers();
-    const before = await redeliveries();
-    const send = vi.fn<Send>(() => new Promise<never>(() => undefined));
-    const error = new Error('handler failed');
+  it.each([
+    new Error('handler failed'),
+    new TypeError("Cannot read properties of undefined (reading 'id')"),
+  ])(
+    'waits 5 s for a send that never settles, then hands kafkajs a retriable error for a $name and counts redelivery',
+    async (error) => {
+      expect(KAFKA_DEAD_LETTER_SEND_TIMEOUT_MS).toBe(5_000);
+      vi.useFakeTimers();
+      const before = await redeliveries();
+      const send = vi.fn<Send>(() => new Promise<never>(() => undefined));
 
-    const outcome = watch(
-      lastValueFrom(new KafkaDeadLetterFilter().catch(error, host('rpc', kafkaContext(send)))),
-    );
-    await vi.advanceTimersByTimeAsync(KAFKA_DEAD_LETTER_SEND_TIMEOUT_MS - 1);
-    expect(outcome.settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    expect(outcome).toEqual({ settled: true, error });
-    expect(await redeliveries()).toBe(before + 1);
-    expect(send).toHaveBeenCalledTimes(1);
-  });
+      const outcome = watch(
+        lastValueFrom(new KafkaDeadLetterFilter().catch(error, host('rpc', kafkaContext(send)))),
+      );
+      await vi.advanceTimersByTimeAsync(KAFKA_DEAD_LETTER_SEND_TIMEOUT_MS - 1);
+      expect(outcome.settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(outcome.settled).toBe(true);
+      expectRedelivery(outcome.error, error);
+      expect(await redeliveries()).toBe(before + 1);
+      expect(send).toHaveBeenCalledTimes(1);
+      vi.useRealTimers();
+      expect(await kafkajsGivesUpWith(outcome.error)).toBe('KafkaJSNumberOfRetriesExceeded');
+    },
+  );
 
   it('dead-letters a send that is slow but acknowledged within the deadline', async () => {
     vi.useFakeTimers();

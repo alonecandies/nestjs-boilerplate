@@ -1027,12 +1027,16 @@ flowchart LR
   are therefore safe.
 - **Retry.** `KafkaRetryInterceptor` retries in process (`DEFAULT_KAFKA_RETRY_OPTIONS`: 4 attempts, exponential
   backoff from 250 ms capped at 2 s, so about 0.25 s, 0.5 s and 1 s between attempts) only for infrastructure errors and 5xx-class `DomainException`s. 4xx-class errors and `ZodError`s go
-  straight to the dead-letter topic. The retry budget stays far below the consumer's 30 s `sessionTimeout`.
+  straight to the dead-letter topic. Every attempt and delay of one message shares one 40 s budget (`budgetMs`), and
+  the consumer heartbeats every 3 s while it runs, because kafkajs heartbeats only between messages. With the 5 s
+  dead-letter send deadline, one message holds its consumer for at most 45 s, within the 60 s `rebalanceTimeout`
+  ([PERFORMANCE.md](PERFORMANCE.md#consumer)).
 - **Dead letter.** `KafkaDeadLetterFilter`, applied by `@KafkaConsumerController()`, sends the failing record (same
   key, value and headers, plus the error headers) to `<topic>.dlq` and commits the offset. One poison message therefore
-  never blocks its partition. If the dead-letter publish itself fails, the original error is rethrown and kafkajs
-  redelivers the record later. A handler can throw `KafkaRetriableException` (from `@nestjs/microservices`) to ask for a kafkajs
-  redelivery explicitly.
+  never blocks its partition. If the dead-letter publish fails or is not acknowledged within 5 s, the offset is not
+  committed and the filter hands kafkajs a `KafkaRetriableException` with the original error as `cause`; kafkajs
+  retries it, then restarts the consumer, and the record is redelivered. A handler can throw
+  `KafkaRetriableException` (from `@nestjs/microservices`) to ask for a kafkajs redelivery explicitly.
 
 ### Replaying a dead-letter topic
 
