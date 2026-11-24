@@ -378,7 +378,7 @@ Reading the series:
 ## Grafana dashboard
 
 ```bash
-bun run docker:observability             # Prometheus, Grafana, Jaeger, postgres/redis exporters
+bun run docker:observability             # Prometheus, Grafana, Jaeger, postgres/redis/kafka exporters
 docker compose --profile logs up -d      # optional: Loki + Alloy (container logs → Grafana)
 # then browse to http://localhost:3300   (Grafana: admin / admin, anonymous users are Viewers)
 ```
