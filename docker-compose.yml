@@ -376,7 +376,7 @@ services:
         limits: { cpus: "0.5", memory: 64M }
 
   redis:
-    image: redis:8.10.2-alpine3.23
+    image: redis:8.10.3-alpine3.23
     restart: unless-stopped
     logging: *logging
     networks: [backend]
@@ -558,7 +558,7 @@ services:
         limits: { cpus: "0.2", memory: 64M }
 
   immudb-init:
-    image: redis:8.10.2-alpine3.23 # any already-pulled image with busybox wget
+    image: redis:8.10.3-alpine3.23 # any already-pulled image with busybox wget
     restart: "no"
     logging: *logging
     networks: [backend]
@@ -752,7 +752,7 @@ services:
   # profile nothing would, and `--wait` would fail on "kafka-init exited (0)". This idle process
   # also means "infra bootstrapped": it starts only after all six init jobs succeeded.
   infra-ready:
-    image: redis:8.10.2-alpine3.23 # any already-pulled image with busybox `sleep`
+    image: redis:8.10.3-alpine3.23 # any already-pulled image with busybox `sleep`
     restart: unless-stopped
     init: true # tini forwards SIGTERM: stops instantly
     logging: *logging

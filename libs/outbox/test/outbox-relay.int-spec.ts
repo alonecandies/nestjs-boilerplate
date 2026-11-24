@@ -41,7 +41,7 @@ import {
  *   INTEGRATION=1 bunx vitest run --project outbox:int
  */
 
-const REDIS_IMAGE = 'redis:8.10.2-alpine3.23';
+const REDIS_IMAGE = 'redis:8.10.3-alpine3.23';
 const TENANTS = [
   '0197a000-0000-7000-8000-0000000000a1',
   '0197a000-0000-7000-8000-0000000000b2',
