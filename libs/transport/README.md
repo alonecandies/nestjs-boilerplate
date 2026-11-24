@@ -165,9 +165,10 @@ send the same headers, so the edge also signs them:
   everywhere, then sign with it, then drop the old one): ES256 only, the key chosen by `kid`, the signature checked before
   any claim. It counts `grpc_principal_assertions_total{outcome}` (`valid`, `missing`, `expired`, `invalid`, `mismatch`
   when the claims differ from the plain headers) for every call and logs every outcome but `valid` at `warn`, without
-  the token, at most once a minute per outcome and handler with the number held back (in both modes, so a peer
-  cannot flood the log). An anonymous call (no `x-user-id`, no assertion) is not counted. In `warn` the plain headers
-  still build the principal: nothing is refused.
+  the token, throttled to one line a minute per outcome and handler (in both modes, so a peer cannot flood the log).
+  The number held back appears on the next line for that outcome and handler, and a burst that then stops leaves
+  its count unlogged: the counter, not the log, is the source of truth. An anonymous call (no `x-user-id`, no
+  assertion) is not counted. In `warn` the plain headers still build the principal: nothing is refused.
 - **Enforce.** Under `enforce` the principal comes from a valid assertion's claims only (`principalForRpcCall`, through
   the same `createPrincipal` rules). A call with `x-user-id` and no valid assertion (missing, expired, invalid, another
   key, or plain headers that differ from the claims) fails `UNAUTHENTICATED` `INVALID_PRINCIPAL` before any handler

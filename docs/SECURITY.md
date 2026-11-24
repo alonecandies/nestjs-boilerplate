@@ -441,8 +441,10 @@ bytes on their own calls (ai-service's chat tools), never signing. `GRPC_PRINCIP
 
 - `off` (default): the header is ignored; the plain metadata decides.
 - `warn`: the assertion is verified and counted in `grpc_principal_assertions_total{outcome}` (`valid`, `missing`,
-  `expired`, `invalid`, `mismatch`); every other outcome is logged, at most once a minute per outcome and handler
-  (in `enforce` too), with the number held back; the plain metadata still decides.
+  `expired`, `invalid`, `mismatch`); every other outcome is logged, throttled to one line a minute per outcome and
+  handler (in `enforce` too). The number held back appears on the next line for that outcome and handler, and a
+  burst that then stops leaves its count unlogged: `grpc_principal_assertions_total` is the source of truth, not the
+  log. The plain metadata still decides.
 - `enforce`: the principal comes from a valid assertion's claims only. A call with `x-user-id` and no valid assertion
   (missing, expired, signed by another key, or plain headers that differ from the claims), or with an assertion and
   no `x-user-id`, fails `UNAUTHENTICATED` `INVALID_PRINCIPAL` before any handler runs. The refusal carries no
