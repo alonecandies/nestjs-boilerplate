@@ -1158,6 +1158,23 @@ services:
       resources:
         limits: { cpus: "0.25", memory: 64M }
 
+  # Broker-side consumer lag (kafka_consumergroup_lag, _current_offset, _members) for the
+  # KafkaConsumerGroupStalled alert; scrape job `kafka`, in-network only (port 9308).
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:v1.11.0
+    profiles: [observability]
+    restart: unless-stopped
+    logging: *logging
+    networks: [backend]
+    depends_on:
+      kafka: { condition: service_healthy }
+    command:
+      - --kafka.server=kafka:9092
+      - --kafka.version=4.3.1 # the `kafka` image tag (apache/kafka:4.3.1): change them together
+    deploy:
+      resources:
+        limits: { cpus: "0.25", memory: 64M }
+
   loki:
     image: grafana/loki:3.7.8 # distroless (no shell) => no healthcheck; single binary, tsdb v13
     profiles: [logs]

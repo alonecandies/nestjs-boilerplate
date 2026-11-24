@@ -77,6 +77,13 @@ scrape_configs:
       - targets: ["redis-exporter:9121"]
         labels: { service: redis }
 
+  # Broker-side consumer group lag and committed offsets (kafka-exporter, `observability` profile),
+  # read by the KafkaConsumerGroupStalled alert.
+  - job_name: kafka
+    static_configs:
+      - targets: ["kafka-exporter:9308"]
+        labels: { service: kafka }
+
   # immudb's Prometheus endpoint (in-network only; infra service, always on).
   - job_name: immudb
     static_configs:

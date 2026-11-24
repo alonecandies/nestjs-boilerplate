@@ -1,8 +1,9 @@
-# promtool unit tests for docker/prometheus/rules/platform.rules.yml (follow-ups Task 5), run by
-# scripts/docker/check-prometheus-rules.sh in the image the compose file pins. Breaker series as
-# @platform/transport exports them: grpc_client_circuit_breaker_state is one-hot per upstream,
+# promtool unit tests for docker/prometheus/rules/platform.rules.yml (follow-ups Tasks 5 and 6),
+# run by scripts/docker/check-prometheus-rules.sh in the image the compose file pins. Breaker series
+# as @platform/transport exports them: grpc_client_circuit_breaker_state is one-hot per upstream,
 # grpc_client_circuit_breaker_events_total starts at 0 for its three events. `service` is the label
-# Prometheus adds from the scrape target. Sample index i is at i × interval.
+# Prometheus adds from the scrape target. The kafka_consumergroup_* series are kafka-exporter's.
+# Sample index i is at i × interval.
 rule_files:
   - ../rules/platform.rules.yml
 
@@ -326,3 +327,103 @@ tests:
                 Traffic this light may never open the circuit breaker, so GrpcCircuitBreakerOpen can
                 stay silent. Check that upstream's health and logs, and grpc_client_handled_total by
                 grpc_code for its grpc_service.
+
+  # KafkaConsumerGroupStalled. kafka-exporter series as the probe showed them (labels
+  # consumergroup, topic, partition; members per consumergroup), plus the `service="kafka"` of the
+  # scrape job. A live group stops committing: the offset last moves between minutes 9 and 10, then
+  # stays flat while messages wait. delta() over 10 m is 0 from minute 19, so the alert is pending
+  # then and pages 5 minutes later, about 15 minutes after the last commit. It resolves once the
+  # offset moves again (minute 32).
+  - name: lag with a flat offset and a member pages after 15 minutes and resolves when it moves
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{service="kafka", consumergroup="notifications", topic="identity.membership-created.v1", partition="0"}'
+        values: "100+10x10 200x20 210+10x10"
+      - series: 'kafka_consumergroup_lag{service="kafka", consumergroup="notifications", topic="identity.membership-created.v1", partition="0"}'
+        values: "3x10 4+1x20 3x10"
+      - series: 'kafka_consumergroup_members{service="kafka", consumergroup="notifications"}'
+        values: "1x42"
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 23m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: kafka
+              consumergroup: notifications
+              topic: identity.membership-created.v1
+              partition: "0"
+            exp_annotations:
+              summary: "group notifications stopped committing on identity.membership-created.v1"
+              description: >-
+                Partition 0 of identity.membership-created.v1 is 18 messages behind for group
+                notifications, its committed offset has not moved for 15 minutes and the group has
+                members. Look for a hung handler or a message redelivered in a loop in the consuming
+                service's logs and kafka_consumer_messages_total. If the group no longer reads
+                identity.membership-created.v1, delete its offsets there with
+                kafka-consumer-groups.sh --delete-offsets.
+      - eval_time: 33m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+
+  # A consumer that keeps committing while messages wait (a busy group) never pages.
+  - name: a moving offset with lag stays silent
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{service="kafka", consumergroup="billing", topic="billing.checkout-completed.v1", partition="1"}'
+        values: "0+10x40"
+      - series: 'kafka_consumergroup_lag{service="kafka", consumergroup="billing", topic="billing.checkout-completed.v1", partition="1"}'
+        values: "50x40"
+      - series: 'kafka_consumergroup_members{service="kafka", consumergroup="billing"}'
+        values: "2x40"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+
+  # A group with lag and a flat offset but no member: its service is stopped, or the other
+  # topology left the group behind. That is not this alert (documented limit).
+  - name: a group without members stays silent
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{service="kafka", consumergroup="monolith", topic="identity.membership-created.v1", partition="0"}'
+        values: "100+10x10 200x40"
+      - series: 'kafka_consumergroup_lag{service="kafka", consumergroup="monolith", topic="identity.membership-created.v1", partition="0"}'
+        values: "3x10 4+1x40"
+      - series: 'kafka_consumergroup_members{service="kafka", consumergroup="monolith"}'
+        values: "0x50"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+
+  # An idle partition: the offset is flat because nothing waits. Only the partition with lag of a
+  # live group counts, so the idle one stays silent.
+  - name: a partition without lag stays silent
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{service="kafka", consumergroup="notifications", topic="billing.checkout-completed.v1", partition="2"}'
+        values: "200x50"
+      - series: 'kafka_consumergroup_lag{service="kafka", consumergroup="notifications", topic="billing.checkout-completed.v1", partition="2"}'
+        values: "0x50"
+      - series: 'kafka_consumergroup_members{service="kafka", consumergroup="notifications"}'
+        values: "1x50"
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []

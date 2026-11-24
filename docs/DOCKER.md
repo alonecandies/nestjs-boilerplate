@@ -62,6 +62,7 @@ Budget: the stack is sized for **4 CPUs / 4 GB** of Docker Desktop memory (see [
 | `jaeger`                | `jaegertracing/jaeger:2.20.0`                     | 16686 (UI), 4317/4318 (OTLP) | observability       | traces (in-memory)                                                                         |
 | `postgres-exporter`     | `prometheuscommunity/postgres-exporter:v0.20.1`   | —                            | observability       | Postgres metrics                                                                           |
 | `redis-exporter`        | `oliver006/redis_exporter:v1.92.1-alpine`         | —                            | observability       | Redis metrics                                                                              |
+| `kafka-exporter`        | `danielqsj/kafka-exporter:v1.11.0`                | —                            | observability       | broker-side consumer group lag and committed offsets (`KafkaConsumerGroupStalled`)         |
 | `loki` / `alloy`        | `grafana/loki:3.7.8` / `grafana/alloy:v1.20.0`    | 3100 / 12345                 | logs                | container logs → Loki (Grafana → Explore)                                                  |
 | `kafka-ui`              | `kafbat/kafka-ui:v1.5.0`                          | 8080                         | tools               | topics, consumer groups, lag                                                               |
 | `k6`                    | `grafana/k6:2.3.0`                                | 5665 (live dashboard)        | loadtest            | load test, HTML report in `docker/k6/reports/`                                             |
@@ -593,16 +594,16 @@ read p95 9.6 ms, 0 errors. Gateway + services, defaults (`RATE=5`, 1 min): **p95
 
 Memory limits are caps (sum > 4 GB on purpose); measured RSS once idle:
 
-| Container                                    | Limit                    | RSS                      | Notes                                                               |
-| -------------------------------------------- | ------------------------ | ------------------------ | ------------------------------------------------------------------- |
-| cassandra                                    | 1.5 GB                   | 1.05 GB                  | `MAX_HEAP_SIZE=512M` (`CASSANDRA_HEAP`), `MaxDirectMemorySize=256M` |
-| kafka                                        | 768 MB                   | 300–420 MB               | `-Xmx384m`; CLI tools (healthcheck/init) run with a 96–128 MB heap  |
-| postgres                                     | 512 MB                   | 40 MB                    | `shared_buffers=128MB`, `jit=off`, `pg_stat_statements`             |
-| rustfs / redis / mailpit / gcs               | 256 / 256 / 128 / 128 MB | 55–90 / 15 / 17 / 12 MB  | Redis `maxmemory 192mb noeviction` (BullMQ), AOF on                 |
-| monolith                                     | 768 MB                   | 230 MB                   | heap cap 512 MB                                                     |
-| gateway · identity · notifications · billing | 512 · 448 · 448 · 448 MB | 180 · 130 · 160 · 120 MB | heap caps 384/320 MB                                                |
-| jaeger · prometheus · grafana · exporters    | 512 · 384 · 256 · 64 MB  | —                        | `observability`; Jaeger keeps traces in memory                      |
-| loki · alloy · kafka-ui · k6                 | 384 · 192 · 448 · 512 MB | —                        | `logs` / `tools` / `loadtest`                                       |
+| Container                                    | Limit                    | RSS                      | Notes                                                                                                                                  |
+| -------------------------------------------- | ------------------------ | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| cassandra                                    | 1.5 GB                   | 1.05 GB                  | `MAX_HEAP_SIZE=512M` (`CASSANDRA_HEAP`), `MaxDirectMemorySize=256M`                                                                    |
+| kafka                                        | 768 MB                   | 300–420 MB               | `-Xmx384m`; CLI tools (healthcheck/init) run with a 96–128 MB heap                                                                     |
+| postgres                                     | 512 MB                   | 40 MB                    | `shared_buffers=128MB`, `jit=off`, `pg_stat_statements`                                                                                |
+| rustfs / redis / mailpit / gcs               | 256 / 256 / 128 / 128 MB | 55–90 / 15 / 17 / 12 MB  | Redis `maxmemory 192mb noeviction` (BullMQ), AOF on                                                                                    |
+| monolith                                     | 768 MB                   | 230 MB                   | heap cap 512 MB                                                                                                                        |
+| gateway · identity · notifications · billing | 512 · 448 · 448 · 448 MB | 180 · 130 · 160 · 120 MB | heap caps 384/320 MB                                                                                                                   |
+| jaeger · prometheus · grafana · exporters    | 512 · 384 · 256 · 64 MB  | —                        | `observability`; Jaeger keeps traces in memory; 64 MB for each of the postgres, redis and kafka exporters (kafka-exporter about 30 MB) |
+| loki · alloy · kafka-ui · k6                 | 384 · 192 · 448 · 512 MB | —                        | `logs` / `tools` / `loadtest`                                                                                                          |
 
 Off-heap headroom (limit − heap cap: 256 MB monolith, 128 MB gateway) also holds the Buffers of streamed uploads
 (`POST /v1/files`): up to ~15 MiB each (S3 multipart, 3 × 5 MiB parts), at most `STORAGE_MAX_CONCURRENT_UPLOADS` (4)
