@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import {
   type DynamicModule,
   type INestApplication,
@@ -11,6 +12,10 @@ import { Transport } from '@nestjs/microservices';
 import { grpcConfig, kafkaConfig } from '@platform/config';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FIXTURE_GRPC_PACKAGE } from '../../test/fixtures/fixture.grpc-package.js';
+import {
+  applyPrincipalAssertionConfig,
+  principalAssertionSettings,
+} from '../grpc/grpc-principal-assertion.js';
 import { HealthReportingGrpcServer } from '../grpc/grpc-server.options.js';
 import { InstrumentedServerKafka } from '../kafka/instrumented-server-kafka.js';
 import { connectGrpcServer, connectKafkaConsumer } from './connect-microservices.js';
@@ -45,6 +50,10 @@ function fakeApp(loaded: Record<string, unknown>): {
 }
 
 describe('connectGrpcServer', () => {
+  afterEach(() => {
+    applyPrincipalAssertionConfig(undefined);
+  });
+
   it('connects a health-reporting gRPC server from the registered grpc config, inheriting app config', () => {
     const cfg = grpcConfig.parse({ GRPC_URL: '0.0.0.0:7001' });
     const { app, connect } = fakeApp({ [grpcConfig.namespace]: cfg });
@@ -57,6 +66,50 @@ describe('connectGrpcServer', () => {
     const { strategy } = options as { strategy: HealthReportingGrpcServer };
     expect(strategy).toBeInstanceOf(HealthReportingGrpcServer);
     expect(strategy.health.services).toEqual(['fixture.v1.UsersService']);
+  });
+
+  it('builds the principal assertion settings from the resolved config before connecting', () => {
+    const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-256' });
+    const cfg = grpcConfig.parse({});
+    const { app } = fakeApp({
+      [grpcConfig.namespace]: {
+        ...cfg,
+        principalAssertion: {
+          ...cfg.principalAssertion,
+          mode: 'enforce',
+          publicKeys: [
+            { keyId: 'edge-1', pem: publicKey.export({ type: 'spki', format: 'pem' }).toString() },
+          ],
+        },
+      },
+    });
+
+    connectGrpcServer(app, [FIXTURE_GRPC_PACKAGE]);
+
+    expect(principalAssertionSettings().mode).toBe('enforce');
+    expect([...principalAssertionSettings().publicKeys.keys()]).toEqual(['edge-1']);
+  });
+
+  it('stops the boot on a public key that is not P-256, before connecting', () => {
+    const { publicKey } = generateKeyPairSync('ec', { namedCurve: 'P-384' });
+    const cfg = grpcConfig.parse({});
+    const { app, connect } = fakeApp({
+      [grpcConfig.namespace]: {
+        ...cfg,
+        principalAssertion: {
+          ...cfg.principalAssertion,
+          mode: 'enforce',
+          publicKeys: [
+            { keyId: 'next', pem: publicKey.export({ type: 'spki', format: 'pem' }).toString() },
+          ],
+        },
+      },
+    });
+
+    expect(() => connectGrpcServer(app, [FIXTURE_GRPC_PACKAGE])).toThrow(
+      /GRPC_PRINCIPAL_PUBLIC_KEYS.*"next"/,
+    );
+    expect(connect).not.toHaveBeenCalled();
   });
 
   it('falls back to parsing the environment when no module loaded the namespace', () => {
