@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 /**
  * TEST-1 guard: the specs the audit inventoried must not depend on the wall clock. A spec that
  * compares elapsed time to an upper bound fails from load alone; a fixed sleep before an absence
- * check passes vacuously when the machine is slow; a `free-port.ts` that closes its listener
+ * check passes vacuously when the machine is slow; a helper that closes its port-0 listener
  * before returning the number leaves a window in which a parallel fork takes the port.
  */
 const root = join(import.meta.dirname, '..');
@@ -53,7 +53,26 @@ const SLEEP_SPECS = [
   'libs/outbox/src/outbox.module.spec.ts',
   'domains/ai/src/application/commands/stream-message/stream-message.handler.spec.ts',
   'domains/ai/src/application/commands/send-message/send-message.handler.spec.ts',
+  'libs/outbox/test/outbox-kafka-delivery.int-spec.ts',
 ];
+
+/**
+ * Sections of specs that keep a sleep elsewhere, where real time must pass (a key's TTL, a lock's
+ * auto-extension): from the `describe(` that opens the section to the next top-level `describe(`,
+ * the section waits for a signal and has no `sleep(`.
+ */
+const SLEEP_FREE_SECTIONS = [
+  { file: 'libs/redis/src/redis.int-spec.ts', opens: "describe('two-tier cache" },
+];
+
+/** The text of the top-level `describe(` block that starts with `opens`. */
+function section(file: string, opens: string): string {
+  const text = read(file);
+  const start = text.indexOf(opens);
+  if (start === -1) throw new Error(`${file}: no section ${opens}`);
+  const end = text.indexOf('\ndescribe(', start + opens.length);
+  return text.slice(start, end === -1 ? undefined : end);
+}
 
 /** `expect(performance.now() - t)` or `expect(Date.now() - t)` followed by an upper-bound matcher. */
 const ELAPSED_UPPER_BOUND =
@@ -62,6 +81,21 @@ const ELAPSED_UPPER_BOUND =
 /** `await new Promise((resolve) => setTimeout(resolve, 20))` and the like: a fixed sleep. */
 const FIXED_SLEEP =
   /new Promise(?:<[^>]*>)?\(\s*\(?\s*resolve\s*\)?\s*=>\s*setTimeout\(\s*resolve\s*,/;
+
+/**
+ * `listen(0, ...)`, then `address()`, then `close(`: the port is read from a listener that is then
+ * released, so a parallel fork can take it before the caller binds it.
+ */
+const CLOSE_THEN_REBIND = /\.listen\(\s*0\b[\s\S]*?\.address\(\)[\s\S]*?\.close\(/;
+
+/**
+ * The two Kafka container bootstraps: a container's advertised listener must name the host port
+ * before the container starts, so the port has to be chosen first (an inherent window).
+ */
+const FREE_PORT_ALLOWED = [
+  'libs/outbox/test/outbox-kafka-delivery.int-spec.ts',
+  'libs/transport/test/support/kafka-container.ts',
+];
 
 describe('spec hygiene (TEST-1)', () => {
   it('finds the inventoried specs (the paths below are not stale)', () => {
@@ -75,20 +109,49 @@ describe('spec hygiene (TEST-1)', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('no spec defines WITHIN_TWO_SWEEPS_MS, and the realtime suites have no QUIET_MS wait', () => {
+  it('no spec defines WITHIN_TWO_SWEEPS_MS, and no e2e spec has a QUIET_MS wait', () => {
     const specs = filesMatching((name) => /\.(?:e2e-)?spec\.ts$/.test(name));
     expect(specs.filter((file) => read(file).includes('WITHIN_TWO_SWEEPS_MS'))).toEqual([]);
-    expect(REALTIME_E2E.filter((file) => /\bQUIET_MS\b/.test(read(file)))).toEqual([]);
+    const e2e = filesMatching((name) => name.endsWith('.e2e-spec.ts'));
+    expect(e2e).toEqual(expect.arrayContaining(REALTIME_E2E));
+    expect(e2e.filter((file) => /\bQUIET_MS\b/.test(read(file)))).toEqual([]);
+  });
+
+  it('@platform/testing exports no `wait`: an absence is fenced by a later event, not a pause', () => {
+    const helpers = filesMatching(
+      (name) => name.endsWith('.ts') && !name.includes('.spec.'),
+    ).filter((file) => file.startsWith('libs/testing/src/'));
+    expect(helpers).toContain('libs/testing/src/realtime/socket-client.ts');
+    const exportsWait =
+      /export\s+(?:const|let|function|async\s+function)\s+wait\b|export\s*\{[^}]*\bwait\b/;
+    expect(helpers.filter((file) => exportsWait.test(read(file)))).toEqual([]);
   });
 
   it('the absence and ordering checks of the inventoried specs wait for a signal, not a sleep', () => {
     expect(SLEEP_SPECS.filter((file) => FIXED_SLEEP.test(read(file)))).toEqual([]);
   });
 
-  it('no free-port.ts closes a listener before returning its port', () => {
-    const helpers = filesMatching((name) => name === 'free-port.ts');
-    expect(helpers.length).toBeGreaterThanOrEqual(5);
-    const offenders = helpers.filter((file) => /\.close\(/.test(read(file)));
+  it('the sections that order events next to inherent sleeps wait for a signal, not a sleep', () => {
+    const sleepy = SLEEP_FREE_SECTIONS.filter(({ file, opens }) =>
+      /\bsleep\(/.test(section(file, opens)),
+    );
+    expect(sleepy).toEqual([]);
+  });
+
+  it('there is exactly one definition of withBoundGrpcPort, in @platform/transport/testing', () => {
+    const definitions = filesMatching((name) => name.endsWith('.ts')).filter((file) =>
+      /\bfunction\s+withBoundGrpcPort\b/.test(read(file)),
+    );
+    expect(definitions).toEqual(['libs/transport/src/testing/bound-grpc-port.ts']);
+  });
+
+  it('no spec or test helper closes a port-0 listener to return its number', () => {
+    const offenders = filesMatching((name) => name.endsWith('.ts')).filter(
+      (file) =>
+        (/\.(?:e2e-|int-)?spec\.ts$/.test(file) || /(?:^|\/)test\//.test(file)) &&
+        !FREE_PORT_ALLOWED.includes(file) &&
+        CLOSE_THEN_REBIND.test(read(file)),
+    );
     expect(offenders).toEqual([]);
   });
 });

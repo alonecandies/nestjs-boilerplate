@@ -1,4 +1,3 @@
-import { createServer } from 'node:net';
 import { setTimeout as sleep } from 'node:timers/promises';
 import {
   BILLING_GRPC_PACKAGE,
@@ -16,6 +15,7 @@ import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { generateId, OperationTimeoutException } from '@platform/common';
 import { AppConfigModule, grpcConfig } from '@platform/config';
 import { createGrpcServerStrategy } from '@platform/transport';
+import { withBoundGrpcPort } from '@platform/transport/testing';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BillingPort } from '../../../application/ports/billing.port.js';
 import { BillingApiModule } from '../../../billing-api.module.js';
@@ -83,32 +83,24 @@ class SlowBillingService {
 @Module({ controllers: [SlowBillingService] })
 class SlowBillingServiceModule {}
 
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (address === null || typeof address === 'string') throw new Error('No free port');
-  return address.port;
-}
-
 describe('billing over gRPC: the Stripe-backed calls get BILLING_GRPC_STRIPE_DEADLINE_MS', () => {
   let server: INestMicroservice;
   let gateway: TestingModule;
   let port: BillingPort;
 
   beforeAll(async () => {
-    const grpcPort = await freePort();
+    const { port: grpcPort } = await withBoundGrpcPort(async () => {
+      server = await NestFactory.createMicroservice(SlowBillingServiceModule, {
+        ...createGrpcServerStrategy(grpcConfig.parse({ GRPC_URL: '127.0.0.1:0' }), [
+          BILLING_GRPC_PACKAGE,
+        ]),
+        logger: false,
+      });
+      await server.listen();
+    });
     vi.stubEnv('BILLING_GRPC_URL', `127.0.0.1:${grpcPort}`);
     vi.stubEnv('GRPC_DEADLINE_MS', String(GRPC_DEADLINE_MS));
     vi.stubEnv('BILLING_GRPC_STRIPE_DEADLINE_MS', String(STRIPE_DEADLINE_MS));
-    server = await NestFactory.createMicroservice(SlowBillingServiceModule, {
-      ...createGrpcServerStrategy(grpcConfig.parse({ GRPC_URL: `127.0.0.1:${grpcPort}` }), [
-        BILLING_GRPC_PACKAGE,
-      ]),
-      logger: false,
-    });
-    await server.listen();
 
     gateway = await Test.createTestingModule({
       imports: [AppConfigModule.forRoot(), RbacModule.forRoot(), BillingApiModule.forRemote()],

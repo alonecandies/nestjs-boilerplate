@@ -1,5 +1,4 @@
 import { generateKeyPairSync } from 'node:crypto';
-import { createServer } from 'node:net';
 import {
   type ChannelCredentials,
   credentials,
@@ -43,6 +42,7 @@ import {
   UsersServiceControllerMethods,
 } from '../../test/fixtures/fixture.grpc-package.js';
 import { RPC_CLS_KEYS } from '../context/transport-context.js';
+import { withBoundGrpcPort } from '../testing/bound-grpc-port.js';
 import { createTestPrincipalSigner } from '../testing/test-principal-signer.js';
 import { GRPC_METADATA_KEYS } from './grpc.constants.js';
 import { grpcCall } from './grpc-call.js';
@@ -137,15 +137,6 @@ class TestUsersGrpcController implements UsersServiceController {
 })
 class TestGrpcModule {}
 
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (address === null || typeof address === 'string') throw new Error('No port');
-  return address.port;
-}
-
 interface HealthClient {
   check(
     request: { service: string },
@@ -186,13 +177,15 @@ describe('gRPC round trip (in-process server + ClientGrpc)', () => {
     });
 
   beforeAll(async () => {
-    const port = await freePort();
-    cfg = grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}`, GRPC_DEADLINE_MS: '3000' });
-    app = await NestFactory.createMicroservice(TestGrpcModule, {
-      ...createGrpcServerStrategy(cfg, [FIXTURE_GRPC_PACKAGE]),
-      logger: false,
+    const serverCfg = grpcConfig.parse({ GRPC_URL: '127.0.0.1:0', GRPC_DEADLINE_MS: '3000' });
+    const { port } = await withBoundGrpcPort(async () => {
+      app = await NestFactory.createMicroservice(TestGrpcModule, {
+        ...createGrpcServerStrategy(serverCfg, [FIXTURE_GRPC_PACKAGE]),
+        logger: false,
+      });
+      await app.listen();
     });
-    await app.listen();
+    cfg = grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}`, GRPC_DEADLINE_MS: '3000' });
     client = new ClientGrpcProxy(
       createGrpcClientOptions(cfg, { spec: FIXTURE_GRPC_PACKAGE, url: cfg.url }).options,
     );

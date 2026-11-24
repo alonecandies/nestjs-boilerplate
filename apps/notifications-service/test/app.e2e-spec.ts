@@ -29,13 +29,12 @@ import {
   grpcCall,
   KafkaProducer,
 } from '@platform/transport';
-import { FakeKafkaProducer } from '@platform/transport/testing';
+import { FakeKafkaProducer, withBoundGrpcPort } from '@platform/transport/testing';
 import cassandra from 'cassandra-driver';
 import { lastValueFrom, type Observable } from 'rxjs';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { createFakeCassandra } from './support/fake-cassandra.js';
-import { withBoundGrpcPort } from './support/free-port.js';
 import { InMemoryKafkaServer } from './support/in-memory-kafka.server.js';
 import { startServiceTestApp } from './support/service-test-app.js';
 

@@ -67,7 +67,6 @@ const RELAY: OutboxConfig = {
   retentionHours: 168,
 };
 const silent = { log: noop, warn: noop, error: noop, debug: noop };
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 class FxOutbox extends OutboxWriter {}
 
@@ -138,6 +137,8 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     const deliveries: Delivery[] = [];
     /** The consumer's idempotent effect: one entry per envelope id, whatever the delivery count. */
     const effects = new Map<string, EventEnvelope<OrderPlacedPayload>>();
+    /** Per partition, the offset after the last record the consumer handled. */
+    const consumedTo = new Map<number, number>();
 
     const deliveriesOf = (id: string): Delivery[] =>
       deliveries.filter(({ envelope }) => envelope.id === id);
@@ -146,6 +147,22 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
     const topicRecordCount = async (): Promise<number> => {
       const offsets = await kafkaAdmin.fetchTopicOffsets(TOPIC);
       return offsets.reduce((sum, { high, low }) => sum + (Number(high) - Number(low)), 0);
+    };
+
+    /**
+     * Waits until the consumer has handled every record the broker holds now (up to each
+     * partition's high watermark): whatever was on the topic has been seen by then.
+     */
+    const consumedToHighWatermark = async (): Promise<void> => {
+      const offsets = await kafkaAdmin.fetchTopicOffsets(TOPIC);
+      await vi.waitFor(
+        () => {
+          for (const { partition, high } of offsets) {
+            expect(consumedTo.get(partition) ?? 0).toBeGreaterThanOrEqual(Number(high));
+          }
+        },
+        { timeout: 30_000, interval: 50 },
+      );
     };
 
     const unpublishedCount = async (): Promise<number> => {
@@ -248,7 +265,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       await consumer.connect();
       await consumer.subscribe({ topic: TOPIC, fromBeginning: true });
       await consumer.run({
-        eachMessage: async ({ message }) => {
+        eachMessage: async ({ partition, message }) => {
           const envelope = JSON.parse(
             message.value?.toString('utf8') ?? 'null',
           ) as EventEnvelope<OrderPlacedPayload>;
@@ -258,6 +275,7 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
             envelope,
           });
           if (!effects.has(envelope.id)) effects.set(envelope.id, envelope);
+          consumedTo.set(partition, Number(message.offset) + 1);
         },
       });
 
@@ -356,9 +374,9 @@ describe.skipIf(process.env['INTEGRATION'] !== '1')(
       expect(failed).toEqual({ polled: 1, published: 0, failed: true });
       expect(await isPublished(envelope.id)).toBe(false);
       expect(await unpublishedCount()).toBe(1);
-      // Give the consumer time to (wrongly) see something, then check the broker too.
-      await sleep(1_000);
+      // The broker holds nothing new, and the consumer has read all it holds: nothing was delivered.
       expect(await topicRecordCount()).toBe(before);
+      await consumedToHighWatermark();
       expect(deliveriesOf(envelope.id)).toHaveLength(0);
 
       const retried = await tick();

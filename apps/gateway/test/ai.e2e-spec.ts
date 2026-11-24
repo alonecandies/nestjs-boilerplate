@@ -6,25 +6,25 @@
  * the real hop: JWT + `ai:chat` + `ai.chat` at the edge, the caller in metadata, domain codes back,
  * deltas in order, and the client's disconnect cancelling the call in ai-service.
  */
-await vi.hoisted(async () => {
-  const { createServer } = await import('node:net');
+const { ai, upstream } = await vi.hoisted(async () => {
   const { GATEWAY_E2E_ENV } = await import('./support/e2e-env.js');
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (address === null || typeof address === 'string') throw new Error('No free port');
+  const { FakeAiPort, startFakeAiService } = await import('@domain/ai/testing');
+  const { withBoundGrpcPort } = await import('@platform/transport/testing');
+  Object.assign(process.env, GATEWAY_E2E_ENV);
+  // The stand-in ai-service starts here, on port 0, and keeps the port it bound: AI_GRPC_URL must
+  // exist before AppModule's decorators evaluate, so it cannot be a port found first and bound later.
+  const fake = new FakeAiPort();
+  const started = await withBoundGrpcPort(() => startFakeAiService('127.0.0.1:0', fake));
   // AiApiModule.forRemote() reads AI_GRPC_URL when AppModule's decorators evaluate.
-  Object.assign(process.env, GATEWAY_E2E_ENV, {
-    AI_GRPC_URL: `127.0.0.1:${address.port}`,
+  Object.assign(process.env, {
+    AI_GRPC_URL: `127.0.0.1:${started.port}`,
     AI_CHAT_LIMIT: '4',
     AI_CHAT_TENANT_LIMIT: '100',
   });
+  return { ai: fake, upstream: started.value };
 });
 
 import { request as httpRequest, type IncomingHttpHeaders } from 'node:http';
-import { FakeAiPort, startFakeAiService } from '@domain/ai/testing';
-import type { INestMicroservice } from '@nestjs/common';
 import { signTestAccessToken } from '@platform/auth/testing';
 import { ExternalServiceException, generateId, PROBLEM_JSON_CONTENT_TYPE } from '@platform/common';
 import { listenOnLoopback, waitUntil } from '@platform/testing/realtime';
@@ -76,11 +76,9 @@ function parseSse(body: string): SseEvent[] {
 
 describe('AI chat through the gateway (forRemote → ai-service over gRPC)', () => {
   let e2e: GatewayE2e;
-  let upstream: INestMicroservice;
   let httpUrl = '';
   let ada: Tokens;
   let bob: Tokens;
-  const ai = new FakeAiPort();
   const inject = (...args: Parameters<GatewayE2e['app']['inject']>) => e2e.app.inject(...args);
 
   const register = async (email: string): Promise<Tokens> => {
@@ -146,7 +144,6 @@ describe('AI chat through the gateway (forRemote → ai-service over gRPC)', () 
     });
 
   beforeAll(async () => {
-    upstream = await startFakeAiService(process.env['AI_GRPC_URL'] ?? '', ai);
     e2e = await createGatewayE2eApp();
     ({ httpUrl } = await listenOnLoopback(e2e.app));
     ada = await register('ada.ai@example.com');
@@ -160,7 +157,7 @@ describe('AI chat through the gateway (forRemote → ai-service over gRPC)', () 
   });
   afterAll(async () => {
     await e2e?.app.close();
-    await upstream?.close();
+    await upstream.close();
   });
 
   describe('REST', () => {

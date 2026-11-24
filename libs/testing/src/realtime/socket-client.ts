@@ -141,13 +141,11 @@ export function collectEvents<T = unknown>(
   return { received, stop: () => socket.off(event, onEvent) };
 }
 
-/** Waits `ms` (an absence can only be asserted by waiting). */
-export const wait = (ms: number): Promise<void> =>
-  new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-
-/** Polls `predicate` until it holds; rejects after `timeoutMs`. */
+/**
+ * Polls `predicate` until it holds; rejects after `timeoutMs`. There is no fixed pause to prove an
+ * absence: send a later event on the same channel and wait for it (a fence), or await the
+ * server-side end of the work, then assert what arrived.
+ */
 export async function waitUntil(
   predicate: () => boolean,
   timeoutMs = DEFAULT_WAIT_MS,
@@ -156,7 +154,9 @@ export async function waitUntil(
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error(`condition not met within ${timeoutMs} ms`);
-    await wait(intervalMs);
+    await new Promise((resolve) => {
+      setTimeout(resolve, intervalMs);
+    });
   }
 }
 

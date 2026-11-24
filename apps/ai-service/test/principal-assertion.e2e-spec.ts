@@ -7,31 +7,24 @@
  * call really crosses the wire. Both are configured from the environment, public key only.
  *
  * The environment is set before any import: `AppModule` reads the tool upstreams' targets while its
- * decorators evaluate.
+ * decorators evaluate. The stand-in therefore starts in `vi.hoisted`, on port 0, and the env names
+ * the port it bound.
  */
-const { signer, identityUrl } = await vi.hoisted(async () => {
-  const { createServer } = await import('node:net');
-  const freePort = async (): Promise<number> => {
-    const server = createServer();
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const address = server.address();
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    if (address === null || typeof address === 'string') throw new Error('No free port');
-    return address.port;
-  };
-  const { createTestPrincipalSigner } = await import('@platform/transport/testing');
+const { signer, identity } = await vi.hoisted(async () => {
+  const { createTestPrincipalSigner, withBoundGrpcPort } = await import(
+    '@platform/transport/testing'
+  );
   const edge = createTestPrincipalSigner('edge-e2e');
-  const identity = `127.0.0.1:${await freePort()}`;
   Object.assign(process.env, {
     NODE_ENV: 'test',
     LOG_LEVEL: 'silent',
     SERVICE_NAME: 'ai-service',
     OTEL_SDK_DISABLED: 'true',
-    GRPC_URL: `127.0.0.1:${await freePort()}`,
+    // Port 0: the server binds an OS-chosen port, read back after it started.
+    GRPC_URL: '127.0.0.1:0',
     GRPC_DEADLINE_MS: '3000',
     DATABASE_URL: 'postgres://app:app@127.0.0.1:1/app',
     DATABASE_RUN_MIGRATIONS: 'false',
-    IDENTITY_GRPC_URL: identity,
     NOTIFICATIONS_GRPC_URL: '127.0.0.1:1',
     BILLING_GRPC_URL: '127.0.0.1:1',
     AI_ENABLED: 'true',
@@ -41,94 +34,42 @@ const { signer, identityUrl } = await vi.hoisted(async () => {
     GRPC_PRINCIPAL_ASSERTION: 'enforce',
     GRPC_PRINCIPAL_PUBLIC_KEYS: edge.publicKeysEnv,
   });
-  return { signer: edge, identityUrl: identity };
+  // The stand-in starts here and keeps the port it bound: IDENTITY_GRPC_URL must exist before
+  // AppModule's decorators evaluate, so it cannot be a port found first and bound later.
+  const { startIdentityStandIn } = await import('./support/identity-stand-in.js');
+  const started = await withBoundGrpcPort(startIdentityStandIn);
+  process.env['IDENTITY_GRPC_URL'] = `127.0.0.1:${started.port}`;
+  return { signer: edge, identity: started.value };
 });
 
 import { aiSchema, ConversationsRepository, MessagesRepository, UsageRepository } from '@domain/ai';
 import { createInMemoryAiPersistence } from '@domain/ai/testing';
 import { AI_GRPC_PACKAGE, type AiServiceClient, type Conversation } from '@domain/ai-contracts';
-import {
-  type GetUserRequest,
-  type GetUsersByIdsRequest,
-  IDENTITY_GRPC_PACKAGE,
-  type ListUsersRequest,
-  type UpdateUserRolesRequest,
-  type User,
-  type UserList,
-  type UserPage,
-  type UsersServiceController,
-  UsersServiceControllerMethods,
-} from '@domain/identity-contracts';
 import { NotificationsPort } from '@domain/notifications/api';
 import { type Metadata, type ServiceError, status } from '@grpc/grpc-js';
-import { type INestMicroservice, Module } from '@nestjs/common';
-import { NestFactory } from '@nestjs/core';
-import { ClientGrpcProxy, Ctx, Payload } from '@nestjs/microservices';
+import { ClientGrpcProxy } from '@nestjs/microservices';
 import type { NestFastifyApplication } from '@nestjs/platform-fastify';
 import { Test } from '@nestjs/testing';
 import { AiModelProvider } from '@platform/ai';
 import { MockAiModelProvider, type MockModelCall, mockScriptedModel } from '@platform/ai/testing';
-import { getPrincipal, PermissionDeniedException } from '@platform/common';
 import { grpcConfig } from '@platform/config';
 import { DRIZZLE } from '@platform/database';
 import {
   createGrpcClientOptions,
-  createGrpcServerStrategy,
   createOutgoingMetadata,
   GRPC_METADATA_KEYS,
-  GrpcController,
 } from '@platform/transport';
-import { ClsModule } from 'nestjs-cls';
+import { withBoundGrpcPort } from '@platform/transport/testing';
 import { lastValueFrom } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { createFakePostgres } from './support/fake-postgres.js';
+import { identityCalls } from './support/identity-stand-in.js';
 import { startServiceTestApp } from './support/service-test-app.js';
 
 const TENANT_ID = '01920000-0000-7000-8000-0000000000a1';
 const ADA = '01920000-0000-7000-8000-0000000000b1';
 const ada = { userId: ADA, tenantId: TENANT_ID, roles: ['member'] };
-
-/** What the identity stand-in saw: the principal its handler ran as and the assertion bytes. */
-const identityCalls: { principal: unknown; assertion: unknown }[] = [];
-
-@GrpcController()
-@UsersServiceControllerMethods()
-class IdentityStandInController implements UsersServiceController {
-  getUser(@Payload() request: GetUserRequest, @Ctx() metadata?: Metadata): User {
-    identityCalls.push({
-      principal: getPrincipal(),
-      assertion: metadata?.get(GRPC_METADATA_KEYS.PRINCIPAL_ASSERTION)[0],
-    });
-    const at = new Date('2026-09-01T10:00:00.000Z');
-    return {
-      id: request.id,
-      email: 'ada@example.com',
-      displayName: 'Ada',
-      roles: [],
-      createdAt: at,
-      updatedAt: at,
-    };
-  }
-
-  getUsersByIds(_request: GetUsersByIdsRequest): UserList {
-    throw new PermissionDeniedException('not served by the stand-in');
-  }
-
-  listUsers(_request: ListUsersRequest): UserPage {
-    throw new PermissionDeniedException('not served by the stand-in');
-  }
-
-  updateUserRoles(_request: UpdateUserRolesRequest): User {
-    throw new PermissionDeniedException('not served by the stand-in');
-  }
-}
-
-@Module({
-  imports: [ClsModule.forRoot({ global: true })],
-  controllers: [IdentityStandInController],
-})
-class IdentityStandInModule {}
 
 const postgres = createFakePostgres(aiSchema, (sql) =>
   sql === 'select 1' ? [{ '?column?': 1 }] : [],
@@ -148,7 +89,6 @@ const toolResultsOf = (call: MockModelCall): string =>
 
 describe('ai-service with GRPC_PRINCIPAL_ASSERTION=enforce', () => {
   let app: NestFastifyApplication;
-  let identity: INestMicroservice;
   let client: ClientGrpcProxy;
   let ai: AiServiceClient;
   let model = mockScriptedModel([{ text: 'unused' }]);
@@ -158,14 +98,6 @@ describe('ai-service with GRPC_PRINCIPAL_ASSERTION=enforce', () => {
     lastValueFrom(ai.createConversation({ tenantId: TENANT_ID, userId: ADA }, metadata));
 
   beforeAll(async () => {
-    identity = await NestFactory.createMicroservice(IdentityStandInModule, {
-      ...createGrpcServerStrategy(grpcConfig.parse({ GRPC_URL: identityUrl }), [
-        IDENTITY_GRPC_PACKAGE,
-      ]),
-      logger: false,
-    });
-    await identity.listen();
-
     const builder = Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(DRIZZLE)
       .useValue(postgres.db)
@@ -177,12 +109,15 @@ describe('ai-service with GRPC_PRINCIPAL_ASSERTION=enforce', () => {
       .useValue(persistence.usage)
       .overrideProvider(AiModelProvider)
       .useValue(new MockAiModelProvider(() => model));
-    app = await startServiceTestApp(builder, { grpc: [AI_GRPC_PACKAGE] });
+    const started = await withBoundGrpcPort(() =>
+      startServiceTestApp(builder, { grpc: [AI_GRPC_PACKAGE] }),
+    );
+    app = started.value;
 
     client = new ClientGrpcProxy(
       createGrpcClientOptions(grpcConfig.parse(), {
         spec: AI_GRPC_PACKAGE,
-        url: process.env['GRPC_URL'] ?? '',
+        url: `127.0.0.1:${started.port}`,
       }).options,
     );
     ai = client.getService<AiServiceClient>('AiService');

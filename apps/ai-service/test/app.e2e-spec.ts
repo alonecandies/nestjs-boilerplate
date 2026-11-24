@@ -71,11 +71,11 @@ import {
   createOutgoingMetadata,
   GRPC_METADATA_KEYS,
 } from '@platform/transport';
+import { withBoundGrpcPort } from '@platform/transport/testing';
 import { lastValueFrom, type Observable, toArray } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { createFakePostgres } from './support/fake-postgres.js';
-import { withBoundGrpcPort } from './support/free-port.js';
 import { startServiceTestApp } from './support/service-test-app.js';
 
 type MockModel = ReturnType<typeof mockTextModel>;
