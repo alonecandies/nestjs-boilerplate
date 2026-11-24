@@ -120,6 +120,7 @@ const PROMQL_WORDS = new Set([
   'delta',
   'increase',
   'max',
+  'max_over_time',
   'min',
   'on',
   'or',
@@ -412,15 +413,18 @@ describe('the broker-side lag source of follow-ups Task 6', () => {
     ]);
   });
 
-  // Lag with a committed offset that has not moved for 10 minutes, in a group that has members:
-  // a live consumer that stopped committing (Task 2 commits during a batch). A group without
-  // members (a stopped service, a group the other topology left behind) is not this alert.
-  it('KafkaConsumerGroupStalled: lag, an offset flat for 10 m and live members, for 5 m', () => {
+  // Lag with a committed offset that has not moved for 10 minutes, in a group that had a member
+  // in those same 10 minutes: a live consumer that stopped committing (Task 2 commits during a
+  // batch). Membership is read over the window, not at the instant: a consumer in a redelivery
+  // loop leaves and rejoins its group, and each scrape at 0 members would reset the `for`. A group
+  // without members for the whole window (a stopped service, a group the other topology left
+  // behind) is not this alert.
+  it('KafkaConsumerGroupStalled: lag, an offset flat for 10 m and a member in them, for 5 m', () => {
     expect(expr('KafkaConsumerGroupStalled')).toBe(
       'kafka_consumergroup_lag > 0' +
         ' and on (consumergroup, topic, partition)' +
         ' delta(kafka_consumergroup_current_offset[10m]) == 0' +
-        ' and on (consumergroup) kafka_consumergroup_members > 0',
+        ' and on (consumergroup) max_over_time(kafka_consumergroup_members[10m]) > 0',
     );
     expect(byName.get('KafkaConsumerGroupStalled')?.for).toBe('5m');
   });

@@ -363,9 +363,10 @@ tests:
               summary: "group notifications stopped committing on identity.membership-created.v1"
               description: >-
                 Partition 0 of identity.membership-created.v1 is 18 messages behind for group
-                notifications, its committed offset has not moved for 15 minutes and the group has
-                members. Look for a hung handler or a message redelivered in a loop in the consuming
-                service's logs and kafka_consumer_messages_total. If the group no longer reads
+                notifications, its committed offset has not moved for 15 minutes and the group had
+                a member in the last 10 minutes. Look for a hung handler or a message redelivered in
+                a loop in the consuming service's logs and kafka_consumer_messages_total. If the
+                group no longer reads
                 identity.membership-created.v1, delete its offsets there with
                 kafka-consumer-groups.sh --delete-offsets.
       - eval_time: 33m
@@ -390,8 +391,8 @@ tests:
         alertname: KafkaConsumerGroupStalled
         exp_alerts: []
 
-  # A group with lag and a flat offset but no member: its service is stopped, or the other
-  # topology left the group behind. That is not this alert (documented limit).
+  # A group with lag and a flat offset but no member for the whole window: its service is stopped,
+  # or the other topology left the group behind. That is not this alert (documented limit).
   - name: a group without members stays silent
     interval: 1m
     input_series:
@@ -406,6 +407,76 @@ tests:
         alertname: KafkaConsumerGroupStalled
         exp_alerts: []
       - eval_time: 50m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+
+  # A single-replica consumer in a redelivery loop: kafkajs' retrier sleeps without heartbeats, the
+  # broker evicts the member (or onCrash leaves the group) and it rejoins about 30 s later, so the
+  # exporter shows 0 members for 2 of every 7 scrapes (15 s) while the offset stays flat and lag
+  # grows. Membership is read over the 10 m window, so the gaps do not reset the `for`: it pages
+  # about 15 minutes after the last commit (9m45s), also at an instant whose sample is 0 (26m).
+  - name: a consumer that leaves and rejoins its group while stuck still pages
+    interval: 15s
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{service="kafka", consumergroup="billing", topic="billing.checkout-completed.v1", partition="0"}'
+        values: "100+10x39 490x100"
+      - series: 'kafka_consumergroup_lag{service="kafka", consumergroup="billing", topic="billing.checkout-completed.v1", partition="0"}'
+        values: "3x39 4+1x100"
+      - series: 'kafka_consumergroup_members{service="kafka", consumergroup="billing"}'
+        values: "1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1 1x4 0x1"
+    alert_rule_test:
+      - eval_time: 18m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 22m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 26m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: kafka
+              consumergroup: billing
+              topic: billing.checkout-completed.v1
+              partition: "0"
+            exp_annotations:
+              summary: "group billing stopped committing on billing.checkout-completed.v1"
+              description: >-
+                Partition 0 of billing.checkout-completed.v1 is 68 messages behind for group
+                billing, its committed offset has not moved for 15 minutes and the group had a
+                member in the last 10 minutes. Look for a hung handler or a message redelivered in
+                a loop in the consuming service's logs and kafka_consumer_messages_total. If the
+                group no longer reads
+                billing.checkout-completed.v1, delete its offsets there with
+                kafka-consumer-groups.sh --delete-offsets.
+
+  # A group abandoned when its last commit lands: the offset moves until minute 10 and the group has
+  # no member from minute 10 on, while lag grows. The offset is flat over 10 m only once the window
+  # holds no member any more, so the two never hold together and nothing pages.
+  - name: a group that loses its members when it stops committing stays silent
+    interval: 1m
+    input_series:
+      - series: 'kafka_consumergroup_current_offset{service="kafka", consumergroup="monolith", topic="billing.checkout-completed.v1", partition="3"}'
+        values: "100+10x10 200x40"
+      - series: 'kafka_consumergroup_lag{service="kafka", consumergroup="monolith", topic="billing.checkout-completed.v1", partition="3"}'
+        values: "3x10 4+1x40"
+      - series: 'kafka_consumergroup_members{service="kafka", consumergroup="monolith"}'
+        values: "1x9 0x41"
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 21m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: KafkaConsumerGroupStalled
+        exp_alerts: []
+      - eval_time: 45m
         alertname: KafkaConsumerGroupStalled
         exp_alerts: []
 

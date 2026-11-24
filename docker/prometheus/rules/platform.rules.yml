@@ -66,21 +66,29 @@ groups:
             latency, kafka_consumer_messages_total{outcome="redelivery"} and the replica count.
 
       # Messages wait on a partition, the group's committed offset there has not moved for 10
-      # minutes, and the group has members: a live consumer that stopped committing (a hung handler,
-      # or a redelivery loop of one message, which is intended). The consumers commit during a batch
-      # (`run.autoCommitInterval`), so a moving offset is the sign of progress. Broker-side series
-      # from kafka-exporter (scrape job `kafka`), labelled `consumergroup`, not `group`. Limits: a
-      # group with no member at all (its service is down, or the group was left behind by the other
-      # topology) fires nothing here; the member count is per group, so a live group that keeps
-      # committed offsets on a topic it no longer reads pages until those offsets are deleted; and
-      # `delta()` needs only two samples, so after an exporter restart or on a new partition it can
-      # page before the full 15 minutes.
+      # minutes, and the group had a member in those same 10 minutes: a live consumer that stopped
+      # committing (a hung handler, or a redelivery loop of one message, which is intended). The
+      # member count is read over the window, not at the instant: a consumer in a redelivery loop
+      # can leave its group and rejoin about 30 s later (kafkajs' retrier sleeps without heartbeats,
+      # then the crash restart), and each scrape at 0 members would reset the `for`. The consumers
+      # commit during a batch (`run.autoCommitInterval`), so a moving offset is the sign of
+      # progress. Broker-side series from kafka-exporter (scrape job `kafka`), labelled
+      # `consumergroup`, not `group`. Limits: a group with no member for the whole 10 minutes (its
+      # service is down, or the group was left behind by the other topology) fires nothing here; a
+      # group that loses its last member when it stops committing stays silent too, as its offset
+      # is flat over 10 m only once no member is left in the window. But on a partition that was
+      # already idle when the last member left, messages that arrive within 5 minutes of that make
+      # all three hold for over 5 m: it pages until 10 minutes after the member left (for up to 5
+      # minutes). The member count is per group, so a live group that keeps committed offsets on a
+      # topic it no longer reads pages until those offsets are deleted. `delta()` needs only two
+      # samples, so after an exporter restart or on a new partition it can page before the full 15
+      # minutes.
       - alert: KafkaConsumerGroupStalled
         expr: >-
           kafka_consumergroup_lag > 0
           and on (consumergroup, topic, partition)
           delta(kafka_consumergroup_current_offset[10m]) == 0
-          and on (consumergroup) kafka_consumergroup_members > 0
+          and on (consumergroup) max_over_time(kafka_consumergroup_members[10m]) > 0
         for: 5m
         labels:
           severity: page
@@ -89,10 +97,10 @@ groups:
           description: >-
             Partition {{ $labels.partition }} of {{ $labels.topic }} is {{ $value | humanize }}
             messages behind for group {{ $labels.consumergroup }}, its committed offset has not moved
-            for 15 minutes and the group has members. Look for a hung handler or a message redelivered
-            in a loop in the consuming service's logs and kafka_consumer_messages_total. If the group
-            no longer reads {{ $labels.topic }}, delete its offsets there with kafka-consumer-groups.sh
-            --delete-offsets.
+            for 15 minutes and the group had a member in the last 10 minutes. Look for a hung handler
+            or a message redelivered in a loop in the consuming service's logs and
+            kafka_consumer_messages_total. If the group no longer reads {{ $labels.topic }}, delete its
+            offsets there with kafka-consumer-groups.sh --delete-offsets.
 
       # A gRPC client circuit breaker has not been closed for 5 minutes while its upstream keeps
       # refusing or failing calls: the upstream is down or too slow. Against a hung upstream the breaker
@@ -128,7 +136,9 @@ groups:
       # zero. `failure` is an upstream failure (UNAVAILABLE, DEADLINE_EXCEEDED, INTERNAL, ...); a caller
       # error the breaker's errorFilter lets through counts as `success`. Limits: fewer than 3 calls in
       # 15 minutes raise nothing, and `reject` is left out (those calls never reached the upstream;
-      # GrpcCircuitBreakerOpen covers them).
+      # GrpcCircuitBreakerOpen covers them). A call the bulkhead refused (`capacity` calls already
+      # running) never reached the upstream either but counts as `failure` (opossum), so a local
+      # concurrency spike can also fire this.
       - alert: GrpcUpstreamFailing
         expr: >-
           sum by (service, upstream)

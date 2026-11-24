@@ -263,6 +263,11 @@ describe('DistributedLockService (real redlock)', () => {
 });
 
 describe('two-tier cache (real Redis L2 + pub/sub invalidation)', () => {
+  /**
+   * L1 copies live 60 s, far longer than the 10 s invalidation waits below, so an L1 entry that
+   * expires by its TTL can never satisfy a wait: only the pub/sub broadcast can.
+   */
+  const L1_TTL_MS = 60_000;
   const replicas: { service: AppCacheService; cache: Cache; subscriber: Redis }[] = [];
   /** Whether `replica`'s L1 (the in-process tier) holds `key`. */
   const inL1 = (replica: (typeof replicas)[0], key: string): Promise<boolean> => {
@@ -272,7 +277,10 @@ describe('two-tier cache (real Redis L2 + pub/sub invalidation)', () => {
   };
 
   beforeAll(async () => {
-    const cacheCfg = cacheConfig.parse({ CACHE_TTL_MS: '30000', CACHE_L1_TTL_MS: '10000' });
+    const cacheCfg = cacheConfig.parse({
+      CACHE_TTL_MS: '120000',
+      CACHE_L1_TTL_MS: String(L1_TTL_MS),
+    });
     for (let i = 0; i < 2; i++) {
       const options = createCacheOptions(cacheCfg, config);
       const cache = createCache({ ...options, stores: options.stores as Keyv[] });
@@ -311,15 +319,20 @@ describe('two-tier cache (real Redis L2 + pub/sub invalidation)', () => {
     const [a, b] = replicas as [(typeof replicas)[0], (typeof replicas)[0]];
     await a.service.set('user:1', { v: 1 });
     expect(await redis.get(`${prefix}:cache:user:1`)).toContain('"v":1');
+    // The L1 entry written next expires by TTL no earlier than this.
+    const bExpiresAfter = Date.now() + L1_TTL_MS;
     await expect(b.service.getOrSet('user:1', async () => ({ v: -1 }))).resolves.toEqual({ v: 1 });
 
     // b holds the old value in its L1: only a's broadcast can make b read the new one.
     expect(await inL1(b, 'user:1')).toBe(true);
+    const aExpiresAfter = Date.now() + L1_TTL_MS;
     await a.service.set('user:1', { v: 2 });
     await vi.waitFor(async () => expect(await inL1(b, 'user:1')).toBe(false), {
       timeout: 10_000,
       interval: 20,
     });
+    // b's entry was still inside its TTL, so the broadcast evicted it, not the TTL.
+    expect(Date.now()).toBeLessThan(bExpiresAfter);
     await expect(b.service.getOrSet('user:1', async () => ({ v: -1 }))).resolves.toEqual({ v: 2 });
 
     expect(await inL1(a, 'user:1')).toBe(true);
@@ -328,6 +341,7 @@ describe('two-tier cache (real Redis L2 + pub/sub invalidation)', () => {
       timeout: 10_000,
       interval: 20,
     });
+    expect(Date.now()).toBeLessThan(aExpiresAfter);
     await expect(a.service.get('user:1')).resolves.toBeUndefined();
   });
 });
