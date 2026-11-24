@@ -85,6 +85,19 @@ export const gizmosMigrations: DatabaseMigrationSet = {
   onlineFolder: join(import.meta.dirname, 'gizmos', 'migrations', 'online'),
 };
 
+/**
+ * The lock-wait fixture on a distributed table (B1-7): one hand-written file that alters
+ * gizmos.gizmos (so it runs after gizmosTablesMigrations), with its own bookkeeping table. On a
+ * coordinator plus worker, its ALTER reaches the shards over connections the coordinator opens to
+ * the worker, so an open transaction that read one shard there blocks it.
+ */
+export const gizmosLockWaitMigrations: DatabaseMigrationSet = {
+  name: 'gizmos-lock-wait',
+  folder: join(import.meta.dirname, 'gizmos-lock-wait', 'migrations'),
+  migrationsSchema: 'gizmos_lock_wait',
+  migrationsTable: MIGRATIONS_TABLE,
+};
+
 /** The gizmos set with another online folder of `fixtures/gizmos` (`online-retry`, …) instead. */
 export const gizmosWithOnline = (folder: string): DatabaseMigrationSet => ({
   ...gizmosTablesMigrations,

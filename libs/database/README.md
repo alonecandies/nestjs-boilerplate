@@ -246,10 +246,13 @@ blocker ends, and each queued request fails at its own 15 s `statement_timeout`.
   when the blocker commits during the backoff. The int container is a single Citus node, whose shard connections go
   to itself: the [online steps](#online-steps) test shows there that they start from the role default, not from the
   session's `lock_timeout`, and that a run leaves the default at this setting, also when the role has a per-database
-  `lock_timeout` of 0 beforehand (a new connection then shows the setting). On a coordinator plus one worker, that
-  a role default reaches the worker connections, and a session `lock_timeout` does not, was probed by hand
-  (`docs/superpowers/plans/2026-11-23-audit-fixes.md`, verified point 6), not in a spec; for the per-database form it
-  is UNTESTED.
+  `lock_timeout` of 0 beforehand (a new connection then shows the setting). On a coordinator plus one worker,
+  `test/citus-cluster.int-spec.ts` holds the lock on a worker shard only, in a transaction on the worker, with every
+  shard of the distributed table there (the `test/fixtures/gizmos-lock-wait` set alters it): a session with a
+  `lock_timeout` of 200 ms waits there for the role's default (2 s), not for its own; the run fails within seconds
+  with `55P03`, recording nothing, although the role default was 0 before it (only the runner's switch bounds the
+  wait); and with a per-database `lock_timeout` of 0 for the role, it applies once when the blocker commits during
+  the backoff. After either run, a new connection to the worker starts from the setting.
 
 ### Online steps
 
@@ -292,8 +295,8 @@ is left alone, and it ships in `dist/` like the other migration files):
   the online value on a throwaway connection before it opens the online session, and back to
   `DATABASE_MIGRATION_LOCK_TIMEOUT_MS` on another one after that session closed, also when a step failed. A run that
   crashed in between leaves the online value; the next run sets it back as soon as it holds the lock, before its first
-  set ([Lock waits](#lock-waits)). Switching the default between the two phases is tested on the single-node int container only; on a
-  multi-node cluster it is UNTESTED.
+  set ([Lock waits](#lock-waits)). Switching the default between the two phases is tested on the single-node int
+  container and on a coordinator plus one worker (below).
 - **Failure and retry.** A failing file stops the run with
   `Migration set "<name>": online step <file> (<path>) failed; nothing was recorded for it, …` and the driver's error
   as `cause`; the transactional files before it stay applied, the ones after its anchor and the sets after it are not
@@ -310,7 +313,13 @@ is left alone, and it ships in `dist/` like the other migration files):
   the role switch that case fails with `55P03` from a shard connection. With the `test/fixtures/anchored` set, a fresh
   database runs the step anchored at `0000` (a unique index built concurrently) before `0001`, which turns that index
   into a constraint (`UNIQUE USING INDEX`; run after `0001` instead, that file fails), and a database at `0000` with
-  the step applied applies `0001` alone.
+  the step applied applies `0001` alone. On a coordinator plus one worker, `test/citus-cluster.int-spec.ts` holds a
+  writer's lock on one shard on the worker until the build has waited there over three times the sets' 500 ms: the index
+  ends valid on all four shards, and a new connection to the worker starts from 500 ms afterwards. There, and on the
+  single node in `test/citus.int-spec.ts`, a unique build over duplicate rows fails with the shard's `23505`, records
+  nothing and leaves the index invalid on the distributed table and on the shard that holds the duplicates; the
+  next run drops it (Citus carries the `DROP INDEX CONCURRENTLY` to the shards) and builds it valid on the table and
+  every shard.
 
 ```bash
 bun run db:generate                                    # drizzle-kit generate in every domain (commit the output)
@@ -371,7 +380,8 @@ from the role settings). The full table is in [CONFIGURATION.md](../../docs/CONF
   `test/fixtures/gadgets/migrations` is hand-written. `test/citus.int-spec.ts` covers the
   Citus helpers (placement, colocation, idempotency, kind changes, the plain-Postgres no-op) and the runner's
   Citus session settings (a set applied while sessions default to remote execution, and the parallel-mode
-  failure they avoid), with the `test/fixtures/citus` set. `test/platform-rls.int-spec.ts`
+  failure they avoid), with the `test/fixtures/citus` set, and a failed online build retried on a distributed table
+  ([Online steps](#online-steps)). `test/platform-rls.int-spec.ts`
   (`startRlsTestPostgres()`, migrated as `app_owner`, local execution off) covers the 0002 helpers as `app_runtime`,
   `SET LOCAL` reaching every shard where `set_config()` does not, the grants and the default privilege, and the
   missing-role stop. The RLS specs all use `startRlsTestPostgres()` (the three roles, `citus.enable_local_execution=off`,
@@ -385,7 +395,8 @@ from the role settings). The full table is in [CONFIGURATION.md](../../docs/CONF
   `SystemContext`, a system write surviving a runtime rollback, the pool cap), `test/boot-guard.int-spec.ts` (each check refusing in
   `enforce` and leaving no backend behind) and `test/sharding.int-spec.ts` (coordinator plus one worker: the context
   crossing the wire, a mid-transaction `elevate`, `set_config` failing where `SET LOCAL` works, a reference-table write
-  on every node). Unit specs fake the pool (`test/fake-sql.ts`), so `bunx vitest run --project database` still needs no
+  on every node). `test/citus-cluster.int-spec.ts` (coordinator plus one worker too) covers the runner's
+  [lock waits](#lock-waits) and [online steps](#online-steps) on shards that sit on the worker. Unit specs fake the pool (`test/fake-sql.ts`), so `bunx vitest run --project database` still needs no
   Docker.
 
 ## Gotchas
