@@ -633,7 +633,11 @@ rows). immudb `unavailable`, Stripe 5xx/429/network and Postgres connection or t
 `KafkaRetriableException` (redelivered, never dead-lettered). A Postgres deadlock (`40P01`) or serialization failure
 (`40001`) is thrown as is: `@KafkaConsumerController()`'s `KafkaRetryInterceptor` retries it in-process within its
 bounded budget (4 attempts with backoff), then it is dead-lettered, so a stuck posting never blocks its partition
-(replay the DLQ, or reconciliation R4 posts it). Anything else is dead-lettered. `BillingLedgerModule`
+(replay the DLQ, or reconciliation R4 posts it). Anything else is dead-lettered. A posting that outlasts the
+consumer's in-process budget (40 s for every attempt and delay; the consumer heartbeats meanwhile) is redelivered,
+never dead-lettered (`retry: { onBudgetExceeded: 'redeliver' }`): one Stripe request up to its 20 s timeout, then
+immudb and Postgres, fits; one that needs Stripe's SDK retries may not. The abandoned attempt may still finish next
+to its redelivery, and the deterministic entry ids make one of them `replayed`. `BillingLedgerModule`
 binds `LedgerPort` to `ImmudbLedgerAdapter` while `LEDGER_ENABLED=true` (the app imports `ImmudbModule`) and to
 `DisabledLedger` (`LEDGER_DISABLED`, 503) otherwise. Metrics: `ledger_postings_total{outcome}`,
 `ledger_post_duration_seconds`, `ledger_discrepancies_total{kind}` (new rows only). Tests: `ledger.service.spec.ts`,

@@ -1,5 +1,5 @@
 import type { KafkaContext } from '@nestjs/microservices';
-import { isDomainException } from '@platform/common';
+import { isDomainException, withTimeout } from '@platform/common';
 import { isNil, isString, truncate } from 'lodash-es';
 import { DEAD_LETTER_HEADERS, DEAD_LETTER_SUFFIX } from './kafka.constants.js';
 
@@ -80,16 +80,30 @@ export function buildDeadLetterRecord(
 }
 
 /**
+ * How long `sendToDeadLetter` waits for the broker's acknowledgement (B3-6). Without it the send
+ * is bounded only by the producer's own retries (each request up to `KAFKA_REQUEST_TIMEOUT_MS`),
+ * minutes in the worst case, all inside one `eachMessage`.
+ */
+export const KAFKA_DEAD_LETTER_SEND_TIMEOUT_MS = 5_000;
+
+/**
  * Produces the dead-letter record with the consumer's own (idempotent) producer, which every
  * `KafkaContext` carries, so consumers need no separate producer client. Resolves once the broker
- * acknowledged it; rejects otherwise.
+ * acknowledged it; rejects otherwise, or with `OperationTimeoutException` after `timeoutMs`. A
+ * send abandoned at the deadline may still be acknowledged later: the message is then redelivered
+ * and dead-lettered twice, which a replay tolerates (handlers dedupe on the envelope id).
  */
 export async function sendToDeadLetter(
   context: KafkaContext,
   error: unknown,
   failedAt: Date = new Date(),
+  timeoutMs: number = KAFKA_DEAD_LETTER_SEND_TIMEOUT_MS,
 ): Promise<DeadLetterRecord> {
   const record = buildDeadLetterRecord(context, error, failedAt);
-  await context.getProducer().send({ topic: record.topic, acks: -1, messages: [record.message] });
+  await withTimeout(
+    context.getProducer().send({ topic: record.topic, acks: -1, messages: [record.message] }),
+    timeoutMs,
+    `The dead-letter send to ${record.topic} was not acknowledged within ${timeoutMs} ms`,
+  );
   return record;
 }

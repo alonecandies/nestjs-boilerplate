@@ -356,12 +356,12 @@ failed publish fails their event, which the consumer retries and then dead-lette
 
 ### Consumer
 
-| Setting                                                         | Default           | Why                                                                                                                                  |
-| --------------------------------------------------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `KAFKA_CONSUMER_CONCURRENCY` → `partitionsConsumedConcurrently` | 3                 | Parallel across partitions, ordered within one. Useful up to the number of partitions assigned to the process (6 per topic locally). |
-| `sessionTimeout` / `heartbeatInterval` / `rebalanceTimeout`     | 30 s / 3 s / 60 s | Nest does not heartbeat while a handler runs, so handlers (including retries) must finish well within 30 s.                          |
-| `autoCommit`                                                    | on                | Nest 12 awaits the handler before kafkajs resolves the offset → at-least-once. Handlers dedupe on the envelope `id`.                 |
-| `fromBeginning`                                                 | `false`           | A new group starts at the latest offset.                                                                                             |
+| Setting                                                         | Default           | Why                                                                                                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------------------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `KAFKA_CONSUMER_CONCURRENCY` → `partitionsConsumedConcurrently` | 3                 | Parallel across partitions, ordered within one. Useful up to the number of partitions assigned to the process (6 per topic locally).                                                                                                                                                                                                                                                     |
+| `sessionTimeout` / `heartbeatInterval` / `rebalanceTimeout`     | 30 s / 3 s / 60 s | kafkajs heartbeats only between messages, so `KafkaRetryInterceptor` heartbeats every 3 s while a message's work runs, and bounds that work (every attempt and delay) to `budgetMs`, 40 s. With the 5 s dead-letter send deadline a message holds its consumer for at most 45 s, within the rebalance timeout; `kafka.options.spec.ts` checks every consumer controller.                 |
+| `autoCommit` / `autoCommitInterval`                             | on / 5 s          | Nest 12 awaits the handler before kafkajs resolves the offset → at-least-once. Handlers dedupe on the envelope `id`. kafkajs commits the resolved offsets after a message once 5 s have passed since the last commit, not only at the end of a batch, so a healthy consumer's committed offset moves during a long batch (a flat one means a stalled consumer) and a crash replays less. |
+| `fromBeginning`                                                 | `false`           | A new group starts at the latest offset.                                                                                                                                                                                                                                                                                                                                                 |
 
 ### Retry, then dead-letter
 
@@ -369,7 +369,7 @@ failed publish fails their event, which the consumer retries and then dead-lette
 flowchart LR
   M[message] --> H[handler]
   H -- ok --> C[commit offset]
-  H -- transient error --> R{KafkaRetryInterceptor<br/>4 attempts, 0.25 s → 2 s}
+  H -- transient error --> R{KafkaRetryInterceptor<br/>4 attempts, 0.25 s → 2 s, 40 s in all}
   R -- succeeded --> C
   R -- still failing --> D[KafkaDeadLetterFilter → topic.dlq] --> C
   H -- caller error: 4xx DomainException, ZodError, invalid envelope --> D
@@ -377,13 +377,18 @@ flowchart LR
 
 A failing handler must never throw out of the consumer: a thrown error is redelivered forever and
 blocks the partition. `@KafkaConsumerController()` retries transient failures **in process**
-(`DEFAULT_KAFKA_RETRY_OPTIONS`: 4 attempts, jittered exponential backoff of at most 0.25 s + 0.5 s
+(`DEFAULT_KAFKA_RETRY_OPTIONS`: 4 attempts, jittered exponential backoff of at most 0.25, 0.5 and
+1 s) and then publishes the message to `<topic>.dlq` with error headers and commits, so the
+partition keeps moving. Errors that would fail the same way again (4xx `DomainException`s such as
+an invalid envelope, zod errors) go straight to the DLQ. Throwing `KafkaRetriableException` is the
+explicit opt-out: it is rethrown so kafkajs redelivers the message.
 
-- 1 s, far below the 30 s session timeout) and then publishes the message to `<topic>.dlq` with
-  error headers and commits, so the partition keeps moving. Errors that would fail the same way again
-  (4xx `DomainException`s such as an invalid envelope, zod errors) go straight to the DLQ. Throwing
-  `KafkaRetriableException` is the explicit opt-out: it is rethrown so kafkajs redelivers the message.
-  After fixing the cause, replay the DLQ:
+All of one message's work, every attempt and delay, shares one budget (`budgetMs`, 40 s) and the
+consumer heartbeats while it runs. A spent budget abandons the running attempt (it is not
+cancelled, and handlers are idempotent) and is dead-lettered as a transient failure, or redelivered
+with `retry: { onBudgetExceeded: 'redeliver' }` (`LedgerPostingConsumer`). The dead-letter send
+waits at most 5 s; after that the message is left for redelivery. After fixing the cause, replay
+the DLQ:
 
 ```bash
 bun run build

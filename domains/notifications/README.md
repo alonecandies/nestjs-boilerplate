@@ -229,17 +229,17 @@ publishes it with the explicit option `tenantId: notification.tenantId` (the inb
 
 ## Commands and queries
 
-| Class                               | Effect                                                                                                                                                                           |
-| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CreateNotificationCommand`         | `NotificationEntity.create()` → insert into the input's `(tenant, user)` inbox → `NotificationCreatedEvent`. With `idempotency: { key, occurredAt }` the id is derived (upsert). |
-| `MarkNotificationReadCommand`       | `requireInboxActor`, then `UPDATE … USING TTL <remaining> … IF EXISTS`; 404 `NOTIFICATION_NOT_FOUND` when not in the `(tenant, user)` inbox (or past its 90 days)                |
-| `PublishNotificationCreatedCommand` | Kafka publish (key = user id, envelope id = notification id, envelope tenant = inbox tenant). Rejects on failure, so the event that created the notification fails               |
-| `WelcomeUserCommand`                | Welcome notification (`welcome:{userId}`), welcome mail to the event's email (`welcome-{userId}`), then the push                                                                 |
-| `UpsertRecipientCommand`            | Upsert the `(tenant, user)` recipient row, `USING TIMESTAMP` = the membership's `createdAt`                                                                                      |
-| `RemoveRecipientCommand`            | Delete the `(tenant, user)` recipient row, `USING TIMESTAMP` = `removedAt`                                                                                                       |
-| `SendPaymentReceiptCommand`         | Receipt notification (`receipt:{paymentId}`), receipt mail (`receipt-{paymentId}`) when the user is a recipient in the payment's tenant, then the push                           |
-| `SendDailyDigestCommand`            | Bounded scan of `(tenant, user)` recipients, each pair's own unread items, one digest mail per pair (`digest-{tenantId}-{userId}-{yyyy-mm-dd}`)                                  |
-| `ListNotificationsQuery`            | `requireInboxActor`, then one `(tenant, user)` inbox page (`executePage`, driver paging state)                                                                                   |
+| Class                               | Effect                                                                                                                                                             |
+| ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `CreateNotificationCommand`         | `NotificationEntity.create()` → insert into the input's `(tenant, user)` inbox. With `idempotency: { key, occurredAt }` the id is derived (upsert).                |
+| `MarkNotificationReadCommand`       | `requireInboxActor`, then `UPDATE … USING TTL <remaining> … IF EXISTS`; 404 `NOTIFICATION_NOT_FOUND` when not in the `(tenant, user)` inbox (or past its 90 days)  |
+| `PublishNotificationCreatedCommand` | Kafka publish (key = user id, envelope id = notification id, envelope tenant = inbox tenant). Rejects on failure, so the event that created the notification fails |
+| `WelcomeUserCommand`                | Welcome notification (`welcome:{userId}`), welcome mail to the event's email (`welcome-{userId}`), then the push                                                   |
+| `UpsertRecipientCommand`            | Upsert the `(tenant, user)` recipient row, `USING TIMESTAMP` = the membership's `createdAt`                                                                        |
+| `RemoveRecipientCommand`            | Delete the `(tenant, user)` recipient row, `USING TIMESTAMP` = `removedAt`                                                                                         |
+| `SendPaymentReceiptCommand`         | Receipt notification (`receipt:{paymentId}`), receipt mail (`receipt-{paymentId}`) when the user is a recipient in the payment's tenant, then the push             |
+| `SendDailyDigestCommand`            | Bounded scan of `(tenant, user)` recipients, each pair's own unread items, one digest mail per pair (`digest-{tenantId}-{userId}-{yyyy-mm-dd}`)                    |
+| `ListNotificationsQuery`            | `requireInboxActor`, then one `(tenant, user)` inbox page (`executePage`, driver paging state)                                                                     |
 
 `DailyDigestCron` runs at 09:00 UTC (`@Cron` + `@WithLock('notifications:daily-digest', 5 min)`,
 `waitForCompletion`), looking at up to 1,000 recipients and 50 notifications each.
@@ -252,7 +252,8 @@ Delivery is at-least-once, so every consumer path is idempotent:
   the fact's time (`registeredAt`, `paidAt`) and the random bits are `sha256(sourceKey)`. A
   redelivered event upserts the same row. Inserts never write `read`, so a replay cannot mark a
   read notification unread.
-- Mails use business idempotency keys (BullMQ job ids, 24 h retention). Keys are derived from the
+- Mails use business idempotency keys (the BullMQ job id, plus a `mail-sent:<jobId>` marker kept
+  14 days, the `.dlq` retention). Keys are derived from the
   user or payment id rather than the envelope id, so a re-published event with a fresh envelope id
   is still deduplicated. The digest key names the tenant too, so one user's digests in two tenants
   are two mails.
@@ -335,10 +336,11 @@ paged and capped.
   `notifications.notification-created.v1` last, after the inbox row and the mail, and a failed
   publish fails their event: the consumer retries it in process, then dead-letters it
   (`KafkaDeadLetters` pages; replay with `dlq-replay`). The redelivery rewrites the same row,
-  enqueues the same mail job (a no-op while BullMQ keeps the deduplicated job: 24 h, or until
-  10,000 newer mail jobs have completed, whichever comes first) and publishes again. The
-  trade-off: a persistent publish failure dead-letters an event whose row and mail were already
-  written, and replaying it after that window sends the mail again.
+  enqueues the same mail job (a no-op for 14 days, the `.dlq` retention: the mail queue's
+  `mail-sent:<jobId>` marker outlives the job, which BullMQ keeps 24 h or until 10,000 newer mail
+  jobs have completed) and publishes again. The trade-off: a persistent publish failure
+  dead-letters an event whose row and mail were already written; a replay within the 14 days
+  sends no second mail.
 - `executePage` can return a page state at the exact end of a partition. The next page is then
   empty with a `null` state, so clients must treat that as the end.
 - Recipients are only known after a `membership-created` event for that `(tenant, user)`. A receipt

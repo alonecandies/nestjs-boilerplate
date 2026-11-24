@@ -94,8 +94,9 @@ holds the data of that moment only; take them on a cadence shorter than the inbo
 group has already moved past the events that created them. They are not rebuilt unless you reset the group's
 offsets to the snapshot time (`kafka-consumer-groups.sh --reset-offsets --to-datetime …`) while the notifications
 consumers are stopped; the consumers deduplicate on the envelope id, and Kafka retention bounds how far back this
-works. UNTESTED. Pushes and mails for those events are sent again by such a replay. Postgres and immudb do not
-depend on this store.
+works. UNTESTED. Pushes for those events are sent again by such a replay; a mail is not when it was enqueued in
+the last 14 days (the mail queue's `mail-sent:<jobId>` marker, see `libs/mailer/README.md`). Postgres and immudb
+do not depend on this store.
 
 ## immudb
 

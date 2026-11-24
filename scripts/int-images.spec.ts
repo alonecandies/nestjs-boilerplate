@@ -101,6 +101,15 @@ describe('scripts/int-images.mjs', () => {
     }
   });
 
+  it('starts one Kafka image in every int spec: the one of the compose kafka service', () => {
+    const names = named();
+    const compose = readFileSync(join(ROOT, 'docker-compose.yml'), 'utf8');
+    const service = /^ {2}kafka:\n(?: {4}.*\n)*? {4}image: (\S+)/m.exec(compose)?.[1];
+    expect(service).toMatch(/^apache\/kafka:\d/);
+    expect(names.get('KAFKA_IMAGE')).toBe(service);
+    expect(names.get('TRANSPORT_KAFKA_IMAGE')).toBe(service);
+  });
+
   it('is what the integration job pre-pulls, not a single hard-coded image', () => {
     expect(CI).toContain('node scripts/int-images.mjs');
     expect(CI).not.toContain('docker pull citusdata/citus');

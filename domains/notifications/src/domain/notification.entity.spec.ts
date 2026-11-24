@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import { makeNotificationProps } from '../../test/support/fixtures.js';
-import { NotificationCreatedEvent } from './events/notification-created.event.js';
 import { NotificationEntity } from './notification.entity.js';
 import { InvalidNotificationException } from './notification.errors.js';
 import { NOTIFICATION_TITLE_MAX_LENGTH } from './notification.types.js';
@@ -11,17 +10,16 @@ const newProps = () => {
 };
 
 describe('NotificationEntity', () => {
-  it('creates an unread notification and raises NotificationCreatedEvent with its state', () => {
+  it('creates an unread notification and raises no domain event', () => {
     const props = newProps();
     const entity = NotificationEntity.create(props);
 
     expect(entity.id).toBe(props.id);
     expect(entity.userId).toBe(props.userId);
     expect(entity.isRead).toBe(false);
-    const events = entity.getUncommittedEvents();
-    expect(events).toHaveLength(1);
-    expect(events[0]).toBeInstanceOf(NotificationCreatedEvent);
-    expect((events[0] as NotificationCreatedEvent).notification).toEqual({ ...props, read: false });
+    expect(entity.toSnapshot()).toEqual({ ...props, read: false });
+    // The push is the caller's Kafka publish; nothing handles a domain event, so none is raised.
+    expect(entity.getUncommittedEvents()).toHaveLength(0);
   });
 
   it('copies input data so later mutations of the input do not leak in', () => {

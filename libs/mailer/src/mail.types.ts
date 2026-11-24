@@ -16,7 +16,8 @@ export interface MailMessage<TTemplate extends string = string> {
    */
   context: Record<string, unknown>;
   /**
-   * Deduplicates `enqueue()`: the same key within the retention window (24h) sends one mail.
+   * Deduplicates `enqueue()`: the same key within 14 days (`MAIL_SENT_MARKER_TTL_SEC`, the `.dlq`
+   * retention) sends one mail.
    * Derive it from the business event, e.g. `order-confirmed-${orderId}`.
    */
   idempotencyKey?: string;
@@ -47,6 +48,7 @@ export interface TypedMailMessage<TContextMap, TTemplate extends keyof TContextM
 /**
  * Overrides of the retention in `MAIL_JOB_OPTIONS`, for mails whose job data is a secret (one-time
  * codes, invitation tokens): `{ removeOnComplete: true, removeOnFail: true }` deletes the job as soon
- * as it is sent or gives up. The idempotency window then ends with the job.
+ * as it is sent or gives up. The idempotency key still holds for 14 days: the sent marker carries
+ * no job data.
  */
 export type MailJobRetention = Pick<JobsOptions, 'removeOnComplete' | 'removeOnFail'>;

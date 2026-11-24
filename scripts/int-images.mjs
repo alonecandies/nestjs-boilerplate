@@ -23,6 +23,7 @@ const SOURCES = [
   ['libs/testing/src/postgres/start-test-postgres.ts', ['TEST_POSTGRES_IMAGE']],
   ['libs/testing/src/cassandra/start-test-cassandra.ts', ['TEST_CASSANDRA_IMAGE']],
   ['libs/outbox/test/outbox-kafka-delivery.int-spec.ts', ['KAFKA_IMAGE']],
+  ['libs/transport/test/support/kafka-container.ts', ['TRANSPORT_KAFKA_IMAGE']],
   ['libs/outbox/test/outbox-relay.int-spec.ts', ['REDIS_IMAGE']],
   ['libs/immudb/src/index.ts', ['IMMUDB_TEST_IMAGE']],
   ['libs/storage/test/emulators.ts', ['RUSTFS_IMAGE', 'FAKE_GCS_IMAGE']],

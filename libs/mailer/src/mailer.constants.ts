@@ -35,9 +35,9 @@ const HOUR_SEC = 3600;
  * needs:
  * - Retries back off exponentially from 5s (7 attempts ≈ 5 min), long enough to ride out SMTP
  *   hiccups and greylisting.
- * - Completed jobs are kept for 24h, not just by count. A custom `jobId` only deduplicates while
- *   the job still exists, so this retention is the idempotency window for `idempotencyKey`
- *   (a Kafka event redelivered within a day does not send the mail twice).
+ * - Completed jobs are kept for 24h or the last 10,000, whichever ends first. A custom `jobId`
+ *   only deduplicates while the job still exists; past that, the sent marker
+ *   (`MAIL_SENT_MARKER_PREFIX`) keeps an `idempotencyKey` from enqueuing the mail again.
  */
 export const MAIL_JOB_OPTIONS = {
   attempts: 7,
@@ -45,6 +45,21 @@ export const MAIL_JOB_OPTIONS = {
   removeOnComplete: { age: 24 * HOUR_SEC, count: 10_000 },
   removeOnFail: { age: 7 * 24 * HOUR_SEC },
 } as const satisfies JobsOptions;
+
+/**
+ * `MailService.enqueue` sets `<queue prefix>:mail:mail-sent:<jobId>` (`queue.toKey`) after it added
+ * a mail with an `idempotencyKey`, and adds nothing while the key exists. It means "enqueued", not
+ * "delivered": a job that ran out of attempts is not sent again by a replay either (retry the
+ * failed job instead).
+ */
+export const MAIL_SENT_MARKER_PREFIX = 'mail-sent:';
+
+/**
+ * How long the sent marker is kept: the 14-day retention of the `.dlq` topics
+ * (`docker/kafka/topics.txt`), so a redelivered or replayed event sends no second mail while its
+ * dead letter can still be replayed.
+ */
+export const MAIL_SENT_MARKER_TTL_SEC = 14 * 24 * HOUR_SEC;
 
 /** Default worker concurrency before `MAIL_QUEUE_CONCURRENCY` is applied at bootstrap. */
 export const DEFAULT_MAIL_CONCURRENCY = 5;

@@ -19,8 +19,8 @@ export interface CreateNotificationInput {
 }
 
 /**
- * Adds a notification to a (tenant, user) inbox and raises `NotificationCreatedEvent`. It does not
- * publish the push: the caller dispatches `PublishNotificationCreatedCommand` when it is done.
+ * Adds a notification to a (tenant, user) inbox. It does not publish the push: the caller dispatches
+ * `PublishNotificationCreatedCommand` when it is done.
  */
 export class CreateNotificationCommand extends Command<Notification> {
   constructor(readonly input: CreateNotificationInput) {

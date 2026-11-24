@@ -1,9 +1,7 @@
-import { type EventBus, EventPublisher, type IEvent } from '@nestjs/cqrs';
 import { isUuidV7, uuidV7Timestamp } from '@platform/common';
 import { createMock } from '@platform/testing';
 import { describe, expect, it } from 'vitest';
-import { asClass, TENANT_ID, USER_ID } from '../../../../test/support/fixtures.js';
-import { NotificationCreatedEvent } from '../../../domain/events/notification-created.event.js';
+import { TENANT_ID, USER_ID } from '../../../../test/support/fixtures.js';
 import { InvalidNotificationException } from '../../../domain/notification.errors.js';
 import { deriveNotificationId } from '../../../domain/notification-id.js';
 import type { NotificationsRepository } from '../../ports/notifications.repository.js';
@@ -12,15 +10,8 @@ import { CreateNotificationHandler } from './create-notification.handler.js';
 
 function setup() {
   const repository = createMock<NotificationsRepository>({ insert: async () => undefined });
-  // AggregateRoot.commit() empties the array it published, so copy the events on the way out.
-  const published: IEvent[] = [];
-  const eventBus = createMock<EventBus>({
-    publishAll: (events: IEvent[]) => {
-      published.push(...events);
-    },
-  });
-  const handler = new CreateNotificationHandler(repository, new EventPublisher(asClass(eventBus)));
-  return { repository, eventBus, published, handler };
+  const handler = new CreateNotificationHandler(repository);
+  return { repository, handler };
 }
 
 const input = {
@@ -32,8 +23,8 @@ const input = {
 };
 
 describe('CreateNotificationHandler', () => {
-  it('persists an unread notification with a fresh uuidv7, then publishes the event', async () => {
-    const { repository, eventBus, published, handler } = setup();
+  it('persists an unread notification with a fresh uuidv7', async () => {
+    const { repository, handler } = setup();
     const before = Date.now();
 
     const result = await handler.execute(new CreateNotificationCommand(input));
@@ -41,20 +32,9 @@ describe('CreateNotificationHandler', () => {
     expect(isUuidV7(result.id)).toBe(true);
     expect(result).toMatchObject({ ...input, read: false, data: {} });
     expect(result.createdAt?.getTime()).toBeGreaterThanOrEqual(before);
-    // Stored in the input's (tenant, user) inbox, and the event names the same tenant.
+    // Stored in the input's (tenant, user) inbox.
     expect(repository.insert).toHaveBeenCalledWith(
       expect.objectContaining({ id: result.id, tenantId: TENANT_ID, userId: USER_ID, read: false }),
-    );
-    expect(published).toHaveLength(1);
-    expect(published[0]).toBeInstanceOf(NotificationCreatedEvent);
-    expect((published[0] as NotificationCreatedEvent).notification).toMatchObject({
-      id: result.id,
-      tenantId: TENANT_ID,
-      userId: USER_ID,
-    });
-    // Persist before publish: the push never announces a row that is not stored.
-    expect(repository.insert.mock.invocationCallOrder[0]).toBeLessThan(
-      eventBus.publishAll.mock.invocationCallOrder[0] ?? 0,
     );
   });
 
@@ -72,14 +52,13 @@ describe('CreateNotificationHandler', () => {
     expect(uuidV7Timestamp(first.id)).toEqual(occurredAt);
   });
 
-  it('does not publish when persistence fails', async () => {
-    const { repository, eventBus, handler } = setup();
+  it('rejects when persistence fails', async () => {
+    const { repository, handler } = setup();
     repository.insert.mockRejectedValueOnce(new Error('NoHostAvailable'));
 
     await expect(handler.execute(new CreateNotificationCommand(input))).rejects.toThrow(
       'NoHostAvailable',
     );
-    expect(eventBus.publishAll).not.toHaveBeenCalled();
   });
 
   it('rejects invalid notifications before touching the repository', async () => {

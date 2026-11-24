@@ -1,7 +1,6 @@
 import { AggregateRoot } from '@nestjs/cqrs';
 import type { ValidationIssue } from '@platform/common';
 import { isEmpty, size, trim } from 'lodash-es';
-import { NotificationCreatedEvent } from './events/notification-created.event.js';
 import { InvalidNotificationException } from './notification.errors.js';
 import {
   isNotificationKind,
@@ -40,13 +39,11 @@ export class NotificationEntity extends AggregateRoot {
     super();
   }
 
-  /** A new, unread notification; raises `NotificationCreatedEvent` (published on `commit()`). */
+  /** A new, unread notification. It raises no domain event: the push is the caller's Kafka publish. */
   static create(props: NewNotificationProps): NotificationEntity {
     const issues = validate(props);
     if (issues.length > 0) throw new InvalidNotificationException(issues);
-    const entity = new NotificationEntity({ ...props, data: { ...props.data }, read: false });
-    entity.apply(new NotificationCreatedEvent(entity.toSnapshot()));
-    return entity;
+    return new NotificationEntity({ ...props, data: { ...props.data }, read: false });
   }
 
   /** Rehydrates persisted state (no events). */
