@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 /**
  * TEST-1 guard: the specs the audit inventoried must not depend on the wall clock. A spec that
  * compares elapsed time to an upper bound fails from load alone; a fixed sleep before an absence
- * check passes vacuously when the machine is slow; a `free-port.ts` that closes its listener
+ * check passes vacuously when the machine is slow; a helper that closes its port-0 listener
  * before returning the number leaves a window in which a parallel fork takes the port.
  */
 const root = join(import.meta.dirname, '..');
@@ -63,6 +63,21 @@ const ELAPSED_UPPER_BOUND =
 const FIXED_SLEEP =
   /new Promise(?:<[^>]*>)?\(\s*\(?\s*resolve\s*\)?\s*=>\s*setTimeout\(\s*resolve\s*,/;
 
+/**
+ * `listen(0, ...)`, then `address()`, then `close(`: the port is read from a listener that is then
+ * released, so a parallel fork can take it before the caller binds it.
+ */
+const CLOSE_THEN_REBIND = /\.listen\(\s*0\b[\s\S]*?\.address\(\)[\s\S]*?\.close\(/;
+
+/**
+ * The two Kafka container bootstraps: a container's advertised listener must name the host port
+ * before the container starts, so the port has to be chosen first (an inherent window).
+ */
+const FREE_PORT_ALLOWED = [
+  'libs/outbox/test/outbox-kafka-delivery.int-spec.ts',
+  'libs/transport/test/support/kafka-container.ts',
+];
+
 describe('spec hygiene (TEST-1)', () => {
   it('finds the inventoried specs (the paths below are not stale)', () => {
     for (const file of [...ELAPSED_BOUND_SPECS, ...SLEEP_SPECS]) {
@@ -85,10 +100,20 @@ describe('spec hygiene (TEST-1)', () => {
     expect(SLEEP_SPECS.filter((file) => FIXED_SLEEP.test(read(file)))).toEqual([]);
   });
 
-  it('no free-port.ts closes a listener before returning its port', () => {
-    const helpers = filesMatching((name) => name === 'free-port.ts');
-    expect(helpers.length).toBeGreaterThanOrEqual(5);
-    const offenders = helpers.filter((file) => /\.close\(/.test(read(file)));
+  it('there is exactly one definition of withBoundGrpcPort, in @platform/transport/testing', () => {
+    const definitions = filesMatching((name) => name.endsWith('.ts')).filter((file) =>
+      /\bfunction\s+withBoundGrpcPort\b/.test(read(file)),
+    );
+    expect(definitions).toEqual(['libs/transport/src/testing/bound-grpc-port.ts']);
+  });
+
+  it('no spec or test helper closes a port-0 listener to return its number', () => {
+    const offenders = filesMatching((name) => name.endsWith('.ts')).filter(
+      (file) =>
+        (/\.(?:e2e-|int-)?spec\.ts$/.test(file) || /(?:^|\/)test\//.test(file)) &&
+        !FREE_PORT_ALLOWED.includes(file) &&
+        CLOSE_THEN_REBIND.test(read(file)),
+    );
     expect(offenders).toEqual([]);
   });
 });

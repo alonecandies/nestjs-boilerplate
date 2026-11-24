@@ -1,4 +1,3 @@
-import { createServer } from 'node:net';
 import { type INestMicroservice, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { ClientGrpcProxy } from '@nestjs/microservices';
@@ -20,6 +19,7 @@ import {
   type UsersServiceController,
   UsersServiceControllerMethods,
 } from '../../test/fixtures/fixture.grpc-package.js';
+import { withBoundGrpcPort } from '../testing/bound-grpc-port.js';
 import { createGrpcClientOptions } from './grpc-client.options.js';
 import { GrpcController } from './grpc-controller.decorator.js';
 import { createGrpcServerStrategy } from './grpc-server.options.js';
@@ -74,15 +74,6 @@ class FlakyUsersGrpcController implements UsersServiceController {
 })
 class FlakyGrpcModule {}
 
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (address === null || typeof address === 'string') throw new Error('No port');
-  return address.port;
-}
-
 describe('gRPC client retry policy (in-process server)', () => {
   let cfg: GrpcConfig;
   let app: INestMicroservice;
@@ -97,13 +88,15 @@ describe('gRPC client retry policy (in-process server)', () => {
   }
 
   beforeAll(async () => {
-    const port = await freePort();
-    cfg = grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}`, GRPC_DEADLINE_MS: '3000' });
-    app = await NestFactory.createMicroservice(FlakyGrpcModule, {
-      ...createGrpcServerStrategy(cfg, [FIXTURE_GRPC_PACKAGE]),
-      logger: false,
+    const serverCfg = grpcConfig.parse({ GRPC_URL: '127.0.0.1:0', GRPC_DEADLINE_MS: '3000' });
+    const { port } = await withBoundGrpcPort(async () => {
+      app = await NestFactory.createMicroservice(FlakyGrpcModule, {
+        ...createGrpcServerStrategy(serverCfg, [FIXTURE_GRPC_PACKAGE]),
+        logger: false,
+      });
+      await app.listen();
     });
-    await app.listen();
+    cfg = grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}`, GRPC_DEADLINE_MS: '3000' });
   });
 
   beforeEach(() => {

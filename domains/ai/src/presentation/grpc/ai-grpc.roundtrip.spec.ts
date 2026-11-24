@@ -1,4 +1,3 @@
-import { createServer } from 'node:net';
 import { AI_GRPC_PACKAGE } from '@domain/ai-contracts';
 import { Metadata, status } from '@grpc/grpc-js';
 import { type INestMicroservice, Module } from '@nestjs/common';
@@ -18,6 +17,7 @@ import {
 } from '@platform/common';
 import { AppConfigModule, grpcConfig } from '@platform/config';
 import { createGrpcServerStrategy, GRPC_METADATA_KEYS } from '@platform/transport';
+import { withBoundGrpcPort } from '@platform/transport/testing';
 import { ClsModule, ClsService } from 'nestjs-cls';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AiApiModule } from '../../ai-api.module.js';
@@ -70,15 +70,6 @@ const port = {
   providers: [{ provide: AiPort, useValue: port }],
 })
 class AiServiceTestModule {}
-
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (address === null || typeof address === 'string') throw new Error('No free port');
-  return address.port;
-}
 
 const conversation = (overrides: Partial<Conversation> = {}): Conversation => ({
   tenantId: TENANT_ID,
@@ -143,16 +134,17 @@ describe('ai over gRPC (forRemote adapter ↔ AiGrpcController)', () => {
     });
 
   beforeAll(async () => {
-    const grpcPort = await freePort();
+    const { port: grpcPort } = await withBoundGrpcPort(async () => {
+      server = await NestFactory.createMicroservice(AiServiceTestModule, {
+        ...createGrpcServerStrategy(grpcConfig.parse({ GRPC_URL: '127.0.0.1:0' }), [
+          AI_GRPC_PACKAGE,
+        ]),
+        logger: false,
+      });
+      await server.listen();
+    });
     vi.stubEnv('AI_GRPC_URL', `127.0.0.1:${grpcPort}`);
     vi.stubEnv('GRPC_DEADLINE_MS', '3000');
-    server = await NestFactory.createMicroservice(AiServiceTestModule, {
-      ...createGrpcServerStrategy(grpcConfig.parse({ GRPC_URL: `127.0.0.1:${grpcPort}` }), [
-        AI_GRPC_PACKAGE,
-      ]),
-      logger: false,
-    });
-    await server.listen();
 
     gateway = await Test.createTestingModule({
       imports: [

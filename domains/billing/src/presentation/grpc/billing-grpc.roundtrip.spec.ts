@@ -1,4 +1,3 @@
-import { createServer } from 'node:net';
 import { BILLING_GRPC_PACKAGE } from '@domain/billing-contracts';
 import { type INestMicroservice, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
@@ -9,6 +8,7 @@ import { TEST_TENANT_ID } from '@platform/auth/testing';
 import { DomainValidationException, generateId } from '@platform/common';
 import { AppConfigModule, grpcConfig } from '@platform/config';
 import { createGrpcServerStrategy } from '@platform/transport';
+import { withBoundGrpcPort } from '@platform/transport/testing';
 import { ClsModule } from 'nestjs-cls';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makePayment } from '../../../test/billing-test.utils.js';
@@ -50,31 +50,23 @@ const queryBus = { execute: vi.fn() };
 })
 class BillingServiceTestModule {}
 
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (address === null || typeof address === 'string') throw new Error('No free port');
-  return address.port;
-}
-
 describe('billing over gRPC (forRemote adapter ↔ BillingGrpcController)', () => {
   let server: INestMicroservice;
   let gateway: TestingModule;
   let port: BillingPort;
 
   beforeAll(async () => {
-    const grpcPort = await freePort();
+    const { port: grpcPort } = await withBoundGrpcPort(async () => {
+      server = await NestFactory.createMicroservice(BillingServiceTestModule, {
+        ...createGrpcServerStrategy(grpcConfig.parse({ GRPC_URL: '127.0.0.1:0' }), [
+          BILLING_GRPC_PACKAGE,
+        ]),
+        logger: false,
+      });
+      await server.listen();
+    });
     vi.stubEnv('BILLING_GRPC_URL', `127.0.0.1:${grpcPort}`);
     vi.stubEnv('GRPC_DEADLINE_MS', '3000');
-    server = await NestFactory.createMicroservice(BillingServiceTestModule, {
-      ...createGrpcServerStrategy(grpcConfig.parse({ GRPC_URL: `127.0.0.1:${grpcPort}` }), [
-        BILLING_GRPC_PACKAGE,
-      ]),
-      logger: false,
-    });
-    await server.listen();
 
     gateway = await Test.createTestingModule({
       imports: [AppConfigModule.forRoot(), RbacModule.forRoot(), BillingApiModule.forRemote()],

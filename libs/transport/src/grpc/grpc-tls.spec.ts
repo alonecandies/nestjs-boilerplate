@@ -1,6 +1,5 @@
 import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { type ChannelCredentials, credentials } from '@grpc/grpc-js';
@@ -25,6 +24,7 @@ import {
   type UsersServiceController,
   UsersServiceControllerMethods,
 } from '../../test/fixtures/fixture.grpc-package.js';
+import { withBoundGrpcPort } from '../testing/bound-grpc-port.js';
 import { createGrpcClientOptions } from './grpc-client.options.js';
 import { GrpcController } from './grpc-controller.decorator.js';
 import { createGrpcServerStrategy } from './grpc-server.options.js';
@@ -136,19 +136,10 @@ function issueCertificates(dir: string): Record<'ca' | 'cert' | 'key' | 'otherCa
   };
 }
 
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (address === null || typeof address === 'string') throw new Error('No port');
-  return address.port;
-}
-
 describe.skipIf(!hasOpenssl())('gRPC mutual TLS (in-process server)', () => {
   const dir = mkdtempSync(join(tmpdir(), 'grpc-mtls-'));
   let files: ReturnType<typeof issueCertificates>;
-  let port: number;
+  let port = 0; // the server binds an OS-chosen port; read back once it is up
   let app: INestMicroservice;
   const clients: ClientGrpcProxy[] = [];
 
@@ -175,17 +166,18 @@ describe.skipIf(!hasOpenssl())('gRPC mutual TLS (in-process server)', () => {
 
   beforeAll(async () => {
     files = issueCertificates(dir);
-    port = await freePort();
     const serverCfg = config({
       GRPC_TLS_CA_PATH: files.ca,
       GRPC_TLS_CERT_PATH: files.cert,
       GRPC_TLS_KEY_PATH: files.key,
     });
-    app = await NestFactory.createMicroservice(TlsGrpcModule, {
-      ...createGrpcServerStrategy(serverCfg, [FIXTURE_GRPC_PACKAGE]),
-      logger: false,
-    });
-    await app.listen();
+    ({ port } = await withBoundGrpcPort(async () => {
+      app = await NestFactory.createMicroservice(TlsGrpcModule, {
+        ...createGrpcServerStrategy(serverCfg, [FIXTURE_GRPC_PACKAGE]),
+        logger: false,
+      });
+      await app.listen();
+    }));
   });
 
   afterAll(async () => {

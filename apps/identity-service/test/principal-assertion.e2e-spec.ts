@@ -23,13 +23,16 @@ import {
   GRPC_METADATA_KEYS,
   KafkaProducer,
 } from '@platform/transport';
-import { createTestPrincipalSigner, FakeKafkaProducer } from '@platform/transport/testing';
+import {
+  createTestPrincipalSigner,
+  FakeKafkaProducer,
+  withBoundGrpcPort,
+} from '@platform/transport/testing';
 import { getTableColumns } from 'drizzle-orm';
 import { lastValueFrom, type Observable } from 'rxjs';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { AppModule } from '../src/app.module.js';
 import { createFakePostgres, type FakeRow } from './support/fake-postgres.js';
-import { withBoundGrpcPort } from './support/free-port.js';
 import { startServiceTestApp } from './support/service-test-app.js';
 
 /*

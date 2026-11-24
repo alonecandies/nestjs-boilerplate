@@ -1,4 +1,3 @@
-import { createServer } from 'node:net';
 import { NOTIFICATIONS_GRPC_PACKAGE } from '@domain/notifications-contracts';
 import { type INestMicroservice, Module } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
@@ -7,6 +6,7 @@ import { Test, type TestingModule } from '@nestjs/testing';
 import { DomainValidationException, generateId } from '@platform/common';
 import { AppConfigModule, grpcConfig } from '@platform/config';
 import { createGrpcServerStrategy, GrpcClientsModule } from '@platform/transport';
+import { withBoundGrpcPort } from '@platform/transport/testing';
 import { ClsModule } from 'nestjs-cls';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { makeNotificationProps, TENANT_ID, USER_ID } from '../../../test/support/fixtures.js';
@@ -40,31 +40,23 @@ const queryBus = { execute: vi.fn() };
 })
 class NotificationsServiceTestModule {}
 
-async function freePort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-  const address = server.address();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  if (address === null || typeof address === 'string') throw new Error('No free port');
-  return address.port;
-}
-
 describe('notifications over gRPC (NotificationsGrpcAdapter ↔ NotificationsGrpcController)', () => {
   let server: INestMicroservice;
   let gateway: TestingModule;
   let adapter: NotificationsGrpcAdapter;
 
   beforeAll(async () => {
-    const port = await freePort();
+    const { port } = await withBoundGrpcPort(async () => {
+      server = await NestFactory.createMicroservice(NotificationsServiceTestModule, {
+        ...createGrpcServerStrategy(grpcConfig.parse({ GRPC_URL: '127.0.0.1:0' }), [
+          NOTIFICATIONS_GRPC_PACKAGE,
+        ]),
+        logger: false,
+      });
+      await server.listen();
+    });
     vi.stubEnv('NOTIFICATIONS_GRPC_URL', `127.0.0.1:${port}`);
     vi.stubEnv('GRPC_DEADLINE_MS', '3000');
-    server = await NestFactory.createMicroservice(NotificationsServiceTestModule, {
-      ...createGrpcServerStrategy(grpcConfig.parse({ GRPC_URL: `127.0.0.1:${port}` }), [
-        NOTIFICATIONS_GRPC_PACKAGE,
-      ]),
-      logger: false,
-    });
-    await server.listen();
 
     gateway = await Test.createTestingModule({
       imports: [
