@@ -337,7 +337,7 @@ paged and capped.
   `notifications.notification-created.v1` last, after the inbox row and the mail, and a failed
   publish fails their event: the consumer retries it in process, then dead-letters it
   (`KafkaDeadLetters` pages; replay with `dlq-replay`). The redelivery rewrites the same row,
-  enqueues the same mail job (a no-op for 14 days, the `.dlq` retention: the mail queue's
+  enqueues the same mail job (a no-op for a fixed 14 days from the enqueue: the mail queue's
   `mail-sent:<jobId>` marker outlives the job, which BullMQ keeps 24 h or until 10,000 newer mail
   jobs have completed) and publishes again. The trade-off: a persistent publish failure
   dead-letters an event whose row and mail were already written; a replay within the 14 days

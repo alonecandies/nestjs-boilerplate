@@ -376,7 +376,8 @@ flowchart LR
 ```
 
 A failing handler must never throw out of the consumer: a thrown error is redelivered forever and
-blocks the partition. `@KafkaConsumerController()` retries transient failures **in process**
+blocks the partition, and a `TypeError`, `RangeError`, `ReferenceError` or `SyntaxError` that
+reaches kafkajs stops the consumer for good. `@KafkaConsumerController()` retries transient failures **in process**
 (`DEFAULT_KAFKA_RETRY_OPTIONS`: 4 attempts, jittered exponential backoff of at most 0.25, 0.5 and
 1 s) and then publishes the message to `<topic>.dlq` with error headers and commits, so the
 partition keeps moving. Errors that would fail the same way again (4xx `DomainException`s such as
