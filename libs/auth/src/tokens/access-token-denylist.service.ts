@@ -1,7 +1,12 @@
 import { Inject, Injectable, Logger, type OnModuleDestroy, Optional } from '@nestjs/common';
 import { ServiceUnavailableException, withTimeout } from '@platform/common';
 import { type AuthConfig, authConfig } from '@platform/config';
-import { InjectRedis, InjectRedisSubscriber, RedisKeyService } from '@platform/redis';
+import {
+  InjectRedis,
+  InjectRedisSubscriber,
+  RedisKeyService,
+  subscribeToChannel,
+} from '@platform/redis';
 import type { Redis } from 'ioredis';
 import { isPlainObject, isString } from 'lodash-es';
 import { DENYLIST_CHECK_TIMEOUT_MS, JWT_CLOCK_TOLERANCE_SEC } from '../auth.constants.js';
@@ -43,17 +48,18 @@ const errorMessage = (error: unknown): string =>
  * queue while it reconnects), authenticated requests get 503 rather than silently accepting a
  * possibly revoked token. `AUTH_DENYLIST_ENABLED=false` turns it into a no-op.
  *
- * `deny()` also announces the jti on `${prefix}:auth:revoked`, so every replica's
- * `RevocationSweeper` closes that token's live WebSockets at once (`onRevoked`). The announcement
- * is best effort; the denylist key stays the source of truth and the timed sweep the fallback.
+ * `deny()` also announces the jti on `${prefix}:auth:revoked`, in the same pipeline as the key (one
+ * round trip), so every replica's `RevocationSweeper` closes that token's live WebSockets at once
+ * (`onRevoked`). The announcement is best effort; the denylist key stays the source of truth and
+ * the timed sweep the fallback.
  */
 @Injectable()
 export class AccessTokenDenylist implements OnModuleDestroy {
   private readonly logger = new Logger(AccessTokenDenylist.name);
   private readonly listeners = new Set<RevokedTokenListener>();
   private readonly channel: string;
-  private readonly onMessage: (channel: string, message: string) => void;
-  private subscribed = false;
+  /** Detaches the channel listener; set from the first listener on, unset by a failed SUBSCRIBE. */
+  private unlisten: (() => void) | undefined;
 
   constructor(
     @InjectRedis() private readonly redis: Redis,
@@ -64,9 +70,6 @@ export class AccessTokenDenylist implements OnModuleDestroy {
     @Optional() @InjectRedisSubscriber() private readonly subscriber?: Redis,
   ) {
     this.channel = keys.key('auth', 'revoked');
-    this.onMessage = (channel, message) => {
-      this.handleMessage(channel, message);
-    };
   }
 
   get enabled(): boolean {
@@ -75,21 +78,40 @@ export class AccessTokenDenylist implements OnModuleDestroy {
 
   onModuleDestroy(): void {
     // The connection itself is closed by RedisModule (after every module is destroyed).
-    this.subscriber?.off('message', this.onMessage);
+    this.unlisten?.();
   }
 
   /**
    * Revokes `jti` for as long as verifiers could still accept the token (`exp` + clock
-   * tolerance), then announces it on `${prefix}:auth:revoked`. No-op for tokens that can no
-   * longer be accepted anyway. A failed announcement is logged, never thrown: the key is set, and
-   * live sockets close at the next sweep instead.
+   * tolerance) and announces it on `${prefix}:auth:revoked`: `SET` and `PUBLISH` in one pipeline,
+   * one round trip. No-op for tokens that can no longer be accepted anyway.
+   *
+   * A failed `SET` (or a pipeline that fails or brings back no reply for it) rejects: the token
+   * is not revoked. The `PUBLISH` beside it may still have gone out, which only closes the
+   * token's sockets early. A failed announcement is logged, never thrown: the key is set, and live
+   * sockets close at the next sweep instead.
    */
   async deny(jti: string, expEpochSec: number): Promise<void> {
     if (!this.enabled) return;
     const ttlSec = Math.ceil(expEpochSec - Date.now() / 1_000) + JWT_CLOCK_TOLERANCE_SEC;
     if (ttlSec <= 0) return;
-    await this.redis.set(this.key(jti), '1', 'EX', ttlSec);
-    await this.announce(jti);
+    const message: RevocationMessage = { jti };
+    const [stored, announced] =
+      (await this.redis
+        .pipeline()
+        .set(this.key(jti), '1', 'EX', ttlSec)
+        .publish(this.channel, JSON.stringify(message))
+        .exec()) ?? [];
+    if (stored === undefined) throw new Error('Redis brought back no reply for the revocation');
+    const [setError] = stored;
+    if (setError !== null) throw setError;
+    const publishError = announced === undefined ? new Error('no reply') : announced[0];
+    if (publishError !== null) {
+      // Never the jti: it identifies a live token.
+      this.logger.warn(
+        `Revocation broadcast failed, live sockets close at the next sweep: ${errorMessage(publishError)}`,
+      );
+    }
   }
 
   async isDenied(jti: string): Promise<boolean> {
@@ -132,31 +154,27 @@ export class AccessTokenDenylist implements OnModuleDestroy {
   }
 
   private subscribe(subscriber: Redis): void {
-    if (this.subscribed) return;
-    this.subscribed = true;
-    subscriber.on('message', this.onMessage);
-    // Not awaited: the subscriber connects lazily and ioredis re-subscribes after reconnects.
-    subscriber.subscribe(this.channel).catch((error: unknown) => {
-      subscriber.off('message', this.onMessage);
-      this.subscribed = false;
-      this.logger.warn(`cannot subscribe to ${this.channel}: ${errorMessage(error)}`);
-    });
+    if (this.unlisten !== undefined) return;
+    const unlisten = subscribeToChannel(
+      subscriber,
+      this.channel,
+      (message) => {
+        this.handleMessage(message);
+      },
+      {
+        logger: this.logger,
+        // ioredis does not retry a failed SUBSCRIBE: stop listening, and let the next
+        // `onRevoked` subscribe again.
+        onError: () => {
+          unlisten();
+          if (this.unlisten === unlisten) this.unlisten = undefined;
+        },
+      },
+    );
+    this.unlisten = unlisten;
   }
 
-  private async announce(jti: string): Promise<void> {
-    const message: RevocationMessage = { jti };
-    try {
-      await this.redis.publish(this.channel, JSON.stringify(message));
-    } catch (error) {
-      // Never the jti: it identifies a live token.
-      this.logger.warn(
-        `Revocation broadcast failed, live sockets close at the next sweep: ${errorMessage(error)}`,
-      );
-    }
-  }
-
-  private handleMessage(channel: string, message: string): void {
-    if (channel !== this.channel) return;
+  private handleMessage(message: string): void {
     const jti = parseRevocationMessage(message);
     if (jti === undefined) return;
     for (const listener of [...this.listeners]) {

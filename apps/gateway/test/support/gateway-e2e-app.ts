@@ -19,6 +19,7 @@ import { FastifyAdapter, type NestFastifyApplication } from '@nestjs/platform-fa
 import { Test } from '@nestjs/testing';
 import { AccessTokenDenylist } from '@platform/auth';
 import { buildFastifyOptions, configureHttpApp, setupApiDocs } from '@platform/bootstrap';
+import { MAINTENANCE_MODE, type MaintenanceModeSwitch } from '@platform/common';
 import { appConfig, authConfig } from '@platform/config';
 import { GRAPHQL_PUB_SUB } from '@platform/graphql';
 import { createL1Store, REDIS_CLIENT } from '@platform/redis';
@@ -54,6 +55,11 @@ export type GatewayE2e = Awaited<ReturnType<typeof createGatewayE2eApp>>;
 export interface GatewayE2eOptions {
   /** Binds `BillingPort` to this stand-in for billing-service (default: the real gRPC adapter). */
   billing?: BillingPort;
+  /**
+   * Replaces the `MAINTENANCE_MODE` switch (the root module's boot boolean, `app.maintenanceMode`),
+   * for example with a function the spec flips while the app runs.
+   */
+  maintenanceMode?: MaintenanceModeSwitch;
 }
 
 export async function createGatewayE2eApp(options: GatewayE2eOptions = {}) {
@@ -92,6 +98,9 @@ export async function createGatewayE2eApp(options: GatewayE2eOptions = {}) {
     .useValue(storage);
   if (options.billing !== undefined) {
     builder.overrideProvider(BillingPort).useValue(options.billing);
+  }
+  if (options.maintenanceMode !== undefined) {
+    builder.overrideProvider(MAINTENANCE_MODE).useValue(options.maintenanceMode);
   }
 
   const app: NestFastifyApplication = await createFastifyTestApp(

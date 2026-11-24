@@ -159,16 +159,21 @@ Connect with `io('<host>/notifications', { auth: { token: '<access jwt>' } })` (
 | c → s     | `ping`                   | → `pong` event `{ ts }`                                                                                           |
 
 The handshake is authenticated by a namespace middleware (`authenticateSocket`, including the
-denylist) before the connection is accepted, so no message can race authentication. With
-`MAINTENANCE_MODE=true` it refuses first, with the 503 problem (`SERVICE_UNAVAILABLE`). Each socket
-joins exactly one room, `t:{tenantId}:u:{userId}` (`tenantUserRoom`), both from the token it
+denylist) before the connection is accepted, so no message can race authentication. While
+maintenance is on (the app's `MAINTENANCE_MODE` switch, read at run time, so a function switch is
+followed without a restart) it refuses first, with the 503 problem (`SERVICE_UNAVAILABLE`); every
+message, `ping` included, is answered with that problem (`WsMaintenanceGuard`), and `pushToUser`
+emits nothing (it never throws, so the push consumer does not dead-letter the event). A socket open
+when maintenance began stays connected and inert until its next message or its token expires. Each
+socket joins exactly one room, `t:{tenantId}:u:{userId}` (`tenantUserRoom`), both from the token it
 authenticated with, and never changes room: another tenant needs a new connection with that
 tenant's token. `NotificationPushConsumer` takes the tenant from the envelope
 (`requireEventTenant`, before the dedupe claim) and calls `pushToUser(tenantId, userId, …)`, so a
 user connected in tenant A never receives tenant B's notifications, their own included. An
 envelope without a tenant is dead-lettered and pushes nothing. Per-message guards: `JwtAuthGuard`
-(token not expired), RBAC, `WsSessionGuard` (denylist: a token revoked by logout or a tenant switch
-gets `TOKEN_REVOKED`, like HTTP) and `WsThrottlerGuard` (`markRead`: 30 per 10 s).
+(token not expired), RBAC, `WsMaintenanceGuard` (503 while maintenance is on), `WsSessionGuard`
+(denylist: a token revoked by logout or a tenant switch gets `TOKEN_REVOKED`, like HTTP) and
+`WsThrottlerGuard` (`markRead`: 30 per 10 s).
 
 Sockets do not outlive their session. When the access token expires the socket receives an
 `exception` event (`TOKEN_EXPIRED`) and is disconnected (like graphql-ws's 4401 close). When a

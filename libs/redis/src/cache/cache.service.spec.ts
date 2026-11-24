@@ -228,6 +228,27 @@ describe('AppCacheService', () => {
     expect(r.subscriber.calls).not.toContain('subscribe');
   });
 
+  it('logs a failed SUBSCRIBE and keeps its listener', async () => {
+    const warn = vi.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const bus = new InMemoryRedis();
+    const subscribe = vi
+      .spyOn(InMemoryRedis.prototype, 'subscribe')
+      .mockRejectedValueOnce(new Error('Connection is closed.'));
+    try {
+      const r = replica(new Keyv(), bus);
+      await flush();
+
+      expect(subscribe).toHaveBeenCalledExactlyOnceWith('svc:cache:invalidate');
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        'cannot subscribe to svc:cache:invalidate: Connection is closed.',
+      );
+      expect(r.subscriber.listenerCount('message')).toBe(1);
+    } finally {
+      subscribe.mockRestore();
+      warn.mockRestore();
+    }
+  });
+
   it('unsubscribes its listener on module destroy', async () => {
     const { a } = await cluster();
     expect(a.subscriber.listenerCount('message')).toBe(1);

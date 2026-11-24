@@ -12,6 +12,7 @@ import type { Cache } from 'cache-manager';
 import type { Redis } from 'ioredis';
 import { compact, isArray, isString, uniq } from 'lodash-es';
 import { RedisKeyService } from '../keys/redis-key.service.js';
+import { subscribeToChannel } from '../pubsub/channel-subscription.js';
 import { InjectRedis, InjectRedisSubscriber } from '../redis.constants.js';
 import { BoundedTtlKeyv } from './bounded-ttl-keyv.js';
 import {
@@ -85,7 +86,8 @@ export class AppCacheService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(AppCacheService.name);
   private readonly instanceId = generateId();
   private readonly channel: string;
-  private readonly onMessage: (channel: string, message: string) => void;
+  /** Detaches the invalidation listener (`subscribeToChannel`); a no-op until it is attached. */
+  private unlisten: () => void = () => undefined;
   private l1: BoundedTtlKeyv | undefined;
   /** The distinct `cache` label values used so far (never `other`), at most `MAX_CACHE_LABELS`. */
   private readonly cacheLabels = new Set<string>();
@@ -100,9 +102,6 @@ export class AppCacheService implements OnModuleInit, OnModuleDestroy {
     @InjectMetric(CACHE_REQUESTS_TOTAL) private readonly requests: CacheRequestCounter,
   ) {
     this.channel = keys.key(CACHE_INVALIDATION_CHANNEL);
-    this.onMessage = (channel, message) => {
-      this.handleInvalidation(channel, message);
-    };
   }
 
   onModuleInit(): void {
@@ -116,17 +115,20 @@ export class AppCacheService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     this.l1 = l1;
-    this.subscriber.on('message', this.onMessage);
-    // Not awaited: the subscriber connects lazily and must not block boot while Redis starts;
-    // ioredis re-subscribes automatically after reconnects.
-    this.subscriber.subscribe(this.channel).catch((error: unknown) => {
-      this.logger.warn(`cannot subscribe to ${this.channel}: ${errorMessage(error)}`);
-    });
+    // A failed SUBSCRIBE is only logged: other replicas' L1 copies then expire on their own.
+    this.unlisten = subscribeToChannel(
+      this.subscriber,
+      this.channel,
+      (message) => {
+        this.handleInvalidation(message);
+      },
+      { logger: this.logger },
+    );
   }
 
   onModuleDestroy(): void {
     // The connection itself is closed by RedisModule (after every module is destroyed).
-    this.subscriber.off('message', this.onMessage);
+    this.unlisten();
   }
 
   /**
@@ -204,8 +206,8 @@ export class AppCacheService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private handleInvalidation(channel: string, message: string): void {
-    if (channel !== this.channel || !this.l1) return;
+  private handleInvalidation(message: string): void {
+    if (!this.l1) return;
     const keys = parseInvalidationMessage(message, this.instanceId);
     if (keys.length === 0) return;
     this.l1.deleteMany(keys).catch((error: unknown) => {

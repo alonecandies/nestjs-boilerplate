@@ -74,6 +74,39 @@ const EMULATED_SCRIPTS = new Map<string, ScriptImplementation>([
   [CONN_COUNT_COMMAND, connSlotModel],
 ]);
 
+/** The commands `InMemoryRedis.pipeline()` queues: the plain ones the client already has. */
+const PIPELINE_COMMANDS = [
+  'get',
+  'set',
+  'del',
+  'unlink',
+  'exists',
+  'incr',
+  'pttl',
+  'ttl',
+  'pexpire',
+  'zrem',
+  'ping',
+  'info',
+  'publish',
+] as const;
+type PipelineCommand = (typeof PIPELINE_COMMANDS)[number];
+
+/** One queued command: its name and arguments, as `InMemoryRedis.pipelines` records it. */
+export type InMemoryPipelinedCommand = readonly [command: PipelineCommand, ...args: unknown[]];
+
+/**
+ * The `ChainableCommander` slice `InMemoryRedis.pipeline()` returns: each command queues and
+ * returns the pipeline, `exec()` runs the queue.
+ */
+export type InMemoryPipeline = {
+  readonly [K in PipelineCommand]: (...args: Parameters<InMemoryRedis[K]>) => InMemoryPipeline;
+} & {
+  readonly length: number;
+  /** ioredis' contract: one `[error, result]` per command, in order; a failed one never rejects. */
+  exec(): Promise<[error: Error | null, result: unknown][]>;
+};
+
 /**
  * Minimal in-memory stand-in for an ioredis client, for unit/e2e tests that must run without
  * Redis: strings with PX/EX expiry, counters, the sorted-set commands of the connection-slot
@@ -86,8 +119,13 @@ const EMULATED_SCRIPTS = new Map<string, ScriptImplementation>([
 export class InMemoryRedis extends EventEmitter {
   status: InMemoryRedisStatus = 'ready';
   readonly options: { connectionName?: string };
-  /** Every command name received, in order (handy for "was Redis called?" assertions). */
+  /**
+   * Every command name received, in order (handy for "was Redis called?" assertions). A
+   * pipeline's commands are listed here too, as they run; `pipelines` tells them apart.
+   */
   readonly calls: string[] = [];
+  /** Each executed `pipeline()`: its commands with their arguments, in order (one round trip). */
+  readonly pipelines: InMemoryPipelinedCommand[][] = [];
   private readonly now: () => number;
   private readonly maxmemoryPolicy: string | null;
   private state: SharedState = { store: new Map(), clients: new Set() };
@@ -323,6 +361,44 @@ export class InMemoryRedis extends EventEmitter {
       }
       return this.channels.size;
     });
+  }
+
+  /**
+   * An ioredis-style pipeline over the plain commands (`PIPELINE_COMMANDS`). `exec()` records the
+   * queue in `pipelines`, then runs each command in order through this client's own method, so a
+   * spy or `simulateOutage` acts on it as on a direct call. Like ioredis, each command settles
+   * into its own `[error, result]` pair: a failed one neither stops the others nor rejects.
+   */
+  pipeline(): InMemoryPipeline {
+    const queue: InMemoryPipelinedCommand[] = [];
+    const pipeline = {
+      get length(): number {
+        return queue.length;
+      },
+      exec: async (): Promise<[error: Error | null, result: unknown][]> => {
+        this.pipelines.push([...queue]);
+        const settled = await Promise.allSettled(
+          queue.map(([command, ...args]) => Reflect.apply(this[command], this, args) as unknown),
+        );
+        return settled.map((outcome) =>
+          outcome.status === 'fulfilled'
+            ? [null, outcome.value]
+            : [
+                outcome.reason instanceof Error
+                  ? outcome.reason
+                  : new Error(String(outcome.reason)),
+                undefined,
+              ],
+        );
+      },
+    };
+    for (const command of PIPELINE_COMMANDS) {
+      Reflect.set(pipeline, command, (...args: unknown[]) => {
+        queue.push([command, ...args]);
+        return pipeline;
+      });
+    }
+    return pipeline as unknown as InMemoryPipeline;
   }
 
   /** Registers an emulated Lua command (only the scripts this package ships are known). */

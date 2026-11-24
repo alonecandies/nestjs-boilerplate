@@ -1039,5 +1039,4 @@ At the ingress, route only `/v1`, `/graphql` and `/notifications` (Socket.IO) pu
   publishing) closes the socket at the next sweep, up to `WS_REVOCATION_SWEEP_INTERVAL_MS` later
   (30 s by default, at most 300 s). Until then Socket.IO messages and new graphql-ws operations are
   still refused (their guards re-check the denylist), but a running subscription keeps receiving
-  pushes. A socket whose token is revoked during its own handshake (after the denylist check,
-  before the sweeper tracks it) misses the announcement the same way and closes at the next sweep.
+  pushes.

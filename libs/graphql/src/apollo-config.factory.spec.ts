@@ -220,6 +220,42 @@ describe('createApolloDriverConfig', () => {
         expect(run).toHaveBeenCalledTimes(1);
       }
     });
+
+    describe('an event of a subscription opened before maintenance began (onNext)', () => {
+      const withSocket = () => {
+        const close = vi.fn();
+        return { close, ctx: { ...ctx, extra: { ...ctx.extra, socket: { close } } } };
+      };
+      const event = { data: { tick: 1 } };
+
+      it('on: closes the connection with the close a refused onConnect gets, sending nothing', () => {
+        let on = false;
+        const { ws } = maintenanceConfig(() => on);
+        const { close, ctx: live } = withSocket();
+        expect(ws.onNext(live, '1', subscribe, {}, event)).toBeUndefined();
+        expect(close).not.toHaveBeenCalled();
+
+        on = true;
+        expect(ws.onNext(live, '1', subscribe, {}, event)).toBeUndefined();
+
+        expect(close).toHaveBeenCalledExactlyOnceWith(4403, 'Forbidden');
+      });
+
+      it('on, with no socket to close: throws, so graphql-ws ends the connection before sending', () => {
+        const { ws } = maintenanceConfig(true);
+
+        expect(() => ws.onNext(ctx, '1', subscribe, {}, event)).toThrow(GraphQLError);
+      });
+
+      it('off or unset: formats the event and closes nothing', () => {
+        for (const mode of [false, undefined]) {
+          const { ws } = maintenanceConfig(mode);
+          const { close, ctx: live } = withSocket();
+          expect(ws.onNext(live, '1', subscribe, {}, event)).toBeUndefined();
+          expect(close).not.toHaveBeenCalled();
+        }
+      });
+    });
   });
 
   it('formats subscription event errors with the production rules', () => {
