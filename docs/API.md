@@ -71,7 +71,7 @@ Conventions that apply to every HTTP response:
   that was open when it turned on is not closed at once: every Socket.IO message on it, `ping` included, is answered
   with the 503 problem (an ack, or an `exception` event), pushes to it stop, and a graphql-ws connection is closed
   (4403) at its subscription's next event, which is not delivered. A Socket.IO socket stays connected until its access
-  token expires or the client closes it; an idle graphql-ws connection stays open until its next event or its token's
+  token expires or is revoked, or the client closes it; an idle graphql-ws connection stays open until its next event or its token's
   expiry. A switch that cannot be read (a function that throws) refuses WebSockets as maintenance does.
 
 ## API documentation pages

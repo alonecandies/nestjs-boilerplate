@@ -168,7 +168,7 @@ cannot be read (a function that throws, a failed lookup) counts as on: the socke
 the fault is logged at most once a minute per reader. The push is gated on the switch of the
 replica that consumes the event, not of the replica that holds the socket (the Redis adapter
 carries the emit to it), so a function switch must give the same answer on every replica. A socket
-open when maintenance began stays connected until its token expires or the client closes it; every
+open when maintenance began stays connected until its token expires or is revoked, or the client closes it; every
 message on it is answered with the 503 problem and no push reaches it. Each socket joins exactly
 one room, `t:{tenantId}:u:{userId}` (`tenantUserRoom`), both from the token it
 authenticated with, and never changes room: another tenant needs a new connection with that

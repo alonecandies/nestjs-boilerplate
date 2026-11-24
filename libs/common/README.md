@@ -111,7 +111,7 @@ None — this package never reads `process.env`. Values come from `@platform/con
   `WsMaintenanceGuard` first in a gateway's `@UseGuards(...)`. Never make that guard an `APP_GUARD`: with
   `inheritAppConfig` it would also wrap the Kafka and gRPC handlers, which keep running during maintenance.
 - The reader never throws and fails closed: a function switch that throws, or a lookup that fails for any reason
-  but "not provided", reads **on** (sockets are refused with the 503 problem, pushes are dropped) and is logged at
+  but "not provided", reads **on** (Socket.IO is refused with the 503 problem, graphql-ws with 4403, pushes are dropped) and is logged at
   most once per `MAINTENANCE_SWITCH_FAULT_LOG_INTERVAL_MS` (60 s) per reader; a switch not built yet (bootstrap)
   reads off and is looked up again. `MaintenanceModeMiddleware` reads the switch itself, so on HTTP a throwing
   switch is that request's 500, not a crash.

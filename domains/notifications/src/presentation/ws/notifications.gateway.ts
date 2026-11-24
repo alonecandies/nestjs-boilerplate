@@ -184,7 +184,10 @@ export class NotificationsGateway
       // authenticate() resolves a refusal rather than rejecting; the second handler is defence in
       // depth, so a bug there refuses this handshake (internals hidden) instead of crashing.
       void this.authenticate(socket).then(next, (error: unknown) => {
-        this.logger.error(`Socket ${socket.id} handshake failed: ${String(error)}`);
+        this.logger.error(
+          `Socket ${socket.id} handshake failed: ${String(error)}`,
+          error instanceof Error ? error.stack : undefined,
+        );
         next(problemRefusal(error));
       });
     });
